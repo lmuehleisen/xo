@@ -114,7 +114,10 @@ rc_remote_actionlint_version() {
 
 rc_remote_ensure_tool() {  # <tool> <required-version> <installer>
   local tool=$1 required=$2 installer=$3 have
-  have=$("rc_remote_${tool}_version") || have=
+  case "$tool" in
+    shellcheck) have=$(rc_remote_shellcheck_version) || have= ;;
+    actionlint) have=$(rc_remote_actionlint_version) || have= ;;
+  esac
   [ "$have" = "$required" ] && return 0
   [ -x "$installer" ] || return 0
   printf '== fm-remote-check: installing %s %s into ~/.local/bin\n' "$tool" "$required"
@@ -141,6 +144,7 @@ rc_remote_tools() {
 
 # Stops the running step's process group, then exits with <code>; the EXIT
 # trap removes the run directory.
+# shellcheck disable=SC2329 # Invoked by the signal traps in rc_remote_main.
 rc_remote_stop() {  # <code>
   [ -z "${RC_STEP_PID:-}" ] || kill -TERM -- "-$RC_STEP_PID" 2>/dev/null
   exit "$1"
