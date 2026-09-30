@@ -66,12 +66,21 @@
 #   fm-publish-gate.sh disable-push <repo-dir> [<remote>]
 #       Set remote.<remote>.pushurl to DISABLED (default remote: upstream) and
 #       print the push URL before and after. Idempotent.
+#   fm-publish-gate.sh config-dir
+#       Print the publish-guard directory this invocation resolves (see
+#       PRIVATE CONFIG), or refuse when no firstmate home owns it.
 #   fm-publish-gate.sh policy
 #       Print the public-text policy.
 #
-# PRIVATE CONFIG. Every private value lives in the gitignored directory
-# ${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/publish-guard (with FM_HOME defaulting
-# to this repository's root), or the directory named by --config. Nothing
+# PRIVATE CONFIG. Every private value lives in the gitignored publish-guard
+# directory of the owning firstmate home. Without --config it is, in order:
+# $FM_CONFIG_OVERRIDE/publish-guard; $FM_HOME/config/publish-guard; the
+# directory named by the publish-guard-config file in this launch's per-task
+# hooks (the core.hooksPath a fleet launch passes through GIT_CONFIG_*, written
+# by bin/fm-git-strip-ai-trailers.sh install); or this repository's own
+# config/publish-guard only when this repository is not a linked git worktree.
+# A worker's worktree therefore never supplies its own config: when none of
+# these names a home, every command that reads the config refuses. Nothing
 # private is ever tracked, and a refusal names a rule and a location, never the
 # matched text or the offending email.
 #   identity        two lines, "name=<name>" and "email=<email>": the only
@@ -217,14 +226,64 @@ tmpdir() {
   fi
 }
 
-default_config() {
-  printf '%s/publish-guard' "${FM_CONFIG_OVERRIDE:-${FM_HOME:-$ROOT}/config}"
+# task_hooks_config: print the publish-guard directory the per-task hooks in
+# this launch's GIT_CONFIG_* core.hooksPath recorded at install, if any.
+task_hooks_config() {
+  local i=0 key value hooks="" line=""
+  case "${GIT_CONFIG_COUNT:-}" in '' | *[!0-9]*) return 1 ;; esac
+  while [ "$i" -lt "$GIT_CONFIG_COUNT" ] && [ "$i" -lt 100 ]; do
+    key=GIT_CONFIG_KEY_$i
+    value=GIT_CONFIG_VALUE_$i
+    if [ "$(lower "${!key:-}")" = core.hookspath ]; then
+      hooks=${!value:-}
+    fi
+    i=$((i + 1))
+  done
+  [ -n "$hooks" ] && [ -f "$hooks/publish-guard-config" ] || return 1
+  IFS= read -r line <"$hooks/publish-guard-config" || [ -n "$line" ] || return 1
+  case "$line" in
+  /*) printf '%s' "$line" ;;
+  *) return 1 ;;
+  esac
+}
+
+# linked_worktree <dir>: true when <dir> is a linked git worktree, whose git
+# dir is not its repository's common dir. A plain clone, a separate-git-dir
+# clone, a submodule, or no repository is not; a .git file git cannot read is
+# treated as one.
+linked_worktree() {
+  local gd common
+  [ -f "$1/.git" ] || return 1
+  gd=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  common=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  [ "$gd" != "$common" ]
+}
+
+# home_config: print the owning home's publish-guard directory (PRIVATE CONFIG
+# owns the order), or fail when no home owns this invocation.
+home_config() {
+  if [ -n "${FM_CONFIG_OVERRIDE:-}" ]; then
+    printf '%s/publish-guard' "$FM_CONFIG_OVERRIDE"
+  elif [ -n "${FM_HOME:-}" ]; then
+    printf '%s/config/publish-guard' "$FM_HOME"
+  elif task_hooks_config; then
+    :
+  elif ! linked_worktree "$ROOT"; then
+    printf '%s/config/publish-guard' "$ROOT"
+  else
+    return 1
+  fi
+}
+
+# resolve_config: set PG_CONFIG from --config or the owning home, or refuse.
+resolve_config() {
+  [ -z "$PG_CONFIG" ] || return 0
+  PG_CONFIG=$(home_config) ||
+    refuse "no firstmate home owns this publish-guard config: FM_HOME is unset, this launch's hooks name none, and $ROOT is a worktree, whose own config is never read" \
+      "relaunch the task through bin/fm-spawn.sh so its hooks name its home, or set FM_HOME to the owning firstmate home for this command"
 }
 
 config_dir() {
-  if [ -z "$PG_CONFIG" ]; then
-    PG_CONFIG=$(default_config)
-  fi
   printf '%s' "$PG_CONFIG"
 }
 
@@ -919,11 +978,7 @@ is_zero() {
 judge_public() {
   local mode=$1
   shift
-  if [ -n "${PG_CONFIG_SET:-}" ]; then
-    "$(dirname "$SELF")/fm-publish-judge.sh" "$mode" --dest "$DEST_KEY" --config "$PG_CONFIG" "$@" >/dev/null || exit 1
-  else
-    "$(dirname "$SELF")/fm-publish-judge.sh" "$mode" --dest "$DEST_KEY" "$@" >/dev/null || exit 1
-  fi
+  "$(dirname "$SELF")/fm-publish-judge.sh" "$mode" --dest "$DEST_KEY" --config "$PG_CONFIG" "$@" >/dev/null || exit 1
 }
 
 # --- pre-push -------------------------------------------------------------------
@@ -1469,6 +1524,12 @@ done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
 case "$CMD" in
+pre-push | commit-msg | pre-commit | check-text | preflight | classify | identity | suggest-allowlist | config-dir)
+  resolve_config
+  ;;
+esac
+
+case "$CMD" in
 pre-push)
   [ "$#" -eq 2 ] || usage
   cmd_pre_push "$1" "$2"
@@ -1520,6 +1581,10 @@ suggest-allowlist)
 disable-push)
   [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
   cmd_disable_push "$@"
+  ;;
+config-dir)
+  [ "$#" -eq 0 ] || usage
+  printf '%s\n' "$PG_CONFIG"
   ;;
 policy) cmd_policy ;;
 -h | --help | help) usage ;;

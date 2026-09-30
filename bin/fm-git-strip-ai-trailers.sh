@@ -30,6 +30,10 @@
 #       rather than skipping the repository's hook. Does not touch the
 #       project's git config; the caller prefixes the pane with
 #       GIT_CONFIG_COUNT / GIT_CONFIG_KEY_0 / GIT_CONFIG_VALUE_0.
+#       When <publish-guard-dir> is given, the file publish-guard-config in
+#       <hooks-dir> records its absolute path, so a gate run outside these
+#       hooks (the gh publish guard in a worker's worktree) finds the same
+#       home's config; bin/fm-publish-gate.sh's PRIVATE CONFIG owns the lookup.
 #       With FM_KEEP_AI_TRAILERS=1 (fm-spawn sets it when the home has
 #       config/keep-ai-trailers) the commit-msg hook skips the strip and still
 #       runs the publish gate.
@@ -228,7 +232,15 @@ install_hooks() {
   mkdir -p "$hooks_dir" || return 1
   chmod 700 "$hooks_dir" 2>/dev/null || true
   hooks_dir=$(CDPATH='' cd -- "$hooks_dir" && pwd -P) || return 1
-  [ -z "$guard" ] || gate_config=" --config $(quote_for_hook "$guard")"
+  if [ -n "$guard" ]; then
+    case "$guard" in
+    /*) ;;
+    *) guard="$(pwd -P)/$guard" ;;
+    esac
+    gate_config=" --config $(quote_for_hook "$guard")"
+    printf '%s\n' "$guard" >"$hooks_dir/publish-guard-config" || return 1
+    chmod 400 "$hooks_dir/publish-guard-config"
+  fi
 
   strip_line="$(quote_for_hook "$SELF") \"\$1\" || exit \$?"
   [ "${FM_KEEP_AI_TRAILERS:-0}" != 1 ] || strip_line=": keep AI trailers"

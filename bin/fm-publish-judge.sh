@@ -71,9 +71,11 @@
 #
 # CACHE. Verdicts are cached by the SHA-256 of the prompt version, the
 # destination, the material kind, and the material, under
-# ${FM_STATE_OVERRIDE:-$FM_HOME/state}/publish-judge/cache/, so re-pushing or
-# re-posting identical content is never judged twice. A refusal is cached too:
-# asking again returns the same answer rather than a second opinion. Material
+# ${FM_STATE_OVERRIDE:-$FM_HOME/state}/publish-judge/cache/ (FM_HOME defaulting
+# to this repository's root unless it is a linked git worktree, which keeps no
+# cache), so re-pushing or re-posting identical content is never judged twice.
+# A refusal is cached too: asking again returns the same answer rather than a
+# second opinion. Material
 # larger than FM_PUBLISH_JUDGE_CHUNK characters (default 120000) is judged in
 # chunks, each cached on its own; every chunk must be allowed. Every judged or
 # cached decision appends one JSON line to publish-judge/log.jsonl beside the
@@ -142,16 +144,36 @@ sha256() { # stdin
   fi
 }
 
+# The publish-guard directory: --config, else the gate's own resolution
+# (bin/fm-publish-gate.sh config-dir), set once before any command runs.
 config_dir() {
-  if [ -n "${PJ_CONFIG:-}" ]; then
-    printf '%s' "$PJ_CONFIG"
-  else
-    printf '%s/publish-guard' "${FM_CONFIG_OVERRIDE:-${FM_HOME:-$ROOT}/config}"
-  fi
+  printf '%s' "$PJ_CONFIG"
 }
 
+# linked_worktree <dir>: true when <dir> is a linked git worktree, whose git
+# dir is not its repository's common dir. A plain clone, a separate-git-dir
+# clone, a submodule, or no repository is not; a .git file git cannot read is
+# treated as one.
+linked_worktree() {
+  local gd common
+  [ -f "$1/.git" ] || return 1
+  gd=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  common=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  [ "$gd" != "$common" ]
+}
+
+# The verdict cache and log directory. A linked worktree with no home named
+# has none, so a worktree can never seed its own cached allow.
 state_dir() {
-  printf '%s/publish-judge' "${FM_STATE_OVERRIDE:-${FM_HOME:-$ROOT}/state}"
+  if [ -n "${FM_STATE_OVERRIDE:-}" ]; then
+    printf '%s/publish-judge' "$FM_STATE_OVERRIDE"
+  elif [ -n "${FM_HOME:-}" ]; then
+    printf '%s/state/publish-judge' "$FM_HOME"
+  elif ! linked_worktree "$ROOT"; then
+    printf '%s/state/publish-judge' "$ROOT"
+  else
+    return 1
+  fi
 }
 
 # --- material ------------------------------------------------------------------
@@ -428,7 +450,7 @@ judge_chunk() {
 
 log_line() { # <json>
   local d
-  d=$(state_dir)
+  d=$(state_dir) || return 0
   mkdir -p "$d" 2>/dev/null && printf '%s\n' "$1" >>"$d/log.jsonl" 2>/dev/null
   return 0
 }
@@ -441,13 +463,13 @@ overridden() { # <hash>
 
 cache_get() { # <hash>
   local f
-  f="$(state_dir)/cache/$1.json"
+  f="$(state_dir)/cache/$1.json" || return 1
   [ -f "$f" ] && jq -ce 'select(.verdict == "allow" or .verdict == "refuse")' "$f" 2>/dev/null
 }
 
 cache_put() { # <hash> <json>
   local d
-  d="$(state_dir)/cache"
+  d="$(state_dir)/cache" || return 0
   mkdir -p "$d" 2>/dev/null || return 0
   printf '%s\n' "$2" >"$d/$1.json.tmp.$$" 2>/dev/null && mv -f "$d/$1.json.tmp.$$" "$d/$1.json" 2>/dev/null
   return 0
@@ -602,6 +624,12 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
+
+case "$CMD" in
+corpus | text | probe | override)
+  [ -n "$PJ_CONFIG" ] || PJ_CONFIG=$("$SCRIPT_DIR/fm-publish-gate.sh" config-dir) || exit 1
+  ;;
+esac
 
 case "$CMD" in
 corpus)
