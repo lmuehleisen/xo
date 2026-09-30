@@ -324,10 +324,15 @@ tier_run() {
   bin=$(judge_bin "$tier") || return 127
   case "$tier" in
   codex)
-    (cd "$dir" && fm_run_timed "$seconds" "$bin" exec --skip-git-repo-check --ephemeral \
+    # The prompt is opened inside the bounded command: the timeout and
+    # gtimeout mechanisms start it in the background, where bash replaces an
+    # inherited stdin with /dev/null, so codex would judge an empty prompt.
+    # shellcheck disable=SC2016 # expanded by the bounded child shell
+    (cd "$dir" && fm_run_timed "$seconds" bash -c 'prompt=$1; shift; exec "$@" <"$prompt"' _ "$prompt" \
+      "$bin" exec --skip-git-repo-check --ephemeral \
       --ignore-user-config --ignore-rules -s read-only --color never \
       -m "$model" -c "model_reasoning_effort=\"${FM_PUBLISH_JUDGE_CODEX_EFFORT:-low}\"" \
-      -o "$dir/last-message.txt" - <"$prompt" >/dev/null 2>"$dir/stderr.txt")
+      -o "$dir/last-message.txt" - </dev/null >/dev/null 2>"$dir/stderr.txt")
     rc=$?
     [ ! -f "$dir/last-message.txt" ] || cat "$dir/last-message.txt"
     return "$rc"
