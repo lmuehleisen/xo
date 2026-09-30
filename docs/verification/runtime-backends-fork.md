@@ -208,6 +208,25 @@ ok - Claude Code 2.1.283 (Claude Code): a stale owned digest is cleared from the
 ```
 `tests/fm-afk-owned-digest-recovery.test.sh` is the portable regression for the same recovery, including the give-up path and composers the daemon may not touch.
 
+### Named Claude Code composer
+
+Claude Code draws a user-set session name into its composer's top rule as `─...─ name ─`.
+The name takes the width before the rule does, so a long name leaves no leading rule and is truncated with `…`, as in ` long-name… ─`, and a name just under the width leaves only a few leading `─`.
+The shared reader accepts that row only as a composer's top rule, never its bottom.
+Verified on 2026-09-30 on macOS with tmux 3.7c on a private socket, against Claude Code 2.1.286; no prompt is submitted:
+
+```sh
+FM_COMPOSER_MATRIX_LIVE=1 tests/fm-composer-matrix-live-e2e.test.sh
+```
+
+```text
+ok - claude (2.1.286 (Claude Code)): a short-named composer reads empty idle and proves, then clears, typed text
+ok - claude (2.1.286 (Claude Code)): a long-named composer reads empty idle and proves, then clears, typed text
+```
+
+This guard is the refresh command after a Claude Code upgrade.
+`tests/fm-afk-inject-titled-composer.test.sh` is the portable regression on tmux and herdr, including the truncated form and a dropped Enter on herdr.
+
 ## Composer classification matrix
 
 ### 2026-09-10 Codex pane re-read refresh

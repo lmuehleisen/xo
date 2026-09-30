@@ -924,6 +924,33 @@ _fm_composer_pi_separator_row() {  # <trimmed-row>
   return 1
 }
 
+# _fm_composer_titled_rule_row: Claude Code's composer top rule for a named
+# session, which carries the name near its right end: `──── name ─`. Claude
+# gives the name the whole width before truncating it with `…`, so the leading
+# run shrinks to any length and disappears for a long name, leaving
+# ` long-name-trunc… ─` with a single pad column. The shape is therefore the
+# single-dash tail after one space, a name with no rule or border glyph and no
+# prompt glyph, and either a leading `─` run or exactly that one pad column.
+# The scan lets this row OPEN a pair but never close one; Claude's bottom rule
+# is always plain.
+_fm_composer_titled_rule_row() {  # <trimmed-row> <indent>
+  local row=$1 indent=$2 body lead title glyph
+  case "$row" in *?' ─') ;; *) return 1 ;; esac
+  body=${row% ─}
+  lead=${body%%' '*}
+  if [ -n "$lead" ] && [ -z "${lead//─/}" ]; then
+    title=${body#"$lead"}
+    case "$title" in ' '[!' ']*) title=${title# } ;; *) return 1 ;; esac
+  else
+    [ "$indent" = ' ' ] || return 1
+    title=$body
+  fi
+  case "$title" in *─*|*' ') return 1 ;; esac
+  fm_composer_row_has_edge "$title" && return 1
+  fm_composer_leading_prompt_glyph_var glyph "$title" && return 1
+  return 0
+}
+
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
@@ -1020,6 +1047,12 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
         FM_COMPOSER_SCAN_PI_GLYPH_ROW=$pi_glyph_row
         FM_COMPOSER_SCAN_PI_GLYPH=$pi_glyph
       fi
+      pi_open=$row
+      pi_lines=0
+      pi_glyph_row=-1
+      pi_glyph=''
+    elif _fm_composer_titled_rule_row "$trimmed" "$indent"; then
+      FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       pi_open=$row
       pi_lines=0
       pi_glyph_row=-1
@@ -2011,6 +2044,62 @@ fm_composer_submit_retry_core() {  # <send-key-fn> <state-fn> <target> <retries>
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf '%s' "$state"; return 0; }
   done
+}
+
+# fm_composer_clear_owned_input <key-fn> <target> <text> <owned-fn> <clear-presses>
+# Clear input the caller has just proven it owns with at most <clear-presses>
+# Ctrl+U presses, stopping as soon as <owned-fn> finds nothing of it left.
+# <key-fn> <target> <key> sends one named key on the caller's backend, and
+# <owned-fn> <target> <text> [residue] answers ownership with 0 owned, 1 not
+# held, 2 unreadable (fm_tmux_composer_owned_input's contract).
+# Returns 0 when the cleanup is confirmed and 1 when it is not.
+fm_composer_clear_owned_input() {
+  local key=$1 target=$2 text=$3 owned=$4 presses=$5 press=0 pending_status=0
+  while [ "$pending_status" = 0 ] && [ "$press" -lt "$presses" ]; do
+    "$key" "$target" C-u || true
+    press=$((press + 1))
+    sleep 0.3
+    pending_status=0
+    "$owned" "$target" "$text" residue || pending_status=$?
+  done
+  [ "$pending_status" = 1 ]
+}
+
+# fm_composer_owned_submit_enter <key-fn> <target> <already-typed-text>
+#   <owned-fn> <clear-presses> <label> <postcondition-function> [postcondition-args...]
+# The one recovery owner for input a sender typed and must submit or remove,
+# with <key-fn> and <owned-fn> as for fm_composer_clear_owned_input.
+# At most three Enter attempts over 20 half-second polls. The first Enter is
+# unconditional, so a caller resuming earlier input proves ownership first;
+# subsequent keys require exact ownership. A failed send can still have
+# executed, so always inspect the postcondition. On exhaustion, clear only
+# proven owned input (fm_composer_clear_owned_input) and report whether cleanup
+# could be confirmed. Returns 0 when the postcondition held, 1 when owned input
+# was cleared, 2 when owned cleanup could not be confirmed, and 3 when
+# ownership was unproven so no cleanup keys were sent.
+# Callers must stop on failure, never append more input to uncertain input.
+fm_composer_owned_submit_enter() {
+  local key=$1 target=$2 text=$3 owned=$4 presses=$5 label=$6 verify=$7 poll attempt=1
+  shift 7
+  "$key" "$target" Enter || true
+  for ((poll=0; poll<20; poll++)); do
+    sleep 0.5
+    "$verify" "$@" && return 0
+    if [ "$attempt" -lt 3 ] && "$owned" "$target" "$text"; then
+      "$key" "$target" Enter || true
+      attempt=$((attempt + 1))
+    fi
+  done
+  if ! "$owned" "$target" "$text"; then
+    echo "error: $label execution unconfirmed in $target; input ownership is unproven, so no cleanup keys were sent" >&2
+    return 3
+  fi
+  if fm_composer_clear_owned_input "$key" "$target" "$text" "$owned" "$presses"; then
+    echo "error: $label did not run in $target after $attempt Enter attempts; cleared owned input" >&2
+    return 1
+  fi
+  echo "error: $label did not run in $target after $attempt Enter attempts; owned input cleanup could not be confirmed" >&2
+  return 2
 }
 
 # fm_composer_queued_enter_verdict: the ONE busy-queued-Enter policy.

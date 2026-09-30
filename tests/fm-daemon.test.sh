@@ -2740,7 +2740,8 @@ test_wedge_alarm_command_failure_hides_configured_command() {
   local dir daemon_log secret rc
   dir=$(make_wedge_case wedge-command-redaction); daemon_log="$dir/daemon.log"
   secret="https://alerts.example.invalid/hook?token=private-wedge-token"
-  LOG="$daemon_log" FM_WEDGE_ALARM_EXEC='' FM_WEDGE_ALARM_CHANNEL="command:exit 73 # $secret" \
+  # The fake osascript catches the all-channels-failed fallback.
+  PATH="$dir/fakebin:$PATH" LOG="$daemon_log" FM_WEDGE_ALARM_EXEC='' FM_WEDGE_ALARM_CHANNEL="command:exit 73 # $secret" \
     wedge_alarm_notify "away-mode WEDGED 900s" "/s/.marker"
   rc=$?
   [ "$rc" -eq 0 ] || fail "a failed command channel made wedge_alarm_notify return non-zero ($rc)"
@@ -2749,6 +2750,36 @@ test_wedge_alarm_command_failure_hides_configured_command() {
   grep -F "$secret" "$daemon_log" >/dev/null \
     && fail "command channel failure leaked its configured command: $(cat "$daemon_log")"
   pass "command channel failures redact configured commands while logging their exit status"
+}
+
+test_wedge_alarm_misconfigured_command_is_reported_and_falls_back() {
+  local dir daemon_log real_log state
+  dir=$(make_wedge_case wedge-command-misconfigured); daemon_log="$dir/daemon.log"; real_log="$dir/real.log"
+  state="$dir/state"
+  printf 'lab-x.status: done: EVENT\n' > "$state/.subsuper-escalations"
+  PATH="$dir/fakebin:$PATH" LOG="$daemon_log" FM_WEDGE_ALARM_EXEC='' FM_WEDGE_ALARM_REAL_LOG="$real_log" \
+    FM_FAKE_UNAME=Darwin FM_SUPERVISOR_BACKEND=herdr INJECT_LAST_FAILURE="recovery: stuck" WEDGE_ALARM_LAST_EPOCH=0 \
+    FM_WEDGE_ALARM_CHANNEL="command:echo 'no handle configured; see https://x.invalid/h?token=private-wedge-token' >&2; exit 1" \
+    inject_wedge_alarm "$state" 600
+  grep -F 'command channel exited 1: no handle configured; see https://x.invalid/h?... (command redacted)' "$daemon_log" >/dev/null \
+    || fail "a failed command channel did not name its reason: $(cat "$daemon_log" 2>/dev/null)"
+  grep -F 'private-wedge-token' "$daemon_log" "$state/.subsuper-inject-wedged" >/dev/null \
+    && fail "a failed command channel's reason leaked a URL query"
+  head -1 "$state/.subsuper-inject-wedged" | grep -F 'alarm channel failed: command exited 1: no handle configured' >/dev/null \
+    || fail "the wedge marker's first line does not name the failed channel: $(head -1 "$state/.subsuper-inject-wedged")"
+  grep -Fx osascript "$real_log" >/dev/null \
+    || fail "a failed-only command channel did not fall back to the OS notification"
+  pass "a misconfigured command channel names its reason in the log and the wedge marker, and falls back to the OS notification"
+}
+
+test_wedge_alarm_working_channel_needs_no_fallback() {
+  local dir real_log
+  dir=$(make_wedge_case wedge-command-ok); real_log="$dir/real.log"
+  PATH="$dir/fakebin:$PATH" FM_WEDGE_ALARM_EXEC='' FM_WEDGE_ALARM_REAL_LOG="$real_log" FM_FAKE_UNAME=Darwin \
+    FM_WEDGE_ALARM_CHANNEL="command:true" wedge_alarm_notify "away-mode WEDGED 900s" "/s/.marker"
+  [ ! -s "$real_log" ] || fail "a working command channel still fired the OS fallback"
+  [ -z "$WEDGE_ALARM_CHANNEL_FAILURES" ] || fail "a working channel recorded a failure: $WEDGE_ALARM_CHANNEL_FAILURES"
+  pass "a working channel records no failure and fires no fallback"
 }
 
 test_wedge_alarm_unknown_channel_hides_configured_directive() {
@@ -3323,6 +3354,8 @@ test_wedge_alarm_osascript_channel_selected
 test_wedge_alarm_herdr_channel_selected
 test_wedge_alarm_command_channel_receives_summary
 test_wedge_alarm_command_failure_hides_configured_command
+test_wedge_alarm_misconfigured_command_is_reported_and_falls_back
+test_wedge_alarm_working_channel_needs_no_fallback
 test_wedge_alarm_unknown_channel_hides_configured_directive
 test_wedge_alarm_off_disables_active_alert_regardless_of_position
 test_wedge_alarm_auto_darwin_selects_osascript

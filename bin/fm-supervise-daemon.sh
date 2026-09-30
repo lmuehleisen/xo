@@ -243,6 +243,8 @@ MAX_DEFER_SECS_DEFAULT=300
 WEDGE_ALARM_TIMEOUT_SECS_DEFAULT=10
 WEDGE_ALARM_LAST_EPOCH=0
 WEDGE_ALARM_NOTIFIER_PID=
+WEDGE_ALARM_CHANNEL_FAILURES=
+WEDGE_ALARM_CHANNEL_ERROR=
 # Why the latest delivery attempt did not land; the wedge alarm reports it.
 INJECT_LAST_FAILURE=
 # The captain-relevant verb set and the status classifiers (last_status_line,
@@ -1080,19 +1082,30 @@ wedge_alarm_via_herdr() {  # <summary>
 
 # Run a captain-supplied command with the summary on $1 and on stdin, so an
 # alert can reach a phone/pager (ntfy, Slack, SMS) even when the captain is away
-# from the machine entirely. Best-effort: logs and returns 1 on failure.
+# from the machine entirely. Best-effort: logs and returns 1 on failure. A
+# failure names the command's last stderr line, so a misconfigured channel
+# (a missing handle, a bad token) says why; the configured command itself stays
+# redacted, and URL query strings are cut from that line because they can carry
+# a token. WEDGE_ALARM_CHANNEL_ERROR carries the reason to wedge_alarm_notify.
 wedge_alarm_via_command() {  # <cmd> <summary>
-  local cmd=$1 summary=$2 rc
+  local cmd=$1 summary=$2 rc errf reason=''
   if [ "${WEDGE_ALARM_EMIT_ACTIVE:-}" != 1 ]; then
     wedge_alarm_emit command "$summary" "$cmd"
     return $?
   fi
-  [ -n "$cmd" ] || { log "wedge alarm: empty command: channel; nothing to run"; return 1; }
+  [ -n "$cmd" ] || { WEDGE_ALARM_CHANNEL_ERROR="empty command"; log "wedge alarm: empty command: channel; nothing to run"; return 1; }
+  errf=$(mktemp "${TMPDIR:-/tmp}/fm-wedge-alarm-err.XXXXXX" 2>/dev/null) || errf=
   wedge_alarm_run_bounded command sh -c "$cmd" fm-wedge-alarm "$summary" \
-    <<< "$summary" >/dev/null 2>&1
+    <<< "$summary" >/dev/null 2>"${errf:-/dev/null}"
   rc=$?
+  if [ -n "$errf" ]; then
+    reason=$(grep -v '^[[:space:]]*$' "$errf" 2>/dev/null | tail -n 1 | sed 's/?[^[:space:]]*/?.../g')
+    rm -f "$errf"
+    _utf8_prefix "$reason" 160 reason
+  fi
   [ "$rc" -eq 0 ] && return 0
-  log "wedge alarm: command channel exited $rc (command redacted)"
+  WEDGE_ALARM_CHANNEL_ERROR="exited $rc${reason:+: $reason}"
+  log "wedge alarm: command channel exited $rc${reason:+: $reason} (command redacted)"
   return 1
 }
 
@@ -1120,9 +1133,15 @@ wedge_alarm_emit() {  # <channel> <summary>
 # `off` directive disables the alert, regardless of position; an unresolvable
 # `auto` (no OS channel on this platform) logs that the durable marker is the
 # only signal. Every notifier routes through the test-forced recorder seam.
+# Each failed channel is named in WEDGE_ALARM_CHANNEL_FAILURES, which
+# inject_wedge_alarm puts on the marker's first line so the return summary
+# shows a misconfigured channel. When every configured channel failed, the
+# platform's OS channel fires as a fallback if it was not already tried, so a
+# broken command channel alone never leaves the alarm silent.
 wedge_alarm_notify() {  # <summary> <marker>
-  local summary=$1 marker=$2 ch
+  local summary=$1 marker=$2 ch fired=0 tried_os='' fallback
   local -a channels=()
+  WEDGE_ALARM_CHANNEL_FAILURES=
   while IFS= read -r ch; do
     [ -n "$ch" ] || continue
     channels+=("$ch")
@@ -1134,12 +1153,36 @@ wedge_alarm_notify() {  # <summary> <marker>
     case "$ch" in auto|default) ch=$(wedge_alarm_platform_default) ;; esac
     case "$ch" in
       '') log "wedge alarm: no OS-level alert channel on $(uname); durable marker $marker is the only signal - set config/wedge-alarm (e.g. a command: directive)" ;;
-      osascript|herdr) wedge_alarm_emit "$ch" "$summary" || true ;;
-      command:*) wedge_alarm_emit command "$summary" "${ch#command:}" || true ;;
-      *) log "wedge alarm: unrecognized active-alert channel directive (redacted); marker still written" ;;
+      osascript|herdr)
+        [ "$ch" != osascript ] || tried_os=1
+        _wedge_alarm_try "$ch" "$summary" && fired=1 ;;
+      command:*) _wedge_alarm_try command "$summary" "${ch#command:}" && fired=1 ;;
+      *) _wedge_alarm_channel_failed "unrecognized directive"
+         log "wedge alarm: unrecognized active-alert channel directive (redacted); marker still written" ;;
     esac
   done
+  if [ "$fired" = 0 ] && [ -n "$WEDGE_ALARM_CHANNEL_FAILURES" ] && [ -z "$tried_os" ]; then
+    fallback=$(wedge_alarm_platform_default)
+    if [ -n "$fallback" ]; then
+      log "wedge alarm: every configured channel failed; falling back to $fallback"
+      wedge_alarm_emit "$fallback" "$summary (alarm channel failed: $WEDGE_ALARM_CHANNEL_FAILURES)" || true
+    fi
+  fi
   return 0
+}
+
+# _wedge_alarm_channel_failed: add one failure to WEDGE_ALARM_CHANNEL_FAILURES.
+_wedge_alarm_channel_failed() {  # <description>
+  WEDGE_ALARM_CHANNEL_FAILURES="${WEDGE_ALARM_CHANNEL_FAILURES:+$WEDGE_ALARM_CHANNEL_FAILURES; }$1"
+}
+
+# _wedge_alarm_try: emit one channel, recording its failure with the reason
+# the notifier left in WEDGE_ALARM_CHANNEL_ERROR.
+_wedge_alarm_try() {  # <channel> <summary> [cmd]
+  WEDGE_ALARM_CHANNEL_ERROR=''
+  wedge_alarm_emit "$@" && return 0
+  _wedge_alarm_channel_failed "$1${WEDGE_ALARM_CHANNEL_ERROR:+ $WEDGE_ALARM_CHANNEL_ERROR}"
+  return 1
 }
 
 # Raise a loud, rate-limited alarm when escalations cannot be delivered after
@@ -1166,12 +1209,7 @@ inject_wedge_alarm() {  # <state> <age-seconds>
     WEDGE_ALARM_LAST_EPOCH=$now
     log "ERROR: away-mode escalation undelivered ${age}s; last delivery failure: ${INJECT_LAST_FAILURE:-not recorded}. Buffer + wake-queue preserved; alarm marker written."
   fi
-  {
-    printf 'fm away-mode inject WEDGED: %ss undelivered as of %s\n' "$age" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
-    printf 'Last delivery failure: %s\n' "${INJECT_LAST_FAILURE:-not recorded}"
-    printf 'The supervisor pane could not accept an escalation. Buffered items:\n'
-    cat "$state/.subsuper-escalations" 2>/dev/null
-  } 2>/dev/null > "$marker" || true
+  _wedge_alarm_marker_write "$state" "$age"
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
   backend="${FM_SUPERVISOR_BACKEND:-$FM_SUPERVISOR_BACKEND_DEFAULT}"
   # Best-effort status-line flash. tmux's display-message is a client-side OSD
@@ -1188,7 +1226,22 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   # the durable record whether or not any channel fires.
   if [ "$notify" -eq 1 ]; then
     wedge_alarm_notify "away-mode escalations WEDGED ${age}s undelivered - see $marker" "$marker"
+    # A channel that failed is named on the marker's first line, which the
+    # return summary shows; a throttled re-alarm keeps the last result.
+    [ -z "${WEDGE_ALARM_CHANNEL_FAILURES:-}" ] || _wedge_alarm_marker_write "$state" "$age"
   fi
+}
+
+# _wedge_alarm_marker_write: the durable wedge marker. Its first line is what
+# bin/fm-afk-return.sh surfaces, so it carries a failed alarm channel too.
+_wedge_alarm_marker_write() {  # <state> <age-seconds>
+  {
+    printf 'fm away-mode inject WEDGED: %ss undelivered as of %s%s\n' "$2" "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
+      "${WEDGE_ALARM_CHANNEL_FAILURES:+; alarm channel failed: $WEDGE_ALARM_CHANNEL_FAILURES}"
+    printf 'Last delivery failure: %s\n' "${INJECT_LAST_FAILURE:-not recorded}"
+    printf 'The supervisor pane could not accept an escalation. Buffered items:\n'
+    cat "$1/.subsuper-escalations" 2>/dev/null
+  } 2>/dev/null > "$1/.subsuper-inject-wedged" || true
 }
 
 _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first arrived (sidecar epoch)
@@ -1425,27 +1478,31 @@ window_for_task() {  # <task-key> [state]
 # can leave the digest the daemon typed sitting in the primary's composer, and
 # every later flush then defers on a composer that is not empty, so away mode
 # stalls indefinitely (tests/fm-afk-owned-digest-recovery.test.sh owns the
-# regression). So on tmux inject_msg records the exact digest in
+# regression; tests/fm-afk-inject-titled-composer.test.sh covers a named
+# Claude composer on tmux and herdr). So on tmux and herdr inject_msg records
+# the exact digest in
 # state/.subsuper-inject-owned BEFORE typing it, bound to the head of the
 # escalation buffer that digest carried, and removes the record only once
 # delivery is proven; every failed submit also saves a pane capture under
 # state/.subsuper-submit-failures/. Every later
 # flush first runs recover_owned_input, which acts only on an idle pane whose
-# composer fm_tmux_composer_owned_input proves holds exactly that digest:
+# composer the backend's ownership read (fm_tmux_composer_owned_input,
+# fm_backend_herdr_composer_owned_input) proves holds exactly that digest:
 #   - while the buffer still begins with the digest's events, Enter is retried
-#     through the shared owner (fm_tmux_owned_submit_enter); a confirmed submit
+#     through the shared owner (fm_composer_owned_submit_enter); a confirmed submit
 #     drops those events, and an exhausted one clears the owned digest so the
 #     next flush types a fresh one;
 #   - once the buffer no longer begins with them (a return or a new away window
 #     reset it), the stale digest is cleared, never submitted.
 # Text the daemon cannot prove it owns - a draft, added text, an unknown or
 # unreadable composer - is never submitted or cleared: the flush keeps
-# deferring, one capture records that state, and the wedge alarm stays the
-# backstop. A composer that is empty again drops the record, and the digest's
+# deferring, one capture records that state, the cause becomes the wedge
+# alarm's last delivery failure, and that alarm stays the backstop. A composer that is empty again drops the record, and the digest's
 # events stay buffered for a fresh digest, unless the operational record its
-# doorbell named was opened meanwhile, which proves a late delivery. Herdr needs
-# no record: its submit already withholds Enter from an unproven Claude payload
-# and clears it. The same record lets clear_owned_input_at_exit remove the
+# doorbell named was opened meanwhile, which proves a late delivery. Herdr's
+# submit already withholds Enter from an unproven Claude payload and clears it,
+# but an Enter it sent and the primary never took leaves the text behind, which
+# is why herdr records too. The same record lets clear_owned_input_at_exit remove the
 # daemon's own unsent text when away mode ends.
 
 # record_submit_failure: save a plain capture of the supervisor pane with what
@@ -1535,64 +1592,89 @@ _buffer_drop_head() {  # <state> <lines> <typed-epoch>
 
 # _owned_note_once: log and capture a composer the daemon may not touch, once
 # per record, so a long run of deferrals does not fill the capture directory.
-_owned_note_once() {  # <state> <target> <why>
+# The cause also becomes INJECT_LAST_FAILURE on every call, so each wedge alarm
+# names why the owned digest is stuck rather than an older typing failure.
+_owned_note_once() {  # <state> <backend> <target> <why>
   local rec="$1/$INJECT_OWNED_NAME" capture
+  INJECT_LAST_FAILURE="recovery: $4"
   [ -e "$rec.noted" ] && return 0
   : > "$rec.noted"
-  capture=$(record_submit_failure "$1" tmux "$2" "owned digest not recoverable: $3") || capture='(pane capture failed)'
-  log "inject recovery waiting: $3; pane capture: $capture"
+  capture=$(record_submit_failure "$1" "$2" "$3" "owned digest not recoverable: $4") || capture='(pane capture failed)'
+  log "inject recovery waiting: $4; pane capture: $capture"
+}
+
+# _owned_backend: 0 when <backend> can prove and resolve an owned digest, with
+# its ownership read and key sender in OWNED_INPUT_FN and OWNED_KEY_FN, the
+# callbacks fm_composer_owned_submit_enter and fm_composer_clear_owned_input
+# take. tmux and herdr can; no other backend records one.
+_owned_backend() {  # <backend>
+  case "$1" in
+    tmux) OWNED_INPUT_FN=fm_tmux_composer_owned_input; OWNED_KEY_FN=_fm_tmux_owned_key ;;
+    herdr) OWNED_INPUT_FN=fm_backend_herdr_composer_owned_input; OWNED_KEY_FN=fm_backend_herdr_send_key ;;
+    *) return 1 ;;
+  esac
+  fm_backend_source "$1"
 }
 
 # _inject_pane_busy: the busy read that proves a turn started. It reads the
 # visible viewport only, so a footer left in scrollback cannot count, with the
 # primary harness's own signature, or the generic one when the harness is
-# unknown. inject_msg defers while it reads busy, so a busy read after Enter
+# unknown; a backend with native agent state (herdr) also counts its busy
+# verdict. inject_msg defers while it reads busy, so a busy read after Enter
 # is a transition from idle.
-_inject_pane_busy() {  # <target>
-  local harness screen
+_inject_pane_busy() {  # <target> [backend]
+  local backend=${2:-tmux} harness screen
+  if [ "$backend" != tmux ] && [ "$(fm_backend_busy_state "$backend" "$1" 2>/dev/null)" = busy ]; then
+    return 0
+  fi
   harness=$(fm_daemon_primary_harness)
   [ "$harness" != unknown ] || harness=
-  screen=$(fm_backend_visible_capture tmux "$1" 2>/dev/null) || return 1
+  screen=$(fm_backend_visible_capture "$backend" "$1" 2>/dev/null) || return 1
   printf '%s' "$screen" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match "$harness"
 }
 
 # _inject_turn_started: the turn-started half of a delivery proof. The
 # operational record the doorbell named was opened, or the pane went busy from
 # an idle baseline. Prints the evidence word.
-_inject_turn_started() {  # <target> <baseline-idle 0|1> [op-record]
+_inject_turn_started() {  # <target> <baseline-idle 0|1> [op-record] [backend]
   if [ -n "${3:-}" ] && fm_operational_record_opened "$3"; then
     printf 'record-opened'
     return 0
   fi
-  if [ "$2" != 1 ] || ! _inject_pane_busy "$1"; then
+  if [ "$2" != 1 ] || ! _inject_pane_busy "$1" "${4:-tmux}"; then
     return 1
   fi
   printf 'busy'
 }
 
 # The owned digest was delivered: a readable composer no longer holds it, and
-# a turn provably started.
-_owned_submit_landed() {  # <target> <baseline-idle 0|1> <op-record>
+# a turn provably started. _owned_backend has set OWNED_INPUT_FN.
+_owned_submit_landed() {  # <backend> <target> <baseline-idle 0|1> <op-record>
   local rc=0
-  fm_tmux_composer_owned_input "$1" "$OWNED_TEXT" || rc=$?
-  [ "$rc" = 1 ] && _inject_turn_started "$1" "$2" "$3" >/dev/null
+  "$OWNED_INPUT_FN" "$2" "$OWNED_TEXT" || rc=$?
+  [ "$rc" = 1 ] && _inject_turn_started "$2" "$3" "$4" "$1" >/dev/null
 }
 
 # _owned_clear_presses: Ctrl+U presses that remove the digest a wrapped row at
-# a time, bounded by the rows it can occupy.
-_owned_clear_presses() {  # <target> <text>
+# a time, bounded by the rows it can occupy. Herdr sizes them with its own
+# payload bound, since it reports no pane width here.
+_owned_clear_presses() {  # <backend> <target> <text>
   local width
-  width=$(tmux display-message -p -t "$1" '#{pane_width}' 2>/dev/null) || width=
+  if [ "$1" = herdr ]; then
+    fm_backend_herdr_proof_lines "$3"
+    return 0
+  fi
+  width=$(tmux display-message -p -t "$2" '#{pane_width}' 2>/dev/null) || width=
   case "$width" in ''|*[!0-9]*) width=80 ;; esac
   [ "$width" -gt 8 ] || width=8
-  printf '%s' $(( ${#2} / (width - 4) + 2 ))
+  printf '%s' $(( ${#3} / (width - 4) + 2 ))
 }
 
 # recover_owned_input: resolve an owned digest before a flush types anything.
 # Returns 0 to proceed with a normal flush, 1 to defer, and 3 when the owned
 # digest was submitted, so its OWNED_LINES events are delivered.
 recover_owned_input() {  # <state>
-  local state=$1 rec target backend rc presses err capture
+  local state=$1 rec target backend rc presses err capture composer
   rec="$state/$INJECT_OWNED_NAME"
   [ -e "$rec" ] || return 0
   afk_active "$state" || { log "inject deferred: afk inactive"; return 1; }
@@ -1603,22 +1685,23 @@ recover_owned_input() {  # <state>
   fi
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
-  if [ "$backend" != tmux ] || [ "$OWNED_BACKEND" != "$backend" ] || [ "$OWNED_TARGET" != "$target" ]; then
+  if [ "$OWNED_BACKEND" != "$backend" ] || [ "$OWNED_TARGET" != "$target" ] || ! _owned_backend "$backend"; then
     log "inject recovery: the owned digest was typed into $OWNED_BACKEND:$OWNED_TARGET, not $backend:$target; dropped the record without touching either"
     rm -f "$rec" "$rec.noted"
     return 0
   fi
-  fm_backend_target_exists tmux "$target" || return 1
-  if pane_is_busy "$target" tmux || _inject_pane_busy "$target"; then
+  fm_backend_target_exists "$backend" "$target" || return 1
+  if pane_is_busy "$target" "$backend" || _inject_pane_busy "$target" "$backend"; then
+    INJECT_LAST_FAILURE="deferred: supervisor pane busy (agent mid-turn) with the daemon's unproven digest recorded"
     log "inject deferred: supervisor pane busy (agent mid-turn)"
     return 1
   fi
   rc=0
-  fm_tmux_composer_owned_input "$target" "$OWNED_TEXT" || rc=$?
+  "$OWNED_INPUT_FN" "$target" "$OWNED_TEXT" || rc=$?
   case "$rc" in
     0) ;;
     1)
-      if [ "$(fm_tmux_composer_state "$target")" = empty ]; then
+      if [ "$(fm_backend_composer_state "$backend" "$target")" = empty ]; then
         if _buffer_head_matches "$state" "$OWNED_LINES" "$OWNED_SUM"; then
           if [ -n "$OWNED_OPREC" ] && fm_operational_record_opened "$OWNED_OPREC"; then
             log "inject delivered late: the primary opened the owned digest's record ($OWNED_LINES event(s))"
@@ -1635,29 +1718,39 @@ recover_owned_input() {  # <state>
         rm -f "$rec" "$rec.noted"
         return 0
       fi
-      _owned_note_once "$state" "$target" "the composer holds text the daemon cannot prove it typed, so it is left untouched"
+      _owned_note_once "$state" "$backend" "$target" "the composer holds text the daemon cannot prove it typed, so it is left untouched"
       return 1
       ;;
     *)
-      _owned_note_once "$state" "$target" "the composer is unreadable or not identified, so the owned digest is left untouched"
+      # A composer the verdict identifies as holding input whose rows still
+      # cannot be read is a reader gap, not a human draft: name it, so the
+      # wedge alarm says the daemon's own digest is stuck.
+      composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
+      case "$composer" in
+        pending|pending-unproven)
+          _owned_note_once "$state" "$backend" "$target" "the daemon's own digest may be stuck: the composer reads $composer but its rows cannot be read, so it is left untouched" ;;
+        *)
+          _owned_note_once "$state" "$backend" "$target" "the composer is unreadable or not identified (state=${composer:-unknown}), so the owned digest is left untouched" ;;
+      esac
       return 1
       ;;
   esac
-  presses=$(_owned_clear_presses "$target" "$OWNED_TEXT")
+  presses=$(_owned_clear_presses "$backend" "$target" "$OWNED_TEXT")
   if ! _buffer_head_matches "$state" "$OWNED_LINES" "$OWNED_SUM"; then
-    if fm_tmux_clear_owned_input "$target" "$OWNED_TEXT" fm_tmux_composer_owned_input "$presses"; then
+    if fm_composer_clear_owned_input "$OWNED_KEY_FN" "$target" "$OWNED_TEXT" "$OWNED_INPUT_FN" "$presses"; then
       log "inject recovery: cleared a stale owned digest whose events are no longer buffered"
       rm -f "$rec" "$rec.noted"
       return 0
     fi
-    capture=$(record_submit_failure "$state" tmux "$target" "stale owned digest cleanup unconfirmed") || capture='(pane capture failed)'
+    INJECT_LAST_FAILURE="recovery: could not confirm clearing a stale owned digest"
+    capture=$(record_submit_failure "$state" "$backend" "$target" "stale owned digest cleanup unconfirmed") || capture='(pane capture failed)'
     log "inject recovery: could not confirm clearing a stale owned digest; pane capture: $capture"
     return 1
   fi
   # The busy guard above read idle, so a busy read after Enter is a turn start.
   rc=0
-  err=$(fm_tmux_owned_submit_enter "$target" "$OWNED_TEXT" fm_tmux_composer_owned_input "$presses" \
-    'away-mode digest' _owned_submit_landed "$target" 1 "$OWNED_OPREC" 2>&1 >/dev/null) || rc=$?
+  err=$(fm_composer_owned_submit_enter "$OWNED_KEY_FN" "$target" "$OWNED_TEXT" "$OWNED_INPUT_FN" "$presses" \
+    'away-mode digest' _owned_submit_landed "$backend" "$target" 1 "$OWNED_OPREC" 2>&1 >/dev/null) || rc=$?
   case "$rc" in
     0)
       log "inject recovered: submitted the owned digest left in the composer ($OWNED_LINES event(s))"
@@ -1666,11 +1759,12 @@ recover_owned_input() {  # <state>
       ;;
     1)
       rm -f "$rec" "$rec.noted"
-      capture=$(record_submit_failure "$state" tmux "$target" "owned digest resubmit exhausted; cleared") || capture='(pane capture failed)'
+      capture=$(record_submit_failure "$state" "$backend" "$target" "owned digest resubmit exhausted; cleared") || capture='(pane capture failed)'
       log "inject recovery gave up: ${err#error: }; its events stay buffered for a fresh digest; pane capture: $capture"
       ;;
     *)
-      capture=$(record_submit_failure "$state" tmux "$target" "owned digest resubmit unconfirmed") || capture='(pane capture failed)'
+      INJECT_LAST_FAILURE="recovery: ${err#error: }"
+      capture=$(record_submit_failure "$state" "$backend" "$target" "owned digest resubmit unconfirmed") || capture='(pane capture failed)'
       log "inject recovery failed: ${err#error: }; pane capture: $capture"
       ;;
   esac
@@ -1688,16 +1782,16 @@ clear_owned_input_at_exit() {  # <state>
   local state=$1 rec rc=0 presses
   rec="$state/$INJECT_OWNED_NAME"
   [ -e "$rec" ] || return 0
-  if ! _owned_record_read "$rec" || [ "$OWNED_BACKEND" != tmux ] \
-    || ! fm_backend_target_exists tmux "$OWNED_TARGET"; then
+  if ! _owned_record_read "$rec" || ! _owned_backend "$OWNED_BACKEND" \
+    || ! fm_backend_target_exists "$OWNED_BACKEND" "$OWNED_TARGET"; then
     rm -f "$rec" "$rec.noted"
     return 0
   fi
-  fm_tmux_composer_owned_input "$OWNED_TARGET" "$OWNED_TEXT" || rc=$?
+  "$OWNED_INPUT_FN" "$OWNED_TARGET" "$OWNED_TEXT" || rc=$?
   case "$rc" in
     0)
-      presses=$(_owned_clear_presses "$OWNED_TARGET" "$OWNED_TEXT")
-      if fm_tmux_clear_owned_input "$OWNED_TARGET" "$OWNED_TEXT" fm_tmux_composer_owned_input "$presses"; then
+      presses=$(_owned_clear_presses "$OWNED_BACKEND" "$OWNED_TARGET" "$OWNED_TEXT")
+      if fm_composer_clear_owned_input "$OWNED_KEY_FN" "$OWNED_TARGET" "$OWNED_TEXT" "$OWNED_INPUT_FN" "$presses"; then
         log "away mode ended: cleared the daemon's unsent digest from the composer"
         rm -f "$rec" "$rec.noted"
         return 0
@@ -1705,7 +1799,7 @@ clear_owned_input_at_exit() {  # <state>
       log "away mode ended: could not confirm clearing the daemon's unsent digest from the composer"
       ;;
     1)
-      if [ "$(fm_tmux_composer_state "$OWNED_TARGET")" = empty ]; then
+      if [ "$(fm_backend_composer_state "$OWNED_BACKEND" "$OWNED_TARGET")" = empty ]; then
         rm -f "$rec" "$rec.noted"
         return 0
       fi
@@ -1810,12 +1904,13 @@ inject_msg() {  # <message> [state] [buffered-lines buffered-cksum]
   # (4) Type the digest ONCE, then submit with Enter (retry Enter only, never
   # retype). An unconfirmed or unknown submit does NOT count as delivered, so
   # the buffer is preserved (strict) rather than cleared.
-  # On tmux the owned-digest record is written before a key is sent and removed
-  # only on proven delivery (fm_tmux_proven_submit: the digest shown unchanged
-  # before Enter, then gone with a proven turn start), so recover_owned_input
-  # can always resolve text this daemon left behind. Herdr dispatches through
+  # On tmux and herdr the owned-digest record is written before a key is sent
+  # and removed only on proven delivery, so recover_owned_input can always
+  # resolve text this daemon left behind. tmux proves it with
+  # fm_tmux_proven_submit (the digest shown unchanged before Enter, then gone
+  # with a proven turn start). Herdr dispatches through
   # fm_backend_send_text_submit (bin/fm-backend.sh), whose normal idle-baseline
-  # path already confirms a real turn start through native agent state.
+  # path confirms a real turn start through native agent state.
   # The transport's stderr is kept so a failure names its cause. send-failed
   # means the text was never confirmed typed, or (herdr) it was typed but no
   # Enter could be sent, so no confirmation retry ran.
@@ -1824,7 +1919,8 @@ inject_msg() {  # <message> [state] [buffered-lines buffered-cksum]
   bytes=$(LC_ALL=C; printf '%s' "${#msg}")
   events=${3:-0}
   errf=$(mktemp "$state/.subsuper-inject-err.XXXXXX" 2>/dev/null) || errf=
-  if [ "$backend" = tmux ]; then
+  oprec=
+  if _owned_backend "$backend"; then
     fm_operational_doorbell_path "$msg" oprec || oprec=
     if ! _owned_record_write "$state" "$target" "$backend" "$msg" "$events" "${4:-}" "$oprec"; then
       [ -z "$errf" ] || rm -f "$errf"
@@ -1832,6 +1928,8 @@ inject_msg() {  # <message> [state] [buffered-lines buffered-cksum]
       log "inject failed: $INJECT_LAST_FAILURE"
       return 1
     fi
+  fi
+  if [ "$backend" = tmux ]; then
     verdict=$(fm_tmux_proven_submit "$target" "$msg" \
       "${FM_INJECT_SHOW_POLLS:-$INJECT_SHOW_POLLS_DEFAULT}" "${FM_INJECT_QUIET_GAP:-$INJECT_QUIET_GAP_DEFAULT}" \
       "$retries" "${FM_INJECT_PROOF_POLLS:-$INJECT_PROOF_POLLS_DEFAULT}" "$sleep_s" \
@@ -1846,7 +1944,7 @@ inject_msg() {  # <message> [state] [buffered-lines buffered-cksum]
   fi
   case "$verdict" in
     delivered*)
-      [ "$backend" != tmux ] || rm -f "$state/$INJECT_OWNED_NAME" "$state/$INJECT_OWNED_NAME.noted"
+      rm -f "$state/$INJECT_OWNED_NAME" "$state/$INJECT_OWNED_NAME.noted"
       log "inject delivered ($events event(s), $bytes bytes, ${verdict#delivered })"
       return 0
       ;;
@@ -1861,6 +1959,9 @@ inject_msg() {  # <message> [state] [buffered-lines buffered-cksum]
   case "$verdict" in
     send-failed)
       # A refused tmux literal send typed nothing, so there is nothing to own.
+      # Herdr's send-failed can follow a typed payload whose Enter never went
+      # out, so its record stays for recovery, which drops it once the
+      # composer reads empty.
       [ "$backend" != tmux ] || rm -f "$state/$INJECT_OWNED_NAME"
       INJECT_LAST_FAILURE="initial send or Enter delivery (verdict=send-failed, bytes=$bytes; text may be in composer on backends that typed before Enter failed): ${err:-no transport error output}"
       ;;
