@@ -226,7 +226,7 @@ test_remote_cleans_up_and_installs_tools_once() {
 }
 
 test_dropped_connection_stops_the_step() {
-  local repo home lint_pid i
+  local repo home lint_pid
   repo=$(new_fixture dropped)
   home="$repo.remote-home"
   : > "$repo/lint-sleep"
@@ -234,7 +234,7 @@ test_dropped_connection_stops_the_step() {
   git -C "$repo" commit -qm 'slow lint'
   (cd "$TMP_ROOT" && PATH="$FAKEBIN:$PATH" FAKE_REMOTE_HOME="$home" FM_HOME="$repo" \
     "$repo/bin/fm-remote-check.sh" lint >/dev/null 2>&1) &
-  for i in $(seq 1 100); do
+  for _ in $(seq 1 100); do
     [ -s "$home/lint.pid" ] && break
     sleep 0.1
   done
@@ -242,12 +242,12 @@ test_dropped_connection_stops_the_step() {
   [ -n "$(find "$home/fm-remote-check" -mindepth 1 -maxdepth 1 -type d)" ] \
     || fail "the run directory is missing while the step runs"
   kill -KILL "$(cat "$home/ssh.pid")"
-  for i in $(seq 1 100); do
+  for _ in $(seq 1 100); do
     kill -0 "$lint_pid" 2>/dev/null || break
     sleep 0.1
   done
   ! kill -0 "$lint_pid" 2>/dev/null || fail "the step outlived the dropped connection"
-  for i in $(seq 1 50); do
+  for _ in $(seq 1 50); do
     [ -n "$(find "$home/fm-remote-check" -mindepth 1 -maxdepth 1 -type d)" ] || break
     sleep 0.1
   done
