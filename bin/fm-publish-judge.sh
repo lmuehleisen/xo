@@ -150,6 +150,18 @@ config_dir() {
   printf '%s' "$PJ_CONFIG"
 }
 
+# linked_worktree <dir>: true when <dir> is a linked git worktree, whose git
+# dir is not its repository's common dir. A plain clone, a separate-git-dir
+# clone, a submodule, or no repository is not; a .git file git cannot read is
+# treated as one.
+linked_worktree() {
+  local gd common
+  [ -f "$1/.git" ] || return 1
+  gd=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  common=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  [ "$gd" != "$common" ]
+}
+
 # The verdict cache and log directory. A linked worktree with no home named
 # has none, so a worktree can never seed its own cached allow.
 state_dir() {
@@ -157,7 +169,7 @@ state_dir() {
     printf '%s/publish-judge' "$FM_STATE_OVERRIDE"
   elif [ -n "${FM_HOME:-}" ]; then
     printf '%s/state/publish-judge' "$FM_HOME"
-  elif [ ! -f "$ROOT/.git" ]; then
+  elif ! linked_worktree "$ROOT"; then
     printf '%s/state/publish-judge' "$ROOT"
   else
     return 1

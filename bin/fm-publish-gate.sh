@@ -245,6 +245,18 @@ task_hooks_config() {
   esac
 }
 
+# linked_worktree <dir>: true when <dir> is a linked git worktree, whose git
+# dir is not its repository's common dir. A plain clone, a separate-git-dir
+# clone, a submodule, or no repository is not; a .git file git cannot read is
+# treated as one.
+linked_worktree() {
+  local gd common
+  [ -f "$1/.git" ] || return 1
+  gd=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  common=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  [ "$gd" != "$common" ]
+}
+
 # home_config: print the owning home's publish-guard directory (PRIVATE CONFIG
 # owns the order), or fail when no home owns this invocation.
 home_config() {
@@ -254,7 +266,7 @@ home_config() {
     printf '%s/config/publish-guard' "$FM_HOME"
   elif task_hooks_config; then
     :
-  elif [ ! -f "$ROOT/.git" ]; then
+  elif ! linked_worktree "$ROOT"; then
     printf '%s/config/publish-guard' "$ROOT"
   else
     return 1
