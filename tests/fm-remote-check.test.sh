@@ -62,6 +62,14 @@ SH
   cat > "$repo/bin/fm-test-run.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'TEST args=[%s]\n' "$*"
+prev=
+for arg in "$@"; do
+  base=
+  [ "$prev" != --base ] || base=$arg
+  case "$arg" in --base=*) base=${arg#--base=} ;; esac
+  [ -z "$base" ] || printf 'TEST base %s=%s\n' "$base" "$(git rev-parse --verify -q "$base^{commit}" || echo missing)"
+  prev=$arg
+done
 exit "$(cat test-exit)"
 SH
   cat > "$repo/bin/fm-install-shellcheck.sh" <<'SH'
@@ -122,6 +130,7 @@ test_only_committed_tree_is_sent() {
   local repo clone
   repo=$(new_fixture private)
   printf 'DIRTY-EDIT-MARKER\n' >> "$repo/tracked.txt"
+  printf '# DIRTY-RUNNER-MARKER\n' >> "$repo/bin/fm-remote-check.sh"
   run_check "$repo" lint
   expect_code 0 "$RC" "a lint run with private files present"
   assert_contains "$OUT" "LINT file ./feature.txt" "the committed tree reaches the remote"
@@ -152,7 +161,8 @@ SH
   git -C "$clone" rev-list --objects --all | awk '{print $1}' \
     | git -C "$clone" cat-file --batch > "$TMP_ROOT/objects"
   assert_grep "COMMITTED-MARKER" "$TMP_ROOT/objects" "the object dump holds committed content"
-  if grep -a -E 'PRIVATE-|UNTRACKED-|DIRTY-EDIT|devbox-alias' "$TMP_ROOT/objects"; then
+  assert_grep "rc_remote_main" "$TMP_ROOT/stream/runner.sh" "the committed runner is sent"
+  if grep -a -r -E 'PRIVATE-|UNTRACKED-|DIRTY-|devbox-alias' "$TMP_ROOT/objects" "$TMP_ROOT/stream"; then
     fail "the bundle carries private, untracked or uncommitted content"
   fi
   pass "only committed history is sent; config, data, state, untracked and dirty edits stay local"
@@ -265,5 +275,30 @@ test_only_committed_tree_is_sent
 test_refuses_when_unconfigured
 test_exit_status_propagates
 test_remote_cleans_up_and_installs_tools_once
+test_named_base_refs_reach_the_remote() {
+  local repo base_sha orphan
+  repo=$(new_fixture bases)
+  base_sha=$(git -C "$repo" rev-parse main)
+  git -C "$repo" branch release main
+  git -C "$repo" tag v1 main
+  run_check "$repo" test --changed --base release --then test --changed --base=v1 \
+    --then test --changed --base HEAD~1
+  expect_code 0 "$RC" "base refs named by the test steps"
+  assert_contains "$OUT" "TEST base release=$base_sha" "a named branch base is recreated remotely"
+  assert_contains "$OUT" "TEST base v1=$base_sha" "a --base= tag is recreated remotely"
+  assert_contains "$OUT" "TEST base HEAD~1=$base_sha" "a base inside the sent history resolves"
+
+  run_check "$repo" test --changed --base no-such-ref
+  expect_code 64 "$RC" "an unknown base"
+  [ ! -s "$SSH_LOG" ] || fail "ssh ran for an unknown base"
+  orphan=$(git -C "$repo" commit-tree -m orphan "$(git -C "$repo" mktree </dev/null)")
+  run_check "$repo" test --changed --base "$orphan"
+  expect_code 64 "$RC" "a commit outside the sent history"
+  assert_contains "$OUT" "name a branch or tag" "the refusal says how to fix it"
+  [ ! -s "$SSH_LOG" ] || fail "ssh ran for an unsendable base"
+  pass "named --base refs reach the remote and unsendable bases refuse before ssh"
+}
+
 test_dropped_connection_stops_the_step
+test_named_base_refs_reach_the_remote
 test_usage_errors

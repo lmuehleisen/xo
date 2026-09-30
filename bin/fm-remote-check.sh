@@ -34,11 +34,15 @@
 # nothing else names it. The checked commit is this repository's HEAD. Only
 # committed history is sent: a git bundle of HEAD plus origin/main (else
 # main) when present, so the remote reproduces fm-lint.sh's changed-file mode
-# and fm-test-run.sh --changed against the same base. Uncommitted edits,
-# untracked files, and the home's config/, data/ and state/ never leave this
-# machine; a dirty tree only prints a note.
+# and fm-test-run.sh --changed against the same base, plus the ref each
+# --base <ref> argument names, recreated under the same name. A --base that is
+# neither a ref nor a commit in that history is a usage error. Uncommitted
+# edits, including edits to this script, untracked files, and the home's
+# config/, data/ and state/ never leave this machine; a dirty tree only prints
+# a note.
 #
-# The remote side is this same script, sent beside the bundle and run as
+# The remote side is the checked commit's own copy of this script, sent beside
+# the bundle and run as
 # `bash runner.sh --remote-side <dir>`. It works in a fresh
 # ~/fm-remote-check/<commit>.XXXXXX directory, removes it on exit, and sweeps
 # directories older than a day left by interrupted runs. It checks out the
@@ -180,12 +184,11 @@ rc_remote_main() {  # <run-dir>
 
   git init -q "$dir/work" || rc_die 1 "git init failed on the remote"
   cd "$dir/work" || exit 1
-  if git bundle list-heads ../src.bundle | grep -q ' refs/remotes/origin/main$'; then
-    git fetch -q ../src.bundle '+refs/remotes/origin/main:refs/remotes/origin/main' \
-      || rc_die 1 "could not fetch the base ref from the bundle"
-  elif git bundle list-heads ../src.bundle | grep -q ' refs/heads/main$'; then
-    git fetch -q ../src.bundle '+refs/heads/main:refs/remotes/origin/main' \
-      || rc_die 1 "could not fetch the base ref from the bundle"
+  git fetch -q --update-head-ok ../src.bundle '+refs/*:refs/*' \
+    || rc_die 1 "could not fetch the base refs from the bundle"
+  if ! git rev-parse --verify -q refs/remotes/origin/main >/dev/null \
+    && git rev-parse --verify -q refs/heads/main >/dev/null; then
+    git update-ref refs/remotes/origin/main refs/heads/main
   fi
   git fetch -q ../src.bundle HEAD || rc_die 1 "could not fetch the checked commit from the bundle"
   if [ -n "$branch" ]; then
@@ -279,6 +282,33 @@ if git rev-parse --verify -q refs/remotes/origin/main >/dev/null; then
 elif git rev-parse --verify -q refs/heads/main >/dev/null; then
   BASE_REF=refs/heads/main
 fi
+# rc_add_base <ref>: bundle a named base ref, or accept a commit the bundle
+# already carries; anything else cannot be reproduced remotely.
+BASE_REFS=()
+rc_add_base() {
+  local full commit
+  full=$(git rev-parse --symbolic-full-name "$1" 2>/dev/null) || full=
+  case "$full" in
+    refs/*)
+      git rev-parse --verify -q "$full^{commit}" >/dev/null \
+        || rc_die "$EXIT_USAGE" "--base $1 does not name a commit"
+      BASE_REFS+=("$full")
+      return 0
+      ;;
+  esac
+  commit=$(git rev-parse --verify -q "$1^{commit}") \
+    || rc_die "$EXIT_USAGE" "--base $1 does not name a commit"
+  git merge-base --is-ancestor "$commit" HEAD 2>/dev/null \
+    || { [ -n "$BASE_REF" ] && git merge-base --is-ancestor "$commit" "$BASE_REF" 2>/dev/null; } \
+    || rc_die "$EXIT_USAGE" "--base $1 is not in the history sent to the remote; name a branch or tag"
+}
+PREV_ARG=
+for ARG in "$@"; do
+  [ "$PREV_ARG" != --base ] || rc_add_base "$ARG"
+  case "$ARG" in --base=*) rc_add_base "${ARG#--base=}" ;; esac
+  PREV_ARG=$ARG
+done
+
 if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
   printf 'fm-remote-check.sh: note: uncommitted changes are not sent; checking committed %s\n' "${SHA:0:12}" >&2
 fi
@@ -291,10 +321,11 @@ STAGE=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-check.XXXXXX") || rc_die 1 "cannot 
 trap 'rm -rf "$STAGE"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-cat "${BASH_SOURCE[0]}" > "$STAGE/runner.sh"
+git show "$SHA:bin/fm-remote-check.sh" > "$STAGE/runner.sh" 2>/dev/null \
+  || rc_die 1 "commit ${SHA:0:12} has no bin/fm-remote-check.sh to run remotely"
 printf 'sha=%s\nbranch=%s\n' "$SHA" "$BRANCH" > "$STAGE/meta"
 printf '%s\0' "$@" > "$STAGE/argv"
-git bundle create -q "$STAGE/src.bundle" HEAD ${BASE_REF:+"$BASE_REF"} \
+git bundle create -q "$STAGE/src.bundle" HEAD ${BASE_REF:+"$BASE_REF"} ${BASE_REFS[@]+"${BASE_REFS[@]}"} \
   || rc_die 1 "git bundle of HEAD failed"
 
 REMOTE_CMD="set -e; umask 077; b=\"\$HOME/$REMOTE_BASE_NAME\"; mkdir -p \"\$b\"; d=\$(mktemp -d \"\$b/${SHA:0:12}.XXXXXX\"); tar -xf - -C \"\$d\" || { rm -rf \"\$d\"; exit 1; }; exec bash \"\$d/runner.sh\" --remote-side \"\$d\""
