@@ -16,6 +16,9 @@ unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_PARAMETERS
 
 STRIP="$ROOT/bin/fm-git-strip-ai-trailers.sh"
 TMP_ROOT=$(fm_test_tmproot fm-git-strip-ai-trailers)
+# Installs here name no publish-guard directory, so the gate needs a home; an
+# empty one keeps these local cases as they are in a plain clone.
+export FM_CONFIG_OVERRIDE="$TMP_ROOT/config"
 
 fm_git_identity 'Captain Tests' 'captain@example.invalid'
 

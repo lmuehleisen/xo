@@ -891,6 +891,7 @@ A remote secondmate is launched on its host from its own home's configuration, s
 
 The publish guard keeps private identities, names, and old history off public forges.
 It is one directory of private files that `bin/fm-publish-gate.sh` reads; that script's header owns the file formats, the destination classes, and every check.
+The gate always reads the owning home's directory, including from a worker's own copy of this repository, which never supplies its own; its header's PRIVATE CONFIG owns how that home is found.
 
 | File | Holds |
 | --- | --- |
