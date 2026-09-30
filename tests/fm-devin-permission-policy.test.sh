@@ -33,6 +33,12 @@ printf 'name=Fixture\nemail=fixture@example.invalid\n' >"$TMP_ROOT/config/publis
 printf 'synthetic-denylist-term\n' >"$TMP_ROOT/config/publish-guard/denylist"
 printf 'public owner/name\npublic owner/other\npublic someone/name\n' >"$TMP_ROOT/config/publish-guard/allowlist"
 export FM_CONFIG_OVERRIDE="$TMP_ROOT/config"
+# Text bound for a listed public destination reaches the publish judge; stub
+# judges that allow everything keep these cases off any real model and off
+# this machine's sign-in state (tests/fm-publish-judge.test.sh covers it).
+mkdir -p "$TMP_ROOT/judge-bin"
+fm_fake_publish_judges "$TMP_ROOT/judge-bin" "$TMP_ROOT/config/publish-guard"
+export FM_STATE_OVERRIDE="$TMP_ROOT/state"
 
 command -v jq >/dev/null 2>&1 || {
   printf 'skip - fm-devin-permission-policy: jq not installed\n'

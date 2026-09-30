@@ -620,8 +620,9 @@ test_binary_and_empty_file_names_are_scanned() {
     esac
     git -C "$repo" add "$name"
     pinned git -C "$repo" commit -q -m 'add artifact'
-    [ -z "$(git -C "$repo" show --format= HEAD | grep '^+++ ')" ] \
-      || fail "the fixture must have no +++ line, or it does not prove the name is read elsewhere: $name"
+    if git -C "$repo" show --format= HEAD | grep '^+++ ' >/dev/null; then
+      fail "the fixture must have no +++ line, or it does not prove the name is read elsewhere: $name"
+    fi
     push_expect "$repo" 1 "binary or empty $name"
     assert_contains "$PUSH_OUT" "location redacted" "the name of a binary or empty file is scanned"
     assert_no_secret_echo "$PUSH_OUT" "binary name"
@@ -666,9 +667,11 @@ test_unlisted_github_destination_is_refused() {
   [ "$rc" -ne 0 ] || fail "an unlisted upstream destination should be refused"
   assert_contains "$HOOK_OUT" "example-org/upstream is not on the allowlist" "unlisted reason"
   hook_direct origin git@github.com:someone-else/fork.git
-  [ $? -ne 0 ] || fail "an unlisted SSH destination should be refused"
-  hook_direct origin https://gitlab.com/acme/widgets.git
-  [ $? -ne 0 ] || fail "a non-GitHub network destination should be refused"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an unlisted SSH destination should be refused"
+  if hook_direct origin https://gitlab.com/acme/widgets.git; then
+    fail "a non-GitHub network destination should be refused"
+  fi
   pass "unlisted GitHub destinations (including an upstream's) and non-GitHub hosts are refused"
 }
 
@@ -722,8 +725,9 @@ test_private_destination_needs_live_confirmation() {
   assert_contains "$HOOK_OUT" "acme/secret-app is listed private but is public now" "public-now reason"
   assert_contains "$HOOK_OUT" "fix: sed -i.bak 's#^private acme/secret-app\$#public acme/secret-app#'" "public-now fix line"
   rm -f "$FAKEBIN/gh"
-  hook_direct origin https://github.com/acme/secret-app.git
-  [ $? -ne 0 ] || fail "a private entry whose live read fails should be refused"
+  if hook_direct origin https://github.com/acme/secret-app.git; then
+    fail "a private entry whose live read fails should be refused"
+  fi
   assert_contains "$HOOK_OUT" "could not confirm acme/secret-app is private" "unconfirmed private reason"
   assert_contains "$HOOK_OUT" "fix: printf '%s\\n' \"\$(command -v gh)\" > '$CFG/gh'" "missing trusted gh fix line"
   reset_trusted_gh
@@ -748,11 +752,13 @@ test_private_check_ignores_worker_gh_and_proxy() {
 #!/usr/bin/env bash
 if [ -n "${HTTPS_PROXY:-}${GH_HOST:-}${GH_CONFIG_DIR:-}" ]; then printf 'true\n'; else printf 'false\n'; fi
 SH
-  HTTPS_PROXY=http://127.0.0.1:9 GH_HOST=ghe.example GH_CONFIG_DIR="$TMP_ROOT" hook_direct origin https://github.com/acme/secret-app.git
-  [ $? -ne 0 ] || fail "proxy, host, and gh-config variables must not reach the privacy read"
+  if HTTPS_PROXY=http://127.0.0.1:9 GH_HOST=ghe.example GH_CONFIG_DIR="$TMP_ROOT" hook_direct origin https://github.com/acme/secret-app.git; then
+    fail "proxy, host, and gh-config variables must not reach the privacy read"
+  fi
   printf '%s\n' "$TMP_ROOT/no-such-gh" >"$CFG/gh"
-  hook_direct origin https://github.com/acme/secret-app.git
-  [ $? -ne 0 ] || fail "a configured gh that does not exist must refuse"
+  if hook_direct origin https://github.com/acme/secret-app.git; then
+    fail "a configured gh that does not exist must refuse"
+  fi
   reset_trusted_gh
   pass "the privacy read ignores a gh on PATH and the environment's proxy, host, and gh config"
 }
@@ -775,7 +781,7 @@ test_suggest_allowlist_lists_only_confirmed_private_repos() {
   assert_contains "$out" "private acme/secret-app" "a confirmed private repo is suggested"
   assert_contains "$out" "# site: acme/site is not confirmed private" "an unconfirmed repo is only a comment"
   assert_contains "$out" "example-org/tool is never suggested" "an upstream owner's repo is never suggested"
-  [ -z "$(printf '%s\n' "$out" | grep '^public ')" ] || fail "nothing may be suggested as a public row: $out"
+  case $'\n'"$out" in *$'\n''public '*) fail "nothing may be suggested as a public row: $out" ;; esac
   # Even confirmed private, a repository of an owner in the upstream file is
   # never suggested; without that file the same repository would be.
   out=$(FM_TEST_GH_REPO=example-org/tool FM_HOME="$home" "$GATE" suggest-allowlist 2>&1) ||
@@ -896,12 +902,14 @@ test_owned_repos_pass_while_private() {
   install_gh_stub
   FM_TEST_GH_REPO=example-owner/tools hook_direct origin https://github.com/example-owner/tools.git \
     || fail "a confirmed-private repository of the identity's login should pass with no entry: $HOOK_OUT"
-  FM_TEST_GH_REPO=example-owner/tools FM_TEST_GH_PRIVATE=false hook_direct origin https://github.com/example-owner/tools.git
-  [ $? -ne 0 ] || fail "an owner's repository that is public needs an allowlist entry"
+  if FM_TEST_GH_REPO=example-owner/tools FM_TEST_GH_PRIVATE=false hook_direct origin https://github.com/example-owner/tools.git; then
+    fail "an owner's repository that is public needs an allowlist entry"
+  fi
   assert_contains "$HOOK_OUT" "example-owner/tools is public and is not on the allowlist" "owned public reason"
   assert_contains "$HOOK_OUT" "fix: printf 'public %s\\n' 'example-owner/tools' >> '$CFG/allowlist'" "owned public fix"
-  FM_TEST_GH_REPO=someone-else/tools hook_direct origin https://github.com/someone-else/tools.git
-  [ $? -ne 0 ] || fail "another owner's repository still needs an entry"
+  if FM_TEST_GH_REPO=someone-else/tools hook_direct origin https://github.com/someone-else/tools.git; then
+    fail "another owner's repository still needs an entry"
+  fi
   assert_contains "$HOOK_OUT" "someone-else/tools is not on the allowlist" "other owner reason"
   FM_TEST_GH_REPO=example-owner/tools hook_direct origin https://github.com/example-owner/tools.git \
     || fail "the owner's repository should pass again once private: $HOOK_OUT"
@@ -910,15 +918,17 @@ test_owned_repos_pass_while_private() {
     || fail "a verdict from the last 24 hours should carry a push the live read cannot answer: $HOOK_OUT"
   assert_contains "$HOOK_OUT" "using its private verdict from the last 24 hours" "cached verdict note"
   printf 'example-owner/tools %s\n' "$(($(date +%s) - 90000))" >"$CFG/private-verdicts"
-  hook_direct origin https://github.com/example-owner/tools.git
-  [ $? -ne 0 ] || fail "a verdict older than 24 hours must not carry a push"
+  if hook_direct origin https://github.com/example-owner/tools.git; then
+    fail "a verdict older than 24 hours must not carry a push"
+  fi
   assert_contains "$HOOK_OUT" "no verdict from the last 24 hours" "stale verdict reason"
   printf 'acme-org\n' >"$CFG/owners"
   install_gh_stub
   FM_TEST_GH_REPO=acme-org/app hook_direct origin https://github.com/acme-org/app.git \
     || fail "an owners entry should admit its confirmed-private repository: $HOOK_OUT"
-  FM_TEST_GH_REPO=example-owner/tools hook_direct origin https://github.com/example-owner/tools.git
-  [ $? -ne 0 ] || fail "with an owners file the identity's login is no longer an owner"
+  if FM_TEST_GH_REPO=example-owner/tools hook_direct origin https://github.com/example-owner/tools.git; then
+    fail "with an owners file the identity's login is no longer an owner"
+  fi
   rm -f "$CFG/owners" "$CFG/private-verdicts"
   printf 'Built for %s.\n' "$PRIVATE_TERM" >"$TMP_ROOT/owned-body.md"
   FM_TEST_GH_REPO=example-owner/tools policy 'gh pr create --repo example-owner/tools --title t --body-file owned-body.md' \
@@ -1029,37 +1039,37 @@ test_pre_commit_checks_the_staged_change() {
 # path and the verdict cache stay per home, and none of it is pasted into an
 # agent's re-read instruction.
 test_secondmate_home_inherits_publish_guard() {
-  local src="$TMP_ROOT/primary/config" home="$TMP_ROOT/secondmate-home" report="$TMP_ROOT/inherit-report" item changed payload bytes hash
-  rm -rf "$TMP_ROOT/primary" "$home" "$report"
-  mkdir -p "$src/publish-guard" "$home"
-  for item in identity allowlist denylist poison-commits; do cp "$CFG/$item" "$src/publish-guard/$item"; done
-  printf 'example-org/upstream\n' >"$src/publish-guard/upstream"
-  printf 'example-owner\n' >"$src/publish-guard/owners"
-  printf '/opt/homebrew/bin/gh\n' >"$src/publish-guard/gh"
-  printf 'example-owner/tools 1\n' >"$src/publish-guard/private-verdicts"
+  local primary_cfg="$TMP_ROOT/primary/config" sm_home="$TMP_ROOT/secondmate-home" report="$TMP_ROOT/inherit-report" item changed payload bytes hash
+  rm -rf "$TMP_ROOT/primary" "$sm_home" "$report"
+  mkdir -p "$primary_cfg/publish-guard" "$sm_home"
+  for item in identity allowlist denylist poison-commits; do cp "$CFG/$item" "$primary_cfg/publish-guard/$item"; done
+  printf 'example-org/upstream\n' >"$primary_cfg/publish-guard/upstream"
+  printf 'example-owner\n' >"$primary_cfg/publish-guard/owners"
+  printf '/opt/homebrew/bin/gh\n' >"$primary_cfg/publish-guard/gh"
+  printf 'example-owner/tools 1\n' >"$primary_cfg/publish-guard/private-verdicts"
   : >"$report"
   (
     unset FM_INHERITABLE_CONFIG
     # shellcheck source=bin/fm-config-inherit-lib.sh
     . "$ROOT/bin/fm-config-inherit-lib.sh"
-    FM_CONFIG_INHERIT_REPORT="$report" propagate_inheritable_config "$src" "$home/config"
+    FM_CONFIG_INHERIT_REPORT="$report" propagate_inheritable_config "$primary_cfg" "$sm_home/config"
   ) || fail "propagation into the secondmate home failed"
   for item in identity allowlist denylist poison-commits upstream owners; do
-    cmp -s "$src/publish-guard/$item" "$home/config/publish-guard/$item" \
+    cmp -s "$primary_cfg/publish-guard/$item" "$sm_home/config/publish-guard/$item" \
       || fail "the secondmate home did not inherit publish-guard/$item"
   done
-  assert_absent "$home/config/publish-guard/gh" "the machine-local gh path must stay per home"
-  assert_absent "$home/config/publish-guard/private-verdicts" "the verdict cache must stay per home"
+  assert_absent "$sm_home/config/publish-guard/gh" "the machine-local gh path must stay per home"
+  assert_absent "$sm_home/config/publish-guard/private-verdicts" "the verdict cache must stay per home"
   changed=$(
     unset FM_INHERITABLE_CONFIG
     . "$ROOT/bin/fm-config-inherit-lib.sh"
     fm_config_reread_changed_items "$report"
   )
   assert_not_contains "$changed" "publish-guard" "publish-guard files must never be inlined into a re-read instruction"
-  assert_equals owned "$("$GATE" classify https://github.com/example-owner/tools.git --config "$home/config/publish-guard")" \
+  assert_equals owned "$("$GATE" classify https://github.com/example-owner/tools.git --config "$sm_home/config/publish-guard")" \
     "the secondmate's gate reads the inherited owners"
   # The remote route accepts the nested item and refuses a redirected parent.
-  payload="$src/publish-guard/identity"
+  payload="$primary_cfg/publish-guard/identity"
   bytes=$(LC_ALL=C wc -c <"$payload" | tr -d ' ')
   hash=$(shasum -a 256 "$payload" 2>/dev/null | awk '{print $1}')
   [ -n "$hash" ] || hash=$(sha256sum "$payload" | awk '{print $1}')
@@ -1103,6 +1113,7 @@ test_gh_guard() {
   [ $? -eq 2 ] || fail "a session link in a PR comment should be refused"
   policy "gh issue create --repo acme/widgets --title 'Ask $LEAK_EMAIL' --body ok"
   [ $? -eq 2 ] || fail "a private email in an issue title should be refused"
+  # shellcheck disable=SC2016 # the unexpanded $BODY is the unreadable body under test
   policy 'gh pr create --repo acme/widgets --title t --body "$BODY"'
   [ $? -eq 2 ] || fail "an unreadable body should be refused"
   assert_contains "$POLICY_OUT" "gh-unreadable-text" "unreadable code"

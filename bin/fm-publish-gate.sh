@@ -199,7 +199,9 @@ say() {
 # (or the one edit) that fixes it.
 refuse() {
   say "REFUSED: $1"
-  say "fix: ${2:-read '$(basename "$SELF") policy' and correct what the lines above name}"
+  local fix=${2:-}
+  [ -n "$fix" ] || fix="read '$(basename "$SELF") policy' and correct what the lines above name"
+  say "fix: $fix"
   exit 1
 }
 
@@ -1035,7 +1037,7 @@ upstream_sources() {
 }
 
 cmd_pre_push() {
-  local url=$2 lref lsha rref rsha excl out src
+  local url=$2 lsha rref rsha excl out src
   classify_destination "$url"
   case "$DEST_CLASS" in
   local) exit 0 ;;
@@ -1047,7 +1049,7 @@ cmd_pre_push() {
   corpus_reset
   : >"$PG_TMP/tips.txt"
   : >"$PG_TMP/public.txt"
-  while read -r lref lsha rref rsha; do
+  while read -r _ lsha rref rsha; do
     [ -n "${lsha:-}" ] || continue
     is_zero "$lsha" && continue
     case "$rref" in
