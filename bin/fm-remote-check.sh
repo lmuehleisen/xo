@@ -37,11 +37,12 @@
 # prepends ~/.local/bin to PATH, and installs the tree's pinned ShellCheck
 # and actionlint there with bin/fm-install-shellcheck.sh and
 # bin/fm-install-actionlint.sh when the installed version differs from the
-# pin. FM_LINT_JOBS, when set locally, is the only environment passed to the
-# remote. Each step runs in its own process group, and a dropped connection
-# (the runner losing its ssh parent) or a signal stops the step and removes
-# the directory. The remote needs bash, git, tar, curl, xz and ps; there is no
-# daemon or queue, so concurrent runs simply share the host.
+# pin. No local environment is passed to the remote. Each step runs in its
+# own process group, and a dropped connection (the runner losing its ssh
+# parent) or a signal stops the step and removes the directory. The remote
+# needs bash, git, tar, curl, xz and ps; there is no daemon or queue, so
+# concurrent runs simply share the host, and running the two lint partitions
+# as two concurrent invocations roughly halves full-lint wall time.
 set -u
 
 REMOTE_BASE_NAME=fm-remote-check
@@ -150,7 +151,7 @@ rc_remote_watchdog() {  # <runner-pid> <parent-pid> <step-pid>
 }
 
 rc_remote_main() {  # <run-dir>
-  local dir=$1 base="$HOME/$REMOTE_BASE_NAME" sha branch lint_jobs step start rc first_rc=0 arg
+  local dir=$1 base="$HOME/$REMOTE_BASE_NAME" sha branch step start rc first_rc=0 arg
   local parent=$PPID watchdog
   local -a argv step_args
   case "$dir" in
@@ -166,11 +167,6 @@ rc_remote_main() {  # <run-dir>
 
   sha=$(sed -n 's/^sha=//p' "$dir/meta")
   branch=$(sed -n 's/^branch=//p' "$dir/meta")
-  lint_jobs=$(sed -n 's/^lint_jobs=//p' "$dir/meta")
-  case "$lint_jobs" in
-    ''|*[!0-9]*) ;;
-    *) export FM_LINT_JOBS="$lint_jobs" ;;
-  esac
   argv=()
   while IFS= read -r -d '' arg; do argv+=("$arg"); done < "$dir/argv"
 
@@ -288,11 +284,7 @@ trap 'rm -rf "$STAGE"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 cat "${BASH_SOURCE[0]}" > "$STAGE/runner.sh"
-LINT_JOBS=${FM_LINT_JOBS:-}
-case "$LINT_JOBS" in
-  *[!0-9]*) rc_die "$EXIT_USAGE" "FM_LINT_JOBS must be a positive integer" ;;
-esac
-printf 'sha=%s\nbranch=%s\nlint_jobs=%s\n' "$SHA" "$BRANCH" "$LINT_JOBS" > "$STAGE/meta"
+printf 'sha=%s\nbranch=%s\n' "$SHA" "$BRANCH" > "$STAGE/meta"
 printf '%s\0' "$@" > "$STAGE/argv"
 git bundle create -q "$STAGE/src.bundle" HEAD ${BASE_REF:+"$BASE_REF"} \
   || rc_die 1 "git bundle of HEAD failed"
