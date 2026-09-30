@@ -17,6 +17,8 @@
 # Every CLI operation is routed through one guarded named non-default lab, and
 # lab teardown verifies that the default fleet session is byte-identical.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
@@ -47,7 +49,7 @@ cleanup() {
     wait "$SAMPLER_PID" 2>/dev/null || true
   fi
   env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || status=1
-  rm -rf "$TMP_ROOT"
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
   exit "$status"
 }
 trap cleanup EXIT

@@ -68,6 +68,8 @@ REAL_PS_FOR_TEST=$(command -v ps)
 export REAL_PS_FOR_TEST
 REAL_LSOF_FOR_TEST=$(command -v lsof)
 export REAL_LSOF_FOR_TEST
+REAL_TMUX_FOR_TEST=$(command -v tmux)
+export REAL_TMUX_FOR_TEST
 
 # Build a fresh sandbox for one test case. Sets up:
 #   $CASE/state/        - firstmate state dir (with a fresh watcher beacon)
@@ -262,6 +264,7 @@ SH
   cat > "$case_dir/fakebin/gh" <<SH
 #!/usr/bin/env bash
 case "\${1:-} \${2:-}" in
+  "pr list") printf '7\n' ; exit 0 ;;
   "pr view")
     case " \$* " in
       *"state,headRefOid,url"*) printf '%s\t%s\t%s\n' 'MERGED' '$head' 'https://github.com/example/repo/pull/7' ; exit 0 ;;
@@ -3742,6 +3745,7 @@ test_lsof_absent_reaps_tmux_process_group() {
   local case_dir rc pid path_without_lsof
   case_dir=$(make_case lsof-absent-process-group-reap)
   write_meta "$case_dir" no-mistakes ship
+  printf 'window_id=@5\n' >> "$case_dir/state/task-x1.meta"
   land_shippable_commit "$case_dir"
   path_without_lsof=$(make_path_without_lsof "$case_dir")
   PATH="$path_without_lsof" command -v lsof >/dev/null 2>&1 \
@@ -3752,10 +3756,22 @@ test_lsof_absent_reaps_tmux_process_group() {
   disown
   sleep 0.3
   kill -0 "$pid" 2>/dev/null || fail "lsof-absent-process-group-reap: setup sleeper did not start"
+  # The stub must satisfy the fallback's reads: the recorded window's
+  # presence proof (fm_backend_tmux_target_presence's inventory read) answers
+  # fm-task-x1, and the bound pane_pid read is addressed to the recorded
+  # immutable window id and answers the sleeper together with that same id.
+  # It answers per format so it stays truthful under either read shape.
   cat > "$case_dir/fakebin/tmux" <<EOF
 #!/usr/bin/env bash
-if [ "\${1:-}" = display-message ] && [ "\${*: -1}" = '#{pane_pid}' ]; then
-  printf '%s\n' '$pid'
+if [ "\${1:-}" = list-windows ]; then
+  printf 'fm-task-x1\n'
+elif [ "\${1:-}" = display-message ]; then
+  case "\${*: -1}" in
+    '#{pane_pid} #{window_id}')
+      printf '%s @5\n' '$pid' ;;
+    '#{pane_pid}')
+      printf '%s\n' '$pid' ;;
+  esac
 fi
 exit 0
 EOF
@@ -3773,6 +3789,246 @@ EOF
   assert_grep "reaping leaked worktree process group" "$case_dir/stderr" \
     "lsof-absent-process-group-reap: teardown did not use the process-group fallback"
   pass "missing lsof falls back to reaping the tmux pane process group"
+}
+
+test_lsof_absent_gone_window_never_reaps_another_pane() {
+  local case_dir rc victim_pid path_without_lsof sock tmux_bin
+  local victim_alive=0 pane_pid_read=0
+  case_dir=$(make_case lsof-absent-gone-window)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  tmux_bin=${REAL_TMUX_FOR_TEST:-}
+  if [ -z "$tmux_bin" ]; then
+    pass "tmux is not installed; private-socket regression skipped"
+    return 0
+  fi
+  path_without_lsof=$(make_path_without_lsof "$case_dir")
+  PATH="$path_without_lsof" command -v lsof >/dev/null 2>&1 \
+    && fail "lsof-absent-gone-window: fixture path unexpectedly exposes lsof"
+
+  # A real private tmux server holds a live firstmate session whose only
+  # window is another task's pane; the recorded task window fm-task-x1 is
+  # gone. That is the exact shape where `display-message -t` answers from the
+  # session's active pane with exit 0, so an unguarded pane_pid read resolves
+  # to the victim's process and a group reap kills another task's pane.
+  # The socket path must stay short (unix socket name limit), so it lives at
+  # /tmp rather than inside the deep per-case fixture dir.
+  sock="/tmp/fm-td-gone-$$.sock"
+  rm -f "$sock"
+  env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" \
+    new-session -d -s firstmate -n fm-other-task 'sleep 300' \
+    || fail "lsof-absent-gone-window: could not start the private tmux server"
+  sleep 0.3
+  victim_pid=$(env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" \
+    display-message -p -t firstmate:fm-other-task '#{pane_pid}') \
+    || fail "lsof-absent-gone-window: could not read the decoy pane's pid"
+  kill -0 "$victim_pid" 2>/dev/null \
+    || fail "lsof-absent-gone-window: decoy pane process did not start"
+
+  # Every bare `tmux` call teardown makes reaches the private socket through
+  # this shim and is logged, so the test proves the pane_pid read never ran
+  # rather than only proving its victim survived.
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/tmux-calls.log"
+exec env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" "\$@"
+EOF
+  chmod +x "$case_dir/fakebin/tmux"
+
+  rc=0
+  FM_TEARDOWN_TEST_PATH="$path_without_lsof" TMUX='' TMUX_PANE='' \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  kill -0 "$victim_pid" 2>/dev/null && victim_alive=1
+  if [ -e "$case_dir/tmux-calls.log" ] \
+     && grep -F 'pane_pid' "$case_dir/tmux-calls.log" >/dev/null; then
+    pane_pid_read=1
+  fi
+  # The private server goes down before any assertion can exit, so a failure
+  # here never leaks a tmux server or its decoy process.
+  env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" kill-server >/dev/null 2>&1 || true
+
+  expect_code 0 "$rc" "lsof-absent-gone-window: teardown should succeed"
+  [ "$pane_pid_read" -eq 0 ] \
+    || fail "lsof-absent-gone-window: teardown read a pane_pid while the task window was gone"
+  [ "$victim_alive" -eq 1 ] \
+    || fail "lsof-absent-gone-window: teardown reaped another pane's process group"
+  assert_grep "tmux task window firstmate:fm-task-x1 is not present" "$case_dir/stderr" \
+    "lsof-absent-gone-window: teardown did not report skipping the pane reap"
+  pass "a gone task window skips the pane process-group reap; another pane's group is never read or killed"
+}
+
+test_lsof_absent_misresolved_pane_read_is_never_reaped() {
+  local case_dir rc pid path_without_lsof
+  case_dir=$(make_case lsof-absent-misresolved-read)
+  write_meta "$case_dir" no-mistakes ship
+  printf 'window_id=@5\n' >> "$case_dir/state/task-x1.meta"
+  land_shippable_commit "$case_dir"
+  path_without_lsof=$(make_path_without_lsof "$case_dir")
+  PATH="$path_without_lsof" command -v lsof >/dev/null 2>&1 \
+    && fail "lsof-absent-misresolved-read: fixture path unexpectedly exposes lsof"
+
+  # A process group leader that is NOT the task's pane - the group an
+  # unguarded read would signal if the resolved window were trusted blindly.
+  perl -e 'setpgrp(0, 0); exec "sleep", "300"' &
+  pid=$!
+  disown
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "lsof-absent-misresolved-read: setup sleeper did not start"
+
+  # The record pins the window object @5, the name still reads present, but
+  # the pane_pid read addressed to @5 comes back answered by a DIFFERENT
+  # window object - the live shape of any tmux resolution that did not find
+  # the recorded window. The reap must refuse the mismatched answer rather
+  # than signal the foreign group. The stub answers per format so the same
+  # read against an unbound caller (plain '#{pane_pid}') still resolves to
+  # the foreign pane exactly as a live server's active-pane fallback would.
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = list-windows ]; then
+  printf 'fm-task-x1\n'
+elif [ "\${1:-}" = display-message ]; then
+  case "\${*: -1}" in
+    '#{pane_pid} #{window_id}')
+      printf '%s @9\n' '$pid' ;;
+    '#{pane_pid}')
+      printf '%s\n' '$pid' ;;
+  esac
+fi
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/tmux"
+
+  rc=0
+  FM_TEARDOWN_TEST_PATH="$path_without_lsof" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "lsof-absent-misresolved-read: teardown should succeed"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "lsof-absent-misresolved-read: teardown reaped a process group from a window other than the task's"
+  fi
+  kill -KILL "$pid" 2>/dev/null || true
+  assert_grep "did not resolve recorded window @5" "$case_dir/stderr" \
+    "lsof-absent-misresolved-read: teardown did not report the misresolved pane read"
+  pass "a pane_pid read answered by another window is never reaped as the task's process group"
+}
+
+test_lsof_absent_record_without_window_id_never_reaps() {
+  local case_dir rc pid path_without_lsof
+  case_dir=$(make_case lsof-absent-no-window-id)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  path_without_lsof=$(make_path_without_lsof "$case_dir")
+  PATH="$path_without_lsof" command -v lsof >/dev/null 2>&1 \
+    && fail "lsof-absent-no-window-id: fixture path unexpectedly exposes lsof"
+
+  perl -e 'setpgrp(0, 0); exec "sleep", "300"' &
+  pid=$!
+  disown
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "lsof-absent-no-window-id: setup sleeper did not start"
+
+  # The record predates window_id (or was rewritten without it). Presence by
+  # name still proves SOME window is there, but nothing binds a pane to this
+  # task's recorded endpoint object, so the pane_pid read must not run at all
+  # - the stub would answer it with a foreign group if it did.
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/tmux-calls.log"
+if [ "\${1:-}" = list-windows ]; then
+  printf 'fm-task-x1\n'
+elif [ "\${1:-}" = display-message ]; then
+  printf '%s\n' '$pid'
+fi
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/tmux"
+
+  rc=0
+  FM_TEARDOWN_TEST_PATH="$path_without_lsof" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "lsof-absent-no-window-id: teardown should succeed"
+  if [ -e "$case_dir/tmux-calls.log" ] \
+     && grep -F 'pane_pid' "$case_dir/tmux-calls.log" >/dev/null; then
+    fail "lsof-absent-no-window-id: teardown read a pane_pid without a recorded window id"
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "lsof-absent-no-window-id: teardown reaped a process group without a recorded window id"
+  fi
+  kill -KILL "$pid" 2>/dev/null || true
+  assert_grep "carries no tmux window id" "$case_dir/stderr" \
+    "lsof-absent-no-window-id: teardown did not report the missing window id"
+  pass "a record with no tmux window id reaps nothing through the pane_pid fallback"
+}
+
+test_lsof_absent_replaced_window_never_reaps() {
+  local case_dir rc victim_pid path_without_lsof sock tmux_bin
+  case_dir=$(make_case lsof-absent-replaced-window)
+  write_meta "$case_dir" no-mistakes ship
+  # The record binds the window OBJECT spawn minted (@5); that object is
+  # already gone by the time teardown runs.
+  printf 'window_id=@5\n' >> "$case_dir/state/task-x1.meta"
+  land_shippable_commit "$case_dir"
+  tmux_bin=${REAL_TMUX_FOR_TEST:-}
+  if [ -z "$tmux_bin" ]; then
+    pass "tmux is not installed; private-socket regression skipped"
+    return 0
+  fi
+  path_without_lsof=$(make_path_without_lsof "$case_dir")
+  PATH="$path_without_lsof" command -v lsof >/dev/null 2>&1 \
+    && fail "lsof-absent-replaced-window: fixture path unexpectedly exposes lsof"
+
+  # The recorded window @5 is dead, but its NAME lives on: another home
+  # minted a NEW firstmate:fm-task-x1 window (a fresh object - this server's
+  # windows count from @0, so @5 was never minted here) with its own process
+  # group. Presence by name still reads present - the replacement - while
+  # the pane_pid read must be addressed to @5, which resolves to nothing, so
+  # the replacement's group is never signaled through the fallback. The
+  # socket path must stay short (unix socket name limit), so it lives at
+  # /tmp rather than inside the deep per-case fixture dir.
+  sock="/tmp/fm-td-repl-$$.sock"
+  rm -f "$sock"
+  env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" \
+    new-session -d -s firstmate -n fm-task-x1 'sleep 300' \
+    || fail "lsof-absent-replaced-window: could not start the private tmux server"
+  sleep 0.3
+  victim_pid=$(env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" \
+    display-message -p -t firstmate:fm-task-x1 '#{pane_pid}') \
+    || fail "lsof-absent-replaced-window: could not read the replacement pane's pid"
+  kill -0 "$victim_pid" 2>/dev/null \
+    || fail "lsof-absent-replaced-window: replacement pane process did not start"
+  env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" \
+    list-windows -a -F '#{window_id}' | grep -qx '@5' \
+    && fail "lsof-absent-replaced-window: @5 unexpectedly exists on the private server"
+
+  # Every bare `tmux` call teardown makes reaches the private socket through
+  # this shim and is logged, so the test can prove the pane_pid read was
+  # addressed to the recorded id rather than the reusable name.
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/tmux-calls.log"
+exec env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" "\$@"
+EOF
+  chmod +x "$case_dir/fakebin/tmux"
+
+  rc=0
+  FM_TEARDOWN_TEST_PATH="$path_without_lsof" TMUX='' TMUX_PANE='' \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  # The private server goes down before any assertion can exit, so a failure
+  # here never leaks a tmux server or its window's process.
+  env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" kill-server >/dev/null 2>&1 || true
+
+  expect_code 0 "$rc" "lsof-absent-replaced-window: teardown should succeed"
+  assert_grep "did not resolve recorded window @5" "$case_dir/stderr" \
+    "lsof-absent-replaced-window: teardown did not report the dead recorded window"
+  if grep -F 'reaping leaked' "$case_dir/stderr" >/dev/null; then
+    fail "lsof-absent-replaced-window: teardown signaled a process group through the pane_pid fallback"
+  fi
+  grep -F 'pane_pid' "$case_dir/tmux-calls.log" | grep -F -- '-t @5' >/dev/null \
+    || fail "lsof-absent-replaced-window: the pane_pid read was not addressed to the recorded window id"
+  pass "a window re-created under the task's name is never reaped as the task's process group"
 }
 
 test_lsof_error_refuses_before_removal() {
@@ -4339,6 +4595,10 @@ test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
+test_lsof_absent_gone_window_never_reaps_another_pane
+test_lsof_absent_misresolved_pane_read_is_never_reaped
+test_lsof_absent_record_without_window_id_never_reaps
+test_lsof_absent_replaced_window_never_reaps
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
 test_exec_changed_process_is_still_reaped

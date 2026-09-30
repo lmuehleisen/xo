@@ -95,14 +95,23 @@ signed_in_claude_root() {
 # spawn_ship <id> [fm-spawn args...]: a ship spawn from HOME_DIR whose invoking
 # process carries an ambient signed-in Claude root and an ambient API key.
 spawn_ship() {
-  local id=$1
+  local id=$1 wt=$WT
   shift
+  # This fork's spawn claims its worktree durably, so each later spawn in a case
+  # gets its own copy rather than reusing one an earlier task already claimed.
+  # The marker is a file because callers run this in a command substitution.
+  if [ -e "$CASE/.first-spawn-used" ]; then
+    wt="$CASE/wt-$id"
+    git -C "$PROJ" worktree add --quiet --detach "$wt" >/dev/null 2>&1 \
+      || fail "could not add a distinct worktree for $id"
+  fi
+  : > "$CASE/.first-spawn-used"
   fm_test_spawn_brief "$HOME_DIR" "$id"
   signed_in_claude_root "$CASE/ambient-claude"
   : > "$CASE/launch.log"
   FM_FAKE_LAUNCH_LOG="$CASE/launch.log" FM_TEST_CLAUDE_CONFIG_DIR="$CASE/ambient-claude" \
     ANTHROPIC_API_KEY=ambient-invoker-key \
-    fm_test_run_spawn "$HOME_DIR" "$WT" "$FAKEBIN" "$id" "$PROJ" --mode no-mistakes --yolo off "$@"
+    fm_test_run_spawn "$HOME_DIR" "$wt" "$FAKEBIN" "$id" "$PROJ" --mode no-mistakes --yolo off "$@"
 }
 
 # run_pane: execute the recorded launch in a pane whose ambient environment

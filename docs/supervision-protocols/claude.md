@@ -7,6 +7,8 @@ When this session owns supervision and away mode is not active:
    Every turn end while supervision is needed launches or attaches one home-scoped watcher cycle with no model command and no model tokens.
    An actionable close wakes you through the hook's exit-2 rewake, delivered as a `Stop hook feedback` message.
 3. On a `Stop hook feedback` wake (`signal:`, `stale:`, `check:`, or `heartbeat`), run `bin/fm-wake-drain.sh` first and handle the wake.
+   A `firstmate recovery turn` notice comes from the `StopFailure` hook after a turn ended on an API error such as a usage limit; handle it the same way.
+   A `check: autoarm-deadline` wake is the hook closing its own cycle before Claude's hook timeout; it needs no handling beyond its acknowledgement.
    Do not run `bin/fm-watch-arm.sh` after an ordinary wake; the next turn end re-arms automatically when supervision is still needed.
    Do not invent a wake from an attach-status line alone; drain and act only on real wake records, the drain's `OPEN DECISIONS` and `UNREAD STATUS` entries, or a real watcher reason line.
 4. On the one `Stop hook feedback` automatic-mechanism failure notice (`firstmate watcher auto-arm FAILED ...`), drain, inspect the automatic mechanism failure, and do not turn the notice into a repeating manual-arm loop.

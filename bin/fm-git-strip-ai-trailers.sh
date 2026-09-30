@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Strip AI co-author trailers from a commit message, and
-# install that strip as a per-task git commit-msg hook for a fleet launch.
+# install that strip as a per-task git commit-msg hook for a fleet launch,
+# together with the publish gate (bin/fm-publish-gate.sh) on pre-commit,
+# commit-msg, and pre-push.
 #
 # Usage:
 #   fm-git-strip-ai-trailers.sh <msgfile>
 #       Commit-msg hook mode. Git passes the proposed message file as $1.
 #       Rewrites that file in place, then exits 0 so the commit proceeds.
-#   fm-git-strip-ai-trailers.sh install <hooks-dir> <worktree>
-#       Recreate <hooks-dir> as a core.hooksPath for this launch: a commit-msg
-#       hook that runs this strip, plus one wrapper per client-side hook name
+#   fm-git-strip-ai-trailers.sh install <hooks-dir> <worktree> [<publish-guard-dir>]
+#       Recreate <hooks-dir> as a core.hooksPath for this launch: a pre-commit
+#       hook that runs the publish gate's staged-change check first, a
+#       commit-msg hook that runs this strip and then the publish gate's
+#       commit-msg check, a pre-push hook that runs the publish gate's pre-push
+#       check first (each with --config <publish-guard-dir> when it is given),
+#       each then chaining the repository's own hook of that name, plus one wrapper
+#       per client-side hook name
 #       git documents except reference-transaction and post-index-change,
 #       which are deliberately excluded (see FM_GIT_CLIENT_HOOKS below).
 #       Each wrapper unsets GIT_CONFIG_* and then resolves
@@ -23,6 +30,9 @@
 #       rather than skipping the repository's hook. Does not touch the
 #       project's git config; the caller prefixes the pane with
 #       GIT_CONFIG_COUNT / GIT_CONFIG_KEY_0 / GIT_CONFIG_VALUE_0.
+#       With FM_KEEP_AI_TRAILERS=1 (fm-spawn sets it when the home has
+#       config/keep-ai-trailers) the commit-msg hook skips the strip and still
+#       runs the publish gate.
 #
 # WHY THIS EXISTS. Claude launches already carry attribution-off in their
 # per-launch --settings JSON. Cursor and other non-Claude runtimes inject a
@@ -40,11 +50,11 @@
 #
 # ACCEPTED RESIDUAL, ruled 2026-09-17. git commit --no-verify skips every hook,
 # so a worker that passes it still lands the trailer, as would a runtime that
-# writes the commit object without running git. Both incidents that motivated
-# this strip came through an ordinary hook-running commit, so the ruling is to
-# accept that gap rather than add a push-side rewrite or a push-side check. A
-# trailer found on a fleet commit therefore points at one of those two paths,
-# not at an unnoticed hole in the matcher.
+# writes the commit object without running git. A trailer found on a fleet
+# commit therefore points at one of those two paths, not at an unnoticed hole
+# in the matcher. The pre-push hook runs bin/fm-publish-gate.sh, whose header
+# owns the identity and trailer checks a push to a public destination must
+# pass.
 #
 # ACCEPTED RESIDUAL, ruled 2026-09-17. Inside a fleet pane git reports this
 # directory as the repository's hooks directory, so a hook manager run there
@@ -58,12 +68,13 @@ set -u
 unset CDPATH GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 
 SELF="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
+GATE="$(dirname "$SELF")/fm-publish-gate.sh"
 
 usage() {
   cat >&2 <<'EOF'
 usage:
   fm-git-strip-ai-trailers.sh <msgfile>
-  fm-git-strip-ai-trailers.sh install <hooks-dir> <worktree>
+  fm-git-strip-ai-trailers.sh install <hooks-dir> <worktree> [<publish-guard-dir>]
 EOF
   exit 2
 }
@@ -202,7 +213,7 @@ pre-merge-commit prepare-commit-msg post-commit pre-rebase post-checkout
 post-merge pre-push post-rewrite pre-auto-gc sendemail-validate'
 
 install_hooks() {
-  local hooks_dir=$1 wt=$2 name
+  local hooks_dir=$1 wt=$2 guard=${3:-} name gate_config="" strip_line
   [ -n "$hooks_dir" ] && [ -n "$wt" ] || usage
   [ -d "$wt" ] || {
     echo "error: worktree is not a directory: $wt" >&2
@@ -217,15 +228,40 @@ install_hooks() {
   mkdir -p "$hooks_dir" || return 1
   chmod 700 "$hooks_dir" 2>/dev/null || true
   hooks_dir=$(CDPATH='' cd -- "$hooks_dir" && pwd -P) || return 1
+  [ -z "$guard" ] || gate_config=" --config $(quote_for_hook "$guard")"
 
+  strip_line="$(quote_for_hook "$SELF") \"\$1\" || exit \$?"
+  [ "${FM_KEEP_AI_TRAILERS:-0}" != 1 ] || strip_line=": keep AI trailers"
   write_executable "$hooks_dir/commit-msg" <<EOF
 #!/usr/bin/env bash
 set -u
-$(quote_for_hook "$SELF") "\$1" || exit \$?
+$strip_line
+$(quote_for_hook "$GATE") commit-msg "\$1"$gate_config || exit \$?
+$(runtime_chain_body "$hooks_dir")
+EOF
+
+  # pre-push reads the ref list on stdin, so it is captured once and fed to the
+  # publish gate and then to the chained repository hook.
+  write_executable "$hooks_dir/pre-push" <<EOF
+#!/usr/bin/env bash
+set -u
+refs=\$(mktemp "\${TMPDIR:-/tmp}/fm-pre-push.XXXXXX") || exit 1
+cat >"\$refs"
+$(quote_for_hook "$GATE") pre-push "\$1" "\$2"$gate_config <"\$refs" || { rm -f "\$refs"; exit 1; }
+exec <"\$refs"
+rm -f "\$refs"
+$(runtime_chain_body "$hooks_dir")
+EOF
+
+  write_executable "$hooks_dir/pre-commit" <<EOF
+#!/usr/bin/env bash
+set -u
+$(quote_for_hook "$GATE") pre-commit$gate_config || exit \$?
 $(runtime_chain_body "$hooks_dir")
 EOF
 
   for name in $FM_GIT_CLIENT_HOOKS; do
+    [ "$name" != pre-push ] && [ "$name" != pre-commit ] || continue
     write_executable "$hooks_dir/$name" <<EOF
 #!/usr/bin/env bash
 set -u
@@ -238,8 +274,8 @@ EOF
 CMD=${1:-}
 case "$CMD" in
 install)
-  [ "$#" -eq 3 ] || usage
-  install_hooks "$2" "$3"
+  [ "$#" -eq 3 ] || [ "$#" -eq 4 ] || usage
+  install_hooks "$2" "$3" "${4:-}"
   ;;
 -h | --help)
   usage

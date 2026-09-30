@@ -98,13 +98,14 @@ fm_control_harness_family() {  # <recorded-harness>
     kimi*) printf 'kimi' ;;
     cursor*) printf 'cursor' ;;
     gemini*) printf 'gemini' ;;
+    agy*) printf 'agy' ;;
     muse*) printf 'muse' ;;
     rovo*) printf 'rovo' ;;
     *) return 1 ;;
   esac
 }
 
-# Which task kinds an adapter is verified to run. muse, gemini, rovo, agy, and devin
+# Which task kinds an adapter is verified to run. muse, gemini, rovo, and devin
 # are crewmate/scout adapters only: none has a primary supervision protocol,
 # and bin/fm-spawn.sh refuses a --secondmate launch on any of them. The control
 # plane asks this BEFORE it stops anything, so an incompatible relaunch target is
@@ -114,7 +115,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    muse|gemini|rovo|agy|devin) [ "$kind" != secondmate ] || return 1 ;;
+    muse|gemini|rovo|devin) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -124,9 +125,9 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # gemini names its own key in the running turn's status row
 # (`(esc to cancel, <n>s)`), and a single Escape was verified to cancel it.
 # rovo cancels on a single Escape too, printing "Agent cancelled" (verified,
-# 202609.1.2). agy cancels on a single Escape, printing the Interrupted row
-# with an idle composer and no repollution (verified live, agy 1.2.0 through
-# Herdr). omp (Oh My Pi) shares Pi's single Escape, empty composer
+# 202609.1.2). agy advertises its own key in the running turn's footer
+# (`esc to cancel`), and a single Escape was verified to cancel it, printing
+# `Interrupted - What should Antigravity CLI do instead?` (agy 1.2.0). omp (Oh My Pi) shares Pi's single Escape, empty composer
 # afterwards, and /quit exit (verified omp 18.1.2 in a PTY, re-verified 18.1.11
 # through Herdr).
 fm_control_interrupt_key() {  # <harness>
@@ -200,7 +201,8 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 # follow-up` placeholder, so it needs no clear key. gemini was checked the
 # same way and also does not repollute: after a single Escape it prints
 # `Request cancelled.` and its composer shows only the `Type your message
-# or @path/to/file` placeholder. Prints the key or nothing;
+# or @path/to/file` placeholder. agy was checked the same way and also leaves
+# an empty composer after its cancellation line. Prints the key or nothing;
 # a harness with no verified mechanics returns nonzero, matching the tables
 # above.
 fm_control_interrupt_clear_key() {  # <harness>
@@ -226,11 +228,16 @@ fm_control_interrupt_ack_source() {  # <harness>
   esac
 }
 
-# The command that exits the agent from its own composer.
+# The command that exits the agent from its own composer. devin's `/exit`
+# slash form is ambiguous against its `/revert <step>` fuzzy command search
+# and can open that menu instead of exiting, so the verified exit cannot
+# complete; devin's own docs document plain `exit` (no `/` prefix) as
+# an equivalent, unambiguous alias, so devin alone uses that form.
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
-    claude|opencode|grok|kimi|cursor|muse|rovo) printf '/exit' ;;
-    codex|pi|pi-signed|omp|gemini|agy|devin) printf '/quit' ;;
+    claude|opencode|grok|kimi|cursor|muse|rovo|agy) printf '/exit' ;;
+    devin) printf 'exit' ;;
+    codex|pi|pi-signed|omp|gemini) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
@@ -403,6 +410,16 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
     # is written into the worktree, whose own .gemini/settings.json belongs to
     # the project, and nothing global is installed.
     gemini) printf '%s\n' "$state/$id.gemini-settings.json" ;;
+    # The directory and per-generation session bindings are retired through
+    # fm-agy-hook.sh retire-worker; these are the flat wiring artifacts. The
+    # bypass layer's sibling $id.agy-permission-pending/ markers are retired
+    # through fm-agy-permission-policy.sh retire before the policy file goes,
+    # so each open decision is closed as not-run while the policy file still
+    # names the status file.
+    agy)
+      printf '%s\n' "$state/$id.agy-hooks/.agents/hooks.json"
+      printf '%s\n' "$state/$id.agy-permission.json"
+      ;;
     devin) printf '%s\n' "$state/$id.devin-config.json" ;;
   esac
 }

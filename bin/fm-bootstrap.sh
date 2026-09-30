@@ -6,7 +6,6 @@
 #          exits 0.
 #          Silent = all good.
 #          Lines: "MISSING: <tool> (install: <command>)",
-#                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>",
@@ -55,17 +54,20 @@
 #          landed in the primary instead of its own worktree; restore it per the line.
 #          treehouse is also MISSING when its installed version lacks
 #          "treehouse get --lease" support.
-#          no-mistakes is also MISSING when its installed version is older than
-#          1.46.0 (structured pipeline attestation floor; see CONTRIBUTING.md).
-#          The AXI-family floor policy is owned beside GH_AXI_MIN and
-#          LAVISH_AXI_MIN below; the per-tool owners point there. An installed
-#          essential build below its floor reports MISSING like no-mistakes.
-#          Missing or incompatible lavish-axi reports PRESENTATION_UNAVAILABLE:
-#          nonvisual dispatch continues with plain-text decisions and reports,
-#          but Lavish use still requires a compatible build at or above its floor.
-#          tasks-axi feature probes remain a separate defense-in-depth check.
-#          tasks-axi and quota-axi are essential bootstrap tools.
-#          A compatible tasks-axi default backend is silent.
+#          gitleaks is MISSING when the home has config/publish-guard (a
+#          secondmate home inherits it) and no gitleaks is on PATH; its install
+#          command is the pinned bin/fm-install-gitleaks.sh.
+#          This home does not require no-mistakes, gh-axi, chrome-devtools-axi,
+#          or lavish-axi. GitHub operations use gh. tasks-axi feature probes
+#          remain a separate defense-in-depth check.
+#          With the optional config/no-mistakes opt-in present and no
+#          no-mistakes binary on PATH, one non-blocking line is printed:
+#          "BOOTSTRAP_INFO: no-mistakes pipeline unavailable (config/no-mistakes
+#          is set; install: <command>) - direct-PR and local-only work may
+#          proceed; pipeline ships are refused until it is installed".
+#          Without the opt-in, bootstrap stays silent about no-mistakes.
+#          tasks-axi and quota-axi are required bootstrap tools. A compatible
+#          tasks-axi default backend is silent.
 #          quota-axi is required for the agent-owned dispatch-profile array
 #          procedure in AGENTS.md section 4 and
 #          .agents/skills/quota-array-dispatch/SKILL.md.
@@ -151,9 +153,6 @@
 #          keeps detect-only meaning unlocked, exactly as before.
 #        fm-bootstrap.sh install <tool>...
 #          Install the named tools (only ones the captain approved).
-#        fm-bootstrap.sh lavish-compatible
-#          Exit 0 when lavish-axi meets LAVISH_AXI_MIN, 1 otherwise, printing
-#          nothing; bin/fm-brief.sh uses it to gate scout Lavish hosting.
 set -u
 
 TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
@@ -179,6 +178,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-env-lib.sh"
 # shellcheck source=bin/fm-tangle-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
+# shellcheck source=bin/fm-dod-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-ff-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-cursor-lib.sh disable=SC1091
@@ -798,9 +799,24 @@ install_cmd() {
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
+    devin) echo "brew install --cask devin-cli  # or see https://docs.devin.ai/cli" ;;
     tasks-axi|quota-axi) echo "npm install -g $1" ;;
+    gitleaks) echo "'$SCRIPT_DIR/fm-install-gitleaks.sh' '$(gitleaks_install_dir)'  # the pinned, checksum-verified build" ;;
     *) return 1 ;;
   esac
+}
+
+# A writable directory already on PATH for the pinned gitleaks build.
+gitleaks_install_dir() {
+  local dir
+  for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
+    case ":$PATH:" in *":$dir:"*) ;; *) continue ;; esac
+    if [ -d "$dir" ] && [ -w "$dir" ]; then
+      printf '%s' "$dir"
+      return 0
+    fi
+  done
+  printf '%s' "$HOME/.local/bin"
 }
 
 manual_install_url() {
@@ -825,7 +841,7 @@ missing_tool_diagnostic() {
 # fm_backend_required_tools (bin/fm-backend.sh). So a herdr/zellij/cmux home is
 # never told tmux is missing, and only orca drops treehouse. A backend value with
 # no verified dependency set is reported before the universal checks continue.
-COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi tasks-axi quota-axi"
+COMMON_TOOLS="node git gh tasks-axi quota-axi"
 BACKEND=$(fm_backend_name)
 BACKEND_VALID=1
 if ! BACKEND_TOOLS=$(fm_backend_required_tools "$BACKEND"); then
@@ -833,41 +849,13 @@ if ! BACKEND_TOOLS=$(fm_backend_required_tools "$BACKEND"); then
   BACKEND_TOOLS=""
 fi
 TOOLS="$BACKEND_TOOLS $COMMON_TOOLS"
-NO_MISTAKES_MIN=1.46.0
-# AXI-FAMILY FLOOR POLICY. Every axi-family floor is the CURRENT LATEST published
-# version of that tool, captain-bumped periodically to keep the whole fleet on the
-# newest axi tools. It is NOT the minimum feature-introduced version. These floors
-# are expected to drift upward as new versions ship. Never lower a floor to the
-# earliest release that happens to satisfy some depended-on behavior. The
-# tasks-axi feature probes are an independent defense-in-depth concern, not part
-# of its floor.
-GH_AXI_MIN=0.1.29
-LAVISH_AXI_MIN=0.1.77
+
 
 treehouse_supports_lease() {
   treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
 }
 
-# Shared semantic-version floor for the tool gates below. A version string that
-# cannot be parsed into exactly one major.minor.patch triple is incompatible,
-# never assumed current, so a development or vendored build cannot pass a floor
-# it was never checked against.
-tool_version_at_least() {  # <tool> <min-version>
-  local tool=$1 min=$2 output parts major minor patch extra
-  local min_major min_minor min_patch min_extra
-  command -v "$tool" >/dev/null 2>&1 || return 1
-  output=$("$tool" --version 2>/dev/null) || return 1
-  parts=$(printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | head -n 1)
-  IFS=' ' read -r major minor patch extra <<< "$parts"
-  [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 1
-  IFS='.' read -r min_major min_minor min_patch min_extra <<< "$min"
-  [ -n "$min_major" ] && [ -n "$min_minor" ] && [ -n "$min_patch" ] && [ -z "$min_extra" ] || return 1
-  [ "$major" -gt "$min_major" ] && return 0
-  [ "$major" -eq "$min_major" ] || return 1
-  [ "$minor" -gt "$min_minor" ] && return 0
-  [ "$minor" -eq "$min_minor" ] || return 1
-  [ "$patch" -ge "$min_patch" ]
-}
+
 
 x_mode_write_if_changed() {
   local dest=$1 content=$2 mode=$3 parent tmp parent_device current_mode
@@ -1046,7 +1034,7 @@ crew_dispatch_validate() {
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else
-    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp","devin"]'
+    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","gemini","agy","muse","rovo","omp","devin"]'
   fi
   err=$(jq -r --argjson typed "$typed_active" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" '
     def verified($h): $verified_harnesses | index($h);
@@ -1058,11 +1046,11 @@ crew_dispatch_validate() {
       elif $h == "claude" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "codex" then ((["low","medium","high","xhigh"] | index($e)) != null or ($e == "max" and $m == "gpt-5.6-luna"))
       elif $h == "grok" then (["low","medium","high"] | index($e))
-      elif $h == "agy" then (["low","medium","high"] | index($e))
+      elif $h == "agy" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "pi" or $h == "pi-signed" or $h == "omp" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "muse" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "rovo" then (["low","medium","high","max"] | index($e))
-      elif $h == "opencode" or $h == "kimi" or $h == "cursor" then false
+      elif $h == "opencode" or $h == "kimi" or $h == "cursor" or $h == "gemini" or $h == "devin" then false
       else true
       end;
     def profiles($value):
@@ -1301,11 +1289,6 @@ startup_memory_budget_setup() {
   fi
 }
 
-if [ "${1:-}" = "lavish-compatible" ]; then
-  tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"
-  exit
-fi
-
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }
@@ -1389,21 +1372,17 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
+  # A home with publish-guard config gates public pushes, whose scans need
+  # gitleaks; a secondmate home inherits that config from its primary.
+  if [ -d "$CONFIG/publish-guard" ] && ! command -v gitleaks >/dev/null 2>&1; then
+    missing_tool_diagnostic gitleaks
+  fi
   # The treehouse lease-support upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its
   # own worktrees); an orca home must not be told to upgrade a provider it never uses.
   if fm_backend_list_contains "$TOOLS" treehouse \
     && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
     echo "MISSING: treehouse (install: $(install_cmd treehouse))"
-  fi
-  if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
-    echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
-  fi
-  if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
-    echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
-  fi
-  if ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
-    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
   fi
   if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
     echo "MISSING: quota-axi (install: $(install_cmd quota-axi))"
@@ -1439,7 +1418,15 @@ detect_local_config() {
   if [ "$crew" = cursor ] && ! fm_cursor_resolve_binary >/dev/null 2>&1; then
     echo "MISSING_MANUAL: cursor-agent (instructions: $(manual_install_url cursor-agent))"
   fi
+  if [ "$crew" = devin ] && ! command -v devin >/dev/null 2>&1; then
+    missing_tool_diagnostic devin
+  fi
   crew_dispatch_validate
+  # config/no-mistakes is an optional opt-in, never a required tool: a missing
+  # CLI is one non-blocking fact, and bin/fm-spawn.sh refuses the pipeline ship.
+  if [ "$(fm_no_mistakes_pipeline_state "$CONFIG")" = unavailable ]; then
+    echo "BOOTSTRAP_INFO: no-mistakes pipeline unavailable (config/no-mistakes is set; install: $(install_cmd no-mistakes)) - direct-PR and local-only work may proceed; pipeline ships are refused until it is installed"
+  fi
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
     && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
     echo "BOOTSTRAP_INFO: tasks-axi available"

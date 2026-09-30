@@ -14,6 +14,21 @@
 # from the stored URL and refuses any record whose parts do not reconstruct that
 # exact URL.
 #
+# Task metadata identity is that single pr=<url> line. Unrelated well-formed
+# key=value lines after it, including pr_head= and Relay x_* keys, are not part
+# of the binding. A second pr=, an unparseable pr=, an invalid pr_head= after
+# pr=, or a non-key line after pr= still fails, and consumers still require the
+# parsed identity to match the sidecar.
+#
+# Recorded file identities are device:inode. A poll registration's recorded
+# identities are compared strictly and re-recorded only after
+# fm_pr_poll_registration_device_shifted proves a volume renumber is the only
+# difference. A retirement receipt's persisted identity is compared by inode
+# only (fm_pr_identity_same): every such site first requires the live file to
+# be a private single-link file on the state directory's current device, and
+# macOS APFS can renumber st_dev across a reboot while inodes stay the same, so
+# a receipt left by a reboot would otherwise stay refused forever.
+#
 # A validated exact merged result is retired through a private receipt only
 # after its durable wake is appended.
 # The receipt binds the terminal observation to the canonical registration and
@@ -321,6 +336,14 @@ fm_pr_file_identity() {
   printf '%s:%s\n' "$device" "$inode"
 }
 
+# <recorded-identity> <current-identity>: success when both are well-formed
+# device:inode identities naming the same inode. The caller must already have
+# proved the current file lives on the state directory's device.
+fm_pr_identity_same() {
+  [[ "$1" =~ ^[0-9]+:[0-9]+$ ]] && [[ "$2" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  [ "${1#*:}" = "${2#*:}" ]
+}
+
 fm_pr_sha256() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
@@ -358,8 +381,14 @@ fm_pr_regular_destination_on_device_or_absent() {
   [ ! -e "$path" ] || [ "$(fm_pr_file_device "$path")" = "$device" ]
 }
 
+# Bind the poll to the single pr=<url> in task metadata. Other well-formed
+# keys may appear after that line because later writers (captain-hold complete,
+# control relaunch, Relay link, and any future key) append to the same file.
+# The identity this function owns is still only that URL; an extra pr=, a
+# garbage line, or an invalid pr_head= after pr= remains a failed binding.
 fm_pr_metadata_identity_parse() {
-  local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
+  local file=$1 line value key pr_count=0 seen_pr=0 post_pr_invalid=0
+  local LC_ALL=C
   FM_PR_META_PROVIDER=
   FM_PR_META_URL=
   FM_PR_META_HOST=
@@ -388,7 +417,11 @@ fm_pr_metadata_identity_parse() {
           fm_pr_head_valid "$value" || post_pr_invalid=1
         fi
         ;;
-      x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
+      *=*)
+        key=${line%%=*}
+        if ! [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+          [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
+        fi
         ;;
       *)
         [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
@@ -1136,7 +1169,7 @@ fm_pr_poll_retirement_data_valid() {
   [ "$FM_PR_DATA_PATH" = "$FM_PR_RETIRE_PATH" ] || return 1
   [ "$FM_PR_DATA_NUMBER" = "$FM_PR_RETIRE_NUMBER" ] || return 1
   [ "$data_hash" = "$FM_PR_RETIRE_DATA_HASH" ] || return 1
-  [ "$data_identity" = "$FM_PR_RETIRE_DATA_IDENTITY" ]
+  fm_pr_identity_same "$FM_PR_RETIRE_DATA_IDENTITY" "$data_identity"
 }
 
 fm_pr_poll_retirement_registration_valid() {
@@ -1158,7 +1191,7 @@ fm_pr_poll_retirement_registration_valid() {
   [ "$FM_PR_REG_DATA_IDENTITY" = "$FM_PR_RETIRE_DATA_IDENTITY" ] || return 1
   [ "$FM_PR_REG_CHECK_IDENTITY" = "$FM_PR_RETIRE_CHECK_IDENTITY" ] || return 1
   [ "$reg_hash" = "$FM_PR_RETIRE_REG_HASH" ] || return 1
-  [ "$reg_identity" = "$FM_PR_RETIRE_REG_IDENTITY" ]
+  fm_pr_identity_same "$FM_PR_RETIRE_REG_IDENTITY" "$reg_identity"
 }
 
 fm_pr_poll_retirement_check_valid() {
@@ -1169,7 +1202,7 @@ fm_pr_poll_retirement_check_valid() {
   check_hash=$(fm_pr_sha256 "$check") || return 1
   check_identity=$(fm_pr_file_identity "$check") || return 1
   [ "$check_hash" = "$FM_PR_RETIRE_TEMPLATE_HASH" ] || return 1
-  [ "$check_identity" = "$FM_PR_RETIRE_CHECK_IDENTITY" ]
+  fm_pr_identity_same "$FM_PR_RETIRE_CHECK_IDENTITY" "$check_identity"
 }
 
 fm_pr_poll_retirement_state_valid() {
@@ -1200,7 +1233,7 @@ fm_pr_poll_retirement_state_valid() {
 fm_pr_poll_retirement_remove_exact() {
   local path=$1 state_device=$2 expected_identity=$3 expected_hash=$4
   fm_pr_private_file_valid "$path" 600 "$state_device" || return 1
-  [ "$(fm_pr_file_identity "$path")" = "$expected_identity" ] || return 1
+  fm_pr_identity_same "$expected_identity" "$(fm_pr_file_identity "$path")" || return 1
   [ "$(fm_pr_sha256 "$path")" = "$expected_hash" ] || return 1
   rm -f -- "$path" || return 1
   [ ! -e "$path" ] && [ ! -L "$path" ]
@@ -1223,7 +1256,7 @@ fm_pr_poll_retirement_discard_obsolete() {
   current_reg_hash=$(fm_pr_sha256 "$registration") || return 1
   current_reg_identity=$(fm_pr_file_identity "$registration") || return 1
   if [ "$current_reg_hash" = "$FM_PR_RETIRE_REG_HASH" ] \
-    && [ "$current_reg_identity" = "$FM_PR_RETIRE_REG_IDENTITY" ] \
+    && fm_pr_identity_same "$FM_PR_RETIRE_REG_IDENTITY" "$current_reg_identity" \
     && [ "$FM_PR_REG_DATA_IDENTITY" = "$FM_PR_RETIRE_DATA_IDENTITY" ] \
     && [ "$FM_PR_REG_CHECK_IDENTITY" = "$FM_PR_RETIRE_CHECK_IDENTITY" ]; then
     return 1

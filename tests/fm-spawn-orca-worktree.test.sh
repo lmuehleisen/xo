@@ -101,11 +101,14 @@ Confirm the launch enters the worktree Orca created for it.
 EOF
   fb=$(make_orca_fakebin "$case_dir")
 
+  # The fixture project has no remote, and this fork freshens an origin-less
+  # pool copy only for an explicit local-only ship (docs/fork-divergences.md
+  # remote-less-local-only), so the spawn names that mode.
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$case_dir/user-home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
-    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+    "$SPAWN" "$id" "$case_dir/project" --mode local-only --yolo off --backend orca 2>&1)
   status=$?
 
   expect_code 0 "$status" "an Orca-backed spawn should succeed"$'\n'"$out"

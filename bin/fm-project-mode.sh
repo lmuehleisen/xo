@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Resolve a project's REGISTERED delivery posture from the data/projects.md registry.
 # Default usage prints two words to stdout: "<mode> <yolo>" where mode is one of
-# no-mistakes|direct-PR|local-only and yolo is on|off.
+# direct-PR|local-only (no-mistakes is accepted in the registry and mapped to
+# direct-PR) and yolo is on|off.
 # --branch-prefix instead prints one value: the project's registered ship-branch
 # prefix, "fm/" when the project registers none, is unregistered, or the registry
 # is absent, so every existing installation keeps its current "fm/<task-id>"
@@ -16,14 +17,14 @@
 # explicitly to bin/fm-brief.sh, bin/fm-spawn.sh, and bin/fm-promote.sh (AGENTS.md
 # section 7; bin/fm-brief.sh's own header owns the --branch-prefix flag it accepts).
 # The consumers are bin/fm-fleet-sync.sh (skip local-only clones),
-# bin/fm-home-seed.sh and bin/fm-remote-home-seed.sh (refuse local-only seeding,
-# run no-mistakes init), bin/fm-spawn.sh's advisory registry-deviation notice,
+# bin/fm-home-seed.sh and bin/fm-remote-home-seed.sh (refuse local-only seeding
+# without initializing a gate), bin/fm-spawn.sh's advisory registry-deviation notice,
 # and --forge for bin/fm-spawn.sh's forge agreement and yolo refusal and for
 # bin/fm-promote.sh, which takes the forge binding from here because it is a
 # project fact rather than a task choice.
 #
 # Registry line format (data/projects.md):
-#   - <name> - <desc> (added <date>)                                 -> no-mistakes off fm/  (legacy default)
+#   - <name> - <desc> (added <date>)                                 -> direct-PR off fm/  (legacy default)
 #   - <name> [<mode>] - <desc> (added <date>)                        -> <mode> off fm/
 #   - <name> [<mode> +yolo] - <desc> (added <date>)                  -> <mode> on fm/
 #   - <name> [<mode> +yolo branch=<prefix>] - <desc> (added <date>)  -> <mode> <yolo> <prefix>
@@ -36,15 +37,15 @@
 #   legacy "fm/<task-id>".
 #
 # Registered modes:
-#   no-mistakes            full pipeline -> PR -> configured merge authority (default)
-#   direct-PR              push + PR via gh-axi, no pipeline
+#   direct-PR              push + PR via gh, no pipeline (default)
 #   local-only             local branch, no remote/PR, guarded local merge
-#   no-mistakes-prod-only  a conditional policy, not a task mode: firstmate
-#                          classifies each task's surface at intake (the
-#                          project-management skill owns that classification).
-#                          Mechanical output maps it to its most rigorous leg,
-#                          no-mistakes, so sync, seeding, and init treat such a
-#                          project as the remote-backed pipeline project it is.
+#   no-mistakes            accepted for registry compatibility; mechanical
+#                          output maps it to direct-PR
+#   no-mistakes-prod-only  a conditional policy, not a task mode.
+#                          Mechanical output maps it to direct-PR.
+# config/no-mistakes never changes this mapping: a registry token is standing
+# posture only, and the pipeline runs solely for a task firstmate explicitly
+# resolves to --mode no-mistakes (bin/fm-dod-lib.sh owns that opt-in).
 # yolo (orthogonal) = merge authority only: when on, firstmate merges green,
 #   in-scope work itself (AGENTS.md section 7).
 # branch=<prefix> (orthogonal) = overrides the "fm/" ship-branch prefix so a
@@ -76,7 +77,7 @@
 # tell a conditional policy apart from a flat mode sees "no-mistakes-prod-only"
 # itself. Not combined with --branch-prefix, which has no conditional-policy leg.
 #
-# An unknown/missing project or unknown mode falls back to "no-mistakes off" (or
+# An unknown/missing project or unknown mode falls back to "direct-PR off" (or
 # "fm/" under --branch-prefix) and warns to stderr, so a typo never silently
 # drops the gate. Other annotation tokens are ignored, as they always were, keyed
 # ones included: a `<key>=<value>` token whose key is neither exactly `forge` nor
@@ -112,10 +113,10 @@ esac
 NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge] <project-name>}
 
 if [ ! -f "$REG" ]; then
-  echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
+  echo "warn: no registry at $REG; defaulting $NAME to direct-PR off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
-  elif [ "$WANT_FORGE" -eq 1 ]; then echo none; else echo "no-mistakes off"; fi
+  elif [ "$WANT_FORGE" -eq 1 ]; then echo none; else echo "direct-PR off"; fi
   exit 0
 fi
 
@@ -149,7 +150,7 @@ parsed=$(awk -v n="$NAME" '
     if (substr($0, 1, plen) != prefix) next
     after = substr($0, plen + 1);
     if (after != "" && substr(after, 1, 2) != " [" && substr(after, 1, 3) != " - ") next
-    mode="no-mistakes"; yolo="off"; branch="fm/"; forge="none";
+    mode="direct-PR"; yolo="off"; branch="fm/"; forge="none";
     if (substr(after, 1, 2) == " [") {
       s="";
       nk = split(after, rest, " ");
@@ -182,10 +183,10 @@ parsed=$(awk -v n="$NAME" '
 ' "$REG")
 
 if [ -z "$parsed" ]; then
-  echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2
+  echo "warn: project \"$NAME\" not in registry; defaulting to direct-PR off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
-  elif [ "$WANT_FORGE" -eq 1 ]; then echo none; else echo "no-mistakes off"; fi
+  elif [ "$WANT_FORGE" -eq 1 ]; then echo none; else echo "direct-PR off"; fi
   exit 0
 fi
 
@@ -206,7 +207,7 @@ EOF
 forge=${rest_forge:-none}
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;
-  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to no-mistakes off" >&2; mode=no-mistakes; yolo=off; branch=fm/ ;;
+  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to direct-PR off" >&2; mode=direct-PR; yolo=off; branch=fm/ ;;
 esac
 case "$yolo" in on|off) ;; *) yolo=off ;; esac
 if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
@@ -235,9 +236,14 @@ if [ "$forge" = gerrit ] && [ "$yolo" = on ]; then
   echo "refused: +yolo is registered for $NAME but yolo is inactive for forge=gerrit, so this reports yolo=off: a Gerrit Code-Review+2 is a positive attributed claim that a named human approved, and firstmate must not manufacture one (captain's decision 2026-09-15)" >&2
   yolo=off
 fi
-# A conditional policy is not a task mode. Mechanical callers get its most
-# rigorous leg; --raw callers get the annotation itself (see the header).
-if [ "$RAW" -eq 0 ] && [ "$mode" = no-mistakes-prod-only ]; then
-  mode=no-mistakes
+# A conditional policy is not a task mode. Mechanical callers get direct-PR;
+# --raw callers get the annotation itself (see the header).
+# no-mistakes is kept as a registry token so upstream lines still parse, then
+# mapped to direct-PR because a registry token is standing posture only (see
+# the header).
+if [ "$RAW" -eq 0 ]; then
+  case "$mode" in
+    no-mistakes|no-mistakes-prod-only) mode=direct-PR ;;
+  esac
 fi
 echo "$mode $yolo"

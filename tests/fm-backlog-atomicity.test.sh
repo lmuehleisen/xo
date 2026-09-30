@@ -97,7 +97,8 @@ case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse gh gh-axi no-mistakes
+  fm_fake_exit0 "$fakebin" gh gh-axi no-mistakes
+  fm_fake_treehouse_lease "$fakebin"
 
   fm_git_init_commit "$case_dir/project"
   fm_git_add_origin "$case_dir/project" "$case_dir/project.origin.git"
@@ -1318,6 +1319,10 @@ test_dispatch_refuses_to_commit_without_a_published_record() {
   assert_contains "$out" "task record for $id could not be published" \
     "spawn did not report task-record publication failure"
   assert_absent "$meta" "failed publication left a task record"
+  assert_absent "$(home_of "$case_dir")/state/$id.treehouse-lease" \
+    "failed publication kept the receipt of a slot it could return: $out"
+  grep -q '^return --force ' "$case_dir/fakebin/treehouse-calls" \
+    || fail "failed publication did not return its leased slot"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "failed publication retained its busy state"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
@@ -1338,6 +1343,8 @@ test_dispatch_leaves_no_record_when_the_transition_fails() {
     "spawn failed without explaining the backlog transition failure"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
     "a failed backlog transition left an orphaned record behind"
+  assert_present "$(home_of "$case_dir")/state/$id.treehouse-lease" \
+    "a failed backlog transition lost the acquired lease receipt"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "a failed backlog transition left the task's armed busy generation behind"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
@@ -1398,6 +1405,10 @@ test_dispatch_rolls_back_before_a_failed_launch_delivery() {
   [ "$rc" -ne 0 ] || fail "spawn reported success though launch delivery failed"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
     "a failed launch delivery left its provisional record behind"
+  # Every keystroke fails, so the spawn stops before the worker could start
+  # and returns the slot it leased.
+  assert_absent "$(home_of "$case_dir")/state/$id.treehouse-lease" \
+    "a failed delivery kept the receipt of a slot it could return: $out"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "a failed launch delivery left its provisional busy generation behind"
   [ "$(row_state "$case_dir" "$id")" = queued ] \

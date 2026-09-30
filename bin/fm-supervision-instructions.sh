@@ -98,7 +98,7 @@ if [ -z "$HARNESS" ]; then
 fi
 
 case "$HARNESS" in
-  claude|codex|opencode|pi|grok|cursor|omp) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
+  claude|codex|opencode|pi|grok|cursor|omp|agy) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
   pi-signed) SNIPPET="$DOC_DIR/pi.md" ;;
   *) HARNESS=unknown; SNIPPET="$DOC_DIR/unknown.md" ;;
 esac
@@ -178,6 +178,9 @@ repair_line() {
   fi
 
   case "$HARNESS" in
+    agy)
+      printf '%s%s\n' "$prefix" 'repair missing watcher supervision with one native run_command of bin/fm-watch-arm.sh (WaitMsBeforeAsync: 1); read its returned task log with view_file to confirm the initial arm status, then end the turn and await native completion. Never use shell & or invent a status subcommand.'
+      ;;
     claude)
       printf '%s%s\n' "$prefix" 'watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.'
       ;;
@@ -207,6 +210,9 @@ repair_line() {
 
 ordinary_wake_line() {
   case "$HARNESS" in
+    agy)
+      printf '%s\n' '- Ordinary wake: drain and handle the native command completion, then arm one successor through run_command as directed below.'
+      ;;
     claude)
       printf '%s\n' '- Ordinary wake: the Stop-owned auto-arm (bin/fm-claude-stop-autoarm.sh) already owns watcher continuity; drain and handle the wake, and do not arm another cycle yourself.'
       ;;

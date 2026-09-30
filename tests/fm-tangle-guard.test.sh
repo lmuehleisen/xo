@@ -178,23 +178,20 @@ test_spawn_isolation_abort() {
   # "GIT_CEILING_DIRECTORIES").
   mkdir -p "$TMP_ROOT/spawn-notgit-root/plain" "$proj/sub"
 
-  # Abort: the pane resolves to a plain non-git directory (not a worktree at all).
-  # The discovery poll screens every candidate with the isolation conditions, so
-  # a path like this is never adopted and the refusal comes from the poll's own
-  # deadline, naming the path and why it was rejected. The assertions pin which
-  # cause fired, not the operator wording that explains it.
+  # Abort: the provider returns a plain non-git directory. Exact-path validation
+  # refuses before sending cd or entering the pane-settle loop.
   out=$(GIT_CEILING_DIRECTORIES="$TMP_ROOT/spawn-notgit-root" \
     run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit-root/plain" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn into a non-worktree dir should abort"
-  assert_contains "$out" "did not enter an isolated worktree" "non-worktree spawn lacked the isolation error"
-  assert_contains "$out" "not inside a git worktree" "non-worktree spawn did not say why the path was rejected"
+  assert_contains "$out" "did not yield an isolated worktree" "non-worktree spawn lacked the isolation error"
+  assert_contains "$out" "worktree root 'none'" "non-worktree spawn did not say why the path was rejected"
   assert_absent "$home/state/abort-notgit-dd4.meta" "aborted spawn must not record meta"
 
   # Abort: the pane resolves INTO the primary checkout (a subdir of PROJ_ABS).
   out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn landing inside the primary checkout should abort"
-  assert_contains "$out" "did not enter an isolated worktree" "primary-checkout spawn lacked the isolation error"
-  assert_contains "$out" "not a worktree root" "primary-checkout spawn did not say why the path was rejected"
+  assert_contains "$out" "did not yield an isolated worktree" "primary-checkout spawn lacked the isolation error"
+  assert_contains "$out" "resolved '$proj/sub'; worktree root '$proj'" "primary-checkout spawn did not say why the path was rejected"
   assert_absent "$home/state/abort-primary-ee5.meta" "aborted spawn must not record meta"
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
@@ -239,7 +236,7 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
+  fm_fake_treehouse_lease "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -279,8 +276,8 @@ test_spawn_tmux_window_construction() {
     "must disable allow-rename on the spawned window"
 
   # Bug 2 fix (b): treehouse-get and the worktree wait loop target the stable id.
-  assert_grep "send-keys -t @spawnwid treehouse get Enter" "$rec" \
-    "treehouse get must be sent to the stable window id"
+  assert_grep "send-keys -t @spawnwid (cd --" "$rec" \
+    "the lease child shell must be sent to the stable window id"
   assert_grep "display-message -p -t @spawnwid #{pane_current_path}" "$rec" \
     "the worktree wait loop must query the stable window id, not the name"
 

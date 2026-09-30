@@ -201,7 +201,9 @@ SH
 set -u
 # FM_FAKE_TMUX_MISSING: the window is authoritatively gone - every addressed
 # call fails, but the session inventory still answers successfully and simply
-# omits the window, which is what proves absence.
+# omits the window, which is what proves absence. Otherwise the inventory lists
+# every recorded window, because presence is read from that inventory rather
+# than from an addressed call succeeding.
 # FM_FAKE_TMUX_UNREADABLE: tmux itself cannot answer - it fails to execute (a
 # trimmed PATH) or errors non-definitively - so even the inventory fails, with
 # a message that is NOT one of the definitive no-session/no-server/no-socket
@@ -209,9 +211,13 @@ set -u
 [ "${FM_FAKE_TMUX_UNREADABLE:-0}" = 1 ] && { printf 'no current client\n' >&2; exit 1; }
 case "${1:-}" in
   list-windows)
-    # A successful but empty inventory: it omits the crew's window, so absence
-    # is proved by the answer rather than by an addressed call failing. Only
-    # reached once display-message has already failed.
+    [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 0
+    for meta in "${FM_STATE_OVERRIDE:-}"/*.meta; do
+      [ -f "$meta" ] || continue
+      while IFS= read -r line; do
+        case "$line" in window=*:*) printf '%s\n' "${line#window=*:}" ;; esac
+      done < "$meta"
+    done
     ;;
   display-message)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1

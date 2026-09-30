@@ -44,10 +44,22 @@ Verify setup by spawning a small task and confirming its `fm-<id>` window appear
 
 ## Current behavior and safety
 
+### Shell command submission
+
+Worktree entry and replacement-agent launch use the shell-submit owner in `bin/fm-tmux-lib.sh`, reached through `bin/backends/tmux.sh`.
+`bin/fm-spawn.sh` supplies the execution proof: the exact leased working directory, an identifiable agent process, or a changed foreground command after launch.
+The control plane still requires a running agent before reporting a successful relaunch.
+When Enter is lost, retries require the complete owned command at the shell cursor; an exhausted submission stops dispatch and clears only identifiable owned input.
+Unreadable or changed input is preserved and reported for inspection.
+The real-shell regression and verified versions are recorded in [runtime backend verification](verification/runtime-backends-fork.md#shell-command-submission).
+
+The away-mode daemon reuses the same owner for a digest an unconfirmed submit left in the primary's agent composer.
+There, ownership means the shared classifier places the cursor in a composer holding input that is exactly the typed digest, and cleanup presses Ctrl+U once per wrapped row.
+
 ### Agent liveness probe
 
-A target-existence check proves only that the pane exists.
-The deeper tmux agent-liveness probe first verifies exact window membership, then reads process names to distinguish a running harness from a bare idle shell.
+A target-existence check proves only that the pane exists, and it reads that from an exact inventory of the `=`-anchored session, never from `display-message` exiting 0, which tmux does for any target while a server runs.
+The deeper tmux agent-liveness probe first verifies the same exact presence, then reads process names to distinguish a running harness from a bare idle shell.
 It classifies recognized Claude, Codex, OpenCode, Pi, pi-signed, Grok, Kimi, Cursor, Muse, Rovo, and AGY process identities as `alive`, common shells as `dead`, an authoritatively absent window as `missing`, unreadable state as `unreadable`, and every other process as `ambiguous`.
 The process-name vocabulary behind those verdicts is owned by `bin/fm-agent-process-lib.sh` and shared with the Herdr adapter, which proves a registered agent against the same names ([herdr-backend.md](herdr-backend.md) "Restart and liveness behavior").
 Only `dead` and `missing` authorize recovery because a false dead result could launch a duplicate agent.
@@ -87,6 +99,7 @@ The supervisor guard selects only the detected primary harness's signature rathe
 `bin/fm-tmux-lib.sh` owns exact type-and-submit mechanics.
 It types a message once and retries Enter only until the composer clears.
 Only a proven empty composer is a positive delivery acknowledgement.
+The away-mode daemon requires more, because a stale frame also reads empty: its `fm_tmux_proven_submit` sends Enter only after the composer shows the typed text unchanged and counts delivery only when that text is gone and a turn provably started.
 Text left in established structure remains `pending`, text in ambiguous structure remains unproven, and unreadable or unsafe state remains unknown.
 An ordinary local `fm-send.sh` text steer and every remote text steer no longer ride this verified submit at all: they become durable steering-inbox records plus best-effort constant doorbell lines (`bin/fm-task-inbox-lib.sh`).
 The verdicts above are delivery-critical only for the local typed plane - harness-native invocations and explicit backend targets - where `fm-send.sh` still never retypes or assumes a confirmed submit for an unconfirmed verdict; its header owns the distinct delivered-unconfirmed exit status and operator response.

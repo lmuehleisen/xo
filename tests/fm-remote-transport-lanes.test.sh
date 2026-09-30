@@ -29,6 +29,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-transport-lanes)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
+fm_test_require_tmproot "$TMP_ROOT"
 REMOTE_ROOT="$TMP_ROOT/remote-root"
 HOME_A="$TMP_ROOT/home-a"
 HOME_B="$TMP_ROOT/home-b"
@@ -43,7 +44,7 @@ cleanup_lane_fixture() {
   if [ -f "$STATE_ROOT/worker.pid" ]; then
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
   fi
-  rm -rf -- "$TMP_ROOT"
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
 }
 trap cleanup_lane_fixture EXIT
 
@@ -54,6 +55,7 @@ cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" \
   "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-path-lib.sh" "$ROOT/bin/fm-marker-lib.sh" \
   "$ROOT/bin/fm-operational-input.sh" "$ROOT/bin/fm-tmux-lib.sh" \
   "$ROOT/bin/fm-composer-lib.sh" "$ROOT/bin/fm-cursor-lib.sh" \
+  "$ROOT/bin/fm-composer-devin-lib.sh" \
   "$ROOT/bin/fm-classify-lib.sh" "$ROOT/bin/fm-timeout-lib.sh" \
   "$ROOT/bin/fm-ff-lib.sh" "$ROOT/bin/fm-secondmate-registry-lib.sh" \
   "$REMOTE_ROOT/bin/"

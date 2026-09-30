@@ -30,7 +30,7 @@ FIXTURE="$LAB/quota.json"
 CALLS="$LAB/quota-axi.calls"
 
 cleanup() {
-  rm -rf "$LAB"
+  fm_test_rm_tmproot "${LAB:-}"
 }
 trap cleanup EXIT
 

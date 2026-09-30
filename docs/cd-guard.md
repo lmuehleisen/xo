@@ -19,6 +19,8 @@ This guard is not a general sandbox.
 It classifies shell command positions only; it never evaluates, expands, sources, or runs any byte of the submitted command.
 Its threat model is agent mistakes, the same as the watcher-arm seatbelt: an accidental bare `cd projects/foo`, not a deliberately obfuscated bypass.
 
+The Agy native PreToolUse transport in `bin/fm-agy-hook.sh` applies this same command policy to `run_command`.
+
 ## Scope: plain firstmate checkouts only
 
 The guard fires only in a plain firstmate checkout where git-dir equals git-common-dir.

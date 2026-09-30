@@ -50,8 +50,10 @@
 #
 # Why the terminal lifecycle exists (docs/herdr-backend.md "Away-mode daemon terminal launch"):
 # bin/fm-afk-start.sh execs the supervise daemon in the FOREGROUND of whatever
-# terminal it is already in. Harnesses with a native in-pane tracked-background
-# tool (claude, grok) run it there directly and it is fine. A harness with NO
+# terminal it is already in. A harness with a native in-pane tracked-background
+# tool that keeps the job alive (grok) runs it there directly. Claude Code's
+# background-task manager can kill a long-running background job, so claude
+# takes the terminal path below like every other harness. A harness with NO
 # native background mechanism (pi) has to manufacture a terminal, and doing that
 # by SPLITTING the captain's active pane visibly shrinks it - the regression this
 # script fixes. Instead this creates a non-visible tracked terminal (a herdr tab/
@@ -67,11 +69,14 @@
 # Usage:
 #   fm-afk-launch.sh enter [--words-file <path> | --words <text>]
 #                          [--expected-return <UTC ISO 8601>] [--spend <n>]
+#                          [--grant <task-id>]...
 #                              Write the away-posture record now, with no
 #                              separate confirmation, then print the entry
-#                              announcement and the read-back. With no words
-#                              while away it is a refresh; new words replace
-#                              the mandate. On Pi this is the whole entry.
+#                              announcement and the read-back. Repeatable
+#                              --grant names a task that may merge when green
+#                              while away. With no words while away it is a
+#                              refresh; new words replace the mandate and its
+#                              grants. On Pi this is the whole entry.
 #   fm-afk-launch.sh start     Capture the captain pane, then (unless the daemon
 #                              is already running) launch the daemon in a fresh
 #                              non-visible terminal for the detected backend and
@@ -390,6 +395,9 @@ fm_afk_launch_enter() {
     esac
   fi
   "$FM_AFK_CONTRACT_CMD" enter "$@" || return
+  # Fork-only: the detached away watchdog outlives a lost fleet tmux server.
+  "$FM_AFK_LAUNCH_DIR/fm-afk-sentinel.sh" start \
+    || fm_afk_launch_log "the away watchdog did not start; a lost fleet tmux server will not alarm this window"
   fm_afk_launch_host_engine_note
 }
 
@@ -883,6 +891,7 @@ fm_afk_launch_stop() {
       result=1
     fi
   fi
+  [ "$result" -ne 0 ] || "$FM_AFK_LAUNCH_DIR/fm-afk-sentinel.sh" stop || true
   if [ "$result" -eq 0 ]; then
     if [ "$closed_daemon_terminal" -eq 1 ]; then
       fm_afk_launch_log "away mode stopped; daemon terminal torn down, .afk cleared, and the posture record archived"

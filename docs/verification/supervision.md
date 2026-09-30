@@ -8,6 +8,8 @@ Task-specific chronology, temporary paths, run identifiers, and delivery transcr
 
 ## Native session-start delivery
 
+The [Agy native startup verification](runtime-backends-fork.md#primary-and-secondmate-supervision) records the opening-invocation nudge and real session ownership.
+
 The cross-harness transport pass ran on 2026-07-17 with Codex 0.144.4, Grok 0.2.103, OpenCode 1.17.18, Pi 0.80.10, and the tracked Claude hook wiring.
 
 Codex command shape:
@@ -247,6 +249,36 @@ In this 2026-07-28 Codex 0.145.0 semantic-busy probe, Firstmate-written lifecycl
 Codex also exposes no `StopFailure` hook, so an API-error turn end would need separate coverage even after hook discovery works.
 The app-server protocol schema does define the required lifecycle (`turn/started`, plus a `turn/completed` status of `completed`, `interrupted`, `failed`, or `inProgress`), so the gate is a reachability problem rather than a protocol gap.
 
+### Codex lifecycle refresh: 2026-09-09
+
+On codex-cli 0.153.4, a disposable interactive tmux worker with project-inline hooks in `.codex/config.toml` fired `SessionStart`, `UserPromptSubmit`, `Stop`, and `Interrupt` after explicit directory and hook trust.
+This supersedes the older claim that no project-local lifecycle hook can fire; it does not verify the separate `.codex/hooks.json` registration or enable Firstmate's busy-state gate.
+The five probe hooks recorded their event name and JSON payload locally and returned `{}`; they covered those four events plus `SessionEnd`, with no global configuration changes.
+The current [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks) describes project-inline configuration, hook trust, and these lifecycle events.
+
+```sh
+codex --no-alt-screen --approve-for-me -c model_reasoning_effort='low' \
+  'Reply exactly FM_BUSY_PROBE_READY without using tools.'
+```
+
+The launch prompt produced `SessionStart -> UserPromptSubmit -> Stop`.
+A turn running a local `sleep 20` completed with another prompt/Stop pair.
+During a turn running `sleep 60`, `fm-control.sh <task-id> interrupt` delivered Escape to the test-owned endpoint and the hook recorded `Interrupt` for that same turn id.
+The control command still correctly reported cancellation unconfirmed because its own acknowledgement path was not changed by this logging probe.
+
+The disconfirming error case used a separate disposable window in the same trusted project:
+
+```sh
+codex --no-alt-screen --approve-for-me -m fm-intentionally-invalid-probe-model \
+  'Reply exactly FM_ERROR_PROBE.'
+```
+
+This returned HTTP 400 with an unsupported-model error and returned to the input composer.
+Only `SessionStart` and `UserPromptSubmit` were logged for that session; no Stop or Interrupt closed the failed turn before explicit process exit.
+A prompt/Stop/Interrupt busy flag would therefore remain falsely busy after this failure, so `fm_busy_codex_hooks_verified` remains closed.
+No busy events or extra hooks were installed into real project worktrees or the user's global settings.
+A complete app-server observer, or another verified failure-aware source, remains necessary before claiming reliable Codex busy/idle supervision; shared app-server configuration was not changed during this probe.
+
 Deterministic entry points:
 
 ```sh
@@ -256,6 +288,8 @@ tests/fm-crew-state.test.sh
 ```
 
 ## Turn-end guard
+
+The [Agy primary and secondmate verification](runtime-backends-fork.md#primary-and-secondmate-supervision) records bounded Stop continuation and real watcher-completion delivery.
 
 The blocking and bounded-follow-up mechanisms were validated across seven harnesses on 2026-07-08 through 2026-09-21, with Claude's replacement Stop-owned path revalidated on 2026-09-21, Cursor's stop-hook park validated on 2026-08-13, and omp's blocking `session_stop` hook validated on 2026-09-05.
 
@@ -367,6 +401,22 @@ COMPLETE
 ```
 
 No live unattended Claude background session ran on the verifying machine: that topology is documented by the real process listings in issues #3902, #2314, #3398, and #4066, and the coverage above is the structural predicate plus those executable fixtures, not a live pass.
+
+Under Claude Code 2.1.281, a primary hosted by `claude --continue` through `--bg-pty-host` runs as this chain, innermost first: the tool shell, the model loop (`~/.local/share/claude/versions/<version>`), `~/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host`, `~/.local/bin/claude daemon run --origin transient`, and the `claude --continue` front-end in a tmux pane.
+The front-end never runs the model loop, so session start runs with the whole chain above its tool shell.
+Without the same-session id above, a lock that records the outermost front-end with no id beside it stands the primary down as a foreign session once a helper recycle leaves the Stop hook's chain without the still-live front-end, and the auto-arm stays inert; upstream #4894 added that id.
+The same suite runs that executable shape as real processes: session start anchors the lock on the model loop, a recycle onto a model loop under an orphaned pty-host keeps arming with the lock reclaimed onto the new model loop, and a separate live session holding the lock still stands it down.
+Against `bin/` from before #4894, the first case fails with the lock on the front-end and the guard's foreign-owner exit naming it.
+It ran on 2026-09-26 on macOS with bash 3.2.57 as the fake harness interpreter:
+
+```sh
+tests/fm-session-lock-ancestry.test.sh
+```
+
+```text
+ok - session-lock e2e: a primary hosted by claude --continue via bg-pty-host keeps supervision across a helper recycle
+ok - session-lock e2e: a bg-pty-hosted primary still stands down for a separate live session's lock
+```
 [`sessionstart-nudge.md`](../sessionstart-nudge.md#shared-wrapper-and-safety) owns the nudge wrapper's separate ancestry check and its redundant-nudge behavior after helper-chain recycling.
 `tests/fm-watch-arm.test.sh` runs real watcher and arm cycles against durable on-disk state to verify that a delivered reason survives until post-handling acknowledgement and stops replaying after acknowledgement, while an unrelated queue append cannot make a watcher cycle that delivered nothing look successful.
 The same suite ingests a keyed remote-secondmate parent reply through the real adapter, establishes the incremental OPEN DECISIONS cursor, interrupts supervision, and proves re-arm replays every unacknowledged queue row plus the still-open decision through the ordinary drain path.
@@ -577,6 +627,34 @@ ok - a resurfacing handling successor stays alive and supervises instead of goin
 ok - unacknowledged recovery is announced at most once per generation and the successor stays alive
 FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=59357
 ```
+
+### Claude StopFailure recovery, 2026-09-21
+
+The `StopFailure` registration of `bin/fm-claude-stop-autoarm.sh --stop-failure` was verified live against Claude Code 2.1.278 with no credentials and no model tokens.
+The guard runs an interactive session in an isolated tmux server and `CLAUDE_CONFIG_DIR`, with the real tracked `.claude/settings.json`, against a local fake Messages API that answers 429 until a reset named in its error text and answers normally afterward.
+
+```sh
+claude --version
+FM_CLAUDE_STOPFAILURE_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-claude-stopfailure-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+2.1.278 (Claude Code)
+ok - Claude 2.1.278 (Claude Code) live: an API-error turn end fired only StopFailure, the hook waited for the reset named in the error text, one asyncRewake recovery turn followed, and its Stop re-armed
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=42601
+```
+
+Observed guarantee: the rejected turn fired only `StopFailure`, with `error` set to `rate_limit` and the API's error text in `last_assistant_message`.
+Every rejected request fell inside that one turn, and the first accepted request came at or after the named reset.
+The hook's `asyncRewake` exit 2 started exactly one recovery turn, although Claude Code describes `StopFailure` as fire-and-forget, and that turn fired only `Stop`, whose auto-arm took the next ledger generation and re-armed.
+The dead prior session owner was reclaimed.
+With the `StopFailure` registration removed, the same run fired only `StopFailure` and no turn ran within 90 seconds after the reset, which reproduces the blind window.
+Print mode runs async hooks synchronously, so only an interactive session shows the rewake.
+Under API-key billing Claude Code shows the API's own error text, so the live pass exercises the reset-from-text path.
+The subscriber `quotaLimits.resetsAt` path, backoff and repeated failures, away-mode, halt, and live-continuity stand-downs, supersession, and a turn already in progress are verified only by `tests/fm-claude-stop-autoarm.test.sh`, from the transcript shape Claude Code 2.1.278 records for a usage limit.
+A real subscriber usage limit and an hours-long wait were not reproduced live.
 
 Deterministic entry points:
 

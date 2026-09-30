@@ -8,7 +8,8 @@
 #
 # Composer shapes and verdicts are owned by bin/fm-composer-lib.sh.
 # This file owns only tmux's styled capture, cursor and Pi identity primitives,
-# delivery busy read, and submit conversions that consume the shared verdict.
+# delivery busy read, agent-submit conversions, and owned-input recovery for
+# shell commands and agent composers.
 # Styled captures remain internal; fm-peek and every human-facing capture stay
 # plain.
 #
@@ -299,4 +300,204 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   fi
   sleep "$settle"
   fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle"
+}
+
+# Shell commands cannot use an agent-composer verdict. The caller supplies an
+# execution postcondition (leased cwd or agent liveness), never a key-send test.
+# Retry keys require the exact owned line at a shell cursor. Joined wrapped rows
+# include history so long launch lines remain inspectable. A transcript match
+# above the cursor or another foreground program never authorizes a retry.
+# Returns 0 for owned pending input, 1 for another line, 2 for unreadable input.
+fm_tmux_shell_line_pending() { # <target> <text>
+  local target=$1 text=$2 command cursor screen cursor_line line
+  command=$(tmux display-message -p -t "$target" '#{pane_current_command}') || return 2
+  case "$command" in bash|zsh|sh|dash|ksh|fish|-bash|-zsh|-sh) ;; *) return 2 ;; esac
+  cursor=$(tmux display-message -p -t "$target" '#{cursor_y}') || return 2
+  case "$cursor" in ''|*[!0-9]*) return 2 ;; esac
+  # Preserve terminal row endings across command substitution. Remove only
+  # capture-pane's final terminator, so a blank cursor row stays distinguishable
+  # from the submitted command echoed immediately above it.
+  screen=$(tmux capture-pane -p -J -t "$target" -S - -E "$cursor" && printf '.') || return 2
+  screen=${screen%.}
+  screen=${screen%$'\n'}
+  cursor_line=${screen##*$'\n'}
+  [[ "$cursor_line" == *[![:space:]]* ]] || return 1
+  # ZLE can redraw a wrapped command with explicit row moves rather than
+  # terminal autowrap, so tmux -J alone may retain newlines inside the input.
+  # Require the full command as the suffix ending at the cursor row either way.
+  line=${screen//$'\n'/}
+  [ -n "$text" ] && [[ "$line" == *"$text" ]]
+}
+
+# The agent-composer counterpart of fm_tmux_shell_line_pending, with the same
+# return codes. Owned means the cursor-anchored verdict proves an agent
+# composer holding input and that input is exactly <text>
+# (fm_composer_holds_owned_text); `residue` also accepts what a partial Ctrl+U
+# cleanup leaves of it. An empty composer holds nothing of ours; an unknown
+# one is unreadable, because the strict posture cannot place the cursor in a
+# composer there, and a key sent to an unplaced cursor could answer a dialog.
+# The composer rows it read are left in FM_TMUX_OWNED_CONTENT (empty unless the
+# composer held input), so a caller can compare two successive reads.
+fm_tmux_composer_owned_input() { # <target> <text> [residue]
+  local target=$1 text=$2 mode=${3:-} content
+  FM_TMUX_OWNED_CONTENT=
+  case "$(fm_tmux_composer_state "$target")" in
+    empty) return 1 ;;
+    pending|pending-unproven) ;;
+    *) return 2 ;;
+  esac
+  content=$(fm_composer_extract_selected_content \
+    "$(printf 'styled=1\ncursor=0\nidentity=0\nrows=0')" \
+    "$(fm_tmux_composer_capture "$target")" $'\x1f') || return 2
+  FM_TMUX_OWNED_CONTENT=$content
+  fm_composer_holds_owned_text "$text" "$content" "$mode"
+}
+
+# <target> <text> <show-polls> <quiet-gap> <enter-retries> <proof-polls>
+#   <proof-sleep> <proof-fn> [proof-args...]
+# The positive-proof submit for a sender that must never count an undelivered
+# message as delivered (the away daemon's inject_msg). fm_tmux_submit_core
+# accepts a composer that reads empty after Enter, which a stale frame also
+# shows, so an unsent message can be counted as delivered
+# (tests/fm-afk-inject-delivery-proof.test.sh owns the regression). This
+# primitive types <text> once and then requires evidence at both ends:
+#   - Before Enter, the composer must prove it holds exactly <text>
+#     (fm_tmux_composer_owned_input) on two successive reads <quiet-gap>
+#     seconds apart with unchanged rows, polled up to <show-polls> times. The
+#     quiet gap is timed from when the harness shows the text, not from the
+#     tmux write: Claude Code folds an Enter that arrives within about 100 ms of
+#     reading a typed burst into the paste, so the gap must exceed that window.
+#     Text that never proves itself gets no Enter at all.
+#   - After Enter, success needs the owned text provably gone (a readable
+#     composer that does not hold it; an unreadable one proves nothing) AND
+#     <proof-fn> [proof-args...] to succeed, which the caller defines as its
+#     turn-started evidence (an idle-to-busy transition, or an opened
+#     operational record); the proof function prints a short evidence word.
+#     Turn evidence seen while the composer was unreadable is kept until a
+#     readable read confirms the text is gone. Enter is retried, never the
+#     text, while the composer still holds exactly <text>, at most
+#     <enter-retries> presses in all, across <proof-polls> polls <proof-sleep>
+#     seconds apart.
+# Prints one line: `delivered enter=<n> polls=<n> proof=<evidence>` on proof,
+# `unshown` when the text never proved itself (no Enter sent), `pending` when
+# it is still in the composer, `turn-started <evidence>` when a turn started
+# but no readable composer confirmed the text gone, `unproven` when it left
+# the composer but no turn was proven, or `send-failed` when tmux refused the
+# literal send (its stderr is replayed). Every verdict but `delivered` may
+# leave the text in the composer.
+fm_tmux_proven_submit() {
+  local target=$1 text=$2 show=$3 gap=$4 retries=$5 polls=$6 sleep_s=$7 proof=$8
+  local err prev='' shown=0 i=0 rc enters=1 evidence started=''
+  shift 8
+  if ! err=$(tmux send-keys -t "$target" -l "$text" 2>&1 >/dev/null); then
+    [ -z "$err" ] || printf '%s\n' "$err" >&2
+    printf 'send-failed'
+    return 0
+  fi
+  while [ "$i" -lt "$show" ]; do
+    sleep "$gap"
+    i=$((i + 1))
+    if fm_tmux_composer_owned_input "$target" "$text"; then
+      if [ -n "$prev" ] && [ "$FM_TMUX_OWNED_CONTENT" = "$prev" ]; then
+        shown=1
+        break
+      fi
+      prev=$FM_TMUX_OWNED_CONTENT
+    else
+      prev=
+    fi
+  done
+  if [ "$shown" != 1 ]; then
+    printf 'unshown'
+    return 0
+  fi
+  tmux send-keys -t "$target" Enter 2>/dev/null || true
+  i=0
+  while [ "$i" -lt "$polls" ]; do
+    sleep "$sleep_s"
+    i=$((i + 1))
+    rc=0
+    fm_tmux_composer_owned_input "$target" "$text" || rc=$?
+    if [ "$rc" != 0 ]; then
+      if [ -z "$started" ] && evidence=$("$proof" "$@"); then
+        started=${evidence:-yes}
+      fi
+      if [ "$rc" = 1 ] && [ -n "$started" ]; then
+        printf 'delivered enter=%s polls=%s proof=%s' "$enters" "$i" "$started"
+        return 0
+      fi
+    elif [ "$enters" -lt "$retries" ]; then
+      tmux send-keys -t "$target" Enter 2>/dev/null || true
+      enters=$((enters + 1))
+    fi
+  done
+  if [ "$rc" = 0 ]; then
+    printf 'pending'
+  elif [ -n "$started" ]; then
+    printf 'turn-started %s' "$started"
+  else
+    printf 'unproven'
+  fi
+}
+
+# <target> <text> <owned-fn> <clear-presses>
+# Clear input the caller has just proven it owns with at most <clear-presses>
+# Ctrl+U presses, stopping as soon as <owned-fn> finds nothing of it left.
+# Returns 0 when the cleanup is confirmed and 1 when it is not.
+fm_tmux_clear_owned_input() {
+  local target=$1 text=$2 owned=$3 presses=$4 press=0 pending_status=0
+  while [ "$pending_status" = 0 ] && [ "$press" -lt "$presses" ]; do
+    tmux send-keys -t "$target" C-u 2>/dev/null || true
+    press=$((press + 1))
+    sleep 0.3
+    pending_status=0
+    "$owned" "$target" "$text" residue || pending_status=$?
+  done
+  [ "$pending_status" = 1 ]
+}
+
+# <target> <already-typed-text> <owned-fn> <clear-presses> <label>
+#   <postcondition-function> [postcondition-args...]
+# The one recovery owner for input a sender typed and must submit or remove.
+# <owned-fn> <target> <text> [residue] answers ownership with
+# fm_tmux_shell_line_pending's return codes.
+# At most three Enter attempts over 20 half-second polls. The first Enter is
+# unconditional, so a caller resuming earlier input proves ownership first;
+# subsequent keys require exact ownership. A failed send can still have
+# executed, so always inspect the postcondition. On exhaustion, clear only
+# proven owned input (fm_tmux_clear_owned_input) and report whether cleanup
+# could be confirmed. Returns 0 when the postcondition held, 1 when owned input
+# was cleared, 2 when owned cleanup could not be confirmed, and 3 when
+# ownership was unproven so no cleanup keys were sent.
+# Callers must stop on failure, never append more input to uncertain input.
+fm_tmux_owned_submit_enter() {
+  local target=$1 text=$2 owned=$3 presses=$4 label=$5 verify=$6 poll attempt=1
+  shift 6
+  tmux send-keys -t "$target" Enter 2>/dev/null || true
+  for ((poll=0; poll<20; poll++)); do
+    sleep 0.5
+    "$verify" "$@" && return 0
+    if [ "$attempt" -lt 3 ] && "$owned" "$target" "$text"; then
+      tmux send-keys -t "$target" Enter 2>/dev/null || true
+      attempt=$((attempt + 1))
+    fi
+  done
+  if ! "$owned" "$target" "$text"; then
+    echo "error: $label execution unconfirmed in $target; input ownership is unproven, so no cleanup keys were sent" >&2
+    return 3
+  fi
+  if fm_tmux_clear_owned_input "$target" "$text" "$owned" "$presses"; then
+    echo "error: $label did not run in $target after $attempt Enter attempts; cleared owned input" >&2
+    return 1
+  fi
+  echo "error: $label did not run in $target after $attempt Enter attempts; owned input cleanup could not be confirmed" >&2
+  return 2
+}
+
+# <target> <already-typed-text> <postcondition-function> [postcondition-args...]
+# A shell line clears with one Ctrl+U, so a second press is never needed.
+fm_tmux_shell_submit_enter() {
+  local target=$1 text=$2
+  shift 2
+  fm_tmux_owned_submit_enter "$target" "$text" fm_tmux_shell_line_pending 1 'shell command' "$@"
 }

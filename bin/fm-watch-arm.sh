@@ -32,6 +32,8 @@
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor
+#   check: autoarm-deadline - ...                        - FM_WATCH_DEADLINE passed first; see
+#                                                          "Stop-hook deadline" below
 #   watcher: FAILED - attached watcher pid=<N> stalled (beacon <age>s at or past hard bound <bound>s)
 #                                                        - the followed holder is alive but its beacon
 #                                                          reached the stall bound
@@ -483,6 +485,76 @@ if [ "$mode" = handling-delivered ]; then
     && fm_recovery_marker_begin_handling "$STATE/.watcher-down" "$handling_generation"
   exit $?
 fi
+
+# Stop-hook deadline. FM_WATCH_DEADLINE (epoch seconds) is set only by
+# bin/fm-claude-stop-autoarm.sh, which owns its value: Claude kills that hook's
+# whole process tree at the hook's declared timeout and delivers nothing from a
+# killed hook. An independent timer signals this arm at the deadline, whatever
+# the watcher is doing, and the arm closes the cycle with one queued no-op check
+# wake. A watcher this arm started is stopped first: it defers TERM until its
+# current foreground command ends, so its poll sleep is ended with it and its
+# own cleanup runs at once, and KILL after DEADLINE_STOP_GRACE seconds is only
+# the backstop. An attached watcher this arm does not own keeps running.
+# Without FM_WATCH_DEADLINE there is no timer, the default for every other arm
+# owner.
+DEADLINE_REASON='check: autoarm-deadline - the Stop hook closed its watcher cycle before the hook timeout; nothing needs handling, acknowledge it and end the turn so the next turn end re-arms'
+DEADLINE_STOP_GRACE=3
+deadline_timer=
+
+# shellcheck disable=SC2329 # Invoked indirectly by the USR1 trap below.
+handle_deadline() {
+  local rc=0 killer
+  trap '' USR1 HUP TERM INT
+  if [ -n "${child:-}" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+    pkill -TERM -x -P "$child" sleep 2>/dev/null || true
+    ( sleep "$DEADLINE_STOP_GRACE"; kill -KILL "$child" 2>/dev/null ) &
+    killer=$!
+    wait "$child" 2>/dev/null
+    rc=$?
+    kill "$killer" 2>/dev/null || true
+    wait "$killer" 2>/dev/null || true
+  fi
+  if [ -n "${child_out:-}" ] && watch_output_has_wake "$child_out"; then
+    # The watcher delivered a wake of its own just before the deadline.
+    print_watch_output "$child_out"
+  elif fm_wake_append check autoarm-deadline "$DEADLINE_REASON"; then
+    printf '%s\n' "$DEADLINE_REASON"
+  else
+    cycle_log_append "$rc" "$(cycle_signal_name "$rc")" deadline-append-failed none
+    [ -z "${child_out:-}" ] || rm -f "$child_out" 2>/dev/null || true
+    echo "watcher: FAILED - the hook deadline passed and its wake could not be queued"
+    exit 1
+  fi
+  cycle_log_append "$rc" "$(cycle_signal_name "$rc")" deadline none
+  [ -z "${child_out:-}" ] || rm -f "$child_out" 2>/dev/null || true
+  exit 0
+}
+
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap below.
+deadline_timer_stop() {
+  [ -z "$deadline_timer" ] || kill "$deadline_timer" 2>/dev/null || true
+}
+
+case "${FM_WATCH_DEADLINE:-}" in
+  ''|*[!0-9]*) : ;;
+  *)
+    arm_identity=$(fm_pid_identity "$ARM_PID" 2>/dev/null || true)
+    trap handle_deadline USR1
+    trap deadline_timer_stop EXIT
+    (
+      while [ "$(date +%s)" -lt "$FM_WATCH_DEADLINE" ]; do
+        sleep 1
+        kill -0 "$ARM_PID" 2>/dev/null || exit 0
+      done
+      if [ -n "$arm_identity" ]; then
+        [ "$(fm_pid_identity "$ARM_PID" 2>/dev/null || true)" = "$arm_identity" ] || exit 0
+      fi
+      kill -USR1 "$ARM_PID" 2>/dev/null
+    ) </dev/null >/dev/null 2>&1 &
+    deadline_timer=$!
+    ;;
+esac
 
 # Home-scoped stop: only the watcher pid recorded in THIS home's lock. Waits
 # for it to actually exit, so a fresh watcher either takes a released lock or

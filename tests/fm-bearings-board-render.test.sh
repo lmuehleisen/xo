@@ -20,44 +20,13 @@ command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
 
 make_home() {  # <name>
   local home="$TMP_ROOT/$1" fakebin
-  # A build starts a listener for the board it publishes. Registered with
-  # tests/lib.sh, not with a shell array: make_home runs inside a command
-  # substitution, where an array append never reaches the caller.
-  fm_test_track_procevent_home "$home" "$home/procevent-claims"
-  mkdir -p "$home/state" "$home/data" "$home/lavish-state"
+  mkdir -p "$home/state" "$home/data"
   fakebin=$(fm_fakebin "$home")
-  # The build proves the board session is live before it arms anything, so the
-  # stub reports the opened shape the real lavish-axi emits, and records that
-  # session in this home's own store. The listener resolves its server from that
-  # store; the machine-wide default has no session for this board.
+  # A fail-if-invoked sentinel proves rendering stays independent of Lavish.
   cat > "$fakebin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-case "${1-}" in
-  --version) printf '0.1.77\n' ;;
-  '')
-    printf 'sessions[1]{file,status,url,pending_prompts}:\n'
-    [ ! -s "$FM_HOME/lavish-open" ] \
-      || printf '  %s,open,"http://127.0.0.1:4387/session/0123456789abcdef",0\n' "$(cat "$FM_HOME/lavish-open")"
-    ;;
-  poll)
-    # The build's listening sample can land before this process resolves a
-    # session. Recording entry makes that gap observable: a claim that dies
-    # without reaching poll is not a listener.
-    printf 'entered\n' > "$FM_HOME/stub-poll"
-    # Bounded, so a listener that escapes its test stops on its own.
-    while [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do sleep 1; done
-    exit 75
-    ;;
-  *)
-    real=$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")
-    printf '%s\n' "$real" > "$FM_HOME/lavish-open"
-    jq -n --arg file "$real" \
-      '{sessions:{"0123456789abcdef":{file:$file,url:"http://127.0.0.1:4387/session/0123456789abcdef"}}}' \
-      > "$LAVISH_AXI_STATE_DIR/state.json"
-    printf 'session:\n  status: opened\n'
-    ;;
-esac
-exit 0
+printf '%s\n' "$*" >> "${FM_TEST_LAVISH_LOG:?}"
+exit 99
 SH
   chmod +x "$fakebin/lavish-axi"
   printf '%s\n' "$home"
@@ -94,26 +63,24 @@ require_listener_reached_poll() {  # <home>
 
 # Build the board from <underway-json> plus <charted-json> and return what the
 # renderer produced.
-render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charted_warning_more]
-  local home=$1 underway=$2 charted=$3 more=${4:-0} warning_more=${5:-0} data="$1/payload.json"
+render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charted_warning_more] [captains-call-json]
+  local home=$1 underway=$2 charted=$3 more=${4:-0} warning_more=${5:-0} calls=${6:-[]} data="$1/payload.json"
   jq -n --argjson underway "$underway" --argjson charted "$charted" \
-    --argjson more "$more" --argjson warning_more "$warning_more" '{
+    --argjson more "$more" --argjson warning_more "$warning_more" --argjson calls "$calls" '{
     schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z",
-    prs_live:false, captains_call:[], underway:$underway, landed:[],
+    prs_live:false, captains_call:$calls, underway:$underway, landed:[],
     charted:$charted, charted_more:$more, charted_warning_more:$warning_more}' > "$data"
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_TEST_LAVISH_LOG="$home/lavish.log" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
-    LAVISH_AXI_STATE_DIR="$home/lavish-state" \
     "$BOARD" build "$data" >/dev/null || fail "the board did not build"
-  require_listener_reached_poll "$home"
+  [ ! -e "$home/lavish.log" ] || fail "the read-only board invoked lavish-axi"
   node "$HARNESS" "$home/.lavish/bearings-board.html" \
     || fail "the built board could not be rendered"
 }
 
 # Build the board from <charted-json> alone and return what the renderer produced.
-render() {  # <home> <charted-json> [charted_more] [charted_warning_more]
-  render_board "$1" '[]' "$2" "${3:-0}" "${4:-0}"
+render() {  # <home> <charted-json> [charted_more] [charted_warning_more] [captains-call-json]
+  render_board "$1" '[]' "$2" "${3:-0}" "${4:-0}" "${5:-[]}"
 }
 
 charted_next_count() {  # <render-json>
@@ -132,7 +99,7 @@ test_a_warning_row_reads_as_a_repair_not_as_queued_work() {
   printf '%s' "$out" | jq -e '
     (.charted | length) == 2
       and (.charted[0] | .title == "Queued work"
-        and [.badges[] | .text] == ["waiting"] and .pickable == true)
+        and [.badges[] | .text] == ["waiting"] and .pickable == false)
       and (.charted[1] | .title == "Main inventory integrity"
         and [.badges[] | .text] == ["needs repair"]
         and [.badges[] | .tone] == ["danger"]
@@ -203,6 +170,19 @@ test_an_omitted_kind_keeps_the_existing_queued_rendering() {
   pass "an omitted kind renders exactly as queued work always did"
 }
 
+test_read_only_decisions() {
+  local home out
+  home=$(make_home readonly)
+  out=$(render "$home" '[{"id":"queued","repo":"sample","title":"Queued","reason":"","dispatchable":true}]' 0 0 '[
+    {"key":"choice","type":"decision","repo":"sample","title":"Choose a path","options":[{"value":"yes","label":"Proceed"}],"allow_freeform":true},
+    {"key":"review","type":"decision","repo":"sample","title":"Review","options":[{"value":"wait","label":"Wait"}]}
+  ]')
+  printf '%s' "$out" | jq -e '.error == "" and (.calls | length) == 2 and .callControls == [] and (.charted | all(.pickable == false)) and (.calls[0] | contains("Reply in chat"))' >/dev/null \
+    || fail "read-only board lost decisions or offered nonfunctional controls: $out"
+  pass "read-only board renders decisions and queued work without answer or dispatch controls"
+}
+
+test_read_only_decisions
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status() {
   local home out
   home=$(make_home underway-name)

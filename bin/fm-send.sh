@@ -1089,6 +1089,7 @@ else
     1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
     2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
     3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
+    4) echo "fm-send: doorbell typed into $T but its Enter did not submit it, so it is not delivered yet; the steer is durably recorded at $INBOX_RECORD and the watcher will press Enter on its next attempt (do not resend)" >&2 ;;
     esac
     exit 0
   fi
@@ -1107,8 +1108,8 @@ else
     ;;
   *) settle=0.3 ;;
   esac
-  # Per-harness submit-confirm budget. agy's bare `>` composer verdict is
-  # `unknown`, so a landed submit is acknowledged only by the idle-to-busy
+  # Per-harness submit-confirm budget. When agy's composer cannot be read back
+  # as empty, a landed submit is acknowledged only by the idle-to-busy
   # transition poll, and agy renders its verified busy footer well after the
   # shared budget expires: ~1.5s after Enter for a short steer, ~4-5s for a
   # realistic longer brief (live-measured, agy 1.2.1), against the shared

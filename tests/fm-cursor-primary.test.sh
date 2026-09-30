@@ -215,7 +215,14 @@ test_autoarm_stands_down_on_cursor_payload() {
   status=$?
   expect_code 0 "$status" "the Claude auto-arm must stay inert under Cursor"
   [ ! -e "$dir/state/arm-ran" ] || fail "the Claude auto-arm armed under a Cursor payload; on Cursor it would run synchronously and hold the turn open for its multi-hour timeout"
-  pass "fm-claude-stop-autoarm: inert on a Cursor-delivered payload"
+  printf '%s' "$CURSOR_PAYLOAD" | FM_HOME="$dir" "$FAKE_CURSOR" -c '
+      printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+      exec "$FM_HOME/bin/fm-claude-stop-autoarm.sh" --stop-failure
+    ' >/dev/null 2>&1
+  status=$?
+  expect_code 0 "$status" "the Claude StopFailure recovery must stay inert under Cursor"
+  [ ! -e "$dir/state/.claude-autoarm-epoch" ] || fail "the Claude StopFailure recovery claimed under a Cursor payload; on Cursor its wait would hold the turn open"
+  pass "fm-claude-stop-autoarm: inert on a Cursor-delivered payload, in Stop and StopFailure mode"
 }
 
 test_sessionstart_run_stands_down_on_cursor_payload() {

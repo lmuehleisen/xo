@@ -31,6 +31,8 @@
 # that only draws composer text without being a registered agent would read
 # agent_not_found forever and never confirm a submission.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$ROOT/bin/fm-supervise-daemon.sh"
@@ -66,8 +68,8 @@ cleanup_all() {
     wait "$DAEMON_PID" 2>/dev/null || true
   fi
   herdr_safe_stop_and_delete "$SESSION" 2>/dev/null || true
-  rm -rf "${HERDR_SHIM_DIR:-}" 2>/dev/null || true
-  rm -rf "${STATE_DIR:-}" 2>/dev/null || true
+  fm_test_rm_tmproot "${HERDR_SHIM_DIR:-}" || true
+  fm_test_rm_tmproot "${STATE_DIR:-}" || true
 }
 trap cleanup_all EXIT
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"

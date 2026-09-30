@@ -10,7 +10,7 @@ set -u
 . "$ROOT/bin/fm-tmux-lib.sh"
 
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-tmux-submit-busy.XXXXXX")
-trap 'rm -rf "$TMP_ROOT"' EXIT
+trap 'fm_test_rm_tmproot "${TMP_ROOT:-}"' EXIT
 
 # Override fm_pane_is_busy for testing: FM_FAKE_PANE_BUSY=1 means busy.
 fm_pane_is_busy() {
@@ -353,3 +353,70 @@ test_failed_baseline_capture_keeps_busy_unknown_unconfirmed
 test_busy_pane_ambiguous_pending_retries_without_conversion
 test_unrecognized_state_skips_busy_conversion
 test_claude_busy_signature_uses_real_capture_shapes
+
+# Shell retries must not borrow ownership from transcript text or unreadable
+# input, even though the execution postcondition has not yet appeared.
+test_shell_submit_unowned_input() (
+  local_mode=$1
+  shell_keys="$TMP_ROOT/shell-keys-$local_mode"
+  : > "$shell_keys"
+  # shellcheck disable=SC2329 # Invoked by the sourced submit helper.
+  tmux() {
+    case "$1" in
+      display-message)
+        case "$*" in
+          *pane_current_command*) printf 'bash\n' ;;
+          *cursor_y*) printf '2\n' ;;
+        esac ;;
+      capture-pane)
+        [ "$local_mode" != unreadable ] || return 1
+        printf '$ owned-command\ncompleted\n$ someone-else-draft\n' ;;
+      send-keys) printf '%s\n' "$4" >> "$shell_keys" ;;
+    esac
+  }
+  # shellcheck disable=SC2329 # Invoked by the sourced submit helper.
+  sleep() { :; }
+  # shellcheck disable=SC2329 # Passed as the execution-postcondition callback.
+  shell_not_executed() { return 1; }
+  if fm_tmux_shell_submit_enter fake owned-command shell_not_executed 2>/dev/null; then
+    fail "unproven shell execution succeeded"
+  fi
+  [ "$(cat "$shell_keys")" = Enter ] || fail "unowned input received retry or cleanup keys"
+  pass "shell submit preserves $local_mode input without retrying or clearing it"
+)
+test_shell_submit_unowned_input transcript
+test_shell_submit_unowned_input unreadable
+
+# Accepted Enter moves the cursor below the echoed command before the execution
+# postcondition settles. Preserve that empty row instead of retrying transcript.
+test_shell_submit_blank_cursor() (
+  cursor_contents=$1
+  shell_keys="$TMP_ROOT/blank-cursor-keys"
+  : > "$shell_keys"
+  verification_polls=0
+  # shellcheck disable=SC2329 # Invoked by the sourced submit helper.
+  tmux() {
+    case "$1" in
+      display-message)
+        case "$*" in
+          *pane_current_command*) printf 'bash\n' ;;
+          *cursor_y*) printf '1\n' ;;
+        esac ;;
+      capture-pane) printf '$ owned-command\n%s\n' "$cursor_contents" ;;
+      send-keys) printf '%s\n' "$4" >> "$shell_keys" ;;
+    esac
+  }
+  # shellcheck disable=SC2329 # Invoked by the sourced submit helper.
+  sleep() { :; }
+  # shellcheck disable=SC2329 # Passed as the execution-postcondition callback.
+  shell_eventually_executed() {
+    verification_polls=$((verification_polls + 1))
+    [ "$verification_polls" -ge 4 ]
+  }
+  fm_tmux_shell_submit_enter fake owned-command shell_eventually_executed \
+    || fail "accepted command was not confirmed after its delayed postcondition"
+  [ "$(cat "$shell_keys")" = Enter ] || fail "blank cursor received retry or cleanup keys"
+  pass "accepted Enter with a blank cursor waits for execution without further keys"
+)
+test_shell_submit_blank_cursor ''
+test_shell_submit_blank_cursor '   '

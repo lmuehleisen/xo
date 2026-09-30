@@ -65,7 +65,7 @@ ABSENT=
 
 cleanup() {
   tmux -L "$SOCKET" kill-server >/dev/null 2>&1 || true
-  rm -rf "$LAB"
+  fm_test_rm_tmproot "${LAB:-}"
 }
 trap cleanup EXIT INT TERM
 

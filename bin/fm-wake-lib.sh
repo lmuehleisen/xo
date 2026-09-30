@@ -1362,7 +1362,7 @@ fm_task_set_lock_path() {  # <state-dir>
 # the walk at the current home, which is the correct answer rather than an
 # error: the parent lives on another machine, so its filesystem can neither hold
 # nor be observed by a lock taken here, and a remote-seeded home is itself the
-# top of the local tree that bin/fm-teardown.sh's collect_local_firstmate_states
+# top of the local tree that bin/fm-worktree-claims-lib.sh's collect_local_firstmate_states
 # enumerates (that walk already skips remote registry entries for the same
 # reason). Refusing a remote binding instead made every operation anchored here
 # fail closed inside a remote secondmate home and its local descendants.
@@ -1439,104 +1439,6 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
   project_common=$(CDPATH='' cd -- "$project_common" 2>/dev/null && pwd -P) || return 1
   slot_common=$(CDPATH='' cd -- "$slot_common" 2>/dev/null && pwd -P) || return 1
   [ "$project_common" = "$slot_common" ]
-}
-
-# Slot-owner claim: which task a Treehouse pool slot currently belongs to.
-#
-# Treehouse can record ownership durably: `treehouse get --lease --lease-holder`
-# reserves a slot under a label until `treehouse return --if-lease-holder`
-# releases it, and Firstmate uses exactly that for secondmate homes
-# (bin/fm-home-seed.sh). Crewmate spawns do not take that path: they acquire
-# their slot through the interactive pane-driven `treehouse get`, whose state
-# entry is a live process lease (owner_pid plus owner_started_at, and `treehouse
-# status` reports in-use from the processes actually running under the path).
-# That answers "is anything running here", never "which task owns this", and it
-# is released by the very event that makes a task record stale - the worker
-# exiting - so a slot whose lease has lapsed reads identical whether it is still
-# this task's or has since been handed to another one. Firstmate therefore keeps
-# its own claim on top: one file naming the task that took the slot, written by
-# bin/fm-spawn.sh under the same project lock that allocates the slot and
-# released by bin/fm-teardown.sh when the slot goes back to the pool. Moving
-# crewmate spawns onto the durable lease is separate follow-up work.
-#
-# The claim lives at <pool>/<slot>/.fm-slot-owner - a sibling of the repo
-# checkout rather than a file inside it - so claiming a slot can never dirty the
-# copy teardown's landed-work checks inspect, and a returned slot carries no
-# untracked leftover from it.
-fm_treehouse_slot_owner_marker() {  # <worktree>
-  local worktree=$1 slot
-  slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
-  printf '%s/.fm-slot-owner\n' "$(dirname "$slot")"
-}
-
-# Claim a pool slot for a task, replacing whatever the previous holder left.
-# The rename is atomic, so a reader either sees the old claim or the new one.
-fm_treehouse_slot_owner_claim() {  # <worktree> <task-id> <home>
-  local worktree=$1 id=$2 home=$3 marker tmp
-  [ -n "$id" ] || return 1
-  marker=$(fm_treehouse_slot_owner_marker "$worktree") || return 1
-  # Only a plain claim file may be replaced: renaming onto a directory would
-  # move the new claim inside it and leave the slot reading as unclaimable.
-  if { [ -e "$marker" ] || [ -L "$marker" ]; } \
-     && { [ ! -f "$marker" ] || [ -L "$marker" ]; }; then
-    return 1
-  fi
-  tmp="$marker.tmp.${BASHPID:-$$}"
-  rm -f "$tmp" || return 1
-  {
-    printf 'task=%s\n' "$id"
-    printf 'home=%s\n' "$home"
-  } > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$marker" 2>/dev/null || { rm -f "$tmp"; return 1; }
-}
-
-# Read the claim on a pool slot and compare it with a task id.
-# Sets FM_TREEHOUSE_SLOT_OWNER to one of:
-#   mine   - the claim names this task
-#   other  - the claim names a different task, so the slot was reassigned
-#   absent - no claim: the slot was taken before claims existed, or returned since
-#   unsafe - a claim file exists but cannot be read as a claim
-# FM_TREEHOUSE_SLOT_OWNER_ID and FM_TREEHOUSE_SLOT_OWNER_HOME carry the recorded
-# claimant as evidence. The home is reported, never matched: a home that moved
-# must not turn a task's own slot into a refusal.
-fm_treehouse_slot_owner_state() {  # <worktree> <task-id>
-  local worktree=$1 id=$2 marker line owner_id='' owner_home=''
-  FM_TREEHOUSE_SLOT_OWNER=unsafe
-  FM_TREEHOUSE_SLOT_OWNER_ID=
-  FM_TREEHOUSE_SLOT_OWNER_HOME=
-  marker=$(fm_treehouse_slot_owner_marker "$worktree") || return 0
-  if [ ! -e "$marker" ] && [ ! -L "$marker" ]; then
-    FM_TREEHOUSE_SLOT_OWNER=absent
-    return 0
-  fi
-  [ -f "$marker" ] && [ ! -L "$marker" ] || return 0
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      task=*) owner_id=${line#task=} ;;
-      home=*) owner_home=${line#home=} ;;
-    esac
-  done < "$marker" || return 0
-  [ -n "$owner_id" ] || return 0
-  # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
-  FM_TREEHOUSE_SLOT_OWNER_ID=$owner_id
-  # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
-  FM_TREEHOUSE_SLOT_OWNER_HOME=$owner_home
-  if [ "$owner_id" = "$id" ]; then
-    FM_TREEHOUSE_SLOT_OWNER=mine
-  else
-    FM_TREEHOUSE_SLOT_OWNER=other
-  fi
-}
-
-# Drop a task's own claim once its slot is back in the pool. Never removes
-# another task's claim, so a misdirected release cannot strip the evidence that
-# protects the slot's real owner.
-fm_treehouse_slot_owner_release() {  # <worktree> <task-id>
-  local worktree=$1 id=$2 marker
-  fm_treehouse_slot_owner_state "$worktree" "$id"
-  [ "$FM_TREEHOUSE_SLOT_OWNER" = mine ] || return 0
-  marker=$(fm_treehouse_slot_owner_marker "$worktree") || return 0
-  rm -f "$marker" 2>/dev/null || true
 }
 
 fm_failure_episode_reset() {
@@ -1755,16 +1657,44 @@ fm_autoarm_midturn_healthy() {  # <state-dir> [grace]
   [ "$epoch_mtime" -ge "$beacon_mtime" ]
 }
 
+# The whole ledger record as one comparable token: "absent" with no ledger,
+# otherwise "record:" and the file's exact bytes, both lines. Every ledger
+# writer changes those bytes - a claim writes a new epoch, an owned write a new
+# outcome and updated_at, and the legacy graft the identity line - so comparing
+# tokens sees every write, where comparing one field would not.
+fm_autoarm_ledger_token() {  # <state-dir>
+  local epoch="$1/.claude-autoarm-epoch" content
+  if [ ! -e "$epoch" ] && [ ! -L "$epoch" ]; then
+    printf 'absent\n'
+    return 0
+  fi
+  content=$(cat "$epoch" 2>/dev/null) || content='unreadable'
+  printf 'record:%s\n' "$content"
+}
+
 # Atomically publish this process as the owner of generation N+1, under one
 # short micro-mutex hold. Returns 0 with FM_AUTOARM_MY_GEN set on success, 2
-# when a competing claimant won the race (the ledger holds an open claim), and
+# when a competing claimant won the race (the ledger holds an open claim), 3
+# when an expected record was given and the ledger no longer matches it, and
 # 1 when the micro-mutex is contended, the mandatory identity cannot be
-# computed, or the write failed.
-fm_autoarm_claim_next() {  # <state-dir> [grace]
-  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock epoch pid gen identity tmp
+# computed, the outcome is malformed, or the write failed.
+#
+# The optional outcome defaults to "arming", the only outcome that is ever
+# open. The StopFailure recovery claims with "stopfailure-wait" instead, so its
+# hours-long wait can never make a Stop firing or the turn-end guard defer to
+# it: any ordinary Stop simply supersedes it by taking the next generation.
+# The StopFailure recovery also passes the fm_autoarm_ledger_token it observed
+# when it started, making the claim a compare-and-swap on the whole record:
+# any write at all since then supersedes it before it can claim. A Stop
+# claim passes none, because an ordinary Stop always supersedes.
+fm_autoarm_claim_next() {  # <state-dir> [grace] [outcome] [expected-token]
+  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} outcome=${3:-arming} expected=${4:-} lock epoch pid gen identity tmp
   lock="$state/.claude-autoarm.lock"
   epoch="$state/.claude-autoarm-epoch"
   FM_AUTOARM_MY_GEN=
+  case "$outcome" in
+    ''|*[!a-z-]*) return 1 ;;
+  esac
   # Resolve the pid into a variable FIRST: expanding ${BASHPID:-$$} inside a
   # command substitution would resolve it in that subshell, recording the
   # identity of a process that exits immediately.
@@ -1780,10 +1710,14 @@ fm_autoarm_claim_next() {  # <state-dir> [grace]
   case "$gen" in
     ''|*[!0-9]*) gen=0 ;;
   esac
+  if [ -n "$expected" ] && [ "$(fm_autoarm_ledger_token "$state")" != "$expected" ]; then
+    fm_lock_release "$lock"
+    return 3
+  fi
   gen=$((gen + 1))
   tmp="$epoch.tmp.$pid"
-  if ! printf 'epoch=%s owner_pid=%s outcome=arming updated_at=%s\n%s\n' \
-      "$gen" "$pid" "$(date +%s)" "$identity" > "$tmp" 2>/dev/null \
+  if ! printf 'epoch=%s owner_pid=%s outcome=%s updated_at=%s\n%s\n' \
+      "$gen" "$pid" "$outcome" "$(date +%s)" "$identity" > "$tmp" 2>/dev/null \
     || ! mv -f "$tmp" "$epoch" 2>/dev/null; then
     rm -f "$tmp" 2>/dev/null || true
     fm_lock_release "$lock"

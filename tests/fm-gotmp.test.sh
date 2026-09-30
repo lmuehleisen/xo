@@ -10,6 +10,8 @@
 # The isolated fm-spawn subprocess in fm-kimi-harness.test.sh covers temp-root creation,
 # metadata publication, and the pane environment export.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 # This suite does not source tests/lib.sh, so exempt its teardown subprocess from
 # the gate-lifecycle refusal (bin/fm-gate-refuse-lib.sh) the way lib.sh does for
@@ -33,7 +35,7 @@ TMP_ROOT=
 
 cleanup() {
   if [ -n "${TMP_ROOT:-}" ]; then
-    rm -rf "$TMP_ROOT"
+    fm_test_rm_tmproot "${TMP_ROOT:-}"
   fi
 }
 trap cleanup EXIT
@@ -63,6 +65,7 @@ SH
   ln -s "$ROOT/bin/fm-gemini-lib.sh" "$fake/bin/fm-gemini-lib.sh"
   ln -s "$ROOT/bin/fm-cursor-lib.sh" "$fake/bin/fm-cursor-lib.sh"
   ln -s "$ROOT/bin/fm-composer-lib.sh" "$fake/bin/fm-composer-lib.sh"
+  ln -s "$ROOT/bin/fm-composer-devin-lib.sh" "$fake/bin/fm-composer-devin-lib.sh"
   ln -s "$ROOT/bin/fm-nm-run-lib.sh" "$fake/bin/fm-nm-run-lib.sh"
   # fm-lock-lib.sh: teardown sources it for the shared lock-staleness proof.
   ln -s "$ROOT/bin/fm-lock-lib.sh" "$fake/bin/fm-lock-lib.sh"
@@ -71,11 +74,15 @@ SH
   # Lifecycle serialization, status presentation retirement, and shared adapter
   # ownership are sourced by teardown.
   ln -s "$ROOT/bin/fm-control-lib.sh" "$fake/bin/fm-control-lib.sh"
+  # fm-devin-lib.sh and fm-agy-lib.sh: teardown sources the fork-only retires.
+  ln -s "$ROOT/bin/fm-devin-lib.sh" "$fake/bin/fm-devin-lib.sh"
+  ln -s "$ROOT/bin/fm-agy-lib.sh" "$fake/bin/fm-agy-lib.sh"
   ln -s "$ROOT/bin/fm-classify-lib.sh" "$fake/bin/fm-classify-lib.sh"
   # fm-timeout-lib.sh: the shared hard bound fm-classify-lib.sh sources for the
   # wedge detector's bounded worktree write probe.
   ln -s "$ROOT/bin/fm-timeout-lib.sh" "$fake/bin/fm-timeout-lib.sh"
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-worktree-claims-lib.sh" "$fake/bin/fm-worktree-claims-lib.sh"
   ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
@@ -142,13 +149,13 @@ test_teardown_removes_tasktmp_dir() {
   local task_tmp="$TMP_ROOT/fm-$id"
   mkdir -p "$task_tmp/gotmp"
   printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
-  local fake
+  local fake out
   fake=$(make_fake_root "$id" "$task_tmp")
   # Sanity: dir + contents exist before teardown.
   [ -d "$task_tmp/gotmp" ] || fail "precondition: gotmp missing before teardown"
   # Run the REAL teardown against the fake root.
-  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
-    || fail "teardown exited non-zero with a valid tasktmp"
+  out=$(FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" 2>&1) \
+    || fail "teardown exited non-zero with a valid tasktmp: $out"
   [ ! -e "$task_tmp" ] \
     || fail "teardown did not remove the tasktmp dir ($task_tmp still exists)"
   pass "fm-teardown removes the dir pointed to by tasktmp= in meta"
@@ -171,16 +178,21 @@ SH
   ln -s "$ROOT/bin/fm-gemini-lib.sh" "$fake/bin/fm-gemini-lib.sh"
   ln -s "$ROOT/bin/fm-cursor-lib.sh" "$fake/bin/fm-cursor-lib.sh"
   ln -s "$ROOT/bin/fm-composer-lib.sh" "$fake/bin/fm-composer-lib.sh"
+  ln -s "$ROOT/bin/fm-composer-devin-lib.sh" "$fake/bin/fm-composer-devin-lib.sh"
   ln -s "$ROOT/bin/fm-nm-run-lib.sh" "$fake/bin/fm-nm-run-lib.sh"
   ln -s "$ROOT/bin/fm-lock-lib.sh" "$fake/bin/fm-lock-lib.sh"
   # fm-lease-lib.sh: teardown sources it for the supervision lease guard.
   ln -s "$ROOT/bin/fm-lease-lib.sh" "$fake/bin/fm-lease-lib.sh"
   ln -s "$ROOT/bin/fm-control-lib.sh" "$fake/bin/fm-control-lib.sh"
+  # fm-devin-lib.sh and fm-agy-lib.sh: teardown sources the fork-only retires.
+  ln -s "$ROOT/bin/fm-devin-lib.sh" "$fake/bin/fm-devin-lib.sh"
+  ln -s "$ROOT/bin/fm-agy-lib.sh" "$fake/bin/fm-agy-lib.sh"
   ln -s "$ROOT/bin/fm-classify-lib.sh" "$fake/bin/fm-classify-lib.sh"
   # fm-timeout-lib.sh: the shared hard bound fm-classify-lib.sh sources for the
   # wedge detector's bounded worktree write probe.
   ln -s "$ROOT/bin/fm-timeout-lib.sh" "$fake/bin/fm-timeout-lib.sh"
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-worktree-claims-lib.sh" "$fake/bin/fm-worktree-claims-lib.sh"
   ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"

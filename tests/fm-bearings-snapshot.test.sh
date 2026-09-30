@@ -41,7 +41,17 @@ SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
-  display-message) case "$*" in *dead-*) exit 1 ;; *) printf '%%1\n' ;; esac ;;
+  # Presence is the exact session inventory: every recorded window except a
+  # dead-* one, while display-message answers any target as real tmux does.
+  list-windows)
+    for meta in "${FM_HOME:-}"/state/*.meta; do
+      [ -f "$meta" ] || continue
+      while IFS= read -r line; do
+        case "$line" in window=*dead-*) ;; window=*:*) printf '%s\n' "${line#window=*:}" ;; esac
+      done < "$meta"
+    done
+    ;;
+  display-message) printf '%%1\n' ;;
   capture-pane)
     case "$*" in
       *fm-domain-alpha*) printf 'stale terminal summary: Phase 7 started\n> \n' ;;
@@ -3042,7 +3052,7 @@ EOF
   printf 'working: old generation\n' > "$home/state/generation-race.status"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
-if [ "${1:-}" = display-message ]; then
+if [ "${1:-}" = display-message ] || [ "${1:-}" = list-windows ]; then
   if mkdir "$RACE_ONCE" 2>/dev/null; then
     tmp="$RACE_META.tmp.$$"
     cat > "$tmp" <<EOF

@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Credentialed Devin worker guard. Opt in with FM_DEVIN_SIGNALS_LIVE=1.
-# FM_DEVIN_MODEL chooses an account-listed model (default swe-2-medium).
+# FM_DEVIN_MODEL chooses an account-listed model; unset, the fork's default
+# launch must reach SWE-2 Max in the footer.
 # Runs the real fm-spawn launch command in a private tmux server; only worktree
 # allocation and initial endpoint delivery use fixtures. All later steering,
 # interrupt and exit operations use the real Firstmate control plane.
 # The isolated home carries a user Claude Code hook that must never fire, and
 # the worker's own commit must carry no Devin attribution.
+# Fork: the reviewed launch (smart mode, policy hooks) and plain exit; the
+# user config turns Claude import off explicitly because the fork preserves
+# that choice (tests/fm-devin-permission-policy-live-e2e.test.sh keeps it on).
+# Every tmux call runs without TMUX/TMUX_PANE on this guard's own -S socket and
+# lab session. Permission and retry evidence live in their own fork guards.
 set -u
+unset TMUX TMUX_PANE
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 fm_live_gate opt-in FM_DEVIN_SIGNALS_LIVE devin tmux jq
@@ -29,7 +36,7 @@ LAB=$(cd "$LAB" && pwd -P)
 SOCKET="$LAB/tmux.sock"
 case "$SOCKET" in "$PWD"/*) SOCKET=${SOCKET#"$PWD"/} ;; esac
 cleanup() {
-  "$REAL_TMUX" -S "$SOCKET" kill-server >/dev/null 2>&1 || true
+  env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$SOCKET" kill-server >/dev/null 2>&1 || true
   rm -rf "$LAB"
 }
 trap cleanup EXIT
@@ -59,24 +66,25 @@ git -C "$WT" config user.name 'Devin Live Guard'
 git -C "$WT" config user.email devin-live-guard@example.invalid
 # Keep SessionStart evidence for native resume and command hooks for tool ancestry.
 jq -n --arg cmd "cat >> '$LAB/events.jsonl'; printf '\n' >> '$LAB/events.jsonl'" \
-  '{hooks: {SessionStart: [{hooks: [{type: "command", command: $cmd}]}], PreToolUse: [{hooks: [{type: "command", command: $cmd}]}]}}' \
+  '{read_config_from: {claude: false}, hooks: {SessionStart: [{hooks: [{type: "command", command: $cmd}]}], PreToolUse: [{hooks: [{type: "command", command: $cmd}]}]}}' \
   > "$H/user-home/.config/devin/config.json"
-fm_test_spawn_brief "$H" "$ID" "Runtime verification only: compute 12345 plus 67890 using your shell tool and write only the result into answer.txt, then commit answer.txt with git using a commit message you write yourself. Also run '$ROOT/bin/fm-harness.sh' and write its output to harness.txt. Do no other work and do not delegate. Later read and acknowledge Firstmate's instruction inbox when the doorbell arrives."
+fm_test_spawn_brief "$H" "$ID" "Runtime verification only: compute 12345 plus 67890 using your shell tool and write only the result into answer.txt, then commit answer.txt with git using a commit message you write yourself. Also run '$ROOT/bin/fm-harness.sh' and write its output to harness.txt. Do no other work and do not delegate. Later read and acknowledge Firstmate's instruction inbox when the doorbell arrives; until then end your turn, do not wait or poll for it."
 fakebin=$(make_spawn_fakebin "$LAB/fake" claude)
 ln -s "$DEVIN_BIN" "$fakebin/devin"
 FM_FAKE_LAUNCH_LOG="$LAB/launch.sh" fm_test_run_spawn "$H" "$WT" "$fakebin" "$ID" "$PROJ" \
-  --scout --harness devin --model "${FM_DEVIN_MODEL:-swe-2-medium}" --effort high > "$LAB/spawn.log" 2>&1 \
+  --scout --harness devin ${FM_DEVIN_MODEL:+--model "$FM_DEVIN_MODEL"} --effort high > "$LAB/spawn.log" 2>&1 \
   || fail "fm-spawn failed: $(cat "$LAB/spawn.log")"
+sed -i.bak "s/^window=firstmate:/window=devin-lab:/" "$H/state/$ID.meta" && rm -f "$H/state/$ID.meta.bak"
 # Route every backend read/write to this guard's own socket only.
-printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$SOCKET" > "$LAB/bin/tmux"
+printf '#!/bin/sh\nexec env -u TMUX -u TMUX_PANE "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$SOCKET" > "$LAB/bin/tmux"
 chmod +x "$LAB/bin/tmux"
 export PATH="$LAB/bin:$PATH" FM_HOME="$H"
 unset FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE
-TARGET="firstmate:fm-$ID"
-"$REAL_TMUX" -S "$SOCKET" new-session -d -s firstmate -n "fm-$ID" -x 120 -y 40 -c "$WT" \
+TARGET="devin-lab:fm-$ID"
+tmux new-session -d -s devin-lab -n "fm-$ID" -x 120 -y 40 -c "$WT" \
   "HOME='$H/user-home' /bin/sh '$LAB/launch.sh'; exec /bin/bash --noprofile --norc" || fail 'could not start pane'
-capture() { "$REAL_TMUX" -S "$SOCKET" capture-pane -p -e -t "$TARGET"; }
-screen_text() { "$REAL_TMUX" -S "$SOCKET" capture-pane -p -t "$TARGET"; }
+capture() { tmux capture-pane -p -e -t "$TARGET"; }
+screen_text() { tmux capture-pane -p -t "$TARGET"; }
 wait_file() {
   local path=$1 i
   for i in $(seq 1 480); do [ -s "$path" ] && return 0; sleep 0.5; done
@@ -97,7 +105,11 @@ wait_file "$WT/harness.txt"
 wait_idle
 [ -f "$H/state/$ID.turn-ended" ] || fail 'Stop did not notify turn end'
 [ "$(fm_backend_agent_state tmux "$TARGET")" = alive ] || fail 'real Devin process not classified alive'
-pass "$VERSION: spawn brief, model, autonomy, trust, identity and native Stop"
+screen_text | grep -q 'smart mode on' || fail 'the launch is not in the reviewed smart mode'
+if [ -z "${FM_DEVIN_MODEL:-}" ]; then
+  screen_text | grep -q 'SWE-2 Max' || fail "the default launch footer does not read SWE-2 Max: $(screen_text | tail -3)"
+fi
+pass "$VERSION: spawn brief, model, reviewed mode, trust, identity and native Stop"
 git -C "$WT" log -1 --format=%B -- answer.txt > "$LAB/commit.txt" 2>/dev/null
 [ -s "$LAB/commit.txt" ] || fail 'the worker did not commit answer.txt'
 ! grep -qiE 'co-authored-by|generated with' "$LAB/commit.txt" \
@@ -167,14 +179,15 @@ pass "$VERSION: double Escape cancels, preserves agent, and invalidates busy sta
 session=$(jq -r 'select(.hook_event_name == "SessionStart") | .session_id' "$LAB/events.jsonl" | head -1)
 [ -n "$session" ] || fail 'no session id for resume'
 # Native resume is a vendor fact, not a new fm-control verb.
-printf '%s\n' "exec env -u NO_COLOR HOME='$H/user-home' '$DEVIN_BIN' --config '$H/state/$ID.devin-config.json' --permission-mode dangerous --respect-workspace-trust false -r '$session' -- 'Runtime resume probe: write the product of 17 and 29 into resumed.txt, then stop.'" > "$LAB/resume.sh"
+printf '%s\n' "exec env -u NO_COLOR HOME='$H/user-home' '$DEVIN_BIN' --config '$H/state/$ID.devin-config.json' --permission-mode smart --respect-workspace-trust false -r '$session' -- 'Runtime resume probe: write the product of 17 and 29 into resumed.txt, then stop.'" > "$LAB/resume.sh"
 tmux send-keys -t "$TARGET" -l "sh '$LAB/resume.sh'"
 sleep 0.5
 tmux send-keys -t "$TARGET" Enter
 wait_file "$WT/resumed.txt"
 [ "$(tr -d '[:space:]' < "$WT/resumed.txt")" = 493 ] || fail 'resume prompt not processed'
 jq -e 'select(.hook_event_name == "SessionStart" and .source == "resume")' "$LAB/events.jsonl" >/dev/null || fail 'native resume source absent'
+screen_text | grep -q 'smart mode on' || fail 'native resume dropped the reviewed smart mode'
 # Exit via the actual table-backed control plane once more. The retired busy
 # generation remains absent, so control observes unknown and interrupts first.
 "$ROOT/bin/fm-control.sh" "$ID" exit > "$LAB/exit.log" 2>&1 || fail "resumed exit failed: $(cat "$LAB/exit.log")"
-pass "$VERSION: /quit and native -r session resume"
+pass "$VERSION: plain exit and native -r session resume in reviewed mode"

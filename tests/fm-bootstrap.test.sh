@@ -4,16 +4,14 @@
 # Bootstrap prints one block or line per actionable problem, optional verbose
 # BOOTSTRAP_INFO fact, or completed bootstrap no-action fact and is silent when
 # all is well. firstmate consumes the exact 'MISSING: treehouse (install: ...)',
-# 'MISSING: tasks-axi (install: ...)', 'MISSING: quota-axi (install: ...)',
-# 'MISSING: gh-axi (install: ...)', 'PRESENTATION_UNAVAILABLE: lavish-axi ...', and
+# 'MISSING: tasks-axi (install: ...)', 'MISSING: quota-axi (install: ...)', and
 # 'BOOTSTRAP_INFO: ...' lines, so those contracts are pinned verbatim. The cases
 # are table-driven over the inputs that vary: whether `treehouse get --help`
 # advertises --lease, which (if any) tasks-axi version is on PATH, whether
 # tasks-axi update advertises --archive-body, whether its mv help advertises
 # multi-ID moves, whether quota-axi is on PATH,
-# whether the local backend config opts out of tasks-axi backlog mutations,
-# which no-mistakes version is on PATH, which gh-axi version is on PATH, and
-# which lavish-axi version is on PATH.
+# and whether the local backend config opts out of tasks-axi backlog mutations.
+# This home does not require no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi.
 # Dedicated fleet-sync cases pin the computed bootstrap timeout, explicit
 # override, blank-env defaulting, partial-output relay, and pre-launch timeout
 # scan.
@@ -318,100 +316,45 @@ ROWS
   pass "bootstrap reports treehouse lease + tasks-axi/quota-axi bootstrap contracts"
 }
 
-test_no_mistakes_min_version() {
-  local label version mode case_dir fakebin out missing n
-  missing='MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)'
-  n=0
-  while IFS='^' read -r label version mode; do
-    [ -n "$label" ] || continue
-    n=$((n + 1))
-    case_dir="$TMP_ROOT/no-mistakes-$n"
-    mkdir -p "$case_dir/home"
-    mkdir -p "$case_dir/home/config"
-    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
-    fakebin=$(make_fake_toolchain "$case_dir")
-    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_NO_MISTAKES_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh")
-    case "$mode" in
-      empty)
-        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
-      missing)
-        [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
-    esac
-  done <<'ROWS'
-minimum no-mistakes version is accepted^no-mistakes version v1.46.0 (fake)^empty
-newer no-mistakes minor is accepted^no-mistakes version v1.47.0 (fake)^empty
-newer no-mistakes major is accepted^no-mistakes version v2.0.0 (fake)^empty
-older no-mistakes patch reports an upgrade^no-mistakes version v1.45.4 (fake)^missing
-unparseable no-mistakes version reports an upgrade^no-mistakes development build^missing
-ROWS
-  pass "bootstrap enforces no-mistakes minimum version"
+test_dropped_tools_are_not_required() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/dropped-tools"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  rm -f "$fakebin/no-mistakes" "$fakebin/gh-axi" "$fakebin/chrome-devtools-axi" "$fakebin/lavish-axi"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "dropped tools must not be required, got: $out"
+  pass "bootstrap does not require no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi"
 }
 
-test_gh_axi_min_version() {
-  local label version mode case_dir fakebin out missing n
-  missing='MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)'
-  n=0
-  while IFS='^' read -r label version mode; do
+# config/no-mistakes is an optional opt-in: an installed CLI alone says nothing,
+# and an opted-in home without the CLI gets one non-blocking fact, never MISSING.
+test_no_mistakes_opt_in_reports_unavailable_cli() {
+  local case_dir fakebin out label flag cli expect
+  while IFS='|' read -r label flag cli expect; do
     [ -n "$label" ] || continue
-    n=$((n + 1))
-    case_dir="$TMP_ROOT/gh-axi-$n"
+    case_dir="$TMP_ROOT/no-mistakes-opt-in-$flag-$cli"
     mkdir -p "$case_dir/home/config"
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    [ "$flag" = off ] || : > "$case_dir/home/config/no-mistakes"
     fakebin=$(make_fake_toolchain "$case_dir")
+    [ "$cli" = present ] || rm -f "$fakebin/no-mistakes"
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_GH_AXI_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh")
-    case "$mode" in
-      empty)
-        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
-      missing)
-        [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    case "$expect" in
+      silent) [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
+      info)
+        [ "$out" = "BOOTSTRAP_INFO: no-mistakes pipeline unavailable (config/no-mistakes is set; install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh) - direct-PR and local-only work may proceed; pipeline ships are refused until it is installed" ] \
+          || fail "$label: expected exactly the unavailable fact, got: $out" ;;
     esac
   done <<'ROWS'
-minimum gh-axi version is accepted^0.1.29^empty
-newer gh-axi patch is accepted^0.1.30^empty
-newer gh-axi minor is accepted^0.2.0^empty
-newer gh-axi major is accepted^1.0.0^empty
-older gh-axi patch reports an upgrade^0.1.19^missing
-much older gh-axi minor reports an upgrade^0.0.9^missing
-unparseable gh-axi version reports an upgrade^gh-axi development build^missing
+flag absent with the CLI installed|off|present|silent
+flag present with the CLI installed|on|present|silent
+flag present without the CLI|on|absent|info
 ROWS
-  pass "bootstrap enforces gh-axi minimum version"
-}
-
-test_lavish_axi_min_version() {
-  local label version mode case_dir fakebin out unavailable n
-  unavailable='PRESENTATION_UNAVAILABLE: lavish-axi (requires >=0.1.77; install: npm install -g lavish-axi && lavish-axi setup hooks) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish'
-  n=0
-  while IFS='^' read -r label version mode; do
-    [ -n "$label" ] || continue
-    n=$((n + 1))
-    case_dir="$TMP_ROOT/lavish-axi-$n"
-    mkdir -p "$case_dir/home/config"
-    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
-    fakebin=$(make_fake_toolchain "$case_dir")
-    [ "$version" != absent ] || rm -f "$fakebin/lavish-axi"
-    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_LAVISH_AXI_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh") \
-      || fail "$label: optional presentation must not fail bootstrap"
-    assert_not_contains "$out" 'MISSING:' "$label: optional presentation must not block nonvisual dispatch"
-    case "$mode" in
-      empty)
-        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
-      unavailable)
-        [ "$out" = "$unavailable" ] || fail "$label: expected '$unavailable', got: $out" ;;
-    esac
-  done <<'ROWS'
-absent lavish-axi permits text fallback^absent^unavailable
-minimum lavish-axi version is accepted^0.1.77^empty
-newer lavish-axi patch is accepted^0.1.78^empty
-newer lavish-axi minor is accepted^0.2.0^empty
-newer lavish-axi major is accepted^1.0.0^empty
-the patch just below the floor permits text fallback^0.1.76^unavailable
-much older lavish-axi minor permits text fallback^0.0.9^unavailable
-unparseable lavish-axi version permits text fallback^lavish-axi development build^unavailable
-ROWS
-  pass "bootstrap permits nonvisual work without compatible lavish-axi and retains its presentation floor"
+  pass "bootstrap reports an opted-in but unavailable no-mistakes CLI as one non-blocking fact"
 }
 
 test_tasks_axi_min_version() {
@@ -723,6 +666,30 @@ test_treehouse_lease_check_follows_resolved_backend() {
   assert_contains "$out" "MISSING: treehouse" "backend=herdr must still require treehouse with durable lease support"
   assert_not_contains "$out" "MISSING: tmux" "backend=herdr must not demand tmux even when treehouse is too old"
   pass "bootstrap: the treehouse lease check follows the resolved backend's worktree provider"
+}
+
+# A home with publish-guard config gates public pushes, whose scans need
+# gitleaks, so bootstrap reports it missing there and only there; a secondmate
+# home inherits that config from its primary.
+test_publish_guard_home_requires_gitleaks() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/publish-guard-gitleaks"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$out" "MISSING: gitleaks" "a home without publish-guard config must not require gitleaks"
+  mkdir -p "$case_dir/home/config/publish-guard"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "MISSING: gitleaks (install: '$ROOT/bin/fm-install-gitleaks.sh' '" \
+    "a home with publish-guard config must require gitleaks through the pinned installer"
+  fm_fake_exit0 "$fakebin" gitleaks
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$out" "MISSING: gitleaks" "an installed gitleaks must be silent"
+  pass "bootstrap: a home with publish-guard config requires gitleaks, installed by the pinned installer"
 }
 
 test_fleet_sync_timeout_scales_with_origin_backed_project_count() {
@@ -1139,6 +1106,8 @@ ordinary pi ultra is refused^{"default":{"harness":"pi","model":"openai-codex/gp
 missing native model ultra is refused^{"default":{"harness":"pi","effort":"ultra","provider":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
 empty native model ultra is refused^{"default":{"harness":"pi","model":"codex-native/","effort":"ultra","provider":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
 codex harness ultra is refused^{"default":{"harness":"codex","model":"codex-native/gpt-6-astra","effort":"ultra"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:ultra
+agy max effort is accepted^{"rules":[],"default":{"harness":"agy","model":"gemini-3.8-flash","effort":"max"}}^empty^
+agy unsupported effort is refused^{"default":{"harness":"agy","effort":"ultra"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: agy:ultra
 pi max effort is accepted^{"rules":[{"when":"deep coding","use":{"harness":"pi","model":"openai-codex/gpt-5.6-sol","effort":"max","provider":"codex"}}]}^empty^
 pi-signed max effort is accepted^{"rules":[{"when":"signed coding","use":{"harness":"pi-signed","model":"openai-codex/gpt-5.6-sol","effort":"max","provider":"codex"}}]}^empty^
 muse shared efforts are accepted^{"rules":[{"when":"muse low","use":{"harness":"muse","effort":"low"}},{"when":"muse medium","use":{"harness":"muse","effort":"medium"}},{"when":"muse high","use":{"harness":"muse","effort":"high"}},{"when":"muse xhigh","use":{"harness":"muse","effort":"xhigh"}},{"when":"muse max","use":{"harness":"muse","effort":"max"}}]}^empty^
@@ -1146,8 +1115,6 @@ unsupported muse ultra effort is flagged^{"rules":[{"when":"muse ultra","use":{"
 agy model profile is accepted^{"rules":[{"when":"agy work","use":{"harness":"agy","model":"gemini-3.8-flash-high"}}]}^empty^
 gemini profile with explicit provider is accepted^{"rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}^empty^
 agy low medium high efforts are accepted^{"rules":[{"when":"agy low","use":{"harness":"agy","effort":"low"}},{"when":"agy medium","use":{"harness":"agy","effort":"medium"}},{"when":"agy high","use":{"harness":"agy","effort":"high"}}]}^empty^
-unsupported agy xhigh effort is flagged^{"rules":[{"when":"agy xhigh","use":{"harness":"agy","effort":"xhigh"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: agy:xhigh
-unsupported agy max effort is flagged^{"rules":[{"when":"agy max","use":{"harness":"agy","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: agy:max
 unsupported opencode effort is flagged^{"rules":[{"when":"opencode work","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5","effort":"high","provider":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: opencode:high
 kimi model profile is accepted^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3"}}]}^empty^
 unsupported kimi effort is flagged^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: kimi:high
@@ -1220,8 +1187,8 @@ ROWS
   printf '%s\n' '{"rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$case_dir/home/config/crew-dispatch.json"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  [ "$out" = 'CREW_DISPATCH: invalid config/crew-dispatch.json - unverified harness: gemini' ] \
-    || fail "no-key bootstrap must preserve its former verified-harness baseline, got: $out"
+  # This fork's no-key baseline already verifies Gemini crewmate routing.
+  [ -z "$out" ] || fail "no-key bootstrap must preserve the fork's verified-harness baseline, got: $out"
   printf '%s\n' 'TYPESAFE_API_KEY=test-key' > "$case_dir/home/.env"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
@@ -1240,9 +1207,8 @@ ROWS
 }
 
 test_bootstrap_reporting
-test_no_mistakes_min_version
-test_gh_axi_min_version
-test_lavish_axi_min_version
+test_dropped_tools_are_not_required
+test_no_mistakes_opt_in_reports_unavailable_cli
 test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction
@@ -1254,6 +1220,7 @@ test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux
 test_treehouse_lease_check_follows_resolved_backend
+test_publish_guard_home_requires_gitleaks
 test_fleet_sync_timeout_scales_with_origin_backed_project_count
 test_fleet_sync_timeout_floor_preserves_small_fleets
 test_fleet_sync_timeout_explicit_override_wins

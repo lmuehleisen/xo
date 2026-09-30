@@ -238,32 +238,43 @@ JSON
   pass "fm-claude-trust.sh: preserves unrelated keys on the project-root entry"
 }
 
-# hasClaudeMdExternalIncludesApproved===false with WarningShown===true on the
-# project-root entry is a human's explicit "No, disable" answer, recorded in the SAME store their own
-# interactive sessions read. A spawn must never flip that to true on their
-# behalf: doing so would grant every later interactive session in that
-# checkout silent external-file inclusion the human declined. The whole
-# registration refuses instead, and the store - including the worktree entry,
-# which is never reached - must come back byte-for-byte unchanged.
-test_project_root_entry_declined_external_imports_is_not_overridden() {
-  local rec store out before after
-  rec=$(make_case project-decline)
+# approved===false on the project-root entry never proves a human decline:
+# Claude persists it as a default before any warning, and warning-shown===true
+# with approved===false also follows an Escape dismissal. Neither state may
+# block trust registration, be propagated to the new worktree entry, or be
+# rewritten on the existing project entry.
+assert_unapproved_import_flags_register_trust_untouched() {
+  local warning_shown=$1 label=$2 rec store
+  rec=$(make_case "project-unapproved-$label")
   read_case "$rec"
   store="$CONFIG/.claude.json"
   cat > "$store" <<JSON
-{"hasCompletedOnboarding":true,"projects":{"$PROJ":{"hasTrustDialogAccepted":true,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true,"allowedTools":["Read"]}}}
+{"hasCompletedOnboarding":true,"projects":{"$PROJ":{"hasTrustDialogAccepted":true,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":$warning_shown,"allowedTools":["Read"]}}}
 JSON
-  before=$(cat "$store")
-  out=$(run_trust "$CONFIG" "$WT" "$PROJ")
-  expect_code 1 $? "a project that already declined external imports must be refused: $out"
-  assert_contains "$out" "declined external CLAUDE.md imports" \
-    "the refusal did not name the declined-consent reason"
-  assert_contains "$out" "approve the imports dialog interactively" \
-    "the refusal did not name the recovery"
-  after=$(cat "$store")
-  [ "$before" = "$after" ] || fail "the store was modified despite the refusal"
-  assert_not_trusted "$store" "$WT" "the worktree entry was registered despite the refusal"
-  pass "fm-claude-trust.sh: refuses to override a project's declined external-imports consent"
+  run_trust "$CONFIG" "$WT" "$PROJ" >/dev/null \
+    || fail "registration failed against a project with approved=false and warning-shown=$warning_shown"
+  assert_trusted "$store" "$WT" "the worktree was not registered as trusted"
+  assert_store_value "$store" 'true' \
+    "the project entry lost its trust flag" projects "$PROJ" hasTrustDialogAccepted
+  assert_store_value "$store" 'undefined' \
+    "the worktree gained an external-import approval value" projects "$WT" hasClaudeMdExternalIncludesApproved
+  assert_store_value "$store" 'undefined' \
+    "the worktree gained an external-import warning-shown value" projects "$WT" hasClaudeMdExternalIncludesWarningShown
+  assert_store_value "$store" 'false' \
+    "the project entry's external-import approval changed" projects "$PROJ" hasClaudeMdExternalIncludesApproved
+  assert_store_value "$store" "$warning_shown" \
+    "the project entry's warning-shown value changed" projects "$PROJ" hasClaudeMdExternalIncludesWarningShown
+  assert_store_value "$store" '["Read"]' \
+    "the project entry's unrelated settings were lost" projects "$PROJ" allowedTools
+  pass "fm-claude-trust.sh: approved=false with warning-shown=$warning_shown registers trust and leaves the import flags alone"
+}
+
+test_project_root_default_false_without_warning_registers_trust() {
+  assert_unapproved_import_flags_register_trust_untouched false default
+}
+
+test_project_root_false_with_warning_shown_registers_trust() {
+  assert_unapproved_import_flags_register_trust_untouched true warned
 }
 
 # Claude Code's own default project entry carries BOTH external-imports flags as
@@ -653,14 +664,16 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   fm_test_spawn_brief "$home" trustspawn
   out=$(FM_TEST_CLAUDE_CONFIG_DIR="$config" FM_FAKE_LAUNCH_LOG="$launch_log" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" trustspawn "$proj" claude \
-    --mode no-mistakes --yolo off)
+    --mode direct-PR --yolo off)
   expect_code 0 $? "the claude spawn must succeed: $out"
   assert_trusted "$config/.claude.json" "$wt" \
     "the claude spawn did not pre-register trust for its worktree"
   assert_present "$launch_log" "the claude spawn sent no launch command"
-  assert_grep 'claude --dangerously-skip-permissions' "$launch_log" \
+  assert_grep 'claude --permission-mode auto' "$launch_log" \
     "the launch command was not the claude worker launch"
   launch=$(cat "$launch_log")
+  assert_not_contains "$launch" '--dangerously-skip-permissions' \
+    "the launch command bypassed the fork's reviewed permission policy"
   doorbell=$(claude_launch_doorbell "$launch")
   record=$(printf '%s' "$doorbell" | sed -n "s/.*: Firstmate operational input waiting: read '\([^']*\)'.*/\1/p")
   [ -n "$record" ] || fail "the launch command did not carry a brief doorbell"
@@ -690,9 +703,11 @@ test_secondmate_standalone_clone_home_is_trusted() {
   assert_trusted "$case_dir/claude-config/.claude.json" "$home" \
     "the claude secondmate spawn did not pre-register trust for its standalone-clone home"
   assert_present "$case_dir/launch.log" "the claude secondmate spawn sent no launch command"
-  assert_grep 'claude --dangerously-skip-permissions' "$case_dir/launch.log" \
+  assert_grep 'claude --permission-mode auto' "$case_dir/launch.log" \
     "the launch command was not the claude secondmate launch"
   launch=$(cat "$case_dir/launch.log")
+  assert_not_contains "$launch" '--dangerously-skip-permissions' \
+    "the secondmate launch bypassed the fork's reviewed permission policy"
   doorbell=$(claude_launch_doorbell "$launch")
   record=$(printf '%s' "$doorbell" | sed -n "s/.*: Firstmate operational input waiting: read '\([^']*\)'.*/\1/p")
   [ -n "$record" ] || fail "the secondmate launch command did not carry a brief doorbell"
@@ -841,7 +856,8 @@ test_fresh_worktree_is_trusted
 test_fresh_worktree_also_trusts_the_project_root_without_import_consent
 test_registration_carries_forward_existing_import_consent
 test_project_root_entry_preserves_other_keys
-test_project_root_entry_declined_external_imports_is_not_overridden
+test_project_root_default_false_without_warning_registers_trust
+test_project_root_false_with_warning_shown_registers_trust
 test_project_root_entry_default_import_flags_are_not_a_decline
 test_registration_is_idempotent
 test_primary_checkout_is_refused

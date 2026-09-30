@@ -13,6 +13,12 @@
 # file) and ACKNOWLEDGE it (the mv into handled/), failing loudly with the
 # harness name and version.
 #
+# Each harness is also checked for stranded-doorbell recovery: a doorbell typed
+# without its Enter leaves firstmate's own line in the composer, which reads
+# `pending`, and one ordinary re-ring must submit it with Enter alone. Only a
+# real harness renders the composer that the identity check reads. Adapted
+# from upstream kunchenguid/firstmate PR #4002.
+#
 # Run explicitly with FM_SEND_INBOX_LIVE_E2E=1. This test spends a small
 # number of real model tokens per installed harness (one short turn each) -
 # authorized by the harness-dependent-checks rule. An absent harness is
@@ -41,8 +47,10 @@ SOCKET="fm-inbox-live-$$"
 SESSION="inboxlive"
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-inbox-live.XXXXXX")
 LAB=$(cd "$LAB" && pwd)
+fm_test_require_tmproot "$LAB"
 TIMEOUT=${FM_SEND_INBOX_LIVE_TIMEOUT:-240}
 CHECKED=0
+RECOVERY_CHECKED=0
 FAILED=0
 
 pass() { printf 'ok - %s\n' "$1"; }
@@ -50,7 +58,7 @@ note() { printf '# %s\n' "$1"; }
 
 cleanup() {
   tmux -L "$SOCKET" kill-server 2>/dev/null || true
-  rm -rf "$LAB"
+  fm_test_rm_tmproot "${LAB:-}"
 }
 trap cleanup EXIT
 
@@ -185,10 +193,78 @@ check_harness_doorbell() {  # <name>
   tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
 }
 
+# Stranded-doorbell recovery against a real composer: type the doorbell with no
+# Enter (exactly what a swallowed Enter leaves), record the stranded memory the
+# typing ring writes in that case, then require one ordinary re-ring to submit
+# it with Enter alone and the worker to act and acknowledge.
+check_harness_stranded_recovery() {  # <name>
+  local name=$1 version cmd win="hs-$1" home task acted rec handled line i ready_rc ring_rc
+  version=$(harness_version "$name")
+  cmd=$(launch_cmd "$name") || return 0
+  home="$LAB/$name-stranded-home"
+  mkdir -p "$home/state"
+  task="stranded-$name"
+  acted="$LAB/acted-stranded-$name"
+  tmux -L "$SOCKET" new-window -d -t "$SESSION:" -n "$win" -c "$ROOT" \
+    -- bash -lc "$cmd" \
+    || { FAILED=1; printf 'not ok - %s (%s): could not launch for the stranded-doorbell check\n' "$name" "$version" >&2; return 0; }
+  wait_ready "$win"; ready_rc=$?
+  if [ "$ready_rc" -eq 1 ]; then
+    FAILED=1
+    printf 'not ok - %s (%s): composer already pending before the stranded-doorbell check\n' "$name" "$version" >&2
+    tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+    return 0
+  fi
+  rec=$(fm_task_inbox_write "$home/state" "$task" \
+    "Firstmate live check: run exactly this shell command now: touch $acted - then follow the mv instruction you were given for this message. Reply with one short line.") \
+    || { FAILED=1; printf 'not ok - %s (%s): could not write the durable record\n' "$name" "$version" >&2; return 0; }
+  handled="$home/state/$task.inbox/handled/${rec##*/}"
+  line=$(fm_task_inbox_doorbell_line "$rec")
+  tmux -L "$SOCKET" send-keys -t "$SESSION:$win" -l "$line" 2>/dev/null || true
+  sleep 2
+  if [ "$(fm_tmux_composer_state "$SESSION:$win")" != pending ]; then
+    FAILED=1
+    printf 'not ok - %s (%s): typed doorbell did not read as pending; stranded recovery was not verified\n' "$name" "$version" >&2
+    tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+    return 0
+  fi
+  : > "${rec%/*}/.stranded"
+  ring_rc=0
+  fm_task_inbox_ring tmux "$SESSION:$win" "$rec" || ring_rc=$?
+  case "$ring_rc" in
+    0|5) ;;
+    *)
+      FAILED=1
+      printf 'not ok - %s (%s): the re-ring did not submit the stranded doorbell (ring result %s)\n' "$name" "$version" "$ring_rc" >&2
+      tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win" 2>/dev/null | grep '[^[:space:]]' | tail -8 | sed 's/^/#   /' >&2
+      tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+      return 0
+      ;;
+  esac
+  i=0
+  while [ "$i" -lt "$TIMEOUT" ]; do
+    [ -f "$handled" ] && [ -e "$acted" ] && break
+    sleep 1
+    i=$((i + 1))
+  done
+  if [ -f "$handled" ] && [ -e "$acted" ]; then
+    RECOVERY_CHECKED=$((RECOVERY_CHECKED + 1))
+    pass "$name ($version): a stranded doorbell was submitted by one re-ring (result $ring_rc), and the worker acted and acked"
+  else
+    FAILED=1
+    printf 'not ok - %s (%s): stranded doorbell not honored within %ss (acted=%s acked=%s)\n' \
+      "$name" "$version" "$TIMEOUT" "$([ -e "$acted" ] && echo yes || echo no)" \
+      "$([ -f "$handled" ] && echo yes || echo no)" >&2
+    tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win" 2>/dev/null | grep '[^[:space:]]' | tail -10 | sed 's/^/#   /' >&2
+  fi
+  tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+}
+
 HARNESSES=${FM_SEND_INBOX_LIVE_HARNESSES:-'claude codex opencode pi grok kimi muse'}
 for h in $HARNESSES; do
   if command -v "$h" >/dev/null 2>&1; then
     check_harness_doorbell "$h"
+    check_harness_stranded_recovery "$h"
   else
     note "harness absent, not verified here: $h"
   fi
@@ -202,4 +278,8 @@ if [ "$CHECKED" -eq 0 ]; then
   printf 'not ok - live steering-inbox doorbell guard verified nothing (no harness installed?)\n' >&2
   exit 1
 fi
-pass "live steering-inbox doorbell guard: $CHECKED harness(es) honored the doorbell contract"
+if [ "$RECOVERY_CHECKED" -eq 0 ]; then
+  printf 'not ok - live steering-inbox doorbell guard verified no stranded-doorbell recovery\n' >&2
+  exit 1
+fi
+pass "live steering-inbox doorbell guard: $CHECKED delivery and $RECOVERY_CHECKED stranded-recovery check(s) passed"

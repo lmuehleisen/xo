@@ -598,7 +598,7 @@ Each relocated script keeps its own gate, enforcing exactly what a script can ch
 
 | Script | Gate while away |
 | --- | --- |
-| `bin/fm-pr-merge.sh` | Merges any pull request green at its live head, synchronously, under the record lock, and refuses `--allow-red` and `--allow-missing` while away, so the green gate is absolute in this posture; which pull request the words meant is the branch's reading. |
+| `bin/fm-pr-merge.sh` | Merges only a task whose yolo posture is on or whose id the record's merge-grant list names (granted with `--grant` at `/afk`, never read from the words), green at its live head, synchronously, under the record lock, and refuses `--allow-red` and `--allow-missing` while away, so the green gate is absolute in this posture and any other merge the words call for holds for the return. |
 | `bin/fm-spawn.sh` | Dispatches only queued work whose blockers cleared - already queued, or filed by the branch because the words explicitly call for it; refuses a fresh ordinary spawn for either actor once the home holds as many ordinary task records as the record's spend cap (relaunches and secondmates exempt). |
 | `bin/fm-send.sh --resolve-key` | Answers a decision the words pre-answer, or one `ask-user-authority`'s judgment (carried verbatim in the branch prompt) lets firstmate decide. |
 | `bin/fm-merge-local.sh` | Never relocated. |
@@ -652,7 +652,7 @@ At that moment the branch reports any refusal instead of concluding there is "no
 
 `tests/fm-afk-return.test.sh` covers the ordered cleanup-due section, its durable merge-marker requirement, and exclusion of both a done task without durable merge evidence and a persistent secondmate carrying that evidence.
 
-`tests/fm-pr-merge.test.sh` covers the branch actor merging a green task under the record, being refused on a red check, an unreported required check, or `--allow-red`/`--allow-missing` under it, and being refused at the partition while attended.
+`tests/fm-pr-merge.test.sh` covers the branch actor merging a granted green task under the record, being held without a grant, being refused on a red check, an unreported required check, or `--allow-red`/`--allow-missing` under it, and being refused at the partition while attended.
 
 `tests/fm-secondmate-safety.test.sh` covers the branch actor being refused second-mate retirement with the mate's record, home, route, and endpoint left intact.
 

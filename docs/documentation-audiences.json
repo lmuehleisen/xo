@@ -365,6 +365,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/fork-divergences.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/gerrit-change-watch.md",
       "audience": "maintainer-verification"
     },
@@ -415,6 +419,10 @@
     {
       "path": "docs/subagent-guard.md",
       "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/supervision-protocols/agy.md",
+      "audience": "agent-runtime"
     },
     {
       "path": "docs/supervision-protocols/claude.md",
@@ -469,12 +477,8 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/verification/agy.md",
-      "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/verification/devin.md",
-      "audience": "maintainer-verification"
+      "path": "docs/upstream-integration.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/verification/dispatch-auth.md",
@@ -502,6 +506,10 @@
     },
     {
       "path": "docs/verification/rovo.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/runtime-backends-fork.md",
       "audience": "maintainer-verification"
     },
     {

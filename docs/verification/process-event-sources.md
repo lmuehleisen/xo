@@ -166,14 +166,13 @@ Exercised by `tests/fm-procevent.test.sh` against a fake blocking source whose c
 | registration and reconcile lock order | `register-extension` takes the source lock before the extension lifecycle lock, the order reconcile uses when it republishes an unhandled extension result through the lifecycle-locked host; the suite's `lifecycle-order` section holds a re-registration inside binding resolution while reconcile republishes that source's unhandled result, and both must finish within a bound instead of waiting on each other |
 | independent homes | two homes bind the same package id/version to different content-addressed absolute paths and independently capture results and extension state, with no cross-home fallback or result path |
 
-Run the focused external-binding evidence and the live Bearings session guard with:
+Run the focused external-binding evidence with:
 
 ```sh
 node --version
 bin/fm-test-run.sh tests/fm-extension-binding.test.sh
 FM_EXTENSION_BINDING_SEGMENT=lifecycle-invocation-cleanup bin/fm-test-run.sh tests/fm-extension-binding.test.sh
 bin/fm-test-run.sh tests/fm-procevent.test.sh
-FM_BEARINGS_LAVISH_LIVE=1 bin/fm-test-run.sh tests/fm-bearings-board-lavish-live-e2e.test.sh
 bin/fm-doc-audience-check.sh
 ```
 

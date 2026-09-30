@@ -31,7 +31,7 @@ cleanup() {
     FM_HOME="$LAB" "$ROOT/bin/fm-decision-hold.sh" complete "$TASK" --none >/dev/null 2>&1 || true
     FM_HOME="$LAB" "$ROOT/bin/fm-teardown.sh" "$TASK" >/dev/null 2>&1 || true
   }
-  [ -z "$LAB" ] || rm -rf -- "$LAB"
+  fm_test_rm_tmproot "${LAB:-}"
 }
 
 fm_live_gate opt-in FM_CMUX_CLAUDE_COMPOSER_LIVE claude cmux jq treehouse python3

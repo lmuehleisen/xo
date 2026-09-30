@@ -28,6 +28,8 @@
 # Assert on submitted CONTENT (logged verbatim by the supervisor pane), not pane
 # appearance - terminal line-wrapping looks like newlines but isn't.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$ROOT/bin/fm-supervise-daemon.sh"
@@ -56,8 +58,8 @@ cleanup_all() {
   if [ -n "${SOCKET:-}" ] && [ -n "${REAL_TMUX:-}" ]; then
     "$REAL_TMUX" -L "$SOCKET" kill-server 2>/dev/null || true
   fi
-  rm -rf "${TMUX_SHIM_DIR:-}" 2>/dev/null || true
-  rm -rf "${STATE_DIR:-}" 2>/dev/null || true
+  fm_test_rm_tmproot "${TMUX_SHIM_DIR:-}" || true
+  fm_test_rm_tmproot "${STATE_DIR:-}" || true
 }
 trap cleanup_all EXIT
 
@@ -100,8 +102,15 @@ _buf=
 # render the shape the classifier positively proves - "❯ " when idle,
 # "❯ <buffer>" while input is pending. The glyph is rendering only; it never
 # enters the buffer, so submitted-content assertions are unchanged.
+# A submitted line starts a turn: a working footer shows above the prompt for
+# about a second, the turn-start evidence the daemon's delivery proof reads.
+_working=
+# Rows are erased in place, never by clearing the screen, which tmux would
+# push into scrollback where a stale footer would still read busy.
 redraw() {
-  printf '\r\033[K\xe2\x9d\xaf %s' "$_buf"
+  printf '\033[H\033[2K'
+  [ -z "$_working" ] || printf 'Working... (esc to interrupt)'
+  printf '\r\n\033[2K\xe2\x9d\xaf %s\033[J' "$_buf"
 }
 submit_line() {
   local _line=$_buf _c _hex
@@ -113,12 +122,20 @@ submit_line() {
   _hex=$(printf '%s' "$_line" | od -An -tx1 | tr -d ' \n')
   printf '%s\t%s\t%s\n' "$_hex" "$_line" "$_c" >> "$LOG"
   _buf=
-  printf '\r\033[K\n'
+  _working=1
   redraw
 }
 
 redraw
-while IFS= read -r -n 1 _ch; do
+while :; do
+  if ! IFS= read -r -n 1 -t 1 _ch; then
+    # A timeout ends the turn (bash 3.2 reports it as an ordinary failure).
+    if [ -n "$_working" ]; then
+      _working=
+      redraw
+    fi
+    continue
+  fi
   if [ -z "$_ch" ]; then
     submit_line
     continue
@@ -421,6 +438,12 @@ test_scenario_c() {
   user_count=$(grep -c $'\tuser$' "$LOG_FILE" || true)
   [ "$user_count" -eq 0 ] \
     || fail "Scenario C: expected 0 user lines, got $user_count (spurious submission?)"
+
+  # The delivery is logged with its evidence: one Enter and a turn start.
+  grep -q 'inject delivered (1 event(s), [0-9]* bytes, enter=1 polls=[0-9]* proof=busy)' "$STATE_DIR/.supervise-daemon.log" \
+    || fail "Scenario C: the delivery was not logged with its evidence: $(cat "$STATE_DIR/.supervise-daemon.log")"
+  grep -q 'inject failed' "$STATE_DIR/.supervise-daemon.log" \
+    && fail "Scenario C: a delivered digest also logged a failure"
 
   stop_daemon
   pass "Scenario C: a normal captain status injects exactly one clean single-line sentinel digest"

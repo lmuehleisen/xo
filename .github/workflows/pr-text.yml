@@ -1,0 +1,33 @@
+name: PR text
+
+# Public-text check for pull request titles and bodies;
+# bin/fm-publish-gate.sh ci-text owns the patterns. The text reaches the shell
+# only through environment variables written to files, never interpolated into
+# a command, and this workflow runs on pull_request (never pull_request_target)
+# with a read-only token. The gate script comes from the base commit, so a pull
+# request cannot weaken the check it is judged by.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-text:
+    name: PR text check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Check the pull request title and body
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -eu
+          printf '%s\n' "$PR_TITLE" >"$RUNNER_TEMP/pr-title.txt"
+          printf '%s\n' "${PR_BODY:-}" >"$RUNNER_TEMP/pr-body.txt"
+          bin/fm-publish-gate.sh ci-text "title:$RUNNER_TEMP/pr-title.txt" "body:$RUNNER_TEMP/pr-body.txt"

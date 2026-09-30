@@ -116,6 +116,11 @@ The beacon is `state/.last-watcher-beat`, which only the watcher process touches
 - After a successful notice, later Stop cycles exit 2 without repeating it until the turn-end guard consumes the attended fail-open.
 
 The Claude turn-end guard owns that notice commit contract, the monotonic failure progression, one-time attended fail-open, post-alarm continuation suppression, and positive recovery reset described in [`turnend-guard.md`](turnend-guard.md#harness-integrations).
+While supervision is still needed and away mode remains inactive, an actionable close wakes the idle session through exit 2, and it does so even when an earlier failure episode is still on disk, because a real wake is itself positive recovery.
+Claude kills the hook's process tree at its declared timeout and delivers nothing from a killed hook, so the hook passes the arm a deadline derived from that timeout, and the arm's own timer closes a cycle with nothing to report before it with one queued no-op `check: autoarm-deadline` wake, stopping a watcher it started and leaving an attached one running; the rewake turn acknowledges it, and its own Stop re-arms with a fresh timeout.
+A turn that ends on an API error, such as a usage limit, fires `StopFailure` instead of `Stop`, so no `Stop` hook re-arms after it.
+The same script's `--stop-failure` mode, registered beside the `Stop` hooks, owns that edge: it waits for the limit's reset or a bounded backoff, then starts one recovery turn whose normal `Stop` resumes this cycle.
+[`turnend-guard.md`](turnend-guard.md#harness-integrations) names the registration, and the script header owns the contract.
 
 ### Supervision host
 
@@ -475,11 +480,13 @@ It checks that a newly appended keyed decision is classified without rereading e
 - Bounded failure retries.
 - Benign live-watcher cycle ends.
 - One-notice failure episodes.
+- An actionable wake that a leftover failure episode must not silence.
 - Exit-2 translation.
 - The handling successor an ended attached cycle starts with the closed arm as its predecessor and that outlives the rewake.
 - An unconfirmed successor reported in the banner without withholding the wake.
 - Host-timeout HUP/TERM/INT translation into the same durable failure handoff.
 
+It also derives the arm deadline from a fixture's declared hook timeout and runs the real arm and watcher under a 24-second declared timeout, which must close early with one queued no-op wake and a rewake; `tests/fm-watch-arm.test.sh` covers the same deadline for a started arm whose watcher is parked in a long poll and for an arm attached to a watcher it does not own.
 It also covers generation-claim single-flight, stuck-claim supersession, superseded-owner silence, notice-marker refusal and retry, ownership-atomic episode reset, and the legacy upgrade shim.
 [`turnend-guard.md`](turnend-guard.md) owns those behavior contracts.
 
@@ -489,6 +496,10 @@ It also covers generation-claim single-flight, stuck-claim supersession, superse
 2. Receives session start through the tracked SessionStart hook.
 3. Completes two tokenless cycles.
 4. Checks the competing-live-owner negative control.
+
+The `StopFailure` cases of `tests/fm-claude-stop-autoarm.test.sh` dispatch the tracked registrations by event, so an API-error turn end yields exactly one recovery and the next normal turn end runs only the `Stop` hooks.
+They also cover the reset-time and backoff waits, a failed recovery waiting again, away-mode, halt, and live-continuity stand-downs, supersession by an ordinary `Stop` or a newer failure, including a hook that had not claimed yet because each claims only against the whole ledger record it started on, a stand-down that must not block a newer failure, and a turn already in progress.
+`tests/fm-claude-stopfailure-live-e2e.test.sh` proves the vendor half against the installed Claude Code with no credentials or model tokens: an API-error turn end fires only `StopFailure`, the hook's `asyncRewake` exit 2 starts one recovery turn, and that turn's `Stop` re-arms.
 
 `tests/fm-turnend-guard.test.sh` covers the cooperative `--claude` guard, including:
 
@@ -507,7 +518,7 @@ OpenCode support targets persistent TUI sessions rather than headless `opencode 
 
 The other harnesses rely on these mechanisms:
 
-- Claude depends on the Stop `asyncRewake` rewake.
+- Claude depends on the `Stop` and `StopFailure` `asyncRewake` rewakes.
 - Cursor depends on its awaited stop-hook park.
 - Grok retains native background-completion notifications.
 - Codex retains bounded foreground checkpoints.

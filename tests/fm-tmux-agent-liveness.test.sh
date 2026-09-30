@@ -16,6 +16,8 @@
 # between macOS and Linux, so every case asserts only the platform-independent
 # property that the verdict itself is correct.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -32,7 +34,7 @@ SESSION=liveness
 
 cleanup_all() {
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
-  [ -n "${LAB:-}" ] && rm -rf "$LAB"
+  fm_test_rm_tmproot "${LAB:-}"
 }
 trap cleanup_all EXIT
 
@@ -100,6 +102,11 @@ ln -s "$STANDIN_BIN" "$LAB/bin/comp"
 # back on (~/.local/bin/muse-bin-<version>), so the executable name is the ONLY
 # signal, and `muse` alone is a common English fragment that must not widen into
 # a substring match. The last two names are the decoys that would be misread.
+# agy (Antigravity CLI) is a single binary whose live process name is the bare
+# word `agy`; the two decoys are the substrings an unanchored glob would misread.
+ln -s "$STANDIN_BIN" "$LAB/bin/agy"
+ln -s "$STANDIN_BIN" "$LAB/bin/legacy"
+ln -s "$STANDIN_BIN" "$LAB/bin/agyrate"
 ln -s "$STANDIN_BIN" "$LAB/bin/muse-bin-0.1.0-R708.1"
 ln -s "$STANDIN_BIN" "$LAB/bin/musescore"
 ln -s "$STANDIN_BIN" "$LAB/bin/amuse"
@@ -236,6 +243,25 @@ for decoy in ompd comp; do
     || fail "'$decoy' merely contains 'omp' and must not classify as a live agent pane"
 done
 pass "tmux liveness: unrelated omp-containing command names stay ambiguous"
+
+# --- agy's bare binary name -------------------------------------------------
+# agy's worker hooks report busy and idle turns, but whether the agy process
+# is still running in its tmux pane is this classifier's verdict: a
+# misclassification here does not merely look untidy, it makes every control
+# verb refuse on an 'ambiguous' endpoint. The decoys prove the anchored name
+# never widens into a substring match.
+
+new_window agy "$LAB/bin/agy" 900
+wait_for_state "$SESSION:agy" alive \
+  || fail "agy's bare binary name must classify alive"
+pass "tmux liveness: agy's bare binary name classifies alive"
+
+for decoy in legacy agyrate; do
+  new_window "decoy-$decoy" "$LAB/bin/$decoy" 900
+  wait_for_state "$SESSION:decoy-$decoy" ambiguous \
+    || fail "'$decoy' merely contains 'agy' and must not classify as a live agent pane"
+done
+pass "tmux liveness: unrelated agy-containing command names stay ambiguous"
 
 # --- a version name blinds one source ---------------------------------------
 # Giving a genuine harness-named executable the version-string argv[0] that
@@ -413,6 +439,114 @@ fi
 [ "$(fm_tmux_composer_state "$SESSION:cursor-exited")" != empty ] \
   || fail "a dead-shell pane still showing Cursor's composer must never read empty"
 pass "cursor composer: a stale Cursor screen over a dead shell never reads empty"
+
+# --- endpoint presence: an exact inventory, never display-message's exit ------
+# `tmux display-message -t` exits 0 for any target while a server runs, so the
+# cheap presence probe behind the session-start digest, the fleet snapshot
+# (Bearings and the heartbeat view), and fm-crew-state must read the exact
+# session inventory instead. Each case asserts that divergence first, so the
+# probe cannot pass by accident on a tmux whose display-message fails.
+new_window fm-present "$SLEEP_BIN" 900
+new_window fm-present-2 "$SLEEP_BIN" 900
+new_window fm-dotted.id "$SLEEP_BIN" 900
+"$REAL_TMUX" -L "$SOCKET" new-session -d -s "${SESSION}-longer" -n fm-other -c "$LAB/wt" -- "$SLEEP_BIN" 900 \
+  || fail "could not create the prefix-named session"
+
+tmux display-message -p -t "$SESSION:fm-gone" '#{pane_id}' >/dev/null 2>&1 \
+  || fail "precondition: this tmux no longer answers display-message for a missing window, so the case below proves nothing"
+fm_backend_target_exists tmux "$SESSION:fm-present" \
+  || fail "a present window must read as existing"
+if fm_backend_target_exists tmux "$SESSION:fm-gone"; then
+  fail "a missing window on a live server must not read as existing"
+fi
+if fm_backend_target_exists tmux "$SESSION:fm-pres"; then
+  fail "a prefix of a live window name must not stand in for the recorded window"
+fi
+fm_backend_target_exists tmux "$SESSION:fm-dotted.id" \
+  || fail "a present window whose name contains a dot (task ids may) must read as existing"
+pass "tmux presence: a present window exists, dotted names included; a missing window or a name prefix on a live server does not"
+
+tmux display-message -p -t "no-such-session:fm-present" '#{pane_id}' >/dev/null 2>&1 \
+  || fail "precondition: this tmux no longer answers display-message for a missing session"
+if fm_backend_target_exists tmux "no-such-session:fm-present"; then
+  fail "a window in a missing session must not read as existing"
+fi
+if fm_backend_target_exists tmux "${SESSION}-lo:fm-other"; then
+  fail "a session-name prefix must not stand in for the recorded session"
+fi
+[ "$(fm_backend_agent_state tmux "${SESSION}-lo:fm-other")" = missing ] \
+  || fail "the recovery classifier must not resolve a session-name prefix either"
+pass "tmux presence: a missing session or a session-name prefix does not exist"
+
+pane_id=$("$REAL_TMUX" -L "$SOCKET" display-message -p -t "=$SESSION:=fm-present" '#{pane_id}') \
+  || fail "could not read the present window's pane id"
+window_index=$("$REAL_TMUX" -L "$SOCKET" display-message -p -t "=$SESSION:=fm-present" '#{window_index}') \
+  || fail "could not read the present window's index"
+fm_backend_target_exists tmux "$pane_id" || fail "a live pane id (the supervisor's \$TMUX_PANE shape) must read as existing"
+fm_backend_target_exists tmux "$SESSION:$window_index" || fail "a live window index must read as existing"
+fm_backend_target_exists tmux "$SESSION:fm-present.0" || fail "a live pane-qualified window must read as existing"
+if fm_backend_target_exists tmux "%999999" 2>"$LAB/presence.err"; then
+  fail "an unknown pane id must not read as existing"
+fi
+[ ! -s "$LAB/presence.err" ] || fail "the presence probe must answer an unknown pane id cleanly under set -u: $(cat "$LAB/presence.err")"
+pass "tmux presence: pane ids, window indexes, and pane-qualified windows are checked against the same inventory"
+
+window_id=$("$REAL_TMUX" -L "$SOCKET" display-message -p -t "=$SESSION:=fm-present" '#{window_id}') \
+  || fail "could not read the present window's id"
+[ "$(fm_backend_tmux_target_presence "=$SESSION:fm-present")" = present ] || fail "an =session-anchored window must read present"
+[ "$(fm_backend_tmux_target_presence "=$SESSION:fm-gone")" = missing ] || fail "an =session-anchored missing window must read missing"
+[ "$(fm_backend_tmux_target_presence "$window_id")" = present ] || fail "a live window id must read present"
+[ "$(fm_backend_tmux_target_presence "@999999")" = missing ] || fail "an unknown window id must read missing"
+[ "$(fm_backend_tmux_target_presence "$SESSION:999")" = missing ] || fail "an unused window index must read missing"
+[ "$(fm_backend_tmux_target_presence "no-such-session:fm-present")" = missing ] || fail "a missing session must read missing"
+[ "$(PATH=/nonexistent fm_backend_tmux_target_presence "$SESSION:fm-present")" = unreadable ] \
+  || fail "a tmux that cannot be run must read unreadable, never missing"
+[ "$(set -e; fm_backend_tmux_target_presence "no-such-session:fm-present")" = missing ] \
+  || fail "a missing session must read missing under a caller's set -e"
+[ "$(set -e; PATH=/nonexistent fm_backend_tmux_target_presence "$SESSION:fm-present")" = unreadable ] \
+  || fail "an unrunnable tmux must read unreadable under a caller's set -e"
+pass "tmux presence: =session, window-id, and index targets keep their verdicts; an unrunnable tmux is unreadable"
+
+# fm-crew-state routes through the same probe: a gone window with a stale busy
+# record from a turn killed mid-flight must read gone, never working.
+mkdir -p "$LAB/crew/state" "$LAB/crew/shim"
+cat > "$LAB/crew/shim/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x "$LAB/crew/shim/no-mistakes"
+printf 'window=%s\nworktree=%s\nkind=ship\nharness=claude\n' "$SESSION:fm-crew-gone" "$LAB/wt" > "$LAB/crew/state/crew-gone.meta"
+printf 'working: implementing\n' > "$LAB/crew/state/crew-gone.status"
+gen=$("$ROOT/bin/fm-busy-event.sh" arm "$LAB/crew/state" crew-gone) || fail "could not arm the busy record"
+"$ROOT/bin/fm-busy-event.sh" apply "$LAB/crew/state" crew-gone busy --gen "$gen" \
+  --source claude-hook --event user-prompt-submit || fail "could not write the stale busy record"
+crew_out=$(PATH="$LAB/crew/shim:$PATH" FM_STATE_OVERRIDE="$LAB/crew/state" "$ROOT/bin/fm-crew-state.sh" crew-gone 2>&1)
+case "$crew_out" in
+  *"backend target gone: $SESSION:fm-crew-gone"*) ;;
+  *) fail "a gone window with a stale busy record must read gone, got: $crew_out" ;;
+esac
+case "$crew_out" in
+  *"state: working"*) fail "a gone window must never read working from a stale busy record: $crew_out" ;;
+esac
+pass "tmux presence: fm-crew-state reads a gone window as gone before consulting a stale busy record"
+
+# A reboot restarts the server and firstmate recreates its same-name session,
+# but not the worker windows the records name.
+"$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
+if fm_backend_target_exists tmux "$SESSION:fm-present"; then
+  fail "with no server running, a recorded window must not read as existing"
+fi
+"$REAL_TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -n main -c "$LAB/wt" -- "$SLEEP_BIN" 900 \
+  || fail "could not recreate the same-name session"
+tmux display-message -p -t "$SESSION:fm-present" '#{pane_id}' >/dev/null 2>&1 \
+  || fail "precondition: this tmux no longer answers display-message after a restart"
+if fm_backend_target_exists tmux "$SESSION:fm-present"; then
+  fail "a recorded window must not read as existing after its server restarted with a same-name session"
+fi
+[ "$(fm_backend_agent_state tmux "$SESSION:fm-present")" = missing ] \
+  || fail "the recovery classifier must read the recorded window missing after a restart"
+fm_backend_target_exists tmux "$SESSION:main" || fail "the recreated session's own window must read as existing"
+pass "tmux presence: a same-name session recreated after a server restart does not revive recorded windows"
 
 cleanup_all
 trap - EXIT

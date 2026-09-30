@@ -59,7 +59,7 @@ cleanup() {
   if [ -n "$arm_pid" ] && lab_pid_is_safe "$arm_pid"; then
     kill -TERM "$arm_pid" 2>/dev/null || true
   fi
-  rm -rf "$LAB"
+  fm_test_rm_checkout_lab "${LAB:-}"
 }
 trap cleanup EXIT
 

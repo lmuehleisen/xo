@@ -580,6 +580,32 @@ test_matrix_codex_idle_starfield_furniture() {
   pass "matrix: codex 0.154's starfield rows are furniture; typed, mixed, and unanchored rows keep their verdicts"
 }
 
+test_matrix_braille_only_draft_outside_animation() {
+  # A braille-only draft in the default foreground, outside any animated
+  # region, is input: a styled capture proves it pending and a plain one
+  # cannot prove it empty. An `empty` here would admit the exit gate and
+  # skip the doorbell's pending-draft deferral over a live draft.
+  local glyph screen extracted painted mixed
+  for glyph in '›' '❯' '→'; do
+    screen=$'transcript\n\n'"$glyph"$' ⠁⠂'
+    assert_screen "braille-only draft after $glyph, styled" pending "$CAPS_STYLED" "$screen"
+    assert_screen "braille-only draft after $glyph, styled with cursor" pending "$CAPS_TMUX" "$screen" 2
+    assert_screen "braille-only draft after $glyph, plain" unknown "$CAPS_PLAIN" "$screen"
+    assert_screen "braille-only draft after $glyph, plain with cursor" unknown $'styled=0\ncursor=1\nidentity=0\nrows=0' "$screen" 2
+    extracted=$(fm_composer_extract_selected_content styled=1 "$screen")
+    [ "$extracted" = '⠁⠂' ] || fail "braille-only draft after $glyph: expected extracted '⠁⠂', got '$extracted'"
+  done
+  # DIVERGENCE: the same cells, each truecolor-painted as the animation draws
+  # them, are furniture, so only the painting separates the two verdicts.
+  painted=$'transcript\n\n› '"$(codex_cell 150 ⠁)$(codex_cell 150 ⠂)"
+  assert_screen "truecolor-painted braille after the glyph" empty "$CAPS_STYLED" "$painted"
+  assert_screen "truecolor-painted braille after the glyph with cursor" empty "$CAPS_TMUX" "$painted" 2
+  # One default-foreground cell among painted ones keeps the row input.
+  mixed=$'transcript\n\n› '"$(codex_cell 150 ⠁)"$'⠂'
+  assert_screen "painted and typed braille after the glyph" pending "$CAPS_STYLED" "$mixed"
+  pass "matrix: braille-only drafts outside the animation stay input; only painted cells are furniture"
+}
+
 test_matrix_pi_separated_needs_identity() {
   # Real idle pi: a blank row between two solid rules. The blank row alone is
   # exactly what the strict rule refuses; only structure PLUS a live
@@ -978,6 +1004,7 @@ test_matrix_cursor_reverse_video_placeholder_remnant
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap
 test_matrix_omp_status_row_bounds_bare_composer
 test_matrix_codex_idle_starfield_furniture
+test_matrix_braille_only_draft_outside_animation
 test_matrix_pi_separated_needs_identity
 test_matrix_pi_dollar_status_footer_is_empty
 test_matrix_opencode_leftbar_signals
@@ -1023,6 +1050,37 @@ test_queued_enter_verdict_does_not_convert_other_states() {
   pass "fm_composer_queued_enter_verdict: only proven pending is converted"
 }
 
+test_holds_owned_text_ignores_only_row_wrapping() {
+  local text rows us=$'\x1f' mark=$'\xE2\x81\xA3'
+  text="${mark}FIRSTMATE_OP: v1 away-supervisor: the review needs a pick  (two spaces)"
+  rows="FIRSTMATE_OP: v1 away-supervisor: the review${us}needs a pick  (two spaces)"
+  fm_composer_holds_owned_text "$text" "$rows" \
+    || fail "a word-boundary wrap without the U+2063 mark must still be the sender's text"
+  rows="FIRSTMATE_OP: v1 away-supervisor: the rev${us}iew needs a pick  (two spaces)"
+  fm_composer_holds_owned_text "$text" "$rows" \
+    || fail "a mid-word wrap must still be the sender's text"
+  for rows in \
+    "FIRSTMATE_OP: v1 away-supervisor: the review${us}needs a pick (two spaces)" \
+    "FIRSTMATE_OP: v1 away-supervisor: the  review${us}needs a pick  (two spaces)" \
+    "FIRSTMATE_OP: v1 away-supervisor: thereview${us}needs a pick  (two spaces)" \
+    "FIRSTMATE_OP: v1 away-supervisor: the review${us}needs a pick  (two spaces) ok" \
+    "FIRSTMATE_OP: v1 away-supervisor: the review"; do
+    if fm_composer_holds_owned_text "$text" "$rows"; then
+      fail "a changed composer must not be the sender's text: $rows"
+    fi
+  done
+  fm_composer_holds_owned_text "$text" "FIRSTMATE_OP: v1 away-supervisor: the review" residue \
+    || fail "complete leading rows are a cleanup residue"
+  if fm_composer_holds_owned_text "$text" "FIRSTMATE_OP: v1 away-supervisor: the  review" residue; then
+    fail "a respaced leading row is not a cleanup residue"
+  fi
+  if fm_composer_holds_owned_text "$text" "" residue; then
+    fail "an empty composer holds nothing of the sender's"
+  fi
+  pass "fm_composer_holds_owned_text: only row wrapping and the U+2063 mark are ignored"
+}
+
 test_queued_enter_verdict_busy_pending_is_empty
 test_queued_enter_verdict_idle_pending_stays_pending
 test_queued_enter_verdict_does_not_convert_other_states
+test_holds_owned_text_ignores_only_row_wrapping

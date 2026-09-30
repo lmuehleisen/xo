@@ -8,9 +8,15 @@
 # report, decision, or PR the ask refers to, without added speaker labels or
 # direct address) and `{FIRSTMATE_SPEC}`
 # under `## Firstmate spec` (build instructions, which are never the captain's
-# intent). bin/fm-dod-lib.sh owns the no-mistakes `--intent` contract those
-# subsections feed; bin/fm-spawn.sh refuses leftover placeholders and a
-# `## Captain's intent` line opening with a Captain label or address. Secondmate
+# intent). A Firstmate spec may also carry one optional fenced
+# ```firstmate-grants JSON block declaring the task's own credential env files,
+# extra write directories, and the scripts that run its write pass; only Devin
+# workers read it, bin/fm-devin-permission-policy.sh's header owns its schema,
+# and that hook digest-pins the block, so re-pin with its repin-grants event
+# after editing grants in a live brief.
+# bin/fm-dod-lib.sh owns the delivery and verification contract;
+# bin/fm-spawn.sh refuses leftover placeholders and a `## Captain's intent`
+# line opening with a Captain label or address. Secondmate
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
@@ -19,8 +25,6 @@
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
-#   It offers the Lavish review loop only when `fm-bootstrap.sh lavish-compatible`
-#   confirms the supported lavish-axi floor; otherwise it asks for a text report.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -41,8 +45,12 @@
 # For ship tasks, --mode is REQUIRED and shapes the definition of done. Firstmate
 # resolves it per task at intake (AGENTS.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never reads it:
-#   no-mistakes  implement -> /no-mistakes pipeline -> PR -> configured merge authority
-#   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> configured merge authority
+#   no-mistakes  renders the direct-PR contract, whose Delivery contract line says
+#                mode=direct-PR and which ends with a note naming the no-mistakes token;
+#                with config/no-mistakes present (this home's opt-in,
+#                docs/configuration.md) it renders the real pipeline contract:
+#                implement -> no-mistakes pipeline -> PR -> configured merge authority
+#   direct-PR    implement -> push + open PR via gh (no pipeline) -> configured merge authority
 #   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
 #                the configured merge authority approves, firstmate merges to local main
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
@@ -79,9 +87,10 @@
 # recorded task metadata cannot drift apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Both crewmate scaffolds carry one shared rule against administering the
-# infrastructure every lane shares - the no-mistakes daemon and the worktree pool
-# their own slot came from - so ship and scout cannot drift apart. A secondmate
-# charter omits it: that home allocates and returns slots for its own crewmates.
+# infrastructure every lane shares - the worktree pool their own slot came from,
+# plus the no-mistakes daemon in a pipeline ship brief - so ship and scout cannot
+# drift apart. A secondmate charter omits it: that home allocates and returns
+# slots for its own crewmates.
 # --mode, --forge, and --shape are refused on scout and secondmate scaffolds: a
 # scout's deliverable is a report rather than a merge, and a charter is not a
 # delivery contract.
@@ -327,9 +336,13 @@ BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
 mkdir -p "$DATA/$ID"
 
+# The rendered contract follows the effective mode (bin/fm-dod-lib.sh), so a
+# no-mistakes token ships direct-PR unless config/no-mistakes opts this home in.
 ASK_USER_BLOCK=
-if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
-  ASK_USER_BLOCK=$(fm_ask_user_escalation_block "$DATA" "$ID")
+EFFECTIVE_MODE=
+if [ "$KIND" = ship ]; then
+  EFFECTIVE_MODE=$(fm_effective_delivery_mode "$MODE" "$CONFIG")
+  [ "$EFFECTIVE_MODE" != no-mistakes ] || ASK_USER_BLOCK=$(fm_ask_user_escalation_block "$DATA" "$ID")
 fi
 
 shell_quote() {
@@ -343,6 +356,21 @@ STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 # the opt-in fleet ledger (docs/fleet-ledger.md) records it at once, costing one
 # file test when the flag is absent. A host without that flag, such as a remote
 # second mate's, runs only the append; the watcher capture is the backstop.
+# Local skills live gitignored under $FM_ROOT/.agents/skills/local-*/ and are
+# never committed. Each one present is listed by path and description, so a
+# worker on any project can find it while no tracked text names it.
+LOCAL_SKILLS_NOTE=""
+for local_skill in "$FM_ROOT"/.agents/skills/local-*/SKILL.md; do
+  [ -f "$local_skill" ] || continue
+  local_desc=$(awk '
+    NR == 1 && $0 == "---" { fm = 1; next }
+    fm && $0 == "---" { exit }
+    fm && /^description:/ { sub(/^description:[[:space:]]*/, ""); if ($0 != ">-" && $0 != "|" && $0 != ">") { print; exit } grab = 1; next }
+    grab && /^[[:space:]]/ { sub(/^[[:space:]]+/, ""); printf "%s ", $0; next }
+    grab { exit }
+  ' "$local_skill" | cut -c1-400)
+  LOCAL_SKILLS_NOTE="${LOCAL_SKILLS_NOTE}   This home's local skill \`$local_skill\` may fit: ${local_desc% }"$'\n'
+done
 STATUS_APPEND="echo \"{state} [at=<epoch>]: {one short line}\" >> $STATUS_FILE && { [ ! -e $(shell_quote "$CONFIG/fleet-ledger") ] || $(shell_quote "$FM_ROOT/bin/fm-fleet-ledger.sh") appended $(shell_quote "$CONFIG") $STATUS_FILE >/dev/null 2>&1 || true; }"
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 
@@ -509,19 +537,11 @@ TASK_SECTION=${TASK_SECTION%$'\n'}
 # Rule 2 governs file edits, so it does not prohibit pool administration.
 # The secondmate charter deliberately omits this rule because a secondmate
 # legitimately allocates and returns slots for crewmates in its own home.
-IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
-7. Never administer infrastructure that every lane shares. Two things are shared:
-   - The `no-mistakes` daemon - one instance serving every lane/home, so stopping, restarting, or
-     updating it kills other lanes' in-flight pipeline runs; only firstmate manages the daemon.
-     Before you append `blocked:` about the pipeline, run `no-mistakes daemon status` and
-     `no-mistakes axi status`. If the daemon socket refuses connections or is missing, append
-     `blocked [at=<epoch>]: {the daemon error}` and stop even when the local run record still says running or
-     fixing, because that record can be stale after the daemon exits. A run record failed with a
-     daemon error is also a real block.
-     Only after ruling out socket refusal, if the run is still running or fixing, reattach and keep
-     going. A drive-call error, timeout, slow read, or generic unreachability is NOT a daemon error:
-     the daemon accepts `respond` immediately and runs the round in the background, so a killed or
-     timed-out call was only waiting for a read while the run kept working.
+# This home names the no-mistakes daemon only in a pipeline ship brief
+# (PIPELINE_INFRA_RULE, opted in through config/no-mistakes); every other
+# crewmate brief carries SHARED_INFRA_RULE, which also keeps the dropped
+# tools out of the worker.
+IFS= read -r -d '' POOL_INFRA_BULLET <<'EOF' || true
    - The worktree pool your own worktree came from, and the repository every lane's worktree
      shares. Never create, remove, return, prune, move, or reassign a worktree or pool slot, and
      never write into a sibling slot's directory. Rule 2 does not cover this: removing a worktree
@@ -530,17 +550,34 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
      get/return/remove/prune, the equivalent operations on any other worktree provider or runtime
      backend, and `git worktree add|remove|move|prune`. A slot that looks unused is not evidence
      that it is free, and returning your own worktree is firstmate's job at cleanup, not yours.
-   If you genuinely need a second checkout, another slot, or the daemon touched, append
-   `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
+EOF
+IFS= read -r -d '' SHARED_INFRA_RULE <<EOF || true
+7. Never administer infrastructure that every lane shares:
+${POOL_INFRA_BULLET}   If you genuinely need a second checkout or another slot, append
+   \`blocked [at=<epoch>]: {what you need}\` and stop; firstmate arranges it.
+   Do not install or invoke no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi.
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
+IFS= read -r -d '' PIPELINE_INFRA_RULE <<EOF || true
+7. Never administer infrastructure that every lane shares. Two things are shared:
+   - The \`no-mistakes\` daemon - one instance serving every lane/home, so stopping, restarting, or
+     updating it kills other lanes' in-flight pipeline runs; only firstmate manages the daemon.
+     Before you append \`blocked:\` about the pipeline, run \`no-mistakes daemon status\` and
+     \`no-mistakes axi status\`. If the daemon socket refuses connections or is missing, append
+     \`blocked [at=<epoch>]: {the daemon error}\` and stop even when the local run record still says running or
+     fixing, because that record can be stale after the daemon exits. A run record failed with a
+     daemon error is also a real block.
+     Only after ruling out socket refusal, if the run is still running or fixing, reattach and keep
+     going. A drive-call error, timeout, slow read, or generic unreachability is NOT a daemon error:
+     the daemon accepts \`respond\` immediately and runs the round in the background, so a killed or
+     timed-out call was only waiting for a read while the run kept working.
+${POOL_INFRA_BULLET}   If you genuinely need a second checkout, another slot, or the daemon touched, append
+   \`blocked [at=<epoch>]: {what you need}\` and stop; firstmate arranges it.
+   Do not install no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi, and do not invoke gh-axi, chrome-devtools-axi, or lavish-axi.
+EOF
+PIPELINE_INFRA_RULE=${PIPELINE_INFRA_RULE%$'\n'}
 
 if [ "$KIND" = scout ]; then
-if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
-  LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round to acknowledge it, route the board feedback through your steering inbox, write needs-decision [key=board-review] with the live board URL when the captain owes a decision, and stop at session_ended or an empty End without re-arming - acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
-else
-  LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
-fi
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -557,8 +594,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
-4. Report status by appending one line:
+3. Use gh for GitHub operations. For browser work, use the harness browser tools or Playwright.
+${LOCAL_SKILLS_NOTE}4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
@@ -581,7 +618,7 @@ $INBOX_SECTION
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
-$LAVISH_LINE
+Lavish is not available to this fork's workers, so if your deliverable is a visual artifact the captain will review, put it in the report (path or inline) and describe what to look at; do not start a Lavish review loop.
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
@@ -597,20 +634,23 @@ fi
 # The block opens with the fixed "Delivery contract: mode=<mode>" line that
 # bin/fm-spawn.sh checks against its own explicit --mode and the project's
 # registered forge before launching.
-case "$MODE" in
+RULE7=$SHARED_INFRA_RULE
+case "$EFFECTIVE_MODE" in
   direct-PR)
     SETUP2=""
     ;;
   local-only)
     SETUP2=""
     ;;
-  *)  # no-mistakes
+  *)  # no-mistakes, only when config/no-mistakes opts this home in
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
+    RULE7=$PIPELINE_INFRA_RULE
     ;;
 esac
-RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
-DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
+RULE1=$(fm_ship_rule_one "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
+DOD=$(fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
+[ "$EFFECTIVE_MODE" = "$MODE" ] || DOD=$DOD$'\n'$(fm_no_mistakes_remap_note)
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -631,7 +671,9 @@ If the top-level path is the primary checkout or not the worktree you were launc
 # Rules
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+3. Use gh for GitHub operations. For browser work, use the harness browser tools or Playwright.
+${LOCAL_SKILLS_NOTE}   Never write sensitive information into a public repository, where it stays permanently: nothing public may tell a stranger about the captain's private life or work.
+   Commit messages, PR and issue text, and review replies follow the public-text policy that \`$FM_ROOT/bin/fm-publish-gate.sh policy\` prints (short neutral PR text, short review replies, and no sensitive evidence), and git takes its commit identity from the launch or git config only: never pass identity to git (\`-c user.*\`, \`-c author.*\`, \`-c committer.*\`, \`--author\`, or \`GIT_AUTHOR_*\`/\`GIT_COMMITTER_*\`) and never copy an author from \`git log\`.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -652,7 +694,7 @@ $CREWMATE_PAUSE_INSTRUCTIONS
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
-$SHARED_INFRA_RULE
+$RULE7
 
 $INBOX_SECTION
 

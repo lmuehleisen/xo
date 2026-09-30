@@ -5,8 +5,8 @@
 # instead of wedging on the trust dialog. In worktree mode it also carries
 # forward the external-CLAUDE.md-import approval, but only when the primary
 # checkout already holds standing consent for it - see the consent-gating
-# block below for why that dialog is otherwise left for the worker to wedge
-# on rather than answered on the human's behalf.
+# block below for why that dialog is otherwise left for the worker if its
+# import chain triggers one rather than answered on the human's behalf.
 #
 # Usage: fm-claude-trust.sh <worktree> <project>
 #        fm-claude-trust.sh --secondmate-home <home> <id>
@@ -65,20 +65,13 @@
 # apply, same as the existing worktree-entry write.
 #
 # THAT SAME PROJECT ENTRY IS ALSO THE LAUNCHING HUMAN'S OWN INTERACTIVE
-# CONFIG, though, so this registration must never overwrite a decision the
-# human already made there. If the project entry already carries
-# hasClaudeMdExternalIncludesApproved===false WITH
-# hasClaudeMdExternalIncludesWarningShown===true - the pair Claude Code writes
-# on an explicit "No, disable" answer - the whole registration refuses
-# rather than flipping it, because doing so would grant every future
-# interactive session in that checkout silent external-file inclusion the
-# human declined, permanently and without being asked. The worktree entry is
-# left unwritten too: the spawn wedges on the dialog, which is the honest
-# outcome given a standing decline, not registered trust with a stripped
-# consent record. Approved===false with WarningShown false or absent is NOT
-# that decision: Claude Code's default project entry carries both flags as
-# false before the dialog was ever shown, so that pair means "never asked" and
-# is treated like an absent flag - trust registered, no import consent.
+# CONFIG, though, so this registration must never write a consent value the
+# human did not already record there. It also never infers a human decline
+# from the two import flags: approved===false is Claude's persisted default
+# before any warning, and warning-shown===true with approved===false also
+# results from the dialog being dismissed with Escape (as fm-control interrupt
+# does), so neither state proves an explicit decline. Trust therefore always
+# registers, and the import flags are only ever carried, never flipped.
 #
 # THE SCOPE TEST IS THE SAFETY PROPERTY, and it is STRUCTURAL rather than a
 # path policy. Each mode has its own, because the two directories have entirely
@@ -444,14 +437,13 @@ fi
 # disassembly note above) - only when that entry ALREADY carries
 # hasClaudeMdExternalIncludesApproved===true, i.e. the human already said yes
 # at some point and this write is a same-value refresh, not new consent from
-# an absent flag. When it is not already true (including plain absent, the
-# common case for a project claude has never asked about), the import flags
-# are left untouched on both entries: writing them to the worktree entry alone
-# would be a pure no-op (the imports check never reads it) that only obscures
-# the real state, so trust still registers normally but the import dialog is
-# left exactly as undecided as it already was - the worker wedges on it, the
-# same honest outcome as an explicit decline, rather than a spawn spending
-# consent the human was never asked for.
+# an absent or default-false flag. When it is not already true, the import
+# flags are left untouched on both entries: writing them to the worktree entry
+# alone would be a pure no-op (the imports check never reads it) that only
+# obscures the real state. Trust still registers normally, and if the worker's
+# import chain triggers the dialog it remains exactly as undecided as it
+# already was rather than a spawn spending consent the human was never asked
+# for.
 TRUST_FLAG='hasTrustDialogAccepted'
 IMPORT_FLAGS='["hasClaudeMdExternalIncludesApproved","hasClaudeMdExternalIncludesWarningShown"]'
 if [ "$MODE" = worktree ]; then
@@ -485,20 +477,6 @@ const setFlags = (projects, key, flags) => {
 };
 const flagsLanded = (projects, key, flags) =>
   flags.every((flag) => projects?.[key]?.[flag] === true);
-// The project entry is the launching user's OWN interactive config, not a
-// throwaway worktree, so a spawn must never silently reverse a decision the
-// human already recorded there. hasClaudeMdExternalIncludesApproved===false
-// together with hasClaudeMdExternalIncludesWarningShown===true is exactly that
-// decision (the dialog's "No, disable" answer writes that pair; Claude Code's
-// default project entry carries Approved===false with WarningShown===false,
-// which means never asked, not declined); flipping it to true would grant every future
-// interactive session in that checkout silent external-file inclusion the
-// human declined. Refuse the whole registration instead of overriding it -
-// the worktree entry is not written either, so the spawn wedges on the
-// dialog rather than the human's consent being spent without being asked.
-const declinedExternalImports = (projects, key) =>
-  projects?.[key]?.hasClaudeMdExternalIncludesApproved === false &&
-  projects?.[key]?.hasClaudeMdExternalIncludesWarningShown === true;
 // True only on an explicit prior "Yes, allow" answer - the sole state this
 // script may treat as standing consent to refresh. Absent, or any other
 // value, is NOT consent (see the block comment above this script's node call).
@@ -524,11 +502,6 @@ const attempt = () => {
   }
   let keys;
   if (mode === "worktree") {
-    if (declinedExternalImports(projects, project)) {
-      throw new Error(
-        `project entry for ${project} in ${store} already declined external CLAUDE.md imports; refusing to override that consent. To recover, remove hasClaudeMdExternalIncludesApproved and hasClaudeMdExternalIncludesWarningShown from that project entry and approve the imports dialog interactively once`,
-      );
-    }
     const carryImportConsent = approvedExternalImports(projects, project);
     const targetFlags = carryImportConsent ? [trustFlag, ...importFlags] : [trustFlag];
     const projectFlags = carryImportConsent ? [trustFlag, ...importFlags] : [trustFlag];

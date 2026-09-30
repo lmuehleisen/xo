@@ -880,6 +880,9 @@ test_grok_adapter_missing_jq_and_no_supervision_allow() {
 # GROK_AGENT alone, which a grok 1.0.0 HOOK process does not carry, so the
 # Claude-only Stop auto-arm ran synchronously under Grok, foregrounded the
 # watcher, and wedged the Grok turn for its declared 28800-second timeout.
+# The StopFailure recovery entry is guarded for the same reason even though
+# Grok has no counterpart: Grok has no asyncRewake, so its hours-long wait
+# would hold a Grok turn open exactly the same way.
 #
 # bin/fm-subagent-pretool-check.sh is the deliberate exception: Grok has no
 # counterpart registration, so guarding it would REMOVE the guard from Grok
@@ -932,7 +935,7 @@ test_tracked_claude_entries_inert_under_grok() {
       || fail "tracked entry for $target ran under a legacy GROK_AGENT environment"
   done < <(jq -r '.hooks[][].hooks[].command' "$ROOT/.claude/settings.json")
 
-  [ "$guarded" -eq 7 ] || fail "expected 7 grok-guarded tracked entries, saw $guarded"
+  [ "$guarded" -eq 8 ] || fail "expected 8 grok-guarded tracked entries, saw $guarded"
   [ "$unguarded" -eq 1 ] || fail "expected 1 documented unguarded tracked entry, saw $unguarded"
   pass "tracked .claude/settings.json entries: $guarded inert under grok, the documented subagent exception still armed, all live under Claude"
 }

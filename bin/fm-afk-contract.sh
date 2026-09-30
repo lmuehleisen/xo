@@ -5,7 +5,7 @@
 #
 # POSTURE. Away mode is a posture of the one supervision session, recorded in
 # state/.afk-contract and never inferred from chat. While an away record exists
-# the home is afk; the captain's first unmarked message archives it (the return
+# the home is afk; the captain's first genuine message archives it (the return
 # path in bin/fm-afk-return.sh calls `archive` through bin/fm-afk-launch.sh stop).
 # Being away changes how the captain is informed and what happens at a
 # captain-owned decision point, never the authority set. Hold-for-return is the
@@ -37,10 +37,15 @@
 # standing authority it already has (bin/fm-branch-prompt.sh "Postures" owns the
 # execution rules). NO PARSER, TOKENIZER, CLASSIFIER, OR GRAMMAR READS THE WORDS
 # HERE, BY THE CAPTAIN'S MANDATE: this script never tokenizes, classifies, or
-# semantically validates them, records no clause fields, ids, or verbs, and keeps
-# no per-task merge-grant list. What stays mechanical is exactly what a script can
-# check without reading words: a merge green at its live head under this record's
-# lock, synchronous merges only, the spend cap, and the never-set.
+# semantically validates them, and records no clause fields, ids, or verbs.
+# MERGE GRANTS (this fork's merge rule). While the record exists a merge proceeds
+# only for a task whose recorded yolo posture is on or whose id is in the
+# record's merge-grant list; every other merge holds for the return. The list
+# comes only from repeatable --grant <task-id> at entry and is never inferred
+# from the words. What stays mechanical is exactly what a script can check
+# without reading words: that yolo-or-grant gate, a merge green at its live head
+# under this record's lock, synchronous merges only, the spend cap, and the
+# never-set.
 # HARD RULE: destructive, irreversible, and security-sensitive actions are never
 # pre-authorizable whatever the words say.
 #
@@ -55,6 +60,10 @@
 #   spend_max_concurrent_workers: <n>
 #   confirmed: <UTC ISO 8601>       when this mandate was recorded; /afk itself
 #   confirmed_epoch: <seconds>        is the go, so no later human step stamps it
+#   merge_grants: - |            task ids that may merge while an away record
+#     - <task-id>                exists, one per line (the empty list is
+#                                `merge_grants: -`); a record without the field
+#                                grants nothing
 #   mode: quiet                    only on a quiet entry (FM_AFK_MODE=quiet); absent
 #                                  means away
 #   words: | or |-                 the captain's words, verbatim, never edited,
@@ -80,11 +89,13 @@
 #
 # Usage:
 #   fm-afk-contract.sh enter [--words-file <path> | --words <text>]
-#       [--expected-return <UTC ISO 8601>] [--spend <n>]
+#       [--expected-return <UTC ISO 8601>] [--spend <n>] [--grant <task-id>]...
 #     Write the record now, with no separate confirmation step, then print the
 #     entry announcement and the read-back. Exit 0 on success and 2 on a usage
 #     error. --words-file keeps the file's bytes verbatim, trailing newlines
-#     included. With no words while a record stands, this is a refresh that
+#     included. Repeatable --grant names one task whose green merge may proceed
+#     while the record exists; it is the only source of the merge-grant list.
+#     With no words while a record stands, this is a refresh that
 #     leaves the standing record untouched; new words replace the mandate,
 #     carry the original session entry forward, and archive the superseded
 #     record. A replacement is staged before the prior record is archived and
@@ -98,13 +109,14 @@
 #   fm-afk-contract.sh field <name> [--path <record>]
 #   fm-afk-contract.sh words [--path <record>]
 #   fm-afk-contract.sh validate [--path <record>]  exit 0 when the record is readable and complete
+#   fm-afk-contract.sh grants [--path <record>]    one granted task id per line
 #   fm-afk-contract.sh archive              move the record aside; print its path
 #   fm-afk-contract.sh archived <entered_epoch>   print that archived record's path
 #
 # CROSS-SUBSYSTEM LOCK (state/.afk-contract.lock; this script is its one owner).
 # This record is authority another subsystem reads and then ACTS on outside this
-# script: bin/fm-pr-merge.sh reads an away record as away merge authority
-# and afterwards hands a merge to the forge. A publication, replacement, or
+# script: bin/fm-pr-merge.sh reads an away record's merge grants as away merge
+# authority and afterwards hands a merge to the forge. A publication, replacement, or
 # archive landing between that read and the forge handoff would land a merge on
 # authority that no longer holds, so the two subsystems share one lock instead of
 # each locking its own records: the record-mutating subcommands (enter,
@@ -250,7 +262,7 @@ fm_afk_contract_validate_iso() {  # <ts>
 }
 
 # Render a whole record on stdout.
-# Inputs: WORDS (verbatim), EXPECTED_RETURN, SPEND.
+# Inputs: WORDS (verbatim), EXPECTED_RETURN, SPEND, MERGE_GRANTS.
 fm_afk_contract_render_record() {  # <entered-iso> <entered-epoch> <confirmed-iso> <confirmed-epoch>
   local entered=$1 entered_epoch=$2 confirmed=$3 confirmed_epoch=$4
   printf 'version: %s\n' "$FM_AFK_CONTRACT_VERSION"
@@ -262,6 +274,12 @@ fm_afk_contract_render_record() {  # <entered-iso> <entered-epoch> <confirmed-is
   printf 'spend_max_concurrent_workers: %s\n' "${SPEND:-$FM_AFK_CONTRACT_SPEND_DEFAULT}"
   printf 'confirmed: %s\n' "$confirmed"
   printf 'confirmed_epoch: %s\n' "$confirmed_epoch"
+  if [ "${#MERGE_GRANTS[@]}" -eq 0 ]; then
+    printf 'merge_grants: -\n'
+  else
+    printf 'merge_grants:\n'
+    printf '  - %s\n' "${MERGE_GRANTS[@]}"
+  fi
   [ "${FM_AFK_CONTRACT_ENTRY_MODE:-away}" != quiet ] || printf 'mode: quiet\n'
   if [ -n "$WORDS" ]; then
     local words_body=$WORDS words_indicator='|-'
@@ -333,6 +351,61 @@ fm_afk_contract_read_words() {  # <path>
   ' "$path"
 }
 
+# Same alphabet as fm_pr_task_id_valid / fm_task_id_path_safe in bin/fm-pr-lib.sh.
+# Kept local so sourcing this file cannot reset that library's parse globals.
+fm_afk_contract_grant_id_valid() {  # <id>
+  local LC_ALL=C id=${1-}
+  case "$id" in
+    ''|.*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+}
+
+# One granted task id per line. A missing merge_grants field is an empty list,
+# so a record written without it grants nothing and every non-yolo merge holds.
+# A present but unreadable field fails rather than guessing.
+fm_afk_contract_read_grants() {  # <path>
+  local path=$1
+  [ -f "$path" ] || return 1
+  awk -v record="$path" '
+    function die(reason) {
+      printf "fm-afk-contract: record %s has an invalid merge_grants field: %s\n", record, reason > "/dev/stderr"
+      bad = 1
+      exit 2
+    }
+    function valid_id(value) {
+      if (value == "" || substr(value, 1, 1) == ".") return 0
+      return value ~ /^[A-Za-z0-9._-]+$/
+    }
+    /^merge_grants:/ {
+      if (found) die("the field is defined more than once")
+      found = 1
+      if ($0 == "merge_grants: -") { empty = 1; next }
+      if ($0 == "merge_grants:") { inlist = 1; next }
+      die("the empty form is merge_grants: -")
+    }
+    inlist && /^  - / {
+      id = substr($0, 5)
+      if (!valid_id(id)) die("task id \"" id "\" is not a valid task id")
+      if (seen[id]++) die("task id \"" id "\" is listed more than once")
+      print id
+      count++
+      next
+    }
+    inlist && /^[^ ]/ {
+      if (count == 0) die("the list form has no stored ids")
+      inlist = 0
+      next
+    }
+    empty && /^[^ ]/ { empty = 0; next }
+    inlist || empty { die("a stored grant line is malformed") }
+    END {
+      if (bad) exit 2
+      if (!found) exit 0
+      if (inlist && count == 0) die("the list form has no stored ids")
+    }
+  ' "$path"
+}
+
 # A record is valid when its version is one this script reads and the required
 # scalar fields and words block are present. Refuses rather than guessing at a
 # foreign schema. A version 1 record's clause and grant sections are ignored.
@@ -365,6 +438,10 @@ fm_afk_contract_validate() {  # <path>
   words_header=$(sed -n '/^words: /{p;q;}' "$path")
   case "$words_header" in 'words: -'|'words: |'|'words: |-') ;; *) fm_afk_contract_log "record $path has no valid words field"; return 1 ;; esac
   fm_afk_contract_read_words "$path" >/dev/null || return 1
+  fm_afk_contract_read_grants "$path" >/dev/null || {
+    fm_afk_contract_log "record $path has no valid merge_grants field"
+    return 1
+  }
   confirmed=$(fm_afk_contract_read_field "$path" confirmed)
   fm_afk_contract_validate_iso "$confirmed" || { fm_afk_contract_log "record $path has no valid confirmed time"; return 1; }
   case "$(fm_afk_contract_read_field "$path" confirmed_epoch)" in
@@ -380,10 +457,10 @@ fm_afk_contract_validate() {  # <path>
 # rules live in bin/fm-branch-prompt.sh, so this render stays a faithful mirror
 # of the record for the captain at entry and for the away session on every wake.
 # It never asks for a go: the record already stands when it is printed.
-# A quiet record reads back as quiet mode: no return, reach, or spend cap
-# applies while the captain is present.
+# A quiet record reads back as quiet mode: no return, reach, spend cap, or
+# merge grant applies while the captain is present.
 fm_afk_contract_render_readback() {  # <path>
-  local path=$1 words expected spend
+  local path=$1 words expected spend grants grant_list id
   if [ "$(fm_afk_contract_record_mode "$path")" = quiet ]; then
     printf 'Quiet mode (recorded):\n'
     printf '  entered: %s\n' "$(fm_afk_contract_read_field "$path" entered)"
@@ -391,10 +468,19 @@ fm_afk_contract_render_readback() {  # <path>
   else
     expected=$(fm_afk_contract_read_field "$path" expected_return)
     spend=$(fm_afk_contract_read_field "$path" spend_max_concurrent_workers)
+    grants=$(fm_afk_contract_read_grants "$path") || return 1
+    grant_list=
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      grant_list="${grant_list:+$grant_list, }$id"
+    done <<EOF
+$grants
+EOF
     printf 'Away posture (recorded):\n'
     printf '  entered: %s\n' "$(fm_afk_contract_read_field "$path" entered)"
     printf '  expected return: %s\n' "$( [ "$expected" = - ] && printf 'not given' || printf '%s' "$expected")"
     printf '  spend cap: %s concurrent workers\n' "$spend"
+    printf '  merge when green (task ids, besides yolo tasks): %s\n' "${grant_list:-(none)}"
     printf '  reach: hold-for-return only. %s\n' "$(fm_afk_contract_read_field "$path" reach_announced)"
   fi
   words=$(fm_afk_contract_read_words "$path"; rc=$?; printf x; exit "$rc") || return 1
@@ -423,7 +509,7 @@ fm_afk_contract_render_announcement() {  # <path>
   else
     mandate_text='No away instructions were recorded; the away session acts on standing authority only, and anything that needs you waits for your return.'
   fi
-  printf 'Away posture recorded at %s: hold-for-return only. %s %s Destructive, irreversible, and security-sensitive actions are never pre-authorizable, whatever the words say. Expected return: %s. Spend cap: %s concurrent workers.\n' \
+  printf 'Away posture recorded at %s: hold-for-return only. %s %s Merges proceed only for tasks whose yolo posture is on or that you granted at entry; every other merge waits for your return. Destructive, irreversible, and security-sensitive actions are never pre-authorizable, whatever the words say. Expected return: %s. Spend cap: %s concurrent workers.\n' \
     "$(fm_afk_contract_read_field "$path" confirmed)" \
     "$(fm_afk_contract_read_field "$path" reach_announced)" \
     "$mandate_text" \
@@ -433,9 +519,10 @@ fm_afk_contract_render_announcement() {  # <path>
 
 # --- subcommands ------------------------------------------------------------
 
-fm_afk_contract_parse_inputs() {  # <args...>; sets WORDS, EXPECTED_RETURN, SPEND
-  local words_file=''
+fm_afk_contract_parse_inputs() {  # <args...>; sets WORDS, EXPECTED_RETURN, SPEND, MERGE_GRANTS
+  local words_file='' grant
   WORDS=; EXPECTED_RETURN=-; SPEND=$FM_AFK_CONTRACT_SPEND_DEFAULT; FM_AFK_CONTRACT_SCALARS_GIVEN=0
+  MERGE_GRANTS=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --words-file)
@@ -461,7 +548,25 @@ fm_afk_contract_parse_inputs() {  # <args...>; sets WORDS, EXPECTED_RETURN, SPEN
         SPEND=$2
         FM_AFK_CONTRACT_SCALARS_GIVEN=1
         shift 2 ;;
-      --action|--object|--when|--stop|--grant|--grant=*)
+      --grant)
+        [ "$#" -gt 1 ] || { fm_afk_contract_log '--grant requires a task id'; return 2; }
+        fm_afk_contract_grant_id_valid "$2" || {
+          fm_afk_contract_log "--grant must be a valid task id, got '$2'"
+          return 2
+        }
+        for grant in "${MERGE_GRANTS[@]+"${MERGE_GRANTS[@]}"}"; do
+          [ "$grant" != "$2" ] || {
+            fm_afk_contract_log "--grant lists '$2' more than once"
+            return 2
+          }
+        done
+        MERGE_GRANTS+=("$2")
+        FM_AFK_CONTRACT_SCALARS_GIVEN=1
+        shift 2 ;;
+      --grant=*)
+        fm_afk_contract_log '--grant takes a separate task-id argument'
+        return 2 ;;
+      --action|--object|--when|--stop)
         fm_afk_contract_log "$1 was retired: the captain's away words are the whole mandate, so pass them with --words or --words-file and nothing else"
         return 2 ;;
       *)
@@ -496,8 +601,8 @@ fm_afk_contract_archive_target() {  # <record> [superseded-stamp]
 
 # /afk is the go: write the record in this same call, with no proposal and no
 # later confirmation step. Inputs were parsed before the lock (WORDS,
-# EXPECTED_RETURN, SPEND, FM_AFK_CONTRACT_SCALARS_GIVEN). The written mode
-# follows the header's AWAY OR QUIET rules.
+# EXPECTED_RETURN, SPEND, MERGE_GRANTS, FM_AFK_CONTRACT_SCALARS_GIVEN). The
+# written mode follows the header's AWAY OR QUIET rules.
 fm_afk_contract_cmd_enter() {
   local record legacy now now_epoch session_entered session_entered_epoch staged archived archived_tmp standing=''
   record=$(fm_afk_contract_path)
@@ -516,7 +621,7 @@ fm_afk_contract_cmd_enter() {
       fm_afk_contract_log "away posture already recorded at $(fm_afk_contract_read_field "$record" entered); a refresh leaves it untouched"
     fi
     if [ "$FM_AFK_CONTRACT_SCALARS_GIVEN" -eq 1 ]; then
-      fm_afk_contract_log "the expected return and spend cap given with this refresh were not applied; enter new words to replace the mandate"
+      fm_afk_contract_log "the expected return, spend cap, and merge grants given with this refresh were not applied; enter new words to replace the mandate"
     fi
     rm -f "$legacy"
     fm_afk_contract_render_announcement "$record" || return 1
@@ -637,8 +742,11 @@ fm_afk_contract_main() {
     validate)
       path=$(fm_afk_contract_select_path "$@") || { fm_afk_contract_usage >&2; return 2; }
       fm_afk_contract_validate "$path" ;;
-    clauses|flags|refused|grants)
-      fm_afk_contract_log "'$cmd' was retired with the clause and merge-grant apparatus: the record is the captain's words (read them with 'words' or 'readback')"
+    grants)
+      path=$(fm_afk_contract_select_path "$@") || { fm_afk_contract_usage >&2; return 2; }
+      fm_afk_contract_read_grants "$path" ;;
+    clauses|flags|refused)
+      fm_afk_contract_log "'$cmd' was retired with the clause apparatus: the record is the captain's words (read them with 'words' or 'readback')"
       return 2 ;;
     archive) fm_afk_contract_locked_cmd fm_afk_contract_cmd_archive ;;
     archived)

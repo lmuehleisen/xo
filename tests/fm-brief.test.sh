@@ -195,7 +195,7 @@ EOF
 # one of these DOD blocks, since a broken heredoc corrupts or empties the
 # generated brief content, not just the script's own syntax.
 test_ship_modes_generate_clean_briefs() {
-  local home id mode brief status
+  local home id mode effective brief status
   home="$TMP_ROOT/ship-home"
   write_registry "$home"
 
@@ -207,13 +207,18 @@ test_ship_modes_generate_clean_briefs() {
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "$id: brief was not scaffolded"
     assert_grep "# Definition of done" "$brief" "$id: brief missing Definition of done section"
-    grep -qx "Delivery contract: mode=$mode" "$brief" \
+    # Without config/no-mistakes the no-mistakes token records its effective mode.
+    effective=$mode
+    [ "$mode" != no-mistakes ] || effective=direct-PR
+    grep -qx "Delivery contract: mode=$effective" "$brief" \
       || fail "$id: brief did not record its machine-readable delivery contract line"
     assert_grep "{TASK}" "$brief" "$id: brief missing the {TASK} placeholder"
     assert_grep "{FIRSTMATE_SPEC}" "$brief" "$id: brief missing the {FIRSTMATE_SPEC} placeholder"
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
+    assert_grep 'Never write sensitive information into a public repository, where it stays permanently' "$brief" \
+      "$id: brief missing the public-text purpose"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
@@ -258,10 +263,10 @@ test_ship_mode_is_explicit_not_registry() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a5 direct-proj --mode no-mistakes >/dev/null 2>&1 \
     || fail "explicit no-mistakes brief on a direct-PR project should scaffold"
   brief="$home/data/brief-explicit-a5/brief.md"
-  grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
-    || fail "registered direct-PR posture overrode the explicit --mode"
-  assert_grep "Firstmate will then instruct you to run /no-mistakes" "$brief" \
-    "explicit no-mistakes brief did not render the pipeline definition of done"
+  assert_grep "recorded mode is no-mistakes" "$brief" \
+    "registered direct-PR posture overrode the explicit --mode"
+  assert_grep "Do NOT run /no-mistakes" "$brief" \
+    "legacy no-mistakes mode did not render the direct-PR contract"
 
   # An unregistered project is not a blocker either, because nothing is looked up.
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a6 never-registered --mode local-only >/dev/null 2>&1 \
@@ -340,68 +345,104 @@ test_pr_based_dod_requires_non_draft() {
       continue
     fi
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'confirm it is not a draft (`gh-axi pr view <number>` must print `draft: no`' "$brief" \
+    assert_grep 'confirm it is not a draft (`gh pr view <url> --json isDraft --jq .isDraft` must print false)' "$brief" \
       "$mode: done must require reading the PR back from the forge as non-draft"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'mark it ready with `gh-axi pr ready <number>`' "$brief" \
+    assert_grep 'mark it ready with `gh pr ready`' "$brief" \
       "$mode: a draft must be marked ready before done"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backtick must stay literal
+    assert_no_grep '`gh-axi' "$brief" "$mode: this fork's PR contract must not name a gh-axi command"
     assert_grep "If you deliberately keep the PR a draft, append \`paused" "$brief" \
       "$mode: a deliberate draft must declare a wait instead of done"
   done
   pass "fm-brief.sh: PR-based done requires a non-draft PR; a deliberate draft declares a wait"
 }
 
+# Without config/no-mistakes a no-mistakes token on a Gerrit-bound project ships
+# exactly like direct-PR on that forge: it publishes one change itself, records
+# direct-PR as its contract line, and is never handed the pipeline's skip vocabulary.
+test_no_mistakes_gerrit_token_ships_direct_without_opt_in() {
+  local home brief
+  home="$TMP_ROOT/gerrit-remap-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gerrit-remap-g1 some-proj --mode no-mistakes --forge gerrit >/dev/null \
+    || fail "a no-mistakes gerrit brief without the opt-in should scaffold"
+  brief="$home/data/gerrit-remap-g1/brief.md"
+  grep -qx 'Delivery contract: mode=direct-PR forge=gerrit shape=squash' "$brief" \
+    || fail "the remapped gerrit brief did not record its effective delivery contract line"
+  assert_grep 'this home does not run the no-mistakes pipeline' "$brief" "the remapped gerrit brief did not say why no pipeline runs"
+  # shellcheck disable=SC2016 # Backticks are literal generated Markdown.
+  assert_grep 'Run `gerrit-axi publish --squash --json`' "$brief" "the remapped gerrit brief lost the publish step"
+  assert_grep 'relevant tests and lint checks' "$brief" "the remapped gerrit brief lost the verification contract"
+  assert_grep 'Do NOT run /no-mistakes' "$brief" "the remapped gerrit brief did not forbid the pipeline"
+  assert_no_grep 'Delivery pipeline:' "$brief" "the remapped gerrit brief recorded a pipeline contract"
+  assert_no_grep '--skip push,pr,ci' "$brief" "the remapped gerrit brief handed out the pipeline skip vocabulary"
+  pass "fm-brief: a no-mistakes token on a Gerrit forge ships direct without config/no-mistakes"
+}
+
 # Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
 # reference must render as plain prose with no dangling apostrophe artifact.
 test_no_mistakes_dod_wording() {
-  local home id brief spelling
-  home="$TMP_ROOT/wording-home"
+  local home="$TMP_ROOT/wording-home" brief
   mkdir -p "$home/data"
-  id="brief-wording-b1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_present "$brief" "brief was not scaffolded"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wording-b1 some-proj --mode no-mistakes >/dev/null
+  brief="$home/data/brief-wording-b1/brief.md"
+  assert_grep 'Do NOT run /no-mistakes' "$brief" 'legacy mode must not start the pipeline'
+  assert_grep 'open a PR with' "$brief" 'legacy mode must deliver a PR'
+  assert_grep 'relevant tests and lint checks' "$brief" 'ordinary verification is still required'
+  assert_no_grep 'no-mistakes axi run' "$brief" 'legacy mode still invokes the pipeline'
+  pass "fm-brief: legacy mode uses direct PR with normal verification"
+}
+
+# config/no-mistakes opts an explicitly resolved no-mistakes ship into the real
+# pipeline contract. Without it, an installed CLI changes nothing; with it, only
+# the no-mistakes scaffold changes, and every other scaffold stays as it was.
+# shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+test_no_mistakes_pipeline_opt_in() {
+  local off on stub kind id args brief
+  off="$TMP_ROOT/pipeline-off-home"
+  on="$TMP_ROOT/pipeline-on-home"
+  stub="$TMP_ROOT/pipeline-stub-bin"
+  mkdir -p "$off/data" "$on/data" "$on/config" "$stub"
+  : > "$on/config/no-mistakes"
+  printf '#!/bin/sh\nexit 0\n' > "$stub/no-mistakes"
+  chmod +x "$stub/no-mistakes"
+
+  for kind in no-mistakes direct-PR local-only scout; do
+    args="--mode $kind"
+    [ "$kind" != scout ] || args=--scout
+    # shellcheck disable=SC2086  # args is an intentional word-split arg list
+    FM_HOME="$off" "$ROOT/bin/fm-brief.sh" "plain-$kind" some-proj $args >/dev/null
+    # shellcheck disable=SC2086
+    PATH="$stub:$PATH" FM_HOME="$off" "$ROOT/bin/fm-brief.sh" "stub-$kind" some-proj $args >/dev/null
+    # shellcheck disable=SC2086
+    PATH="$stub:$PATH" FM_HOME="$on" "$ROOT/bin/fm-brief.sh" "opted-$kind" some-proj $args >/dev/null
+    sed "s/stub-$kind/plain-$kind/g" "$off/data/stub-$kind/brief.md" | cmp -s - "$off/data/plain-$kind/brief.md" \
+      || fail "$kind: an installed no-mistakes CLI changed the brief without config/no-mistakes"
+    [ "$kind" = no-mistakes ] && continue
+    sed "s#$on/#$off/#g; s/opted-$kind/plain-$kind/g" "$on/data/opted-$kind/brief.md" \
+      | cmp -s - "$off/data/plain-$kind/brief.md" \
+      || fail "$kind: config/no-mistakes changed a brief that is not a no-mistakes ship"
+  done
+
+  id=opted-no-mistakes
+  brief="$on/data/$id/brief.md"
+  grep -qx 'Delivery contract: mode=no-mistakes' "$brief" || fail "pipeline brief lost its delivery contract line"
+  grep -qx 'Delivery pipeline: no-mistakes' "$brief" || fail "pipeline brief did not record the pipeline contract"
+  assert_grep 'Run `no-mistakes doctor`' "$brief" "pipeline brief lost the doctor-and-init setup step"
+  assert_grep 'The `no-mistakes` daemon - one instance serving every lane/home' "$brief" "pipeline brief lost the shared-daemon rule"
+  assert_grep 'worktree pool your own worktree came from' "$brief" "pipeline brief lost the shared worktree-pool rule"
+  assert_grep "$on/data/$id/nm-<run>-findings.txt" "$brief" "pipeline brief lost the ask-user escalation format"
+  assert_grep 'append `done [at=<epoch>]: PR {url} checks green`' "$brief" "pipeline brief lost the pipeline ready signal"
+  assert_grep 'NEVER pass `--yes`' "$brief" "pipeline brief lost the --yes ban"
   for spelling in 'Captain:' "Captain's words:" "Captain's ask:" "Captain's intent:" 'Captain,'; do
     assert_no_grep "$spelling" "$brief" "rendered intent contract still teaches operator-address labels"
   done
   assert_grep '[captain]' "$brief" "rendered intent contract must explain the neutral legacy provenance marker"
-  assert_grep "no-mistakes itself provides for the mechanics" "$brief" \
-    "no-mistakes DOD lost its guidance-reference sentence"
-  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`no-mistakes axi run --help`' "$brief" \
-    "no-mistakes DOD must render literal backticks around the help command"
-  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`help`' "$brief" \
-    "no-mistakes DOD must render literal backticks around help"
-  assert_grep "pass \`--intent\` as only this brief's \`## Captain's intent\`" "$brief" \
-    "no-mistakes DOD must require --intent to be the Captain's intent subsection"
-  assert_grep "plus any later words the captain actually said" "$brief" \
-    "no-mistakes DOD must allow later captain words in --intent"
-  assert_grep "Do not include \`## Firstmate spec\`" "$brief" \
-    "no-mistakes DOD must keep Firstmate spec out of --intent"
-  assert_grep "or your own decisions and tradeoffs" "$brief" \
-    "no-mistakes DOD must keep worker tradeoffs out of --intent"
-  assert_grep "This replaces the no-mistakes skill's advice to enrich \`--intent\`" "$brief" \
-    "no-mistakes DOD must override the external skill's enrich-with-decisions guidance"
-  # A bare reference cannot preserve the captain's ask, so the rendered DOD states
-  # the self-sufficiency rule and requires referenced material to be resolved into
-  # its substance.
-  assert_grep "The \`--intent\` string you pass must be self-sufficient" "$brief" \
-    "no-mistakes DOD must require a self-sufficient --intent string"
-  assert_grep "write the substance of the referenced items into \`--intent\`" "$brief" \
-    "no-mistakes DOD must tell the worker to resolve report, decision, and PR references into substance"
-
-  # The --yes ban is a fleet-wide prohibition, not a preference, and it must not
-  # claim an enforcement the tool does not provide: this is instruction only.
-  assert_grep "NEVER pass \`--yes\` (or \`-y\`) to \`no-mistakes axi run\` or \`no-mistakes axi respond\`. It is banned fleet-wide." "$brief" \
-    "no-mistakes DOD must state the --yes ban as a prohibition"
-  assert_grep "answering your own ask-user finding is a hard rule violation" "$brief" \
-    "no-mistakes DOD must say why --yes is banned"
-  assert_no_grep "Avoid \`--yes\`" "$brief" \
-    "no-mistakes DOD still states the --yes ban as a preference"
-  assert_no_grep "no-mistakes refuses" "$brief" \
-    "no-mistakes DOD must not claim the tool itself refuses --yes"
-  pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
+  assert_no_grep 'Do NOT run /no-mistakes' "$brief" "pipeline brief still forbids the pipeline"
+  assert_no_grep 'this home does not run the no-mistakes pipeline' "$brief" "pipeline brief kept the direct-PR remap"
+  assert_no_grep 'Delivery pipeline:' "$off/data/plain-no-mistakes/brief.md" "flag-absent brief recorded a pipeline contract"
+  pass "fm-brief: config/no-mistakes renders the pipeline contract only for an explicit no-mistakes ship"
 }
 
 # The green-PR report must not depend on a status poll: `axi status` never
@@ -412,7 +453,9 @@ test_no_mistakes_dod_wording() {
 test_no_mistakes_dod_green_detection() {
   local home id brief
   home="$TMP_ROOT/green-detection-home"
-  mkdir -p "$home/data"
+  mkdir -p "$home/data" "$home/config"
+  # This fork renders the pipeline contract only for an opted-in home.
+  : > "$home/config/no-mistakes"
   id="brief-green-b1"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
@@ -433,55 +476,16 @@ test_no_mistakes_dod_green_detection() {
 }
 
 test_ask_user_escalation_format() {
-  local home id brief mode other_id other_brief
-  home="$TMP_ROOT/ask-user-home"
+  local home="$TMP_ROOT/ask-user-home" mode brief
   mkdir -p "$home/data"
-  id="brief-ask-user-d1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_present "$brief" "brief was not scaffolded"
-
-  # A no-mistakes ask-user gate must escalate its ask-user findings as one status
-  # event plus one verbatim findings snapshot file, using that same shape even
-  # for a single finding, never paraphrased into the status line.
-  assert_grep "escalate all ask-user findings as one event plus one snapshot file" "$brief" \
-    "ship rule 6 lost the one-event-plus-snapshot-file ask-user contract"
-  assert_grep "using that same shape even when the gate holds only a single ask-user finding" "$brief" \
-    "ship rule 6 must require the same shape for a single finding"
-  assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$brief" \
-    "ship rule 6 must limit the verbatim axi slice to ask-user findings"
-  # shellcheck disable=SC2016  # single quotes are deliberate: backticks and the key/findings/file tokens must stay literal
-  assert_grep 'needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file='"$home/data/$id/nm-<run>-findings.txt" "$brief" \
-    "ship rule 6 must render the exact needs-decision ask-user status line"
-  assert_grep "$home/data/$id/nm-<run>-findings.txt" "$brief" \
-    "ship rule 6 must point the snapshot file under this task's own data directory"
-  assert_grep "The status line only points at the file; it never restates or summarizes a finding's content." "$brief" \
-    "ship rule 6 must forbid paraphrasing ask-user findings into the status line"
-
-  # The DOD's own ask-user paragraph must point back at rule 6's format
-  # (one-owner rule) rather than restating or bare-citing it.
-  assert_grep "escalate to firstmate using rule 6's ask-user format" "$brief" \
-    "no-mistakes DOD ask-user paragraph must point at rule 6's format instead of a bare citation"
-  assert_no_grep "escalate to firstmate (rule 6) and stop." "$brief" \
-    "no-mistakes DOD ask-user paragraph still uses the old bare rule-6 pointer"
-
-  other_id="brief-no-ask-user-scout"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$other_id" some-proj --scout >/dev/null 2>&1
-  other_brief="$home/data/$other_id/brief.md"
-  assert_no_grep "destructive actions, ask-user findings" "$other_brief" \
-    "scout brief received a no-mistakes-only decision case"
-
-  for mode in direct-PR local-only; do
-    other_id="brief-no-ask-user-$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
-    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$other_id" some-proj --mode "$mode" >/dev/null 2>&1
-    other_brief="$home/data/$other_id/brief.md"
-    assert_no_grep "nm-<run>-findings.txt" "$other_brief" \
-      "$mode brief received a no-mistakes-only escalation format"
-    assert_no_grep "destructive actions, ask-user findings" "$other_brief" \
-      "$mode brief received a no-mistakes-only decision case"
+  for mode in no-mistakes direct-PR local-only; do
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "brief-$mode" some-proj --mode "$mode" >/dev/null
+    brief="$home/data/brief-$mode/brief.md"
+    assert_no_grep 'nm-<run>-findings.txt' "$brief" 'removed gate instructions leaked into brief'
+    assert_grep 'needs-decision' "$brief" 'normal decision escalation was removed'
+    assert_grep 'relevant tests and lint checks' "$brief" 'verification contract was removed'
   done
-
-  pass "fm-brief.sh: no-mistakes ask-user findings use one event plus a verbatim snapshot"
+  pass "fm-brief: all modes preserve verification and ordinary escalation without pipeline gates"
 }
 
 # The project-memory section bounds crewmate edits of a project's AGENTS.md or
@@ -963,41 +967,6 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
-# A scout brief offers the Lavish review loop only when bootstrap confirms the
-# supported lavish-axi floor at scaffold time; a missing or older build gets a
-# text-report instruction instead, so a scout never drives a below-floor Lavish.
-test_scout_lavish_line_follows_presentation_floor() {
-  local base label version expect case_dir fakebin brief n=0
-  local hosting='use the lavish-axi rule'
-  local text_only='deliver your findings as a text report without Lavish'
-  base=$(fm_test_base_path_sans "${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" lavish-axi)
-  while IFS='^' read -r label version expect; do
-    [ -n "$label" ] || continue
-    n=$((n + 1))
-    case_dir="$TMP_ROOT/scout-lavish-$n"
-    mkdir -p "$case_dir/home/data"
-    fakebin=$(fm_fakebin "$case_dir")
-    [ "$version" = absent ] || fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION "$version"
-    PATH="$fakebin:$base" FM_HOME="$case_dir/home" \
-      "$ROOT/bin/fm-brief.sh" scout-lavish alpha --scout >/dev/null \
-      || fail "$label: scout scaffold failed"
-    brief="$case_dir/home/data/scout-lavish/brief.md"
-    if [ "$expect" = hosting ]; then
-      assert_grep "$hosting" "$brief" "$label: scout brief did not offer the Lavish review loop"
-      assert_no_grep "$text_only" "$brief" "$label: scout brief withheld Lavish from a compatible build"
-    else
-      assert_grep "$text_only" "$brief" "$label: scout brief did not ask for a text report"
-      assert_no_grep "$hosting" "$brief" "$label: scout brief offered a below-floor Lavish"
-    fi
-  done <<'ROWS'
-lavish-axi at the floor^0.1.77^hosting
-lavish-axi above the floor^0.2.0^hosting
-lavish-axi just below the floor^0.1.76^text
-absent lavish-axi^absent^text
-ROWS
-  pass "fm-brief.sh: scout Lavish hosting follows the bootstrap lavish-axi floor"
-}
-
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -1007,6 +976,10 @@ test_scout_and_secondmate_scaffold() {
   assert_present "$brief" "scout brief was not scaffolded"
   assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
+  assert_no_grep "host the Lavish review loop" "$brief" \
+    "scout brief must not reinstate Lavish"
+  assert_grep "Lavish is not available to this fork's workers" "$brief" \
+    "scout brief must declare Lavish unavailable, so AGENTS.md's Lavish board line does not apply"
   assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
   assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
   assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
@@ -1023,6 +996,36 @@ test_scout_and_secondmate_scaffold() {
   assert_no_grep "{FIRSTMATE_SPEC}" "$brief" \
     "secondmate charter must not carry the Firstmate spec placeholder"
   pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
+}
+
+# Local skills live gitignored under .agents/skills/local-*/ and are never
+# committed, so the brief itself must tell a worker on any project where each
+# one is and what it covers; with none present the rule stays plain.
+test_briefs_list_local_skills() {
+  local home root brief
+  home="$TMP_ROOT/local-skills-home"
+  write_registry "$home"
+  root="$TMP_ROOT/local-skills-root"
+  mkdir -p "$root/.agents/skills/local-demo"
+  printf '%s\n' '---' 'name: local-demo' 'description: >-' '  Demo local skill for reading example pages.' '  Second description line.' '---' '# local-demo' \
+    >"$root/.agents/skills/local-demo/SKILL.md"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    "$ROOT/bin/fm-brief.sh" local-ship-b1 some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    "$ROOT/bin/fm-brief.sh" local-scout-b2 some-proj --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  for brief in "$home/data/local-ship-b1/brief.md" "$home/data/local-scout-b2/brief.md"; do
+    assert_grep "local skill \`$root/.agents/skills/local-demo/SKILL.md\` may fit: Demo local skill for reading example pages. Second description line." "$brief" \
+      "$brief: the brief does not list the local skill with its description"
+  done
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$TMP_ROOT/no-local-root" \
+    "$ROOT/bin/fm-brief.sh" local-ship-b3 some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold without local skills exited non-zero"
+  brief="$home/data/local-ship-b3/brief.md"
+  assert_grep "For browser work, use the harness browser tools or Playwright." "$brief" "the plain browser rule"
+  assert_no_grep "local skill" "$brief" "a home with no local skills must list none"
+  pass "fm-brief.sh: ship and scout briefs list this home's local skills, and none when there are none"
 }
 
 test_worker_role_scope() {
@@ -1307,11 +1310,13 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   [ "$ship_rule" = "$scout_rule" ] \
     || fail "ship and scout shared-infrastructure rules have drifted apart"
 
-  # The daemon half of the rule survived the fold.
-  assert_grep "no-mistakes" "$brief" "scout brief lost the shared no-mistakes daemon rule"
-  # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-  assert_grep 'blocked [at=<epoch>]: {the daemon error}' "$brief" \
-    "scout brief lost the daemon-error reporting instruction"
+  # This fork names the shared no-mistakes daemon only in an opted-in pipeline
+  # brief (bin/fm-brief.sh PIPELINE_INFRA_RULE); every other crewmate brief keeps
+  # the dropped tools out of the worker instead.
+  assert_no_grep 'blocked [at=<epoch>]: {the daemon error}' "$brief" \
+    "scout brief carried the pipeline-only daemon rule"
+  assert_grep 'Do not install or invoke no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi.' "$brief" \
+    "scout brief lost the dropped-tools rule"
 
   # A secondmate runs its own home and legitimately allocates and returns slots
   # for its own crewmates, so the crewmate prohibition must NOT reach its charter.
@@ -1334,6 +1339,8 @@ test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_no_mistakes_gerrit_token_ships_direct_without_opt_in
+test_no_mistakes_pipeline_opt_in
 test_no_mistakes_dod_green_detection
 test_pr_based_dod_requires_non_draft
 test_ask_user_escalation_format
@@ -1350,7 +1357,7 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
-test_scout_lavish_line_follows_presentation_floor
+test_briefs_list_local_skills
 test_home_brief_include_is_appended_last
 test_ship_branch_prefix_defaults_to_legacy_fm
 test_ship_branch_prefix_override_is_consistent_across_modes

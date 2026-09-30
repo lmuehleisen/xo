@@ -254,7 +254,7 @@ A user row draws at zero height when the canonical operational-input parser reco
 - A from-firstmate routed message.
 - One of the narrow pre-protocol shapes kept for old transcripts.
 
-Other user rows, including near misses such as a quoted or ASCII-only marker, stay visible unless backed by an operational record as the next section describes.
+Other user rows, including near misses such as a quoted marker or an ASCII-only label that is not an exact current header at the first character, stay visible unless backed by an operational record as the next section describes.
 
 Assistant text follows the [shared per-block preservation rule](#shared-preservation-rule-for-assistant-text) above, including when `claude --continue` restores the transcript.
 

@@ -25,7 +25,9 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse no-mistakes
+  fm_fake_exit0 "$fakebin" no-mistakes
+  # This fork's spawn takes a durable Treehouse lease (bin/fm-worktree-claims-lib.sh).
+  fm_fake_treehouse_lease "$fakebin"
   printf '%s\n' "$fakebin"
 }
 

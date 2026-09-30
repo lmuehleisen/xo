@@ -24,6 +24,30 @@
   <img alt="firstmate - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
 </p>
 
+## Personal fork: what differs
+
+This is [lmuehleisen/xo](https://github.com/lmuehleisen/xo), a personal project derived from [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate).
+It prioritizes reliable local use, familiar tools, and less prescriptive workflows.
+Use this repository when cloning for these changes; the upstream project overview and setup below are otherwise retained.
+
+- **No required `gh-axi`:** GitHub operations use the standard `gh` CLI, including compatible merge handling, to avoid an extra wrapper.
+- **No required `chrome-devtools-axi`:** browser work uses harness browser tools or Playwright, leaving the browser tool choice flexible.
+- **No required `lavish-axi`:** decisions and reports use chat, and `/bearings lavish` produces a read-only local HTML snapshot with no answer or dispatch controls and no board polling.
+- **No required `no-mistakes`:** workers run relevant tests and lint directly, then deliver through `direct-PR` or `local-only`; legacy no-mistakes delivery tokens map to `direct-PR` unless a home opts in through `config/no-mistakes`, so local work needs no pipeline.
+- **Reviewed worker permissions:** Claude and Codex launches default to automatic permission review, with a manual-review option, instead of bypassing permissions or the sandbox; see [worker permission modes](docs/configuration.md#worker-permission-mode-configcrew-permissions).
+  agy workers default to accept-edits mode and run bypass only under a policed permission hook, and Devin workers run in reviewed mode behind the same kind of hook, never in bypass.
+- **Remote-less local work:** explicit `local-only` ship tasks can start from local `main` or `master` without a remote, while rejecting dirty or divergent task bases.
+- **Away watchdog outside tmux:** while away, a detached watchdog alarms through the [wedge-alarm channels](docs/wedge-alarm.md) if the fleet's tmux server or the away watcher stops, and the return brief names what stopped and when.
+- **Durable approval waits:** completed ship work awaiting merge approval remains tracked and visible in Bearings, with quiet supervision after the finished worker is verified stopped.
+
+Maintainers: the [fork divergences ledger](docs/fork-divergences.md) records every deliberate difference from upstream, with its seam and guard test.
+
+`tasks-axi` and `quota-axi` remain required, along with the selected backend's dependencies.
+Merge approval and unlanded-work safeguards still apply; inherited upstream contribution and CI requirements are explained in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Upstream changes are integrated on disposable review branches using real merges that preserve upstream ancestry, then fast-forwarded into the installation after review; the [upstream integration checklist](docs/upstream-integration.md) owns each run's steps.
+The [updater](.agents/skills/updatefirstmate/SKILL.md) fetches this fork's `origin` and requires fast-forward ancestry; it does not merge upstream itself.
+
 ## What it is
 
 You can run one coding agent easily.
@@ -45,7 +69,7 @@ Launching a supported harness inside it for your primary session instantiates yo
 - **A visible crew** - every crewmate works in its own tmux window or Herdr tab, or in an experimental Zellij tab, experimental cmux workspace, or experimental Orca terminal you can watch or type into; the first mate reconciles.
 - **Disposable worktrees** - each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) git worktree, or an Orca-managed worktree when `backend=orca`, so parallel work on one repo never collides.
 - **Two task shapes** - ship tasks deliver authorized changes; scout tasks leave standalone investigation reports when the intake contract warrants separate research.
-- **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` merge-autonomy flag, an optional `branch=<prefix>` override for the default `fm/` ship-branch prefix, and an optional `forge=gerrit` binding under which the worker publishes a Gerrit change instead of opening a pull request.
+- **Explicit project modes** - each project ships via `direct-PR` or `local-only`, with an optional `+yolo` merge-autonomy flag, an optional `branch=<prefix>` override for the default `fm/` ship-branch prefix, and an optional `forge=gerrit` binding under which the worker publishes a Gerrit change instead of opening a pull request; legacy `no-mistakes` registry tokens map to direct-PR.
 - **Optional secondmates** - opt in to persistent second mates that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, either locally or as a whole home on an SSH-reachable host, with guarded updates and recovery that never turns an unavailable remote route into a local replacement.
 - **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
 - **Optional Relay** - opt in with one local `.env` pairing token so firstmate can answer your public mentions on X and Discord alike, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-Relay behavior; a final reply promised in a thread becomes durable state that is reconciled from disk, so a restart or a compacted conversation cannot lose it; dry-run preview records would-be replies and dismissals locally before go-live.
@@ -58,7 +82,7 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 
 ### Requirements
 
-- A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI.
+- A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, Cursor Agent CLI, or Antigravity CLI (`agy`).
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - The CLI and dependencies for your selected runtime backend; tmux is the reference default.
 
@@ -74,6 +98,7 @@ Pick whichever one matches your subscription and workflow.
 
 Oh My Pi (`omp`), a Pi fork, is verified as a primary with the same extension-owned watcher model as Pi and a stronger turn-end guard: its blocking `session_stop` hook compels a continuation instead of requesting one.
 Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
+Agy supports primary, local secondmate, and worker sessions through native hooks and background-command completion; see [Agy setup and limits](docs/configuration.md#agy-primary) for its launch and approval requirements.
 Cursor Agent CLI is verified as a primary too, using a tracked project-scope `.cursor/hooks.json` whose `stop` hook parks on the watcher between turns, closest in shape to Claude Code's.
 Launch it with `--trust`, or none of its project hooks load; it also has no turn-end hook in headless `cursor-agent -p`, so run the primary session interactively.
 
@@ -81,8 +106,8 @@ Launch it with `--trust`, or none of its project hooks load; it also has no turn
 
 ```sh
 gh auth login
-git clone https://github.com/kunchenguid/firstmate
-cd firstmate
+git clone https://github.com/lmuehleisen/xo
+cd xo
 ```
 
 Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
@@ -232,7 +257,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/gerrit-change-watch.md](docs/gerrit-change-watch.md) - maintainer verification for watching Gerrit changes read-only, and why the merge path refuses one.
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's current "no turn ends blind" backstop, scope, loop safety, and compatibility limits.
 - [docs/verification/supervision.md](docs/verification/supervision.md) - active maintainer verification for session-start, guard, continuity, and wedge integrations.
-- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi and `pi-signed`, omp, Grok, Cursor, and unknown harness fallback.
+- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi and `pi-signed`, omp, Grok, Cursor, Agy, and unknown harness fallback.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [docs/documentation-audiences.md](docs/documentation-audiences.md) - documentation audiences and the machine-checked placement boundary.
 - [`AGENTS.md`](AGENTS.md) - the supervisor contract, role boundary, and routing index for conditional procedures.

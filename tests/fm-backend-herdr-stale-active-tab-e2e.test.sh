@@ -3,6 +3,8 @@
 # .focused is not a live viewer. A pane on that tab must close when no
 # foreground client is attached.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
@@ -24,7 +26,7 @@ export HERDR_LAB_HELPER HERDR_LAB_SESSION HERDR_ORIGINAL_PATH
 cleanup() {
   local status=$?
   env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || status=1
-  rm -rf "$TMP_ROOT"
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
   exit "$status"
 }
 trap cleanup EXIT

@@ -46,9 +46,10 @@ You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
-Ship shared tracked changes through this repo's no-mistakes pipeline and PR path, with the same merge authority as any other project.
+Ship shared tracked changes through a PR path, with the same merge authority as any other project.
 Never add an agent name as a commit co-author.
-Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
+Never write sensitive information into a public repository, where it stays permanently: nothing public may tell a stranger about the captain's private life or work, and `bin/fm-publish-gate.sh policy` prints the rules that protect against that.
+Use `gh` for GitHub, the harness browser tools or Playwright for browser work, and plain chat for structured decisions and reports.
 
 ## 2. Layout and state
 
@@ -87,7 +88,7 @@ Load `session-start-recovery` when the digest reports unfinished checks, actiona
 ## 4. Harness and runtime dispatch
 
 - Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-- The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor`, and `omp`, plus `muse`, `gemini`, `rovo`, `agy`, and `devin` for crewmates and scouts only; never dispatch on an unverified adapter.
+- The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor`, `omp`, and `agy`, plus `muse`, `gemini`, `rovo`, and `devin` for crewmates and scouts only; never dispatch on an unverified adapter.
 - If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 - Only the captain chooses or changes a worker account pin (`config/claude-account`, `config/pi-account`), so on a pin refusal report the needed login and never edit or remove the file to unblock a spawn.
 
@@ -189,8 +190,9 @@ Resolve every ship task's concrete delivery mode and `yolo` merge posture at int
 Pass the mode explicitly to the brief, and pass both values explicitly to the spawn and any scout promotion; each command refuses to guess the values it consumes.
 A current explicit captain instruction wins; otherwise the project's registry entry is the captain's standing posture, and dropping below its rigor needs a reason you can state.
 Resolve the project's registered ship-branch prefix the same way, via `bin/fm-project-mode.sh --branch-prefix <project>`, and pass it explicitly to the brief, ship spawn, and scout promotion as `--branch-prefix` (default `fm/` needs no flag).
-On a `no-mistakes-prod-only` project, classify the task's surface: internal-only tooling, automation, contributor or operator process, and release or submission work ships `direct-PR`, while product-facing, mixed, and uncertain work ships `no-mistakes`; never infer internal-only from file location or project name.
-An unregistered project or absent registry resolves to `no-mistakes` with yolo off, and the registration gap goes to the captain.
+On a `no-mistakes-prod-only` project, ship `direct-PR`.
+Treat a registered `no-mistakes` posture as `direct-PR`.
+An unregistered project or absent registry resolves to `direct-PR` with yolo off, and the registration gap goes to the captain.
 Record the resulting mode, `yolo` merge posture, and the one-line reason for any deviation in the backlog item note.
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
@@ -219,18 +221,20 @@ Supervise all live work under section 8.
 ### Selected delivery path and merge authority
 
 The selected delivery path owns its own rigor.
-When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, documentation, push, PR, and CI; otherwise follow the faster path without adding an independent reviewer.
-Never hold work outside no-mistakes for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
+Without `config/no-mistakes`, treat a `no-mistakes` mode token as `direct-PR` and never start a no-mistakes pipeline: the worker pushes and opens the PR with `gh`.
+With it present, only a task you explicitly resolve to `no-mistakes` runs the real pipeline, where you send the worker's no-mistakes skill invocation in its harness's form through `fm-send` after its `done:` summary and its ready signal is `done: PR <url> checks green`, while a missing CLI refuses that spawn and registry tokens still mean `direct-PR`.
 A separate review or audit is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
-If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a manual gate.
 The path's worker, automated gates, and captain approval remain authoritative:
 
-- **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
-- **direct-PR** has the worker push and open a PR without the no-mistakes pipeline, then waits for the configured merge authority.
+- **direct-PR** has the worker push and open a PR with `gh`, then waits for the configured merge authority.
+  Public commit, PR, issue, and review text follows the public-text policy owned by `bin/fm-publish-gate.sh` (short neutral PR text, short review replies, no sensitive evidence, and browser, security, or operations changes through the gated direct path), which with the `gh` publish guard enforces it.
 - **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
+  Load `captain-hold-lifecycle` when that completed work must wait for the captain; it owns the durable wait and finished-worker parking procedure.
+- **no-mistakes** is accepted as a spawn/registry token and ships as described above.
 
 Delivery mode and `yolo` are orthogonal.
 `yolo` governs merge authority only: with it off, the captain approves every PR merge and every local-only landing; with it on, firstmate merges green, in-scope work itself.
+While the away-posture record exists, a merge proceeds only for a `yolo` task or one the captain granted with `--grant` at `/afk`; the away words never grant a merge, and every other merge waits for the return.
 Never merge a red PR, or one with a required check that has not reported, under either setting unless a current explicit captain instruction names the GitHub check to waive; `bin/fm-pr-merge.sh`'s header owns the attended-only waiver mechanics and remaining guards.
 Destructive, irreversible, and security-sensitive merges still escalate.
 Without a current explicit captain instruction that states the concrete merge, the green default stands, and standing `yolo` cannot authorize a red merge; section 1 owns when such an instruction overrides a Firstmate-written standing rule within its exact scope.
@@ -240,7 +244,12 @@ After an autonomous merge, give the captain a one-line full-URL or local-main ou
 
 ### Validate
 
-Load `validation-supervision` when a ship starts or already has an active no-mistakes validation run, including a mid-run requirement change or finding.
+For a `direct-PR` ship (including a `no-mistakes` token remapped to that path), the worker pushes the branch and opens the PR with `gh` after its implementation commit, then reports `done: PR <url>`.
+The worker's verification contract is owned by `bin/fm-dod-lib.sh`; removing the pipeline does not remove project tests, lint, or accurate reporting of unverified behavior.
+Never invoke no-mistakes yourself.
+Load `validation-supervision` when a ship explicitly resolved to `no-mistakes` under `config/no-mistakes` starts or already has an active validation run, including a mid-run requirement change or finding.
+Once the PR is open, prefer routing new requirements to follow-up work rather than expanding the current task, unless a new requirement completely invalidates the work.
+Judge current state through `bin/fm-crew-state.sh` when it matters, not by shell liveness or the last status event.
 
 ### PR ready, landing, and teardown
 
@@ -296,13 +305,13 @@ Harness-aware turn-end guards are structural backstops, not permission to omit t
 
 ### Away-mode and quiet-mode stub
 
-Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `state/.afk-contract` or `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
+Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `state/.afk-contract` or `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK` or the exact mark-less current `FIRSTMATE_OP: v1 <kind>: ` header, or any `state/.subsuper-*` marker is involved.
 Invoke the `/quiet` skill instead when the captain says `/quiet` or asks for quiet mode, or `state/.afk` already exists in quiet mode (`fm_afk_mode` in `bin/fm-wake-lib.sh`).
 Load `away-quiet-supervision` whenever either mode is invoked, either record exists, or a marked away-supervisor message arrives.
 
 ### Stuck-worker trigger
 
-For the full `stuck-crewmate-recovery` trigger, including a live worker claiming its no-mistakes pipeline is dead, unreachable, or timed out, follow that skill's description.
+For the full `stuck-crewmate-recovery` trigger, including a live worker whose claim conflicts with an already-attributed legacy no-mistakes run, follow that skill's description.
 
 ## 9. Escalation and captain etiquette
 
@@ -352,7 +361,7 @@ Reach the captain immediately for:
 - For a captain-requested completion, or any wake that needs the captain's review, approval, merge, or design pick, give a captain-facing outcome that states what finished and never reply `Captain, shipshape.`; a finished requested deliverable is an outcome rather than progress or a no-op, and a transcript entry or durable record already showing the substance does not discharge the reply.
 - Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 - Batch non-urgent updates into the next natural reply.
-- Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
+- Use plain chat for a yes-or-no decision and for structured options or reports.
 - Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 - Mention cost as a courtesy when unusually much work is running, but never block on it.
 
@@ -381,7 +390,7 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
 Use its scaffold as the contract, then fill `## Captain's intent` (`{TASK}`) with the captain's own ask and any boundary the captain stated, plus the context needed to read it, including the substance of any report, decision, or PR the ask refers to; never widen the ask there into a general goal or an enumerated coverage list, because the reviewer treats that subsection as acceptance criteria.
 Fill `## Firstmate spec` (`{FIRSTMATE_SPEC}`) with only the build instructions that ask requires, naming what stays out of scope when the ask is narrow; a generalization, consistency sweep, or extra hardening the captain did not ask for is follow-up work to note, not scope to add.
-`bin/fm-dod-lib.sh` owns intent authoring without added speaker labels or direct address, its provenance markers, what a no-mistakes worker may pass as `--intent`, and the string's self-sufficiency rule.
+`bin/fm-dod-lib.sh` owns the worker verification and delivery contract, including intent authoring without added speaker labels or direct address and its provenance markers.
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
 
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.

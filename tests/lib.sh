@@ -38,6 +38,11 @@ umask 022
 # shellcheck source=tests/git-config-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/git-config-helpers.sh"
 
+# The single guard every cleanup path uses before removing a fixture temp root;
+# its header owns what counts as safe to remove.
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
+
 # Exempt firstmate's own test suite from the gate-lifecycle refusal
 # (bin/fm-gate-refuse-lib.sh). The no-mistakes gate runs this suite FROM a gate
 # worktree - the exact environment that guard refuses - so without this every
@@ -102,8 +107,18 @@ pass() {
 # that file is armed once, here, at source time - which always runs in the
 # real caller, never a subshell.
 
+#
+# Every precondition below is fatal at source time: the library exits the
+# sourcing test with a message naming what is missing. It must never return
+# early, because a test that keeps running past a half-initialized library
+# builds its fixtures - and aims its cleanup - at empty or undefined roots.
+
 FM_TEST_CLEANUP_DIRS=()
-FM_TEST_CLEANUP_REGISTRY=$(mktemp "${TMPDIR:-/tmp}/.fm-test-cleanup.$$.XXXXXX") || return 1
+FM_TEST_CLEANUP_REGISTRY=$(mktemp "${TMPDIR:-/tmp}/.fm-test-cleanup.$$.XXXXXX") || {
+  printf 'not ok - tests/lib.sh precondition unmet: cannot create a cleanup registry in %s\n' \
+    "${TMPDIR:-/tmp}" >&2
+  exit 1
+}
 
 fm_test_pid_identity() {
   local pid=$1
@@ -111,9 +126,10 @@ fm_test_pid_identity() {
     '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$pid"
 }
 
-FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") || {
+FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") && [ -n "$FM_TEST_OWNER_IDENTITY" ] || {
   rm -f "$FM_TEST_CLEANUP_REGISTRY"
-  return 1
+  printf 'not ok - tests/lib.sh precondition unmet: cannot read this shell'"'"'s process identity (needs a readable /proc/<pid> or a working ps)\n' >&2
+  exit 1
 }
 
 # --- process-event runner reaping -------------------------------------------
@@ -130,7 +146,12 @@ FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") || {
 # private one). It never matches on a script or process name, which would reach
 # into another home's live runners.
 
-FM_TEST_PROCEVENT_REGISTRY=$(mktemp "${TMPDIR:-/tmp}/.fm-test-procevent.$$.XXXXXX") || return 1
+FM_TEST_PROCEVENT_REGISTRY=$(mktemp "${TMPDIR:-/tmp}/.fm-test-procevent.$$.XXXXXX") || {
+  rm -f "$FM_TEST_CLEANUP_REGISTRY"
+  printf 'not ok - tests/lib.sh precondition unmet: cannot create a process-event registry in %s\n' \
+    "${TMPDIR:-/tmp}" >&2
+  exit 1
+}
 
 fm_test_track_procevent_home() {  # <home> [claim-root]
   [ -n "${1:-}" ] || return 1
@@ -208,13 +229,15 @@ FM_TEST_STUB_MAX_BLOCK_SECONDS=${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}
 export FM_TEST_STUB_MAX_BLOCK_SECONDS
 
 # Remove a fixture tree even when it holds a read-only directory, such as the
-# spawn-owned state/<id>.git-hooks strip directory.
+# spawn-owned state/<id>.git-hooks strip directory. Removal goes through
+# fm_test_rm_tmproot (tests/tmproot-guard.sh), and only a path that guard would
+# accept is made writable first, so neither step reaches outside a temp root.
 fm_test_remove_tree() {
   local dir=$1
-  if [ -d "$dir" ] && [ ! -L "$dir" ]; then
+  if ! fm_test_tmproot_guard_reason "$dir" >/dev/null && [ -d "$dir" ] && [ ! -L "$dir" ]; then
     find "$dir" -type d -exec chmod u+rwx {} + 2>/dev/null || true
   fi
-  rm -rf "$dir"
+  fm_test_rm_tmproot "$dir"
 }
 
 fm_test_cleanup() {
@@ -222,22 +245,35 @@ fm_test_cleanup() {
   fm_test_reap_watchers
   fm_test_reap_procevent_homes
   for d in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
-    [ -n "$d" ] && fm_test_remove_tree "$d"
+    fm_test_remove_tree "$d" || true
   done
   if [ -f "$FM_TEST_CLEANUP_REGISTRY" ]; then
     while IFS= read -r d; do
-      [ -n "$d" ] && fm_test_remove_tree "$d"
+      fm_test_remove_tree "$d" || true
     done < "$FM_TEST_CLEANUP_REGISTRY"
     rm -f "$FM_TEST_CLEANUP_REGISTRY"
   fi
 }
 
 fm_test_tmproot() {
-  local prefix=${1:-fm-test} root tmp_base
+  local prefix=${1:-fm-test} root tmp_base reason
   tmp_base=${TMPDIR:-/tmp}
   tmp_base=${tmp_base%/}
-  root=$(mktemp -d "$tmp_base/${prefix}.XXXXXX") || return 1
+  root=$(mktemp -d "$tmp_base/${prefix}.XXXXXX") || {
+    printf 'fm_test_tmproot: cannot create a temp root in %s\n' "$tmp_base" >&2
+    return 1
+  }
   root=$(cd -P -- "$root" && pwd -P) || return 1
+  if reason=$(fm_test_tmproot_guard_reason "$root"); then
+    # Only a TMPDIR moved somewhere unsafe after sourcing gets here. The new
+    # directory is still empty, so roll it back with rmdir, then stop the owning
+    # test: a command substitution cannot exit its caller, and callers rarely
+    # check this assignment, so returning would hand them an empty root.
+    rmdir -- "$root" 2>/dev/null || true
+    printf 'not ok - fm_test_tmproot: refusing unsafe temp root %s: %s\n' "$root" "$reason" >&2
+    kill -TERM "$$"
+    return 1
+  fi
   if ! printf '%s\n%s\n' "$$" "$FM_TEST_OWNER_IDENTITY" > "$root/.fm-test-fixture" ||
     ! printf '%s\n' "$root" >> "$FM_TEST_CLEANUP_REGISTRY"; then
     rm -rf "$root"
@@ -280,7 +316,8 @@ fm_test_reap_orphans() {
     mtime=$(stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker" 2>/dev/null) || continue
     [ $((now - mtime)) -ge "$FM_TEST_ORPHAN_MAX_AGE_SECONDS" ] || continue
     dir=$(dirname "$marker")
-    fm_test_remove_tree "$dir"
+    fm_test_tmproot_guard_reason "$dir" >/dev/null && continue
+    fm_test_remove_tree "$dir" || true
   done
 }
 
@@ -419,6 +456,86 @@ SH
   done
 }
 
+# fm_fake_publish_judges <fakebin> <publish-guard-dir>: stub `codex` and `pi`
+# answering the way bin/fm-publish-judge.sh invokes them (codex writes its
+# answer to -o <file> and reads the prompt on stdin; pi takes the prompt as its
+# last argument), named in the publish-guard directory's codex and pi files,
+# which the judge reads instead of PATH, so no test reaches a model. Each allows unless FM_TEST_JUDGE_REFUSE (an extended
+# regular expression) matches the material between the prompt's BEGIN and END
+# MATERIAL lines. FM_TEST_JUDGE_CODEX / FM_TEST_JUDGE_PI set a stub's mode:
+# rules (the default), down (exit 1), hang (sleep past any bound), prose (an
+# answer with no verdict), failjson (an allow verdict, then exit 7), hangjson
+# (an allow verdict, then sleep past any bound), twoallow (two allow verdicts),
+# or conflict (an allow and a refuse verdict). FM_TEST_JUDGE_CALLS and
+# FM_TEST_JUDGE_PROMPTS, when set, collect each call's stub name and prompt.
+fm_fake_publish_judges() {
+  local fakebin=$1 cfg=$2 tool
+  mkdir -p "$cfg"
+  for tool in codex pi; do
+    printf '%s\n' "$fakebin/$tool" >"$cfg/$tool"
+    cat > "$fakebin/$tool" <<'SH'
+#!/usr/bin/env bash
+name=$(basename "$0")
+out='' prompt=''
+if [ "$name" = codex ]; then
+  mode=${FM_TEST_JUDGE_CODEX:-rules}
+  while [ "$#" -gt 0 ]; do
+    case "$1" in -o) out=$2; shift 2 ;; *) shift ;; esac
+  done
+  prompt=$(cat)
+else
+  mode=${FM_TEST_JUDGE_PI:-rules}
+  prompt=${!#}
+fi
+[ -z "${FM_TEST_JUDGE_CALLS:-}" ] || printf '%s\n' "$name" >>"$FM_TEST_JUDGE_CALLS"
+[ -z "${FM_TEST_JUDGE_PROMPTS:-}" ] || printf '%s\n' "$prompt" >>"$FM_TEST_JUDGE_PROMPTS"
+allow='{"verdict":"allow","reasons":[]}'
+case "$mode" in
+  down) echo "stub judge: not signed in" >&2; exit 1 ;;
+  hang) exec sleep 30 ;;
+  failjson | hangjson)
+    if [ -n "$out" ]; then printf '%s\n' "$allow" >"$out"; else printf '%s\n' "$allow"; fi
+    [ "$mode" = failjson ] && exit 7
+    exec sleep 30
+    ;;
+  prose) answer='It looks fine to me.' ;;
+  twoallow) answer=$(printf '%s\n%s' "$allow" "$allow") ;;
+  conflict) answer=$(printf '%s\n%s' "$allow" '{"verdict":"refuse","reasons":["text 1: stub finding"]}') ;;
+  *)
+    material=$(printf '%s\n' "$prompt" | sed -n '/^BEGIN MATERIAL /,/^END MATERIAL /p')
+    if [ -n "${FM_TEST_JUDGE_REFUSE:-}" ] && printf '%s\n' "$material" | grep -qiE -- "$FM_TEST_JUDGE_REFUSE"; then
+      answer='Verdict: {"verdict":"refuse","reasons":["text 1: stub finding"]}'
+    else
+      answer='{"verdict":"allow","reasons":[]}'
+    fi
+    ;;
+esac
+if [ -n "$out" ]; then printf '%s\n' "$answer" >"$out"; else printf '%s\n' "$answer"; fi
+SH
+    chmod +x "$fakebin/$tool"
+  done
+}
+
+# A Treehouse lease returns a bare worktree path, independently of pane cwd.
+# Spawn tests can diverge the two to exercise the exact-path handoff guard.
+# Every call is appended to <fakebin>/treehouse-calls so a case can assert
+# which slots were returned.
+fm_fake_treehouse_lease() {
+  local fakebin=$1
+  printf '%s\n' "${2:-}" > "$fakebin/treehouse-lease-path"
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$(dirname "$0")/treehouse-calls"
+if [ "${1:-}" = get ] && [ "${2:-}" = --lease ]; then
+  path=${FM_FAKE_LEASE_PATH:-${FM_FAKE_PANE_PATH:-}}
+  [ -n "$path" ] || IFS= read -r path < "$(dirname "$0")/treehouse-lease-path"
+  printf '%s\n' "$path"
+fi
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
 # fm_fake_crash_injector <fakebin>
 # Drops an `fm-crash-inject <pid>` shim that a PATH fake calls to simulate a
 # hard crash of the process under test. It SIGKILLs <pid> and then returns only
@@ -477,6 +594,28 @@ case "\$*" in
   '-o comm= -p '*) printf '%s\n' bash ;;
   '-o args= -p '*) printf '%s\n' bash ;;
   '-o ppid= -p '*) printf '%s\n' 1 ;;
+  *) exec "$real_ps" "\$@" ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+}
+
+# fm_fake_blind_ancestry_above <fakebin> <pid>
+# Like fm_fake_blind_ancestry, but cuts the parent-chain walk at ONE pid only:
+# the field-first per-pid queries the walks use for <pid> answer comm bash,
+# args bash, and ppid 1, while queries for every other pid pass through to the
+# real ps. A probe launched below the cut still has its intermediate ancestors
+# examined under their real names, so a case can prove the layer it asserts on
+# is genuinely inspected instead of passing vacuously behind a blanket blind
+# that hides the process under test itself.
+fm_fake_blind_ancestry_above() {
+  local fakebin=$1 cut_pid=$2 real_ps
+  real_ps=$(command -v ps) || return 1
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  '-o comm= -p $cut_pid'|'-o args= -p $cut_pid') printf '%s\n' bash ;;
+  '-o ppid= -p $cut_pid') printf '%s\n' 1 ;;
   *) exec "$real_ps" "\$@" ;;
 esac
 SH

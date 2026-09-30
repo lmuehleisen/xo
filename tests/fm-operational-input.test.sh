@@ -54,6 +54,37 @@ test_current_generic_matrix() {
   pass "operational input: every current generic envelope retains its exact structured kind"
 }
 
+# Claude Code 2.1.277 and later remove U+2063 from every submitted prompt, so a
+# marked envelope reaches a Claude transcript as the same header without it.
+test_mark_less_current_header_keeps_its_kind() {
+  local kind body encoded unmarked parsed stripped
+  for kind in session-start watcher turn-end-guard away-supervisor launch-brief branch-outcome; do
+    body="MARKLESS_BODY_FOR_${kind}: with a colon"
+    fm_operational_input_encode "$kind" "$body" encoded \
+      || fail "could not encode current $kind fixture"
+    [ "${encoded#"$FM_OPERATIONAL_HEADER_PREFIX"}" != "$encoded" ] \
+      || fail "construction of $kind stopped emitting the leading U+2063 mark"
+    unmarked=${encoded#"$FM_OPERATIONAL_MARK"}
+    [ "${unmarked#FIRSTMATE_OP: v1 }" != "$unmarked" ] \
+      || fail "mark-less $kind fixture is not the exact ASCII header: $unmarked"
+    fm_operational_input_kind "$unmarked" parsed \
+      || fail "mark-less current $kind header did not parse"
+    [ "$parsed" = "$kind" ] \
+      || fail "mark-less current $kind header became $parsed"
+    [ "$(kind_cli "$unmarked")" = "$kind" ] \
+      || fail "cross-language CLI lost mark-less $kind"
+    [ "$(classify_cli "$unmarked")" = "$kind" ] \
+      || fail "classifier lost mark-less $kind"
+    fm_operational_input_body "$unmarked" stripped \
+      || fail "could not recover mark-less $kind body"
+    [ "$stripped" = "$body" ] \
+      || fail "mark-less $kind body changed: $stripped"
+    [ "$(printf '%s' "$unmarked" | "$OWNER" body)" = "$body" ] \
+      || fail "CLI body lost mark-less $kind body"
+  done
+  pass "operational input: the exact mark-less current header keeps its kind and body for every current kind"
+}
+
 test_current_from_firstmate_carrier() {
   local encoded parsed separator
   separator=$(printf '\342\201\243')
@@ -126,8 +157,19 @@ FIRSTMATE WATCHER WAKE: can you explain this phrase?
 TURN WOULD END BLIND - can you make this warning friendlier?
 Supervisor escalate (1 event(s)): is this wording clear?
 [fm-from-firstmate] inspect this visible label
+Captain quote: FIRSTMATE_OP: v1 away-supervisor: quoted escalation
+ FIRSTMATE_OP: v1 away-supervisor: leading space
+FIRSTMATE_OP: v2 away-supervisor: unknown version
+FIRSTMATE_OP: v1 unknown-kind: unknown kind
+FIRSTMATE_OP: v1 from-firstmate: not a generic kind
+FIRSTMATE_OP: v1 away-supervisor:${FM_OPERATIONAL_MARK}
+FIRSTMATE_OP: v1 away-supervisor:no separator space
+firstmate_op: v1 watcher: lower case
+FIRSTMATE_OP: plain untyped text
 EOF
-  pass "operational input: quoted, ASCII-only, arbitrary-U+2063, altered-legacy, and label-only near misses stay genuine"
+  ! fm_operational_input_classify "FIRSTMATE_OP: v1 away-supervisor: " parsed \
+    || fail "mark-less header with an empty body was classified as $parsed"
+  pass "operational input: quoted, ASCII-only, mark-less wrong-shape, arbitrary-U+2063, altered-legacy, and label-only near misses stay genuine"
 }
 
 test_cross_language_adapter_uses_the_owner() {
@@ -182,12 +224,19 @@ test_record_backed_doorbell_carrier() {
     || fail "the record does not hold exactly the encoded envelope"
   [ "$(printf '%s' "$doorbell" | "$OWNER" doorbell-kind)" = away-supervisor ] \
     || fail "doorbell-kind lost the record's kind"
+  fm_operational_record_opened "$record" && fail "a record read as opened before any open"
   body=$(FM_STATE_OVERRIDE="$state" "$OWNER" open "$record") || fail "open refused this home's own record"
   [ "$body" = "digest body"$'\n''second line' ] || fail "open did not print the record body: $body"
+  fm_operational_record_opened "$record" || fail "open did not mark the record opened for its producer"
   linked="$tmp/linked-state"
   ln -s "$state" "$linked"
   FM_STATE_OVERRIDE="$linked" "$OWNER" open "$record" >/dev/null \
     || fail "open refused this home's record when the home is reached through a symlink"
+  other_record="$other/operational-inbox/1-0.msg"
+  mkdir -p "${other_record%/*}" && cp "$record" "$other_record"
+  FM_STATE_OVERRIDE="$state" "$OWNER" open "$other_record" >/dev/null \
+    && fail "open accepted another home's record"
+  fm_operational_record_opened "$other_record" && fail "a refused open marked another home's record opened"
   FM_STATE_OVERRIDE="$other" "$OWNER" open "$record" >/dev/null \
     && fail "open accepted another home's record"
   fm_operational_doorbell_kind "$doorbell" "$state" kind && [ "$kind" = away-supervisor ] \
@@ -230,7 +279,7 @@ test_record_backed_doorbell_carrier() {
   [ ! -e "$just_expired" ] || fail "a record seconds past seven days survived a write"
   [ -f "$just_kept" ] || fail "a record a minute short of seven days was pruned"
   [ -f "$record" ] || fail "a fresh record was pruned"
-  pass "record-backed carrier: Claude-only selection, an ASCII doorbell naming an exact envelope record, home-bound open, and no recognition without the record"
+  pass "record-backed carrier: Claude-only selection, an ASCII doorbell naming an exact envelope record, home-bound open that marks the record opened, and no recognition without the record"
 }
 
 test_record_prune_outgrows_one_argument_list() {
@@ -248,6 +297,7 @@ test_record_prune_outgrows_one_argument_list() {
 }
 
 test_current_generic_matrix
+test_mark_less_current_header_keeps_its_kind
 test_current_from_firstmate_carrier
 test_landed_untyped_prefix_is_explicitly_legacy
 test_isolated_legacy_matrix

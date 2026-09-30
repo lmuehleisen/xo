@@ -118,7 +118,16 @@ case "${1:-}" in
     fi
     exit 0
     ;;
-  has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
+  has-session|new-session|kill-window|set-window-option) exit 0 ;;
+  new-window)
+    # -P (alone or clustered, e.g. -dP) asks tmux to print the new window's
+    # immutable id, which fm_backend_tmux_create_task returns and fm-spawn
+    # persists as window_id= so teardown can bind its reap to that object.
+    for fm_fake_wid_arg in "$@"; do
+      case "$fm_fake_wid_arg" in -*P*) printf '@7\n'; break ;; esac
+    done
+    exit 0
+    ;;
   send-keys)
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
@@ -299,7 +308,8 @@ fm_test_make_spawn_fakebin() {
   shift
   fakebin=$(fm_fakebin "$dir")
   fm_test_fake_tmux_spawn "$fakebin"
-  fm_fake_exit0 "$fakebin" treehouse "$@"
+  fm_fake_exit0 "$fakebin" "$@"
+  fm_fake_treehouse_lease "$fakebin"
   printf '%s\n' "$fakebin"
 }
 

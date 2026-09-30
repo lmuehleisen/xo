@@ -14,7 +14,7 @@ TARGET="$SESSION:muse"
 
 cleanup() {
   [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
-  [ -z "$LAB" ] || rm -rf -- "$LAB"
+  fm_test_rm_tmproot "${LAB:-}"
 }
 
 fail() {

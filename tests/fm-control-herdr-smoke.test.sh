@@ -20,6 +20,8 @@
 # one (tests/herdr-test-safety.sh; the 2026-07-02 incident). Skips cleanly
 # when herdr or jq is missing.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -37,7 +39,7 @@ SESSION="fm-lab-control-smoke-$$"
 export HERDR_SESSION="$SESSION"
 SCRATCH=
 cleanup_all() {
-  [ -n "$SCRATCH" ] && rm -rf "$SCRATCH"
+  fm_test_rm_tmproot "${SCRATCH:-}"
   herdr_safe_stop_and_delete "$SESSION"
 }
 trap cleanup_all EXIT
@@ -45,6 +47,7 @@ fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab se
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-control-herdr.XXXXXX")
 SCRATCH=$(cd "$SCRATCH" && pwd)
+fm_test_require_tmproot "$SCRATCH"
 HOME_DIR="$SCRATCH/home"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/data/hsmoke"
 cat > "$HOME_DIR/data/hsmoke/brief.md" <<'EOF'

@@ -27,6 +27,11 @@ class Node {
     this.classList = {
       add: (c) => { this.className = (this.className + " " + c).trim(); },
       contains: (c) => this.className.split(/\s+/).includes(c),
+      toggle: (c, enabled) => {
+        const names = new Set(this.className.split(/\s+/).filter(Boolean));
+        if (enabled) names.add(c); else names.delete(c);
+        this.className = [...names].join(" ");
+      },
     };
   }
   get textContent() {
@@ -122,5 +127,14 @@ const errorText = [...byId.entries()]
 const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c) => c.textContent);
 const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map((c) => c.textContent);
 
+const callDeck = byId.get("bb-call") || new Node("div");
+const callControls = [];
+function collectControls(node) {
+  if (["form", "input", "textarea", "select"].includes(node.tagName)) callControls.push(node.tagName);
+  node.children.forEach(collectControls);
+}
+collectControls(callDeck);
+collectControls(ch);
+const calls = callDeck.children.map(c => c.textContent);
 process.stdout.write(
-  JSON.stringify({ stats, underway, charted, empty, more, error: errorText }) + "\n");
+  JSON.stringify({ stats, underway, charted, empty, more, calls, callControls, error: errorText }) + "\n");

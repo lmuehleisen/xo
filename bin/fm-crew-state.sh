@@ -244,7 +244,7 @@ fi
 # not treated as finished-and-safe.
 emit_ship_status_done() {  # [extra-detail]
   local extra=${1:-} reason
-  if reason=$(fm_dod_accept_ship_done "$KIND" "$(meta_value mode)" "$WT" "$(meta_value project)" "$LOG_LINE" "$STATE" "$ID" "$META"); then
+  if reason=$(fm_dod_accept_ship_done "$KIND" "$(fm_dod_task_mode "$META")" "$WT" "$(meta_value project)" "$LOG_LINE" "$STATE" "$ID" "$META"); then
     emit "done" status-log "$(status_line_note "$LOG_LINE")${extra:+${SEP}$extra}"
   fi
   emit blocked status-log "$reason"
@@ -318,7 +318,7 @@ BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
 pane_readable() {  # <target>
   case "$TASK_BACKEND" in
-    tmux) tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1 ;;
+    tmux) fm_backend_target_exists tmux "$1" ;;
     *) fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
   esac
 }

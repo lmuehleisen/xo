@@ -4,7 +4,15 @@ This document is the authoritative human-readable contract for the watcher arm P
 `bin/fm-arm-command-policy.mjs` is the single semantic owner.
 `bin/fm-arm-pretool-check.sh` is only the stable harness transport and output renderer.
 The tracked harness adapters forward command text without classifying it.
+Agy's native PreToolUse transport is `bin/fm-agy-hook.sh`, which forwards `toolCall.args.CommandLine` and translates a denial into Agy's JSON response while preserving ordinary permission review for allowed command shapes.
 `bin/fm-arm-command-policy.mjs` is also the sole owner of firstmate's shell classification: it exports the tokenizer and command-position analysis, which the sibling cd-guard seatbelt (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`) reuses instead of duplicating shell lexing.
+
+## Publish policy on the same transport
+
+The transport also carries a second, independent policy: `bin/fm-gh-publish-policy.mjs`, the `gh` publish guard plus the git identity and hook-bypass refusals, whose header owns its contract.
+It reuses this classifier's tokenizer, runs only when the command has a `gh` command word, a `git` command word with one of the refused spellings, or the publish judge's name or its overrides file, and is evaluated after the watcher policy.
+`--publish-only` evaluates it alone; `bin/fm-spawn.sh` registers that form for Claude workers on every project, and the Devin and agy permission layers call it through `bin/fm-command-policy-lib.sh`.
+Unlike the watcher policy, it fails closed: a command it must see is denied with code `publish-engine-unavailable` when the transport cannot run it (the header of `bin/fm-arm-pretool-check.sh` lists the cases).
 
 ## Purpose and boundary
 
@@ -49,7 +57,7 @@ The marker guard closes the static gap anyway because it is cheap and provable p
 Tripwire: if a third strict-superset gap is ever found after this marker generalization, that falsifies the "provable per encoding class" claim and the decision flips to Option B - drop the prefilter and always invoke the classifier.
 Deeper decode-required obfuscation beyond the coupled marker set stays the classifier's and the post-arm liveness guards' responsibility.
 
-Malformed or empty stdin, invalid JSON, missing `jq` for stdin transport, missing Node, a missing classifier, or an invalid classifier response fail open with exit 0 and no output.
+For the watcher policy, malformed or empty stdin, invalid JSON, missing `jq` for stdin transport, missing Node, a missing classifier, or an invalid classifier response fail open with exit 0 and no output.
 This transport behavior prevents a broken hook from denying every shell tool call.
 Malformed or unsupported shell syntax that contains a protected command is a semantic classification result and fails closed.
 

@@ -19,14 +19,16 @@
 #
 # This is the COMMON daemon entry for every backend. HOW it becomes a tracked
 # background process differs by harness/backend and is owned elsewhere:
-#   - Harnesses with a native in-pane tracked-background tool (e.g. claude, grok)
-#     run this directly via that tool, so the daemon inherits the captain pane's
-#     env and auto-discovers it.
-#   - Harnesses with NO native background mechanism (e.g. pi) run this THROUGH
+#   - grok, whose native in-pane tracked-background tool keeps the job alive,
+#     runs this directly via that tool, so the daemon inherits the captain
+#     pane's env and auto-discovers it.
+#   - Every other daemon-running harness (Pi runs no daemon) goes THROUGH
 #     bin/fm-afk-launch.sh, which creates a non-visible tracked terminal per
 #     backend (herdr tab/workspace, tmux detached session) and passes the
 #     captain pane in as FM_SUPERVISOR_TARGET so injection targets it, not the
-#     daemon's own new pane.
+#     daemon's own new pane. That includes
+#     claude, whose background-task manager can kill a long-running
+#     background job (see bin/fm-afk-launch.sh).
 # Do not wrap this in `nohup ... &`: Codex/herdr can reap fire-and-forget shell
 # children after the tool call returns, while a tracked background terminal stays
 # attached and has a real lifecycle.

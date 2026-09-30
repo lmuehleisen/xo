@@ -10,6 +10,8 @@
 #
 # Merge method on GitHub defaults to --squash when the caller passes none of
 # --squash, --merge, --rebase, or --method after the optional -- separator.
+# Legacy --method <merge|squash|rebase> (including =value) is translated to gh's
+# strategy flags.
 # A GitHub merge is refused unless every pre-merge condition holds, each read
 # live at merge time rather than taken from recorded metadata: the pull request
 # is open, not a draft, mergeable, free of conflicts, every unwaived check
@@ -55,10 +57,10 @@
 # applies on GitLab, where a merge already requires the head pipeline to have
 # succeeded. After gh returns success, GitHub's live state is read back and
 # accepted only when the pull request is merged or in the merge queue. gh's
-# GraphQL API supplies that queue-aware read; when that read fails, gh-axi's
-# own view still proves a landed merge, and every outcome it cannot prove
-# refuses, reporting the failed gh read and naming both failed reads when the
-# gh-axi view could not prove the outcome either.
+# GraphQL API supplies that queue-aware read; when that read fails, `gh pr view
+# --json` still proves a landed merge, and every outcome it cannot prove
+# refuses, naming both failed reads when the fallback view could not prove the
+# outcome either.
 # If the pull request remains open and the base branch has an effective
 # merge_queue rule, an attended refusal names the queue's configured merge
 # method and exact --attended-override -- --auto --<method> retry flags. While
@@ -75,7 +77,9 @@
 # queued is refused the same way and says auto-merge was armed with nothing
 # landed or queued yet, or, when the merge command itself failed, that auto-merge
 # was only requested; both are read from the caller's own arguments rather than
-# from the forge's prose.
+# from the forge's prose. The observed state is judged the same way whichever
+# read produced it, and a refusal built on the `gh pr view` fallback says the
+# merge queue could not be observed at all rather than implying an unqueued pull request.
 # Every refusal that follows a merge command which returned success quotes that
 # command's own output, marked as the forge's text and kept apart from this
 # script's verdict, including the refusal for an outcome that cannot be read;
@@ -101,13 +105,12 @@
 # unreadable row refuses before that command, so a captain approval must be
 # recorded as an `answer --release` before this entrypoint is invoked. While
 # an away record exists (a quiet-mode record is a present captain, so its
-# merges stay attended: bin/fm-afk-contract.sh mode) any green merge may
-# proceed under away authority:
-# the record's presence is the whole mechanical fact, and which merge the
-# captain's away words meant is the supervision session's reading
-# (bin/fm-branch-prompt.sh "Postures"). An unreadable record refuses rather
-# than being skipped, neither posture releases a captain hold, and away
-# authority lapses when the record is archived.
+# merges stay attended: bin/fm-afk-contract.sh mode), a merge for this task also
+# proceeds only if its meta yolo=on or its id is in that record's merge-grant
+# list; otherwise it is held for the captain return, whatever the captain's away
+# words say. An unreadable record refuses rather than being skipped. Neither
+# posture releases a captain hold, and the grant lapses when the record is
+# archived.
 # The authority read and synchronous forge command share the away record's
 # cross-subsystem lock, which bin/fm-afk-contract.sh owns, closing the common
 # live-owner TOCTOU; failure to take it refuses before the forge call. Async and
@@ -133,7 +136,7 @@
 # --remove-source-branch) are refused by default; --attended-override, parsed
 # before the optional -- separator, re-enables those forge flags for an
 # explicit captain instruction and never skips the live green check, the
-# away-record read, or a captain hold.
+# away-grant check, or a captain hold.
 #
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
 #
@@ -243,7 +246,7 @@ caller_has_merge_method() {
   local arg
   for arg in "$@"; do
     case "$arg" in
-      --squash|--merge|--rebase|--method|--method=*) return 0 ;;
+      --squash|-s|--merge|-m|--rebase|-r|--method|--method=*) return 0 ;;
     esac
   done
   return 1
@@ -260,9 +263,9 @@ caller_merge_method() {
       continue
     fi
     case "$arg" in
-      --squash) method=squash ;;
-      --merge) method=merge ;;
-      --rebase) method=rebase ;;
+      --squash|-s) method=squash ;;
+      --merge|-m) method=merge ;;
+      --rebase|-r) method=rebase ;;
       --method) pending=true ;;
       --method=*) method=${arg#--method=} ;;
     esac
@@ -365,6 +368,33 @@ if [ "$PROVIDER" = gitlab ]; then
 fi
 FM_PR_AWAY_POSTURE=false
 
+# Preserve the former wrapper's method spellings at the CLI boundary.
+# Validate before recording metadata or attempting a merge.
+if [ "$PROVIDER" = github ]; then
+  github_args=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --method|--method=*)
+        if [ "$1" = --method ]; then
+          [ "$#" -ge 2 ] || { echo 'error: --method requires merge, squash, or rebase' >&2; exit 1; }
+          shift
+          method=$1
+        else
+          method=${1#--method=}
+        fi
+        case "$method" in
+          merge|squash|rebase) github_args+=("--$method") ;;
+          *) echo 'error: --method requires merge, squash, or rebase' >&2; exit 1 ;;
+        esac
+        ;;
+      *) github_args+=("$1") ;;
+    esac
+    shift
+  done
+  set -- "${github_args[@]+"${github_args[@]}"}"
+fi
+
+# Task-derived paths are constructed only after the canonical ID validation.
 fm_backlog_directory_present "$STATE" "state directory" || {
   echo "error: PR merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
   exit 1
@@ -377,8 +407,8 @@ META="$STATE/$ID.meta"
 # branch reports the green PR and never merges (contract: bin/fm-lease-lib.sh;
 # no-op in homes without a branch actor). While the away-posture record exists
 # main is parked and this one action relocates to the branch, which then meets
-# exactly the same gates below as main would: green at its live head,
-# synchronous, under the record lock. This precedes
+# exactly the same gates below as main would: yolo or a merge grant, green at
+# its live head, synchronous, under the record lock. This precedes
 # reading the task record, because the wrong actor is refused for its role
 # whatever that record says.
 # shellcheck source=bin/fm-lease-lib.sh
@@ -862,11 +892,11 @@ EOF
   FM_PR_GITHUB_BASE=$base
 }
 
-# Read one live GitHub pull request view after gh returns. The selected
+# Read one live GitHub pull request view after gh pr merge returns. The selected
 # fields distinguish a landed pull request from a merge-queue entry and retain
-# the concrete state needed for a refusal. gh supplies the complete queue-aware
-# view; if that post-merge read becomes unavailable, gh-axi is the degradation
-# path that can prove only a landed merge. gh remains a pre-merge prerequisite.
+# the concrete state needed for a refusal. GraphQL supplies the complete
+# queue-aware view; `gh pr view --json` is the degradation path that can prove
+# a landed merge when that read fails. gh remains a pre-merge prerequisite.
 FM_PR_GITHUB_STATE=
 FM_PR_GITHUB_MERGED=
 FM_PR_GITHUB_QUEUED=
@@ -912,50 +942,50 @@ FIELDS
   FM_PR_GITHUB_QUEUE_OBSERVED=true
 }
 
-github_read_outcome_with_gh_axi() {
-  local output state
-  if ! output=$(gh-axi pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" 2>/dev/null); then
+github_read_outcome_with_gh_pr_view() {
+  local fields line
+  local total=0 named=0
+  local state='' base=''
+
+  if ! fields=$(gh pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
+    --json state,baseRefName \
+    --jq '"state=" + (.state // ""), "base=" + (.baseRefName // "")' \
+    2>/dev/null) || [ -z "$fields" ]; then
     return 1
   fi
-  if ! state=$(printf '%s\n' "$output" | awk '
-    $1 == "state:" { count++; value=$2 }
-    END { if (count == 1 && value != "") print value; else exit 1 }
-  '); then
+  while IFS= read -r line; do
+    total=$((total + 1))
+    case "$line" in
+      state=*) [ -z "$state" ] || return 1; state=${line#state=} ;;
+      base=*) [ -z "$base" ] || return 1; base=${line#base=} ;;
+      *) continue ;;
+    esac
+    named=$((named + 1))
+  done <<FIELDS
+$fields
+FIELDS
+  if [ "$named" -ne 2 ] || [ "$total" -ne 2 ] || [ -z "$base" ]; then
     return 1
   fi
-  case "$state" in
-    merged)
-      FM_PR_GITHUB_STATE=MERGED
-      FM_PR_GITHUB_MERGED=true
-      FM_PR_GITHUB_QUEUED=false
-      ;;
-    *)
-      FM_PR_GITHUB_STATE=$state
-      FM_PR_GITHUB_MERGED=false
-      FM_PR_GITHUB_QUEUED=unknown
-      ;;
-  esac
-  FM_PR_GITHUB_BASE=
+  case "$state" in OPEN|CLOSED|MERGED) ;; *) return 1 ;; esac
+  FM_PR_GITHUB_STATE=$state
+  FM_PR_GITHUB_MERGED=false
+  [ "$state" != MERGED ] || FM_PR_GITHUB_MERGED=true
+  FM_PR_GITHUB_QUEUED=unknown
+  FM_PR_GITHUB_BASE=$base
   FM_PR_GITHUB_QUEUE_OBSERVED=false
 }
 
 github_read_outcome() {
   if ! command -v gh >/dev/null 2>&1; then
-    if github_read_outcome_with_gh_axi && [ "$FM_PR_GITHUB_MERGED" = true ]; then
-      return 0
-    fi
     echo "error: could not read the GitHub pull request outcome after the merge attempt; PR metadata and merge poll remain recorded" >&2
     return 1
   fi
-  # Only a failed gh read falls back. A gh read that completes and reports the
-  # pull request as neither merged nor queued is a concrete outcome, not a
-  # missing one, so it keeps its own refusal. The gh-axi view cannot observe the
-  # merge queue, so it can only turn this into a proved merge or into a refusal.
+  # Only a failed GraphQL read falls back. A GraphQL read that completes and
+  # reports the pull request as neither merged nor queued is a concrete outcome.
   github_read_outcome_with_gh && return 0
-  if github_read_outcome_with_gh_axi && [ "$FM_PR_GITHUB_MERGED" = true ]; then
-    return 0
-  fi
-  echo "error: could not read the GitHub pull request outcome after the merge attempt: the gh read failed and the gh-axi view could not prove the outcome either; PR metadata and merge poll remain recorded" >&2
+  github_read_outcome_with_gh_pr_view && return 0
+  echo "error: could not read the GitHub pull request outcome after the merge attempt: the gh read failed and the fallback view could not prove the outcome either; PR metadata and merge poll remain recorded" >&2
   return 1
 }
 
@@ -1090,17 +1120,27 @@ require_released_captain_hold() {
 }
 
 FM_PR_MERGE_AUTHORITY=
-# The authority read. bin/fm-merge-authority-lib.sh owns what the away-posture
-# record's presence means; this function owns what a merge run may do about it,
-# so the answer the merge poll later tags its ledger row with is the same answer
-# resolved here. An unreadable record refuses rather than being skipped.
+# The gate on top of the shared authority read. bin/fm-merge-authority-lib.sh
+# owns what the away-posture record and the task's recorded yolo posture say;
+# this function owns what a merge run may do about it, so the answer the merge
+# poll later tags its ledger row with is the same answer gated here.
 resolve_merge_authority() {
   FM_PR_MERGE_AUTHORITY=
   if fm_merge_authority_resolve "$FM_HOME" "$STATE" "$META" "$ID"; then
     FM_PR_MERGE_AUTHORITY=$FM_MERGE_AUTHORITY
     return 0
   fi
-  echo "error: PR merge refused - the away-posture record could not be read; nothing was merged" >&2
+  case "$FM_MERGE_AUTHORITY_REASON" in
+    record-unreadable)
+      echo "error: PR merge refused - the away-posture record could not be read; nothing was merged" >&2
+      ;;
+    grants-unreadable)
+      echo "error: PR merge refused - the away-posture record's grants could not be read; nothing was merged" >&2
+      ;;
+    *)
+      echo "error: task $ID is held for the captain return" >&2
+      ;;
+  esac
   return 1
 }
 
@@ -1162,7 +1202,9 @@ persist_accepted_merge_authority() {
 
 # While away, a merge proceeds only when the base branch's rules prove no
 # merge queue, because a queued merge can land after its away authority
-# lapses with the record's archive. A repository whose
+# lapses with the record's archive; this holds regardless of which away
+# authority (a named merge grant or a standing yolo=on posture) let the merge
+# run at all. A repository whose
 # plan does not expose branch rules at all (GitHub's "Upgrade to GitHub Pro or
 # make this repository public" 403) proves that on its own, since such a
 # repository cannot have a merge_queue rule either; see

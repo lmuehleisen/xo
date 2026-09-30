@@ -2,6 +2,8 @@
 # Unit tests for bin/fm-quota-choose.sh.
 # Drives the public argv interface with a mocked quota-axi JSON source.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -53,7 +55,7 @@ FAKEBIN="$LAB/fakebin"
 CALLS="$LAB/calls"
 
 cleanup() {
-  rm -rf "$LAB"
+  fm_test_rm_tmproot "${LAB:-}"
 }
 trap cleanup EXIT
 

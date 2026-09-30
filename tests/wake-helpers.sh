@@ -183,11 +183,33 @@ case "${1:-}" in
   list-windows)
     [ -n "${FM_FAKE_TMUX_WINDOW:-}" ] && printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
     exit 0 ;;
+  list-panes)
+    # The exact pane inventory the presence probe reads for an index or pane-id
+    # supervisor target (firstmate:0, %0); a dead pane is simply absent from it.
+    [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 0
+    case " $* " in
+      *" -s "*) printf '0:0:%%0:@0:main\n' ;;
+      *) printf '%%0\n' ;;
+    esac
+    exit 0 ;;
   capture-pane)
     # Honor a single-line band capture (-S N -E M, both non-negative) for the
     # composer reader's non-bordered compatibility fallback; otherwise (e.g. its
     # structural full-pane scan or fm_pane_is_busy's "-S -40" tail) return the whole capture. -e is accepted and
     # ignored: this fake emits plain text, which the dim-stripper passes through.
+    # A turn a submitted line started shows a working footer to exactly one
+    # viewport capture (-S -0, the away daemon's turn-start proof read), then
+    # ends, so a later busy guard or delivery never waits on it.
+    case " $* " in
+      *" -S -0 "*)
+        if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ] && [ -e "$FM_FAKE_TMUX_CAPTURE.turn" ]; then
+          rm -f "$FM_FAKE_TMUX_CAPTURE.turn"
+          cat "$FM_FAKE_TMUX_CAPTURE" 2>/dev/null
+          printf 'Working... (esc to interrupt)\n'
+          exit 0
+        fi
+        ;;
+    esac
     _S=""; _E=""; shift
     while [ "$#" -gt 0 ]; do
       case "$1" in
@@ -212,8 +234,20 @@ case "${1:-}" in
         -l) shift; [ "$#" -gt 0 ] && {
           printf '%s\n' "$1" >> "${FM_FAKE_TMUX_SENT:-/dev/null}"
           # Reflect sent text into capture so pane_input_pending sees it as
-          # pending input (text in the composer).
-          [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ] && printf '%s\n' "$1" >> "$FM_FAKE_TMUX_CAPTURE"
+          # pending input. Typed onto a bare prompt row it lands on that row,
+          # as a composer draws it, and the row is remembered for Enter;
+          # otherwise it is appended as its own line.
+          if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ]; then
+            _last=$(tail -n 1 "$FM_FAKE_TMUX_CAPTURE" 2>/dev/null)
+            if { [ "$_last" = "$(printf '\342\235\257')" ] || [ "$_last" = "$(printf '\342\235\257 ')" ]; } \
+              && [ ! -e "$FM_FAKE_TMUX_CAPTURE.prompt" ]; then
+              printf '%s' "$_last" > "$FM_FAKE_TMUX_CAPTURE.prompt"
+              { sed '$d' "$FM_FAKE_TMUX_CAPTURE"; printf '\342\235\257 %s\n' "$1"; } > "$FM_FAKE_TMUX_CAPTURE.tmp" \
+                && mv -f "$FM_FAKE_TMUX_CAPTURE.tmp" "$FM_FAKE_TMUX_CAPTURE"
+            else
+              printf '%s\n' "$1" >> "$FM_FAKE_TMUX_CAPTURE"
+            fi
+          fi
         } ;;
         Enter)
           # Optionally swallow Enter (file-based flag) to test the retry path.
@@ -221,12 +255,20 @@ case "${1:-}" in
             rm -f "$FM_FAKE_TMUX_SWALLOW_FILE"
           else
             printf '[ENTER]\n' >> "${FM_FAKE_TMUX_SENT:-/dev/null}"
-            # Enter submits: clear the last line (the typed text) from the
-            # capture, simulating the composer being cleared on submit.
+            # Enter submits: clear the typed text from the capture, simulating
+            # the composer being cleared on submit, and start a turn unless
+            # FM_FAKE_TMUX_NO_TURN models a primary that never begins one.
             if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ] && [ -s "$FM_FAKE_TMUX_CAPTURE" ]; then
               _tmp=$(mktemp 2>/dev/null) || _tmp="${FM_FAKE_TMUX_CAPTURE}.tmp"
-              sed '$d' "$FM_FAKE_TMUX_CAPTURE" > "$_tmp" 2>/dev/null && mv -f "$_tmp" "$FM_FAKE_TMUX_CAPTURE"
+              if [ -e "$FM_FAKE_TMUX_CAPTURE.prompt" ]; then
+                { sed '$d' "$FM_FAKE_TMUX_CAPTURE"; cat "$FM_FAKE_TMUX_CAPTURE.prompt"; printf '\n'; } > "$_tmp" 2>/dev/null \
+                  && mv -f "$_tmp" "$FM_FAKE_TMUX_CAPTURE"
+                rm -f "$FM_FAKE_TMUX_CAPTURE.prompt"
+              else
+                sed '$d' "$FM_FAKE_TMUX_CAPTURE" > "$_tmp" 2>/dev/null && mv -f "$_tmp" "$FM_FAKE_TMUX_CAPTURE"
+              fi
               rm -f "$_tmp" 2>/dev/null
+              [ "${FM_FAKE_TMUX_NO_TURN:-0}" = 1 ] || : > "$FM_FAKE_TMUX_CAPTURE.turn"
             fi
           fi
           ;;
@@ -269,8 +311,27 @@ case "${1:-}" in
     for a in "$@"; do [ "$a" = "-p" ] && print=1; done
     [ "$print" = 1 ] && printf 'fakepane\n'
     exit 0 ;;
-  capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
-  list-windows) exit 0 ;;
+  capture-pane)
+    cat "$COMPOSER" 2>/dev/null
+    # A submitted line's turn shows to exactly one viewport capture, as in
+    # make_supercase's fake.
+    case " $* " in
+      *" -S -0 "*)
+        if [ -e "$COMPOSER.turn" ]; then
+          rm -f "$COMPOSER.turn"
+          printf 'Working... (esc to interrupt)\n'
+        fi
+        ;;
+    esac
+    exit 0 ;;
+  list-windows) printf 'win\n'; exit 0 ;;
+  list-panes)
+    # The pane inventory the presence probe reads for the supervisor target.
+    case " $* " in
+      *" -s "*) printf '0:0:%%0:@0:main\n' ;;
+      *) printf '%%0\n' ;;
+    esac
+    exit 0 ;;
   send-keys)
     shift
     text=""; is_enter=0; lit=0
@@ -289,6 +350,7 @@ case "${1:-}" in
       else
         [ -n "${FM_FAKE_SENT:-}" ] && printf '[ENTER]\n' >> "$FM_FAKE_SENT"
         write_composer ""
+        [ "${FM_FAKE_NO_TURN:-0}" = 1 ] || : > "$COMPOSER.turn"
       fi
     elif [ "$lit" = 1 ]; then
       [ "${FM_FAKE_SEND_FAIL:-0}" = 1 ] && exit 1

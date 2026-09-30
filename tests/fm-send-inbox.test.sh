@@ -11,7 +11,8 @@
 #   3. A re-send enqueues a NEW sequence and still never retypes a payload,
 #      so the terminal can never truncate, garble, or duplicate a steer.
 #   4. The composer pre-check is advisory: visibly pending text skips the ring
-#      with a notice, and the steer is still durably sent (exit 0).
+#      with a notice, and the steer is still durably sent (exit 0). A doorbell
+#      whose Enter is swallowed is reported and remembered, still exit 0.
 #   5. A failed doorbell is still a sent steer (exit 0, record durable): the
 #      watcher's re-ring ladder owns delivery from the record on.
 #   6. Carve-outs keep the typed plane: a leading "/" (any harness), a leading
@@ -39,10 +40,13 @@ SEND="$ROOT/bin/fm-send.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-send-inbox)
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
+fm_test_require_tmproot "$TMP_ROOT"
 
 # Stub tmux: logs literal typed text to FM_SEND_LOG and lets the submit and
 # composer paths reach clean verdicts. FM_FAKE_TMUX_COMPOSER=pending renders a
-# composer visibly holding text; FM_FAKE_TMUX_SEND_FAIL=1 fails send-keys.
+# composer visibly holding text; FM_FAKE_TMUX_COMPOSER=swallow renders it only
+# once text is typed, so every Enter is swallowed; FM_FAKE_TMUX_SEND_FAIL=1
+# fails send-keys.
 make_stubs() { # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -63,19 +67,23 @@ case "${1:-}" in
     done
     if [ "$literal" = 1 ]; then
       printf '%s\n' "${1:-}" >> "$FM_SEND_LOG"
+      : > "$FM_SEND_LOG.typed"
     fi
     exit 0 ;;
   display-message)
     for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
-    if [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
+    if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ]; then
+      cat "$FM_FAKE_TMUX_CAPTURE"
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ] \
+      || { [ "${FM_FAKE_TMUX_COMPOSER:-}" = swallow ] && [ -e "$FM_SEND_LOG.typed" ]; }; then
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
     exit 0 ;;
-  list-windows) printf 'fm-t1\n'; exit 0 ;;
+  list-windows) printf 'fm-t1\nwin\n'; exit 0 ;;
 esac
 exit 0
 SH
@@ -107,6 +115,7 @@ run_send() { # <case-dir> <err-file> [env...] -- <fm-send args...>
   done
   shift
   : >"$dir/send.log"
+  rm -f "$dir/send.log.typed"
   env PATH="$dir/fakebin:$PATH" \
     FM_ROOT_OVERRIDE="$dir/home" FM_HOME="$dir/home" FM_SEND_LOG="$dir/send.log" \
     FM_SEND_SETTLE=0 ${envs[@]+"${envs[@]}"} \
@@ -184,6 +193,40 @@ test_pending_composer_skips_ring_advisorily() {
   assert_contains "$(cat "$err")" "watcher will re-ring" \
     "the skip notice should point at the re-ring"
   pass "fm-send inbox: a visibly pending composer skips the ring, and the steer stays durably sent"
+}
+
+test_stranded_ring_is_reported() {
+  local dir err rc
+  dir=$(setup_case stranded)
+  err="$dir/send.err"
+  run_send "$dir" "$err" FM_FAKE_TMUX_COMPOSER=swallow -- t1 "steer into a settling composer"
+  rc=$?
+  expect_code 0 "$rc" "a stranded doorbell is still a durably sent steer"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "the steer was not recorded"
+  [ "$(grep -cF 'Firstmate instruction waiting' "$dir/send.log")" = 1 ] ||
+    fail "the doorbell should be typed exactly once:"$'\n'"$(cat "$dir/send.log")"
+  assert_contains "$(cat "$err")" "Enter did not submit it" \
+    "a stranded doorbell must be reported rather than passed off silently"
+  assert_contains "$(cat "$err")" "do not resend" \
+    "the stranded notice must not invite a duplicate steer"
+  [ -e "$dir/home/state/t1.inbox/.stranded" ] || fail "the stranded doorbell should be remembered for the watcher"
+  pass "fm-send inbox: a doorbell whose Enter was swallowed is reported and remembered, and the steer stays sent"
+}
+
+test_animation_styled_codex_draft_skips_ring() {
+  local dir err capture rc
+  dir=$(setup_case codex-animation-draft codex)
+  err="$dir/send.err"
+  capture="$dir/styled.txt"
+  printf '\033[0m\033[38;2;143;147;156m\033[48;2;65;69;76m⠁\033[0m\033[48;2;65;69;76m       \033[0m\r\n\033[0m\033[1m\033[48;2;65;69;76m›\033[0m\033[38;2;143;147;156m\033[48;2;65;69;76mreal draft!?\033[2m\033[48;2;65;69;76mAsk Codex to do anything\033[0m\033[48;2;65;69;76m  \033[0m\r\n\033[0m\033[48;2;65;69;76m      \033[0m\033[38;2;98;102;110m\033[48;2;65;69;76m⠠\033[0m\033[48;2;65;69;76m \033[0m\r\n' >"$capture"
+  run_send "$dir" "$err" FM_FAKE_TMUX_CAPTURE="$capture" -- t1 "preserve the draft"
+  rc=$?
+  expect_code 0 "$rc" "an animation-styled draft should leave the steer durably recorded"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "the steer was not recorded"
+  [ ! -s "$dir/send.log" ] || fail "an animation-styled draft should block the ring:"$'\n'"$(cat "$dir/send.log")"
+  assert_contains "$(cat "$err")" "doorbell skipped (composer visibly holds pending text)" \
+    "an animation-styled draft should produce the pending-composer skip"
+  pass "fm-send inbox: an animation-styled Codex draft blocks the ring"
 }
 
 test_failed_ring_is_still_sent() {
@@ -415,6 +458,8 @@ test_text_steer_rides_inbox
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence
 test_pending_composer_skips_ring_advisorily
+test_stranded_ring_is_reported
+test_animation_styled_codex_draft_skips_ring
 test_failed_ring_is_still_sent
 test_harness_invocations_stay_typed
 test_explicit_target_stays_typed

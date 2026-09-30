@@ -111,6 +111,20 @@ harness_marker() {
   # the same ordering hazard cursor documents above (see issue #3517). bin/fm-spawn.sh
   # additionally clears foreign markers at rovo's launch boundary as defense in depth.
   [ "${ATLASSIAN_AGENT_TYPE:-}" = "rovo" ] && { echo rovo; return; }
+  # agy (Antigravity CLI) 1.2.0 sets ANTIGRAVITY_LS_VERSION=cli-<version>,
+  # ANTIGRAVITY_PROJECT_ID, ANTIGRAVITY_TRAJECTORY_ID, ANTIGRAVITY_LS_ADDRESS,
+  # ANTIGRAVITY_SOURCE_METADATA, and JETSKI_APP_DATA_DIR=antigravity-cli on its
+  # tool subprocesses. JETSKI_APP_DATA_DIR is the one tested because it
+  # separates the CLI from the Antigravity IDE, which keeps its own state under
+  # ~/.gemini/antigravity rather than ~/.gemini/antigravity-cli.
+  # Whether agy scrubs an inherited CLAUDECODE is unknown, so this is ordered
+  # before the CLAUDECODE line for the same reason cursor, gemini, and rovo
+  # are: agy's own marker is unambiguous WHEN PRESENT, so testing it first is
+  # correct either way, and bin/fm-spawn.sh clears the foreign markers at agy's
+  # launch boundary as defense in depth. agy does NOT set GEMINI_CLI on those
+  # subprocesses, so it cannot be misread as the separate Google Gemini CLI
+  # adapter despite sharing the ~/.gemini config root.
+  [ "${JETSKI_APP_DATA_DIR:-}" = "antigravity-cli" ] && { echo agy; return; }
   [ "${ROVODEV_CLI:-}" = "1" ] && { echo rovo; return; }
   # omp (Oh My Pi) publishes NO harness-identity marker of its own: verified on
   # omp 18.1.11 that PI_CODING_AGENT is absent from the binary and that the
@@ -143,7 +157,7 @@ harness_marker() {
   # identified, and any rule that must be RELIABLE under grok has to test the hook
   # markers too (see .claude/settings.json Stop entries, docs/turnend-guard.md).
   [ "${GROK_AGENT:-}" = "1" ] && { echo grok; return; }
-  # codex, opencode, kimi, muse, agy, and devin publish no harness-identity marker at all, so
+  # codex, opencode, kimi, muse, and devin publish no harness-identity marker at all, so
   # they are never named here and are identified by ancestry alone. That is the
   # whole reason a foreign marker must not outrank ancestry: with markers winning
   # unconditionally, any retained CLAUDECODE would silently rename one of them.
@@ -232,11 +246,10 @@ harness_process_verdict() {  # <pid>
     # agy (Antigravity CLI) is a Go-compiled single binary whose process name
     # is exactly `agy` (verified, agy 1.2.0: `ps -o comm=` reports agy and
     # Herdr's process-info reports name agy with argv[0] agy). Anchored, never
-    # *agy*, so unrelated commands cannot be misread as this harness. agy
-    # publishes no harness-identity marker of its own (a live 1.2.0 TUI
-    # carries no AGY_* or ANTIGRAVITY_* variable; AGENT=1 seen there is an
-    # inherited launcher value, not an agy identity), so like muse it is
-    # detected by ancestry alone.
+    # *agy*, so unrelated commands cannot be misread as this harness. The agy
+    # TUI process itself carries no identity variable, but its tool subprocesses
+    # carry JETSKI_APP_DATA_DIR=antigravity-cli, which harness_marker reads; the
+    # two layers agree on the same harness, so detect_own keeps either verdict.
     agy) echo "comm agy"; return ;;
     devin) echo "comm devin"; return ;;
     node*|python*)

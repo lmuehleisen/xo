@@ -84,6 +84,7 @@ Every `/stow` invocation performs this complete pass, even when the session cont
    If it rejects the setting or a memory file, do not infer a default or silently continue.
    Report that concrete exception and do not call the session reset-safe.
 2. Read every current memory file completely: `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`.
+   Then run `bin/fm-stow-audit.sh snapshot` before the first edit, so this pass's removal audit in the verification step below has this pass's own before-state to diff against.
    Treat an absent local file as absent, not as an invitation to manufacture content.
    In a primary home, all three are curation inputs under their existing ownership rules.
    In a secondmate home, `data/captain-shared.md` is a read-only primary-owned input: count it, never edit it, and curate only the editable local files.
@@ -103,19 +104,29 @@ Every `/stow` invocation performs this complete pass, even when the session cont
    Where the optional pass horizon is enabled, first increment the unreinforced-pass counter of every dated entry step 4 did not reinforce - that increment is the pass tick - then judge each dated entry against both of its horizons and treat it as stale at whichever it reaches first.
    Re-validate a stale `aging` entry from current evidence and refresh its date, or archive it.
    Re-confirm a stale `perishable` entry against its named condition: still open means refresh the date, while resolved, expired, or no longer checkable means archive it in this pass.
+   Also run `bin/fm-stow-audit.sh referents` once during this step: it checks the backlog ids named in every `perishable` entry whatever the entry's age, because a named condition can resolve on day one and would otherwise ride its whole date horizon unexamined.
+   An entry it reports `resolved` must be rewritten from current evidence or archived with provenance in this pass, never carried forward unchanged and never plainly deleted, because deleting it loses the reason it existed.
+   An entry it reports `unknown` is unverified, not confirmed: never read `unknown` as still-open or as resolved, and refresh its date only when step 4's evidence rule independently allows it.
+   The check verifies only machine-checkable backlog ids, never arbitrary prose, and costs one bounded backlog read per unique named id, capped, at stow time only.
    Promote `perishable` to `aging` when its condition keeps proving durable past its expected life, and retier in place when a supersession changes an entry's lifetime.
    `pinned` is exempt from this automatic decay step entirely.
 6. Consolidate every editable memory file as needed, not only the file apparently related to a new finding.
    Prefer one concise current rule or authoritative pointer over duplicate prose.
    Archive completed incident and release chronology, stale versions and paths, transient task state, resolved alternatives, old metrics, and report-sized procedures; merge or remove only superseded claims and duplicates whose facts are preserved elsewhere.
    Never plainly remove a unique current fact: every such exit must archive it with provenance in the recoverable cold tier or relocate it to a live JIT owner or a consolidation merge that preserves the fact.
+   The removal audit in step 8 enforces exactly this rule.
 7. When the total is still over budget after decay and consolidation, make aggressive reduction the default, using editable files only and in this order: archive every editable stale, superseded, or low-utility entry that is eligible for archival; consolidate tighter; run the over-budget offload sweep below and autonomously relocate every eligible non-pinned conditional entry into an already-existing allowed owner only after that owner holds it; then, only when the convergence precondition below holds, archive eligible `aging` entries oldest-reinforced-first until within budget.
    A proposal, a future migration, or an accepted exception is never budget relief in this pass.
    Budget eviction considers only editable `aging` entries that carry a last-reinforced date and are not pending offload; a `<!--g-->` legacy-grace entry is ineligible until its grace cycle resolves, so eviction can neither cancel a promised grace cycle nor prefer just-validated entries over unvalidated ones.
    Convergence precondition: before evicting anything, total the eligible pool and check that archiving all of it would reach the budget; when even that cannot, skip the eviction rung entirely, archive nothing for budget reasons, and carry the concrete inability to the final step, naming the exempt pinned floor that crowds out the budget.
    Automatic processes never move a `pinned` entry: decay clocks, legacy grace cycles, oldest-first budget eviction, immediate budget archiving, and autonomous offload do not apply to it.
    The sole exception is relocation to a JIT owner after explicit, per-item captain approval under the offload flow below, and that entry remains in memory until its destination is live.
-8. Run `bin/fm-startup-memory-budget.sh report` again after the complete pass.
+8. Run `bin/fm-stow-audit.sh verify` after the last memory-file edit.
+   It diffs this pass's snapshot against the edited files, the cold archive, and every relocation destination recorded under the offload flow below, and refuses while any removed entry's fact is absent from all of them, naming each unaccounted entry; the script header owns the exact comparison rule.
+   This check is blocking, not advisory: do not write the completion receipt or call the session reset-safe while it refuses, because a stated no-plain-removal rule that nothing checks does not prevent a loss, and an advisory result would be skipped under the same pressure.
+   The audit refuses rather than archiving on your behalf, so the discrepancy is seen: reconcile a refusal by judging each named entry and archiving it with provenance or restoring it, never by paraphrasing it away until the check passes.
+   The audit proves a removed fact's words survived somewhere recoverable, not that surviving prose still means the same thing, so a rewrite that inverts a preference remains yours to catch in step 3's retention plan.
+9. Run `bin/fm-startup-memory-budget.sh report` again after the complete pass.
    Finish at or below the effective budget, or open a concrete captain decision before ending the pass.
    A secondmate must explicitly report `primary-owned-shared-file-alone-exceeds-budget` when the inherited shared file alone exceeds its allowance, because local curation cannot resolve it.
    Route that constraint to the primary owner and open one concrete captain decision at the primary owning level that names the shortfall, with exactly these options: raise the affected home's effective budget, or explicitly approve the primary owner trimming or offloading each named shared-file entry.
@@ -191,6 +202,7 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
 1. Reduce non-pinned material now.
    For each eligible non-pinned candidate, record its first line, source file, estimated tokens, one-line trigger, live destination, privacy and visibility verdict, and actual budget relief in the completion receipt.
    Autonomously relocate it only by adding it to an already-existing allowed JIT note, or by routing it through a project's established delivery path to an already-existing allowed project-level destination, then confirming that destination holds the quoted entry before removing the memory entry.
+   Record each confirmed destination with `bin/fm-stow-audit.sh relocated <destination-file>` as the entry leaves memory, so step 8's removal audit accounts the legitimate relocation instead of refusing it.
    A destination that needs creation, uncompleted project delivery, or any other future work is not live and cannot count as relief, so continue with the next archival or eviction rung instead of leaving an over-budget proposal pending.
 2. Propose pinned relocation only.
    For a pinned candidate, append a `proposed-offload` section with the same fields to the completion receipt, create or refresh one durable backlog item with `bin/fm-tasks-axi.sh add`, `bin/fm-tasks-axi.sh show <id> --full`, and `bin/fm-tasks-axi.sh update <id> --body-file <path>` as appropriate, then hold it through `bin/fm-captain-hold.sh hold`.
@@ -206,6 +218,7 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
 4. Remove only once live.
    The memory entry leaves its always-injected file only after the destination is live: the local skill exists with its verified line in the active home's resolved repository-local exclude file, or the project change has landed.
    Until then the entry stays, so knowledge is never in limbo between owners.
+   When that removal happens inside a stow pass, record the live destination with `bin/fm-stow-audit.sh relocated <destination-file>` for the same removal-audit accounting.
    Leave no pointer behind by default, and at most one line only when the destination's discoverability is genuinely doubtful.
 
 ## Knowledge sweep and routing
@@ -222,7 +235,7 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
      In a secondmate home, route a newly discovered shared preference to the main firstmate through marked status or a document pointer instead of editing the inherited file.
    - Project-intrinsic knowledge never goes into a project's `AGENTS.md` through this fleet: a crewmate edits those files only to correct factually wrong information (AGENTS.md section 6), so no ship task carries an addition.
      Keep the candidate in `data/learnings.md` or surface it in the completion receipt so the captain can extend the file by hand.
-   - Knowledge general to every Firstmate user belongs in this repo's shared tracked material through the normal branch, no-mistakes, PR, and captain-merge path.
+   - Knowledge general to every Firstmate user belongs in this repo's shared tracked material through this fork's normal branch, verification, and configured delivery path.
    - For task-scoped notes, inspect the item with `bin/fm-tasks-axi.sh show <id> --full`, classify the change as new, duplicate, superseding, or obsolete, then use a considered replacement body through `bin/fm-tasks-axi.sh update <id> --body-file <path>`.
      Use `--archive-body` when recoverability matters.
      Never append.
@@ -264,8 +277,9 @@ Report the outcome in plain captain-facing language with all of these facts:
 - each durable finding filed outside memory and its authoritative owner;
 - each archived entry's reason, each autonomous offload's live destination and actual relief, and, when a pinned candidate was proposed, the `proposed-offload` section with every candidate's fields;
 - every unresolved exception, including a primary-owned shared-file constraint in a secondmate home, and every concrete captain decision opened for an over-budget result;
+- the removal audit's clean result, and each entry the referent check surfaced with how it was reconciled;
 - each open record this pass filed or corrected, and each one it deliberately left alone with the judgment it is waiting on;
-- whether the session is safe to reset, only when all durable findings are captured, every open record this session held is filed or explicitly left with its reason, and the post-pass result is within budget with no exception or pending budget decision.
+- whether the session is safe to reset, only when all durable findings are captured, every open record this session held is filed or explicitly left with its reason, the removal audit passes, and the post-pass result is within budget with no exception or pending budget decision.
 
 State what reset-safe means in the same breath as the claim: nothing this session knew has been lost.
 It is never a claim that the home's durable records are correct, because this pass checks no record the session did not name.
@@ -287,6 +301,7 @@ Act on each home by its reported `transport`:
 - `agent` - send the marked request with `bin/fm-send.sh fm-<id> "<request>"` so the live secondmate performs its own `/stow`, including the uncaptured knowledge that exists only in its session.
   Ask it for the same completion receipt this skill defines, and read its reply from its status file or the document it points to, never from its chat.
 - `direct` - curate that local home's editable memory files yourself under the same retention plan, then re-run the cascade to confirm the after totals.
+  Run the same snapshot-before-edit, referent check, and blocking removal audit there by setting that home's `FM_HOME` on each `bin/fm-stow-audit.sh` call, because a directly curated home loses facts the same way this one does.
   `data/captain-shared.md` stays a read-only counted input there, exactly as it is in any secondmate home.
 - `deferred` - a remote home with no live agent. Its memory is accounted read-only and cannot be curated from here, because there is no generic remote write path for a home's own memory files.
   Report it as an unresolved exception and leave it to its next cascade.

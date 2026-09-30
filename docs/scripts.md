@@ -3,7 +3,7 @@
 The first mate drives these; interactive entrypoints work by hand too, while `*-lib.sh` files are sourced helpers.
 Each row is one purpose clause only: the script's own header comment is the authoritative description of its behavior, flags, and contracts, so read the header before first use.
 If you have changed away from the firstmate home in an interactive shell, invoke these scripts by absolute path through the repo's `bin/` directory; the scripts self-locate internally after they start.
-The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md](architecture.md#no-mistakes-gate-authority-boundary), while `docs/sessionstart-nudge.md` covers the silent session-open hook use; `fm-gate-refuse-lib.sh`'s header owns its exact contract.
+The retained compatibility gate lifecycle boundary for fleet lifecycle entrypoints reached from a legacy no-mistakes gate is summarized in [architecture.md](architecture.md#legacy-no-mistakes-gate-authority-boundary), while `docs/sessionstart-nudge.md` covers the silent session-open hook use; `fm-gate-refuse-lib.sh`'s header owns its exact contract.
 
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
@@ -19,7 +19,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-fleet-ledger.sh`     | Append the opt-in fleet activity ledger's records ([contract](fleet-ledger.md))      |
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
-| `fm-bearings-board.sh`   | Build and arm the stable interactive `/bearings lavish` fleet board                  |
+| `fm-bearings-board.sh`   | Build the stable read-only local HTML `/bearings lavish` fleet board                 |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Guarded self-update of firstmate and local or remote secondmate homes, reconciling redundant divergence and classifying every live mate left on the target commit for restart or fallback nudge |
 | `fm-secondmate-restart.sh` | Persist open conversational work, then restart eligible second mates or report the fallback outcome |
@@ -34,7 +34,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
 | `fm-brief.sh`            | Scaffold ship (explicit `--mode`, plus the project's registered `--forge`), scout, secondmate-charter, and Herdr-lab briefs, with Captain's intent and Firstmate spec subsections on ship/scout |
-| [`fm-dod-lib.sh`](../bin/fm-dod-lib.sh) | Own ship/scout worker role scope, ship definitions of done, the named-head reachability gate on ship `done:` acceptance, and the no-mistakes `--intent` contract |
+| [`fm-dod-lib.sh`](../bin/fm-dod-lib.sh) | Own ship/scout worker role scope, direct ship definitions of done, verification requirements, the named-head reachability gate on ship `done:` acceptance, and the opt-in no-mistakes pipeline contract |
 | `fm-brief-heading-lib.sh` | Single owner of reading a brief's sections, shared by the `--intent` contract, spawn and promotion validation, and `fm-dispatch-resolve.sh` |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-herdr-lab-viewer.py` | The pty engine behind `fm-herdr-lab.sh viewer`: one real foreground Herdr client on a non-zero window grid |
@@ -55,6 +55,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-kimi-turnend-hook.sh` | Surgically install or remove Kimi's guarded global crew turn-end hook                |
 | `fm-arm-pretool-check.sh` | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md) |
 | `fm-arm-command-policy.mjs` | Semantic owner of the watcher-arm PreToolUse policy (docs/arm-pretool-check.md)   |
+| `fm-gh-publish-policy.mjs` | Semantic owner of the PreToolUse publish policy: the `gh` publish guard and the git identity and hook-bypass refusals |
 | `fm-subagent-pretool-check.sh` | Primary-home delegation-shape PreToolUse guard (docs/subagent-guard.md) |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
 | `fm-home-seed.sh`        | Transactionally provision a local secondmate home and maintain `data/secondmates.md` |
@@ -63,6 +64,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | [`fm-project-origin-lib.sh`](../bin/fm-project-origin-lib.sh) | Accepted origin-form owner shared by both remote provisioning boundaries |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
 | `fm-git-strip-ai-trailers.sh` | Strip known AI commit trailers at commit-msg time and install that hook for a fleet launch |
+| `fm-publish-gate.sh`     | Gate public pushes and text: destination allowlist, old-commit refusal, identity, private denylist, and gitleaks |
+| `fm-publish-judge.sh`    | AI semantic review of public pushes and text after the gate's literal checks pass, failing closed when no judge answers |
+| `fm-install-gitleaks.sh` | Install the publish gate's pinned, verified gitleaks build                           |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
 | `fm-composer-lib.sh`     | Single fleet-wide owner of composer shapes, capability-aware screen classification, and verdicts |
@@ -88,7 +92,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-procevent-remote-reply.sh` | Relay the remote-secondmate status stream through non-destructive process-event deltas |
 | `fm-procevent-quota.sh`  | Wake Firstmate when tracked quota drops below a threshold, is exhausted, or cannot be polled |
 | `fm-procevent-when.sh`   | Fire a trust-bound deterministic action at most once when its registered condition holds, then wake with the outcome |
-| `fm-gate-refuse-lib.sh`  | Shared gate-context lifecycle boundary for real and lab homes                      |
+| `fm-gate-refuse-lib.sh`  | Compatibility gate-context lifecycle boundary for real and lab homes                  |
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
 | `fm-watch.sh`            | Singleton-safe watcher: absorb benign wakes, detect stalled local-secondmate wake queues, and exit on actionable ones |
@@ -97,10 +101,11 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away/quiet entry (same-turn record write, then read-back), exit, rollback, and any backend terminal lifecycle |
 | `fm-afk-return.sh`       | Own deterministic return shutdown, the return brief, catch-up evidence, and the firstmate-actionable blocker gate |
+| `fm-afk-sentinel.sh`     | Fork-only detached away watchdog: alarm on a lost fleet tmux server or a stopped away watcher |
 | `fm-supervisor-target-lib.sh` | Resolve the shared supervisor target and backend for the daemon and launcher       |
 | `fm-supervise-daemon.sh` | Presence-gated away-mode sub-supervisor: self-handle routine wakes, guard injection by the detected primary harness, escalate batched digests, alert on failed delivery |
 | `fm-crew-state.sh`       | Print one deterministic current-state line for a crew                                |
-| `fm-nm-run-lib.sh`       | Single owner of shared no-mistakes run-attribution primitives and rules             |
+| `fm-nm-run-lib.sh`       | Compatibility owner for attributing already-recorded legacy no-mistakes runs        |
 | `fm-tangle-lib.sh`       | Shared default-branch resolution and primary-checkout tangle classification          |
 | `fm-timeout-lib.sh`      | Single owner of hard-bounded command execution and its fallback watchdog |
 | `fm-timing-lib.sh`       | Single owner of the deferred network stage's per-step elapsed-time records, inert unless a run asks for them |

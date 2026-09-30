@@ -31,7 +31,8 @@ pass "Devin native identity; anchored liveness"
 [ "$(fm_control_interrupt_key devin)" = Escape ] || fail 'wrong interrupt key'
 [ "$(fm_control_interrupt_repeat devin)" = 2 ] || fail 'Devin needs double Escape'
 [ -z "$(fm_control_interrupt_clear_key devin)" ] || fail 'Devin must not erase a composer draft'
-[ "$(fm_control_exit_command devin)" = /quit ] || fail 'wrong exit command'
+# Fork: plain `exit`, live-verified; `/exit` fuzzy-matches `/revert`.
+[ "$(fm_control_exit_command devin)" = exit ] || fail 'wrong exit command'
 fm_control_harness_supports_kind devin ship || fail 'ship refused'
 fm_control_harness_supports_kind devin scout || fail 'scout refused'
 ! fm_control_harness_supports_kind devin secondmate || fail 'secondmate accepted'
@@ -77,6 +78,8 @@ pass "private config preserves user hooks; lifecycle and stale-generation reject
 # A user config that opts into both must still produce a worker config with no
 # commit attribution and no imported Claude Code hooks; other import choices
 # the user made survive.
+# Fork: this pins the base writer; the fork's reviewed decorator then restores
+# the input config's Claude import choice (tests/fm-devin-fork-harness.test.sh).
 printf '%s\n' '{"attribution":true,"read_config_from":{"claude":true,"cursor":false}}' > "$TMP_ROOT/opted-in.json"
 "$ROOT/bin/fm-devin-config.sh" "$state" worker "$gen" "$TMP_ROOT/opted-in.json" || fail 'config writer failed'
 jq -e '.attribution == false' "$config" >/dev/null \
@@ -114,13 +117,15 @@ fm_test_spawn_brief "$home" devin-worker
 if ! out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch" fm_test_run_spawn "$home" "$wt" "$fakebin" devin-worker "$proj" --scout --harness devin --model fusion-claude-fable-5-1-high-sidekick-swe-2-medium --effort xhigh 2>&1)
 then fail "spawn failed: $out"; fi
 launch=$(cat "$case_dir/launch")
-assert_contains "$launch" '--permission-mode dangerous --respect-workspace-trust false' 'autonomy/trust flags missing'
+# Fork: reviewed smart mode, never dangerous (tests/fm-devin-fork-harness.test.sh).
+assert_contains "$launch" '--permission-mode smart --respect-workspace-trust false' 'autonomy/trust flags missing'
 assert_contains "$launch" "--config '$home/state/devin-worker.devin-config.json'" 'private config missing'
 assert_contains "$launch" "--model 'fusion-claude-fable-5-1-high-sidekick-swe-2-medium'" 'Fusion model lost'
 assert_contains "$launch" 'encode launch-brief' 'typed launch envelope lost'
 case "$launch" in *--effort*|*--thinking*) fail 'independent effort reached Devin argv' ;; esac
 assert_grep 'effort=xhigh' "$home/state/devin-worker.meta" 'effort not recorded'
 assert_present "$home/state/devin-worker.devin-config.json" 'spawn did not wire hooks'
+assert_present "$home/state/devin-worker.devin-permission.json" 'reviewed policy not wired'  # Fork
 [ "$(fm_busy_classify tmux fake:w devin devin-worker "$home/state")" = 'busy fm-spawn' ] || fail 'launch not armed'
 if out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" devin-sm "$proj" --secondmate --harness devin 2>&1)
 then fail 'Devin secondmate launch accepted'; fi

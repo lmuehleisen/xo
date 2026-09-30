@@ -19,6 +19,7 @@ set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-job-orphan-reap)
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
+fm_test_require_tmproot "$TMP_ROOT"
 REAPER="$ROOT/bin/fm-remote-job-reap-orphans.sh"
 
 TRACKED_PIDS=()

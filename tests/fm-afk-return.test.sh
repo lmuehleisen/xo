@@ -129,6 +129,8 @@ test_return_gate_owns_remediation_and_reports_catchup_to_bearings() {
   rc=$?
   set -e
   [ "$rc" -eq 3 ] || fail "return begin should gate on a live blocker (rc=$rc): $out"
+  [ "$(printf '%s\n' "$out" | tail -1)" = 'fm-afk-return: away-mode alerts could not be delivered during the window (delivery wedged: fm away-mode inject WEDGED: 4555s undelivered)' ] \
+    || fail "the delivery wedge is not repeated as the last line of the return output: $out"
   gate="$dir/home/state/.afk-return-catchup"
   [ -s "$gate" ] || fail "return begin did not persist its fail-closed catch-up gate"
   assert_contains "$out" 'firstmate-actionable blocker: repair-task [key=synthetic-dependency]' "return output did not assign blocker remediation to Firstmate"
@@ -209,7 +211,65 @@ test_return_gate_owns_remediation_and_reports_catchup_to_bearings() {
 
   out=$(run_return "$dir" check) || fail "an already-clear repeated check should be idempotent: $out"
   [ ! -e "$gate" ] || fail "idempotent clear check recreated a gate"
+  case "$out" in *'delivery wedged'*) fail "a cleared wedge was repeated on a later return: $out" ;; esac
   pass "return catch-up owns live blocker remediation, reports itself to Bearings as content, preserves evidence once, and clears idempotently"
+}
+
+# The daemon's own unsent digest is cleared from the primary's input box once
+# away mode has stopped, so a stray Enter cannot submit it later.
+test_return_clears_owned_daemon_text_after_stop() {
+  local dir out
+  dir="$TMP_ROOT/owned-text"
+  install_runner "$dir"
+  cat > "$dir/bin/fm-supervise-daemon.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s afk=%s\n' "$*" "$([ -e "$FM_STATE_OVERRIDE/.afk" ] && echo on || echo off)" >> "$FM_HOME/clear.log"
+rm -f "$FM_STATE_OVERRIDE/.subsuper-inject-owned"
+SH
+  chmod +x "$dir/bin/fm-supervise-daemon.sh"
+  date +%s > "$dir/home/state/.afk"
+  printf 'text=digest\n' > "$dir/home/state/.subsuper-inject-owned"
+  out=$(run_return "$dir" begin) || fail "return with owned daemon text did not clear catch-up: $out"
+  [ "$(cat "$dir/home/clear.log" 2>/dev/null)" = 'clear-owned-input afk=off' ] \
+    || fail "return did not clear the daemon's owned text once, after stopping away mode: $(cat "$dir/home/clear.log" 2>/dev/null)"
+  : > "$dir/home/clear.log"
+  out=$(run_return "$dir" check) || fail "a repeated check failed: $out"
+  [ ! -s "$dir/home/clear.log" ] || fail "return ran the owned-text cleanup with no owned text recorded"
+  pass "return clears the away daemon's owned unsent text after stopping away mode"
+}
+
+# Daemon text the cleanup cannot confirm gone keeps catch-up gated until a
+# later check confirms it.
+test_return_gates_unconfirmed_owned_text_cleanup() {
+  local dir out rc
+  dir="$TMP_ROOT/owned-text-unconfirmed"
+  install_runner "$dir"
+  cat > "$dir/bin/fm-supervise-daemon.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_HOME/clear.log"
+[ -e "$FM_STATE_OVERRIDE/.clear-fails" ] && exit 1
+rm -f "$FM_STATE_OVERRIDE/.subsuper-inject-owned"
+SH
+  chmod +x "$dir/bin/fm-supervise-daemon.sh"
+  date +%s > "$dir/home/state/.afk"
+  printf 'text=digest\n' > "$dir/home/state/.subsuper-inject-owned"
+  : > "$dir/home/state/.clear-fails"
+  set +e
+  out=$(run_return "$dir" begin)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "an unconfirmed owned-text cleanup let catch-up clear (rc=$rc): $out"
+  assert_contains "$out" 'an unsent away-mode digest may still be in the primary input box' \
+    "the gated return did not name the unsent digest"
+  set +e
+  out=$(run_return "$dir" check)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a check with the cleanup still unconfirmed cleared catch-up (rc=$rc): $out"
+  rm -f "$dir/home/state/.clear-fails"
+  out=$(run_return "$dir" check) || fail "a confirmed cleanup did not clear catch-up: $out"
+  [ ! -e "$dir/home/state/.afk-return-catchup" ] || fail "a confirmed cleanup left the gate behind"
+  pass "return keeps catch-up gated until the away daemon's unsent text is confirmed gone"
 }
 
 test_explicit_reclassification_requires_durable_reason() {
@@ -930,6 +990,35 @@ test_return_brief_does_not_report_an_acked_watcher_down_marker_as_a_gap() {
   pass "the return brief does not report an already-acked watcher-down marker as an open gap"
 }
 
+test_return_brief_reports_away_watchdog_findings() {
+  local dir out dead
+  dir="$TMP_ROOT/brief-watchdog"
+  install_runner "$dir"
+  cp "$ROOT/bin/fm-afk-sentinel.sh" "$dir/bin/"
+  contract_in "$dir" enter >/dev/null 2>&1 || fail "could not write the away-posture record"
+  touch "$dir/home/state/.last-watcher-beat"
+  printf 'the fleet tmux server (pid 4242, socket /tmp/fleet.sock) stopped; detected 2026-09-25T03:53:04Z\n' > "$dir/home/state/.afk-sentinel-alarm"
+  sh -c 'exit 0' &
+  dead=$!
+  wait "$dead"
+  printf 'pid=%s\nidentity=gone\n' "$dead" > "$dir/home/state/.afk-sentinel"
+  : > "$dir/home/state/.fake-drain"
+  out=$(run_return "$dir" begin) || fail "a clean fleet with watchdog findings should still clear the gate: $out"
+  assert_contains "$out" 'GAP: the away watchdog found the fleet tmux server (pid 4242, socket /tmp/fleet.sock) stopped; detected 2026-09-25T03:53:04Z' "the watchdog finding was not reported as a gap"
+  assert_contains "$out" 'GAP: the away watchdog was not running at return' "a dead watchdog was not reported as a gap"
+  assert_not_contains "$out" 'no detected gap' "a watchdog finding was reported as a clean window"
+  [ ! -e "$dir/home/state/.afk-sentinel-alarm" ] || fail "the watchdog marker survived a clean catch-up"
+  dir="$TMP_ROOT/brief-watchdog-absent"
+  install_runner "$dir"
+  cp "$ROOT/bin/fm-afk-sentinel.sh" "$dir/bin/"
+  contract_in "$dir" enter >/dev/null 2>&1 || fail "could not write the away-posture record"
+  touch "$dir/home/state/.last-watcher-beat"
+  : > "$dir/home/state/.fake-drain"
+  out=$(run_return "$dir" begin) || fail "a clean fleet with no watchdog record should still clear the gate: $out"
+  assert_contains "$out" 'GAP: the away watchdog was not running at return' "a window whose watchdog never started was not reported as a gap"
+  pass "the return brief names what the away watchdog found stopped, and when, reports a dead or never-started watchdog, and clears the marker after catch-up"
+}
+
 test_return_brief_reports_only_an_open_downtime_episode_as_a_gap() {
   local dir out token
   # A wake mid-handling is the ordinary open episode at a return during
@@ -1353,6 +1442,8 @@ test_missing_final_archive_keeps_retained_contract_gated() {
 }
 
 test_return_gate_owns_remediation_and_reports_catchup_to_bearings
+test_return_clears_owned_daemon_text_after_stop
+test_return_gates_unconfirmed_owned_text_cleanup
 test_explicit_reclassification_requires_durable_reason
 test_captain_decision_does_not_masquerade_as_firstmate_blocker
 test_evidence_publication_failure_preserves_wake_for_redrain
@@ -1377,6 +1468,7 @@ test_statusful_leftover_record_lets_catchup_clear
 test_return_guard_refuses_while_the_record_exists
 test_return_brief_health_leads_with_a_gap
 test_return_brief_does_not_report_an_acked_watcher_down_marker_as_a_gap
+test_return_brief_reports_away_watchdog_findings
 test_return_brief_reports_only_an_open_downtime_episode_as_a_gap
 test_return_brief_reports_an_engine_latch_in_the_window
 test_return_brief_keeps_recovered_trip_when_next_append_is_lost

@@ -8,6 +8,12 @@
 # Current generic wire form:
 #   U+2063 FIRSTMATE_OP: v1 <kind>: <body>
 #
+# Construction always emits the leading U+2063. Parsing also accepts the same
+# header without it at byte 0, because Claude Code 2.1.277 and later remove
+# invisible characters from every submitted prompt, including the argv launch
+# prompt, so a marked input reaches that transcript mark-less. The exact
+# version, a current kind, and a non-empty body are still required.
+#
 # The landed U+2063 + "FIRSTMATE_OP: " prefix is permanent compatibility.
 # The version and kind header make current inputs structurally typed without
 # deriving provenance from body prose. The established from-firstmate routing
@@ -31,6 +37,9 @@
 #   Doorbell: FM_OPERATIONAL_DOORBELL_PREFIX <absolute physical record path>
 #             FM_OPERATIONAL_DOORBELL_SUFFIX, one printable-ASCII line whose
 #             leading ": " is the shell no-op, as for the steering doorbell.
+#   Opened:   a successful `open` also leaves <record-dir>/.opened.<name>.msg,
+#             pruned with the records, so a producer can tell that a record's
+#             doorbell reached a turn that read it (fm_operational_record_opened).
 # Verification has two strengths: fm_operational_doorbell_record_kind checks only
 # the named record, which presentation-only consumers mirror (the Claude Code
 # Calm mod), while fm_operational_doorbell_kind also requires the record to sit in
@@ -56,6 +65,7 @@ FM_OPERATIONAL_MARK=$'\xE2\x81\xA3'
 FM_OPERATIONAL_PREFIX="${FM_OPERATIONAL_MARK}FIRSTMATE_OP: "
 FM_OPERATIONAL_VERSION=v1
 FM_OPERATIONAL_HEADER_PREFIX="${FM_OPERATIONAL_PREFIX}${FM_OPERATIONAL_VERSION} "
+FM_OPERATIONAL_UNMARKED_HEADER_PREFIX="FIRSTMATE_OP: ${FM_OPERATIONAL_VERSION} "
 FM_OPERATIONAL_KINDS='session-start watcher turn-end-guard away-supervisor launch-brief branch-outcome'
 
 # Compatibility name retained for the away-mode owner and its tests.
@@ -93,14 +103,29 @@ fm_operational_input_construct() {  # <kind> <body> <result-var>
   fm_operational_input_encode "$kind" "$body" "$result_var"
 }
 
+# The header remainder after either the marked or the mark-less current header
+# prefix, which must begin the message; fails otherwise.
+fm_operational_header_remainder() {  # <message> <result-var>
+  local message=${1-} result_var=${2-}
+  case "$message" in
+    "$FM_OPERATIONAL_HEADER_PREFIX"*)
+      printf -v "$result_var" '%s' "${message#"$FM_OPERATIONAL_HEADER_PREFIX"}"
+      ;;
+    "$FM_OPERATIONAL_UNMARKED_HEADER_PREFIX"*)
+      printf -v "$result_var" '%s' "${message#"$FM_OPERATIONAL_UNMARKED_HEADER_PREFIX"}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 fm_operational_generic_kind() {  # <message> <result-var>
   local message=${1-} result_var=${2-} remainder parsed_kind body
   [ -n "$result_var" ] || return 2
-  case "$message" in
-    "$FM_OPERATIONAL_HEADER_PREFIX"*': '?*) ;;
+  fm_operational_header_remainder "$message" remainder || return 1
+  case "$remainder" in
+    *': '?*) ;;
     *) return 1 ;;
   esac
-  remainder=${message#"$FM_OPERATIONAL_HEADER_PREFIX"}
   parsed_kind=${remainder%%': '*}
   fm_operational_kind_is_current "$parsed_kind" || return 1
   body=${remainder#"${parsed_kind}: "}
@@ -128,7 +153,8 @@ fm_operational_input_body() {  # <current-message> <result-var>
   local message=${1-} result_var=${2-} current_kind parsed_body
   [ -n "$result_var" ] || return 2
   if fm_operational_generic_kind "$message" current_kind; then
-    parsed_body=${message#"${FM_OPERATIONAL_HEADER_PREFIX}${current_kind}: "}
+    fm_operational_header_remainder "$message" parsed_body || return 1
+    parsed_body=${parsed_body#"${current_kind}: "}
     printf -v "$result_var" '%s' "$parsed_body"
     return 0
   fi
@@ -237,7 +263,7 @@ fm_operational_record_prune() {  # <record-dir>
     stat_cmd=(stat -c '%Y %n')
   fi
   cutoff=$(( $(date +%s) - FM_OPERATIONAL_RECORD_RETENTION_DAYS * 86400 ))
-  find "$1" -maxdepth 1 -type f \( -name '*.msg' -o -name '.record.*' \) \
+  find "$1" -maxdepth 1 -type f \( -name '*.msg' -o -name '.record.*' -o -name '.opened.*' \) \
     -exec "${stat_cmd[@]}" {} + 2>/dev/null | while read -r mtime path; do
     case "$mtime" in ''|*[!0-9]*) continue ;; esac
     if [ "$mtime" -lt "$cutoff" ]; then printf '%s\0' "$path"; fi
@@ -270,6 +296,20 @@ fm_operational_record_write() {  # <state-dir> <kind> <body> <doorbell-var>
   fm_operational_record_prune "$dir"
   printf -v "$result_var" '%s%s/%s%s' "$FM_OPERATIONAL_DOORBELL_PREFIX" "$abs" "$name" \
     "$FM_OPERATIONAL_DOORBELL_SUFFIX"
+}
+
+# The marker a successful `open` leaves beside <record-path>.
+fm_operational_record_opened_marker() {  # <record-path> <result-var>
+  local record=${1-}
+  [ -n "${2-}" ] && [ -n "$record" ] || return 2
+  printf -v "$2" '%s/.opened.%s' "${record%/*}" "${record##*/}"
+}
+
+# Whether this home's `open` has read <record-path>.
+fm_operational_record_opened() {  # <record-path>
+  local opened_path
+  fm_operational_record_opened_marker "${1-}" opened_path || return 1
+  [ -e "$opened_path" ]
 }
 
 # The record path a well-formed doorbell names; no filesystem access.
@@ -309,7 +349,14 @@ fm_operational_record_kind() {  # <record-path> <result-var>
   [ -n "$result_var" ] || return 2
   [ -f "$record" ] || return 1
   record_content=$(cat "$record" 2>/dev/null && printf x) || return 1
-  fm_operational_generic_kind "${record_content%x}" "$result_var"
+  record_content=${record_content%x}
+  # The owner always writes a record with its U+2063 mark, so the mark-less header
+  # the generic parse also accepts never backs a doorbell.
+  case "$record_content" in
+    "$FM_OPERATIONAL_PREFIX"*) ;;
+    *) return 1 ;;
+  esac
+  fm_operational_generic_kind "$record_content" "$result_var"
 }
 
 # A doorbell whose named record exists and holds a current generic envelope.
@@ -366,7 +413,7 @@ Current construction kinds:
 The from-firstmate kind uses its established live-charter-compatible carrier.
 A record-backed doorbell counts as operational input only when the record it
 names holds a current generic envelope; `open` also requires that record to be
-in this home's own state/operational-inbox.
+in this home's own state/operational-inbox, and marks it opened for its producer.
 EOF
 }
 
@@ -420,6 +467,9 @@ fm_operational_main() {
         "$state" output || return 1
       input=$(cat "$argument" 2>/dev/null && printf x) || return 1
       fm_operational_input_body "${input%x}" output || return 1
+      # Best effort: the opened marker is delivery evidence for the producer,
+      # never a condition of reading the record.
+      fm_operational_record_opened_marker "$argument" input && : > "$input" 2>/dev/null
       printf '%s' "$output"
       ;;
     *)

@@ -54,6 +54,9 @@ case "${1:-}" in
       if [ "$prev" = -t ]; then session=$arg; break; fi
       prev=$arg
     done
+    # Real tmux reads a leading `=` as an exact session-name match, which the
+    # presence probe relies on.
+    session=${session#=}
     while IFS= read -r recorded; do
       [ -n "$recorded" ] || continue
       if [ -z "$session" ]; then

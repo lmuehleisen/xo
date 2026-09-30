@@ -367,19 +367,20 @@ EOF
   pass "fenced and indented Captain lines are not authorized intent"
 }
 
-# The draft check the DoD hands a worker must be the gh-axi path that rule 3 of
-# every ship brief requires for GitHub operations, never raw gh (issue 5325).
-test_pr_based_dod_draft_check_uses_gh_axi() {
+# The draft check the DoD hands a worker must be the gh path that rule 3 of every
+# ship brief requires for GitHub operations in this fork, never gh-axi, which the
+# fork does not require (README "Personal fork: what differs").
+test_pr_based_dod_draft_check_uses_gh() {
   local mode out
   for mode in direct-PR no-mistakes; do
     out="$TMP_ROOT/dod-$mode.md"
     fm_dod_block "$mode" dod-draft-task > "$out"
-    assert_no_grep 'gh pr view' "$out" "$mode: DoD must not document a raw gh draft check"
+    assert_no_grep 'gh-axi' "$out" "$mode: DoD must not require gh-axi"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'confirm it is not a draft (`gh-axi pr view <number>` must print `draft: no`' "$out" \
-      "$mode: DoD must read the draft state through gh-axi"
+    assert_grep 'confirm it is not a draft (`gh pr view <url> --json isDraft --jq .isDraft` must print false)' "$out" \
+      "$mode: DoD must read the draft state through gh"
   done
-  pass "PR-based DoD draft check uses gh-axi"
+  pass "PR-based DoD draft check uses gh"
 }
 
 test_scout_done_is_not_gated
@@ -399,6 +400,6 @@ test_local_only_detached_head_is_refused
 test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
-test_pr_based_dod_draft_check_uses_gh_axi
+test_pr_based_dod_draft_check_uses_gh
 
 echo "all fm-dod-lib tests passed"

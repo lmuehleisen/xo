@@ -260,7 +260,8 @@ clear_delivery_artifacts() {
     "$STATE/.subsuper-escalations" \
     "$STATE/.subsuper-escalations.since" \
     "$STATE/.subsuper-inject-wedged" \
-    "$STATE/.subsuper-unknown-acked"
+    "$STATE/.subsuper-unknown-acked" \
+    "$STATE/.afk-sentinel-alarm"
 }
 
 # The lifecycle retention reasons the gate kept, one per line, empty when the
@@ -322,7 +323,7 @@ return_guard() {
 # --- supervisor health, snapshotted before anything is shut down ------------
 
 health_snapshot() {  # <evidence-file>
-  local evidence=$1 beat_age state lines="" note=""
+  local evidence=$1 beat_age state lines="" note="" finding
   beat_age=$(fm_path_age "$STATE/.last-watcher-beat")
   if [ -e "$STATE/.watcher-down" ]; then
     # The marker survives past its episode in an acked:* state
@@ -349,6 +350,20 @@ GAP: the away daemon was not running at return (the away flag stood with no live
   if [ "$beat_age" -ge "$RETURN_GRACE" ]; then
     lines="$lines
 GAP: the watcher beat was ${beat_age}s old at return (grace ${RETURN_GRACE}s)"
+  fi
+  # Fork-only: the detached away watchdog (bin/fm-afk-sentinel.sh). It must be
+  # running while the record stands; stop it before reading its findings so none
+  # lands after this one-time snapshot.
+  if [ -x "$SCRIPT_DIR/fm-afk-sentinel.sh" ] && fm_afk_contract_present "$STATE"; then
+    "$SCRIPT_DIR/fm-afk-sentinel.sh" status >/dev/null 2>&1 || lines="$lines
+GAP: the away watchdog was not running at return"
+    "$SCRIPT_DIR/fm-afk-sentinel.sh" stop >/dev/null 2>&1 || true
+  fi
+  if [ -s "$STATE/.afk-sentinel-alarm" ]; then
+    while IFS= read -r finding; do
+      [ -n "$finding" ] && lines="$lines
+GAP: the away watchdog found $finding"
+    done < "$STATE/.afk-sentinel-alarm"
   fi
   if [ -s "$STATE/.subsuper-inject-wedged" ]; then
     lines="$lines
@@ -755,6 +770,17 @@ EOF
       append_evidence lifecycle 'away-mode shutdown failed; lifecycle state preserved for retry' "$evidence"
     fi
   fi
+  # The daemon clears its own unsent digest as it stops; this repeats that for a
+  # daemon that died first, so a stale escalation cannot be submitted later.
+  # Text that may still be there keeps catch-up gated until a check confirms
+  # the input box no longer holds it.
+  if [ -e "$STATE/.subsuper-inject-owned" ] && [ ! -e "$STATE/.afk" ] \
+    && ! FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-supervise-daemon.sh" clear-owned-input; then
+    append_evidence lifecycle 'an unsent away-mode digest may still be in the primary input box; clear that input box without sending it, then run bin/fm-afk-return.sh check' "$evidence"
+    lifecycle_ok=0
+  else
+    remove_evidence_prefix lifecycle 'an unsent away-mode digest may still be' "$evidence" || lifecycle_ok=0
+  fi
 
   if drained=$("$SCRIPT_DIR/fm-wake-drain.sh" 2> "$drain_err"); then
     remove_evidence lifecycle 'durable wake drain failed; retry catch-up before ordinary work' "$evidence" || lifecycle_ok=0
@@ -852,6 +878,10 @@ EOF
   else
     remove_evidence_prefix lifecycle 'held set unreadable:' "$evidence" || lifecycle_ok=0
   fi
+  # A delivery wedge is repeated as the last line of the output (main), so no
+  # truncated read of the brief can lose it.
+  RETURN_WEDGE_TAIL=$(grep "^evidence$(printf '\t')health$(printf '\t')" "$evidence" 2>/dev/null \
+    | sed -n 's/.*\(delivery wedged: .*\)$/\1/p' | tail -1)
   if [ "$lifecycle_ok" -ne 1 ] || grep -q "^blocker$(printf '\t')" "$blockers"; then
     write_gate "$evidence" "$blockers" || { rm -f "$evidence" "$blockers" "$drain_err"; return 1; }
     printf 'fm-afk-return: catch-up must finish before the captain request\n' >&2
@@ -917,10 +947,13 @@ main() {
     case "$contract_epoch" in ''|*[!0-9]*) contract_epoch= ;; esac
   fi
   write_pending_seed "$window_epoch" "$contract_epoch" || { fm_lock_release "$LOCK"; trap - EXIT; return 1; }
+  RETURN_WEDGE_TAIL=
   return_reconcile
   rc=$?
   fm_lock_release "$LOCK"
   trap - EXIT
+  [ -z "$RETURN_WEDGE_TAIL" ] \
+    || printf 'fm-afk-return: away-mode alerts could not be delivered during the window (%s)\n' "$RETURN_WEDGE_TAIL"
   return "$rc"
 }
 

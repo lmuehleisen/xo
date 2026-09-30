@@ -20,11 +20,17 @@
 # to every worker so a worker never starts a second server on another interface.
 # The primary passes its frozen home-session decision into a newly launched
 # Secondmate; see docs/trace-context.md.
-# Primary config/claude-permission-mode is a captain-wide safety preference
-# (bypass or auto for every claude launch), so it flows down too and a
-# secondmate's own claude crewmates launch on the same permission posture.
+# Primary config/crew-permissions is a captain-wide safety preference
+# (auto or manual review for every claude, codex, and agy launch), so it flows
+# down too and a secondmate's own crewmates launch on the same review posture.
 # Primary config/keep-ai-trailers is a home-wide commit-attribution choice, so
 # a secondmate's own crewmates keep AI co-author trailers too.
+# The primary's config/publish-guard files (identity, allowlist, denylist,
+# poison-commits, upstream, owners) flow down so a secondmate home's pushes and
+# gh text pass the same publish gate from its first launch; they are read by
+# bin/fm-publish-gate.sh at each use, so they are never inlined into a re-read
+# instruction. The machine-local gh path and the private-verdict cache stay
+# per home.
 # It also pushes
 # the one primary-authoritative shared captain-preference file,
 # data/captain-shared.md, into each secondmate home's data/ as a read-only copy.
@@ -79,7 +85,17 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context launch-env-allowlist claude-permission-mode lavish-axi-host keep-ai-trailers}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context launch-env-allowlist crew-permissions lavish-axi-host keep-ai-trailers publish-guard/identity publish-guard/allowlist publish-guard/denylist publish-guard/poison-commits publish-guard/upstream publish-guard/owners}"
+
+# Inherited items a script reads at each use rather than an agent at intake.
+# They are never inlined into a config re-read instruction: there is nothing
+# for the agent to re-read, and their private contents stay out of agent text.
+fm_config_inherit_item_script_read() {  # <item>
+  case "$1" in
+    publish-guard/*) return 0 ;;
+  esac
+  return 1
+}
 
 # Items whose value is a home-SESSION enablement decision rather than durable
 # local configuration. They are inherited at the launch convergence point, where
@@ -679,6 +695,7 @@ FM_CONFIG_REREAD_FRAMING='These inherited config files changed. Re-read and appl
 # allowlisted here and must never be inlined into a reread instruction.
 fm_config_reread_is_allowlisted_item() {
   local item=$1 candidate
+  ! fm_config_inherit_item_script_read "$item" || return 1
   for candidate in $FM_INHERITABLE_CONFIG; do
     [ "$candidate" = "$item" ] && return 0
   done
@@ -692,6 +709,7 @@ fm_config_reread_changed_items() {
   local report=$1 item status
   [ -n "$report" ] && [ -f "$report" ] || return 0
   for item in $FM_INHERITABLE_CONFIG; do
+    ! fm_config_inherit_item_script_read "$item" || continue
     status=$(awk -F '\t' -v item="$item" '$1 == item { print $2; exit }' "$report" 2>/dev/null) || status=""
     [ "$status" = pushed ] || continue
     printf '%s\n' "$item"

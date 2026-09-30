@@ -99,37 +99,21 @@
 # this home or any locally registered Firstmate home may name the same live path
 # in its worktree= or home=. One live path with two task records is the reuse
 # collision itself, whichever record is stale.
-# That scan alone cannot prove THIS record is the current owner, because the task
-# that took the slot next may leave no record it can reach - its own worker may
-# have exited and its record been cleaned up, or it may live in a home this
-# machine does not register - which is how a released-then-reassigned slot was
-# returned out from under a live worker (observed 2026-09-07). So teardown also
-# reads the slot's own owner claim, written by bin/fm-spawn.sh at the moment the
-# slot is taken and dropped here once it is genuinely returned; bin/fm-wake-lib.sh
-# owns the claim, its location, and its states. A claim naming another task is
-# proof of reassignment: the slot is no longer this task's, so teardown warns,
-# names the claimant, and then finishes only this task's own cleanup - endpoint,
-# status, records, checks, backlog - while every step that would read or touch
-# that slot is skipped: no process kill under it, no dirty or landed-work
-# inspection of it, no branch or hook removal in it, no Treehouse return, and
-# never the other task's claim. Skipping the inspection discards nothing of this
-# task's: whatever unlanded work it had in that slot was already destroyed when
-# the pool handed the slot on. Refusing instead would strand the record, because
-# bin/fm-backend.sh's endpoint validation refuses an empty or missing worktree=
-# unconditionally, so there is no line an operator could clear to get past it.
-# A claim that cannot be read proves nothing either way and refuses; inspect or
-# repair the claim file at the printed path and re-run - never remove it, since
-# an absent claim proceeds and would return a slot that may be another task's. An
-# absent claim - a slot taken before claims existed, or already returned - keeps
-# exactly the record-scan protection it had before, because refusing it would
-# strand every task in flight across that change on no evidence at all.
-# Why Treehouse's own state cannot answer this for crewmate slots, and why the
-# claim file sits on top of it, is owned by bin/fm-wake-lib.sh's slot-owner
-# claim comment.
+# It then proves the allocator still agrees: Treehouse's own treehouse-state.json
+# entry for the slot must be leased to this task's "<home>:<task-id>" holder
+# (spawn's --lease-holder; the home is compared by resolved path with FM_HOME
+# and with the home owning the task's state directory). A slot leased to any
+# other holder, or leased with none, refuses; a missing, malformed, or ambiguous
+# entry refuses. An unleased entry is a pre-lease legacy claim and proceeds
+# on record exclusivity alone, since spawn already refuses to allocate in a
+# project while any such claim remains (bin/fm-worktree-claims-lib.sh).
+# The same proof covers a secondmate home and every descendant home or slot,
+# where bin/fm-home-seed.sh's bare "<task-id>" holder also counts as the home's
+# own. Any recorded path inside a Treehouse pool whose project record does not
+# identify that pool refuses outright rather than skipping the proof.
 # The recorded endpoint's exact task identity and the record's spawn incarnation
-# are validated separately
-# before cleanup. Its current working directory is only incidental process
-# state: the same worker remains the owner after changing directory, so cwd can
+# are validated separately before cleanup. Its current working directory is only
+# incidental process state: the same worker remains the owner after changing directory, so cwd can
 # never veto teardown of that exact recorded endpoint.
 # The scan and destructive return hold a project-identity lock in the local root
 # Firstmate home's state directory, as resolved by bin/fm-wake-lib.sh's
@@ -140,11 +124,23 @@
 # through metadata publication, closing the publication
 # gap; forced secondmate teardown takes it and runs the same checks for every
 # descendant Treehouse slot before touching any child.
-# These refusals are not relaxed by --force: --force authorizes discarding THIS
-# task's unlanded work, never another task's live work. Nothing of this task's
-# own is removed by a refusal; reconcile whichever record is wrong and re-run.
-# Orca is not a pool slot and proves its path through
-# require_orca_worktree_path_match instead.
+# This refusal is not relaxed by --force: --force authorizes discarding THIS
+# task's unlanded work, never another task's work. For a legacy collision,
+# --retire-stale-claim is a separate record-only migration: a Treehouse ship's
+# endpoint and every other claimant must be recovery-grade dead or missing,
+# each claimant's conventional fm/<task-id> local branch must independently pass
+# the committed-work landed proof using freshly fetched remote refs, and the
+# clean checked-out branch must identify exactly one OTHER claimant. A missing
+# branch, detached HEAD, non-ship claimant, or ambiguous ownership refuses.
+# The stale claimant's shared HEAD is never its landed evidence: an earlier
+# acquisition may already have replaced that copy. Only the requested task's
+# metadata/backlog lifecycle is retired; the worktree, branches, lease, and every
+# endpoint are preserved. Its own and every claimant's control/meta locks remain
+# held through retirement, closing the relaunch race. The normal captain-call
+# retention and legacy-record gates still apply. --force cannot be combined
+# with this option. Once stale records are retired, the remaining owner uses
+# ordinary guarded teardown to release the slot. Orca proves its own path via
+# require_orca_worktree_path_match instead and has no pool-claim migration.
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
@@ -173,7 +169,7 @@
 # leased home releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
-# Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
+# Usage: fm-teardown.sh <task-id> [--force] [--legacy-record] [--retire-stale-claim]
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
@@ -353,6 +349,11 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
+# The fork-only Devin and agy worker retires.
+# shellcheck source=bin/fm-devin-lib.sh
+. "$SCRIPT_DIR/fm-devin-lib.sh"
+# shellcheck source=bin/fm-agy-lib.sh
+. "$SCRIPT_DIR/fm-agy-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
@@ -378,11 +379,17 @@ fi
 ID=$1
 FORCE=
 LEGACY_RECORD_GIVEN=0
+RETIRE_STALE_CLAIM=0
+TEARDOWN_RECORD_ONLY=0
+# Internal selector only; never accept an ambient ref as ordinary HEAD evidence.
+TEARDOWN_SAFETY_REF=HEAD
+CLAIMANT_LOCK_PATHS=()
 shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=--force ;;
     --legacy-record) LEGACY_RECORD_GIVEN=1 ;;
+    --retire-stale-claim) RETIRE_STALE_CLAIM=1 ;;
     *)
       echo "error: invalid teardown request" >&2
       exit 2
@@ -390,12 +397,18 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+if [ "$RETIRE_STALE_CLAIM" = 1 ] && [ "$FORCE" = --force ]; then
+  echo "error: --retire-stale-claim cannot be combined with --force; claimant retirement always requires landed work" >&2
+  exit 2
+fi
 fm_backlog_directory_present "$STATE" "state directory" || {
   echo "error: teardown refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
   exit 1
 }
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-worktree-claims-lib.sh
+. "$SCRIPT_DIR/fm-worktree-claims-lib.sh"
 # Supervision lease guard: post-landing cleanup is overlap territory between
 # the two Pi supervision actors; refuse while the OTHER actor holds this
 # task's live lease (contract: bin/fm-lease-lib.sh; no-op in homes without
@@ -450,6 +463,9 @@ DESCENDANT_TASK_HOMES=()
 DESCENDANT_TREEHOUSE_LOCK_PATHS=()
 teardown_release_locks() {
   local status=$? i
+  for ((i=${#CLAIMANT_LOCK_PATHS[@]} - 1; i >= 0; i--)); do
+    fm_lock_release "${CLAIMANT_LOCK_PATHS[$i]}" || true
+  done
   if declare -F teardown_release_herdr_locks >/dev/null 2>&1; then
     teardown_release_herdr_locks || true
   fi
@@ -512,6 +528,10 @@ fm_backlog_record_present "$META" "task record" "$STATE" || {
 }
 TEARDOWN_META_KIND=$(fm_meta_get "$META" kind)
 [ -n "$TEARDOWN_META_KIND" ] || TEARDOWN_META_KIND=ship
+if [ "$RETIRE_STALE_CLAIM" = 1 ] && [ "$TEARDOWN_META_KIND" != ship ]; then
+  echo "REFUSED: --retire-stale-claim is only available for ship records." >&2
+  exit 1
+fi
 # Retiring a persistent secondmate is main's alone in both postures; the kind
 # is read under the metadata lock (role partition: bin/fm-lease-lib.sh).
 [ "$TEARDOWN_META_KIND" != secondmate ] || fm_lease_forbid_branch "secondmate retirement (fm-teardown)"
@@ -1452,15 +1472,14 @@ remove_pr_poll_artifacts() {
     "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust" || return 1
 }
 
-# Resolve the PR number for a worktree branch via gh-axi. Echoes the number on a
+# Resolve the PR number for a worktree branch via gh. Echoes the number on a
 # single match and returns 0; returns non-zero on no match or any lookup failure,
 # so the caller treats it as "no PR found" (fail-safe).
 pr_number_from_branch() {
-  local branch=$1 out n
+  local branch=$1 n
   [ -n "$branch" ] && [ "$branch" != HEAD ] || return 1
-  out=$( cd "$WT" && gh-axi pr list --state all --head "$branch" --limit 1 2>/dev/null ) || return 1
-  n=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\),.*/\1/p' | head -1)
-  [ -n "$n" ] || return 1
+  n=$( cd "$WT" && gh pr list --state all --head "$branch" --limit 1 --json number --jq '.[0].number' 2>/dev/null ) || return 1
+  [ -n "$n" ] && [ "$n" != "null" ] || return 1
   printf '%s' "$n"
 }
 
@@ -1499,7 +1518,7 @@ patch_id_for_commit() {
 
 unpushed_patches_are_in_pr_head() {
   local pr_head=$1 current base pr_patch_ids commit patch_id unpushed
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  current=$(git -C "$WT" rev-parse --verify "${TEARDOWN_SAFETY_REF:-HEAD}" 2>/dev/null) || return 1
   base=$(git -C "$WT" merge-base "$current" "$pr_head" 2>/dev/null) || return 1
   pr_patch_ids=$(
     git -C "$WT" log --format=%H "$base..$pr_head" -- 2>/dev/null \
@@ -1510,7 +1529,7 @@ unpushed_patches_are_in_pr_head() {
       | sort -u
   ) || return 1
   [ -n "$pr_patch_ids" ] || return 1
-  unpushed=$(git -C "$WT" log --format=%H HEAD --not --remotes -- 2>/dev/null) || return 1
+  unpushed=$(git -C "$WT" log --format=%H "${TEARDOWN_SAFETY_REF:-HEAD}" --not --remotes -- 2>/dev/null) || return 1
   [ -n "$unpushed" ] || return 1
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -1548,7 +1567,7 @@ pr_is_merged() {
   esac
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  current=$(git -C "$WT" rev-parse --verify "${TEARDOWN_SAFETY_REF:-HEAD}" 2>/dev/null) || return 1
   if git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null; then
     landed=1
   elif unpushed_patches_are_in_pr_head "$head"; then
@@ -1582,7 +1601,7 @@ content_in_default() {
   fi
   default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
   [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" "${TEARDOWN_SAFETY_REF:-HEAD}" 2>/dev/null) || return 1
   merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
   [ "$merged_tree" = "$default_tree" ]
 }
@@ -2124,12 +2143,46 @@ $dir_pids"
 }
 
 reap_task_backend_process_group() {  # <label>
-  local label=$1 leader leader_start pgid current_pgid own_pgid
+  local label=$1 leader resolved leader_start pgid current_pgid own_pgid wid
   if [ "$BACKEND" != tmux ]; then
     echo "warning: lsof is unavailable; cannot resolve a process-group fallback for $BACKEND task $ID" >&2
     return 0
   fi
-  leader=$(tmux display-message -p -t "$T" '#{pane_pid}' 2>/dev/null) || leader=""
+  # `display-message -t` exits 0 for ANY target while a server runs and
+  # answers a missing window from the session's ACTIVE pane, so without a
+  # presence proof and a bound read this path could take another firstmate
+  # pane's process group as the task's.
+  fm_backend_source tmux || {
+    echo "warning: lsof is unavailable; cannot resolve the tmux pane process group for $ID" >&2
+    return 0
+  }
+  if [ "$(fm_backend_tmux_target_presence "$T")" != present ]; then
+    echo "warning: lsof is unavailable; tmux task window $T is not present; skipping the pane process-group reap for $ID" >&2
+    return 0
+  fi
+  # The name can also be re-created: another home can mint a NEW window under
+  # the same session:fm-<id> name after the recorded one closed, and the
+  # presence proof then names the replacement. Only the immutable window id
+  # spawn persisted into this record names the same object at reap time, so
+  # the read is addressed to that id and the answering window's own
+  # #{window_id} must equal it. A record carrying no id (written before this
+  # field existed, or rewritten) proves nothing about which object the pane
+  # belongs to, so nothing is reaped through this path for it either.
+  wid=$(fm_meta_get "$META" window_id)
+  case "$wid" in
+    @?*) ;;
+    *)
+      echo "warning: lsof is unavailable; task record carries no tmux window id; skipping the pane process-group reap for $ID" >&2
+      return 0
+      ;;
+  esac
+  resolved=$(tmux display-message -p -t "$wid" '#{pane_pid} #{window_id}' 2>/dev/null) || resolved=""
+  leader=${resolved%% *}
+  resolved=${resolved#* }
+  if [ "$resolved" != "$wid" ]; then
+    echo "warning: lsof is unavailable; the tmux pane_pid read did not resolve recorded window $wid for $T; skipping the pane process-group reap for $ID" >&2
+    return 0
+  fi
   case "$leader" in ''|*[!0-9]*)
     echo "warning: lsof is unavailable; cannot resolve the tmux pane process group for $ID" >&2
     return 0
@@ -2307,51 +2360,6 @@ teardown_live_slot_path() {
   canonical_existing_dir "$WT"
 }
 
-collect_local_firstmate_states() {
-  local record_state=$1 root home reg line child known existing i=0
-  local -a homes
-  TREEHOUSE_OWNER_STATES=("$record_state")
-  root=$(fm_firstmate_root_home "$FM_HOME") || {
-    echo "REFUSED: cannot resolve the root Firstmate home; nothing was changed" >&2
-    return 1
-  }
-  homes=("$root")
-  while [ "$i" -lt "${#homes[@]}" ]; do
-    home=${homes[$i]}
-    i=$((i + 1))
-    known=0
-    for existing in "${TREEHOUSE_OWNER_STATES[@]}"; do
-      [ "$existing" != "$home/state" ] || known=1
-    done
-    [ "$known" = 1 ] || TREEHOUSE_OWNER_STATES+=("$home/state")
-    reg="$home/data/secondmates.md"
-    [ ! -e "$reg" ] && [ ! -L "$reg" ] && continue
-    [ -f "$reg" ] && [ ! -L "$reg" ] || {
-      echo "REFUSED: local Firstmate registry is unsafe at $reg; nothing was changed" >&2
-      return 1
-    }
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        "- "*)
-          secondmate_registry_parse_line "$line" || {
-            echo "REFUSED: malformed local Firstmate registry entry in $reg; nothing was changed" >&2
-            return 1
-          }
-          [ "$SECONDMATE_REGISTRY_REMOTE" -eq 0 ] || continue
-          child=$(canonical_existing_dir "$SECONDMATE_REGISTRY_HOME") || {
-            echo "REFUSED: registered local Firstmate home is unavailable: $SECONDMATE_REGISTRY_HOME; nothing was changed" >&2
-            return 1
-          }
-          known=0
-          for existing in "${homes[@]}"; do
-            [ "$existing" != "$child" ] || known=1
-          done
-          [ "$known" = 1 ] || homes+=("$child")
-          ;;
-      esac
-    done < "$reg"
-  done
-}
 
 require_exclusive_worktree_slot_record() {
   local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
@@ -2381,76 +2389,160 @@ require_exclusive_worktree_slot_record() {
   done
 }
 
+require_slot_lease_holder() {  # <id> <worktree> <home>...
+  local id=$1 slot owner
+  slot=$(canonical_existing_dir "$2") || return 0
+  shift 2
+  owner=$(fm_worktree_lease_owner "$slot" "$id" "$@") || {
+    echo "REFUSED: cannot read Treehouse's lease record for task $id's slot $slot; nothing was changed - not even with --force." >&2
+    return 1
+  }
+  case "$owner" in
+    mine|unleased) return 0 ;;
+  esac
+  echo "REFUSED: task $id's recorded slot $slot is leased to ${owner#other }, not to task $id of home $1." >&2
+  echo "Returning it would kill that holder's processes and reset its copy, so nothing was changed - not even with --force." >&2
+  return 1
+}
+
+# Any recorded path that sits in a Treehouse pool (its grandparent holds
+# treehouse-state.json) is one cleanup may return with --force, whether or not
+# the record's project= still identifies that pool. A failed correlation refuses
+# instead of skipping the proof; a correlated slot must pass the holder proof.
+require_pool_path_owner() {  # <id> <path> <project> <label> <home>...
+  local id=$1 path=$2 project=$3 label=$4 slot pool
+  slot=$(canonical_existing_dir "$path") || return 0
+  pool=$(dirname "$(dirname "$slot")")
+  [ -e "$pool/treehouse-state.json" ] || [ -L "$pool/treehouse-state.json" ] || return 0
+  if ! fm_treehouse_pool_slot "$project" "$slot"; then
+    echo "REFUSED: task $id's recorded $label $slot is in a Treehouse pool that its project record (${project:-none}) does not identify." >&2
+    echo "Cleanup cannot prove the slot is still this task's before returning it, so nothing was changed - not even with --force." >&2
+    return 1
+  fi
+  shift 4
+  require_slot_lease_holder "$id" "$slot" "$@"
+}
+
 require_exclusive_task_worktree_slot() {
-  local slot
-  slot=$(teardown_live_slot_path) || return 0
-  require_exclusive_worktree_slot_record "$META" "$ID" "$STATE" "$slot"
+  local slot home
+  if [ "$KIND" = secondmate ]; then
+    home=${HOME_PATH:-$WT}
+    require_pool_path_owner "$ID" "$home" "$FM_ROOT" "secondmate home" - "$FM_HOME" "${STATE%/state}"
+    return
+  fi
+  if ! slot=$(teardown_live_slot_path); then
+    require_pool_path_owner "$ID" "$WT" "$PROJ" worktree "$FM_HOME" "${STATE%/state}"
+    return
+  fi
+  require_exclusive_worktree_slot_record "$META" "$ID" "$STATE" "$slot" || return 1
+  require_slot_lease_holder "$ID" "$slot" "$FM_HOME" "${STATE%/state}"
 }
 
-# Positive slot ownership, read from the claim the task that took the slot wrote
-# into the slot itself (bin/fm-wake-lib.sh owns the claim and its states).
-#
-# The record scan above proves that no OTHER task record names this slot. It
-# cannot prove that THIS record is not the stale one, because the task that took
-# the slot next may leave no record this scan can reach: its own worker may have
-# exited and its record been cleaned up, or it may belong to a home this machine
-# does not register. The claim closes that gap from the other side - it names the
-# task that actually took the slot, and it is written under the same project lock
-# that allocates it - so a claim naming another task is proof the slot was
-# reassigned after this record was written.
-#
-# A claim naming another task does not refuse: it means the slot is no longer
-# this task's, so the record's own cleanup proceeds and every slot step is
-# skipped (see the script header for why refusing would strand the record and
-# why skipping discards nothing). Returns TEARDOWN_SLOT_REASSIGNED_RC for that
-# state so each caller gates its slot steps on one determination; the claimant
-# stays in FM_TREEHOUSE_SLOT_OWNER_ID and FM_TREEHOUSE_SLOT_OWNER_HOME.
-#
-# An absent claim proceeds as the slot's owner: a slot taken before claims
-# existed, or already returned to the pool, carries none, and refusing those
-# would strand every task in flight across the change for no evidence at all.
-# Those keep exactly the record-scan protection they had before.
-TEARDOWN_SLOT_REASSIGNED_RC=3
-require_owned_worktree_slot_record() {  # <task-id> <worktree>
-  local record_id=$1 worktree=$2 marker
-  fm_treehouse_slot_owner_state "$worktree" "$record_id"
-  case "$FM_TREEHOUSE_SLOT_OWNER" in
-    mine|absent) return 0 ;;
-    other)
-      echo "warning: task $record_id's recorded worktree $worktree was reassigned to task $FM_TREEHOUSE_SLOT_OWNER_ID${FM_TREEHOUSE_SLOT_OWNER_HOME:+ (home $FM_TREEHOUSE_SLOT_OWNER_HOME)}, which claimed that pool slot after this record was written; that slot is no longer $record_id's, so its processes, copy, and claim are left untouched and only $record_id's own cleanup runs." >&2
-      return "$TEARDOWN_SLOT_REASSIGNED_RC"
-      ;;
+stale_claim_endpoint_stopped() {  # <meta> <id>
+  local meta=$1 id=$2 endpoint_state
+  fm_backend_validate_task_endpoint "$meta" "$id" || return 1
+  endpoint_state=$(fm_backend_agent_state "$FM_BACKEND_VALIDATED_BACKEND" "$FM_BACKEND_VALIDATED_TARGET")
+  case "$endpoint_state" in
+    dead|missing) return 0 ;;
+    *) echo "REFUSED: claimant $id's endpoint is $endpoint_state, not provably stopped; no claim or worktree was changed." >&2; return 1 ;;
   esac
-  marker=$(fm_treehouse_slot_owner_marker "$worktree" 2>/dev/null) || marker="beside $worktree"
-  echo "REFUSED: task $record_id's recorded worktree $worktree carries a slot-owner claim that cannot be read, so the slot cannot be proved to still be this task's; nothing was changed - not even with --force." >&2
-  echo "Inspect or repair the claim file at $marker (task= and home= lines), then re-run teardown." >&2
-  return 1
 }
 
-# The one ownership determination for this task's recorded slot. Every later
-# step that would read or touch $WT consults teardown_owns_worktree, so a
-# reassigned slot is skipped consistently rather than by each step's own guess.
-TEARDOWN_SLOT_REASSIGNED=0
-TEARDOWN_SLOT_REASSIGNED_TO=
-TEARDOWN_SLOT_REASSIGNED_HOME=
-require_owned_task_worktree_slot() {
-  local slot rc=0
-  slot=$(teardown_live_slot_path) || return 0
-  require_owned_worktree_slot_record "$ID" "$slot" || rc=$?
-  case "$rc" in
-    0) return 0 ;;
-    "$TEARDOWN_SLOT_REASSIGNED_RC")
-      TEARDOWN_SLOT_REASSIGNED=1
-      TEARDOWN_SLOT_REASSIGNED_TO=$FM_TREEHOUSE_SLOT_OWNER_ID
-      TEARDOWN_SLOT_REASSIGNED_HOME=$FM_TREEHOUSE_SLOT_OWNER_HOME
-      return 0
-      ;;
-  esac
-  return 1
+# Use the established committed-work proof with this claimant's branch ref.
+# The shared HEAD is NOT evidence of an older claimant's work: a prior get may
+# already have replaced it with main. Missing refs and detached checkouts stay
+# ambiguous; neither --force nor another task's merged PR can fill that gap.
+stale_claim_branch_landed() {
+  local branch=$1 meta=${2:-} unpushed default PR_URL=$PR_URL MODE=$MODE TEARDOWN_SAFETY_REF
+  if [ -n "$meta" ]; then
+    PR_URL=$(fm_meta_get "$meta" pr)
+    MODE=$(fm_meta_get "$meta" mode); MODE=${MODE:-no-mistakes}
+  fi
+  TEARDOWN_SAFETY_REF="refs/heads/$branch"
+  git -C "$WT" rev-parse --verify "$TEARDOWN_SAFETY_REF^{commit}" >/dev/null 2>&1 || return 1
+  git -C "$WT" fetch --all --prune --quiet || return 1
+  unpushed=$(git -C "$WT" log --format=%H "$TEARDOWN_SAFETY_REF" --not --remotes --) || return 1
+  [ -n "$unpushed" ] || return 0
+  if [ "$MODE" = local-only ]; then
+    default=$(default_branch) || return 1
+    git -C "$WT" merge-base --is-ancestor "$TEARDOWN_SAFETY_REF" "$default"
+  else
+    work_is_landed "$branch"
+  fi
 }
 
-teardown_owns_worktree() {
-  [ "$TEARDOWN_SLOT_REASSIGNED" != 1 ]
+validate_stale_claim_retirement() {
+  local slot current dirty own_branch="fm/$ID" other other_id other_kind lock field path owner_count=0
+  local -a claims
+  [ "$KIND" = ship ] && [ "$BACKEND" != orca ] || {
+    echo "REFUSED: stale-claim retirement requires a Treehouse ship task." >&2
+    return 1
+  }
+  slot=$(teardown_live_slot_path) || return 1
+  fm_worktree_claims_for_path "$META" "$STATE" "$slot" || return 1
+  [ "${#FM_WORKTREE_CLAIMS[@]}" -gt 0 ] || {
+    echo "REFUSED: task $ID has no competing claim; use ordinary teardown." >&2
+    return 1
+  }
+  claims=("${FM_WORKTREE_CLAIMS[@]}")
+  current=$(git -C "$WT" symbolic-ref --quiet HEAD) || {
+    echo "REFUSED: shared worktree $WT has a detached HEAD; claimant ownership is ambiguous." >&2
+    return 1
+  }
+  [ "$current" != "refs/heads/$own_branch" ] || {
+    echo "REFUSED: task $ID still owns the checked-out branch; its claim is not stale." >&2
+    return 1
+  }
+  stale_claim_endpoint_stopped "$META" "$ID" || return 1
+  for other in "${claims[@]}"; do
+    other_id=${other##*/}; other_id=${other_id%.meta}
+    for field in control meta; do
+      lock="${other%/*}/.$field-$other_id.lock"
+      fm_lock_try_acquire "$lock" || {
+        echo "REFUSED: another lifecycle or metadata operation owns claimant $other_id; nothing was changed." >&2
+        return 1
+      }
+      CLAIMANT_LOCK_PATHS+=("$lock")
+    done
+    other_kind=$(fm_meta_get "$other" kind)
+    [ "${other_kind:-ship}" = ship ] || {
+      echo "REFUSED: claimant $other_id is not a ship; preserve its claim." >&2
+      return 1
+    }
+    path=$(fm_worktree_canonical_dir "$(fm_meta_get "$other" worktree)") || return 1
+    [ "$path" = "$slot" ] || {
+      echo "REFUSED: claimant $other_id changed worktree while locking; retry from current records." >&2
+      return 1
+    }
+    stale_claim_endpoint_stopped "$other" "$other_id" || return 1
+    [ "$current" != "refs/heads/fm/$other_id" ] || owner_count=$((owner_count + 1))
+  done
+  [ "$owner_count" = 1 ] || {
+    echo "REFUSED: the checked-out branch does not identify exactly one other claimant; preserve every claim." >&2
+    return 1
+  }
+  # Every old claimant's named branch must be landed independently, even when
+  # its checkout has been overwritten. Preserve all branch refs on success.
+  if ! stale_claim_branch_landed "$own_branch"; then
+    echo "REFUSED: claimant $ID's branch $own_branch is missing or unlanded; the shared HEAD cannot prove it landed." >&2
+    return 1
+  fi
+  for other in "${claims[@]}"; do
+    other_id=${other##*/}; other_id=${other_id%.meta}
+    if ! stale_claim_branch_landed "fm/$other_id" "$other"; then
+      echo "REFUSED: claimant $other_id's branch is missing or unlanded; preserve every claim." >&2
+      return 1
+    fi
+  done
+  # A dirty current owner's copy also keeps the existing collision refusal.
+  # This is an additional check, never substituted for branch-specific proof.
+  dirty=$(git -C "$WT" status --porcelain) || return 1
+  if [ -n "$dirty" ]; then
+    echo "REFUSED: shared worktree has uncommitted changes; preserve every claim." >&2
+    return 1
+  fi
+  [ "$(git -C "$WT" symbolic-ref --quiet HEAD)" = "$current" ] || return 1
+  echo "teardown: proved task $ID's claim stale and every claimant stopped and landed; retiring only $ID's record, preserving $WT and its branches" >&2
 }
 
 firstmate_home_has_treehouse_slot() {
@@ -2923,7 +3015,7 @@ preflight_descendant_task_locks() {
 }
 
 preflight_descendant_treehouse_slots() {
-  local i state task_id meta kind backend target worktree project lock_path held owner_rc
+  local i state task_id meta kind backend target worktree project lock_path held
   for ((i=0; i < ${#DESCENDANT_TASK_IDS[@]}; i++)); do
     state=${DESCENDANT_TASK_STATES[$i]}
     task_id=${DESCENDANT_TASK_IDS[$i]}
@@ -2966,20 +3058,20 @@ preflight_descendant_treehouse_slots() {
     backend=$(fm_backend_of_meta "$meta")
     worktree=$(meta_value "$meta" worktree)
     project=$(meta_value "$meta" project)
-    if [ "$kind" = secondmate ] || [ "$backend" = orca ]; then
+    if [ "$kind" = secondmate ]; then
+      worktree=$(meta_value "$meta" home)
+      [ -n "$worktree" ] || worktree=$(meta_value "$meta" worktree)
+      require_pool_path_owner "$task_id" "$worktree" "$FM_ROOT" "child firstmate home" - "${state%/state}" || return 1
       continue
     fi
+    [ "$backend" != orca ] || continue
     if ! fm_treehouse_pool_slot "$project" "$worktree"; then
+      require_pool_path_owner "$task_id" "$worktree" "$project" "child worktree" "${state%/state}" || return 1
       continue
     fi
     fm_backend_validate_task_endpoint "$meta" "$task_id" || return 1
     require_exclusive_worktree_slot_record "$meta" "$task_id" "$state" "$worktree" || return 1
-    owner_rc=0
-    require_owned_worktree_slot_record "$task_id" "$worktree" || owner_rc=$?
-    case "$owner_rc" in
-      0|"$TEARDOWN_SLOT_REASSIGNED_RC") ;;
-      *) return 1 ;;
-    esac
+    require_slot_lease_holder "$task_id" "$worktree" "${state%/state}" || return 1
   done
 }
 
@@ -3193,7 +3285,7 @@ endpoint_close_refusal() {  # <subject> <backend> <target> <honors-force>
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen child_owner_rc
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -3249,39 +3341,27 @@ cleanup_firstmate_home_children() {
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
         rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
+        remove_devin_managed_wiring "$child_meta" "$child_wt"
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
-      # The same ownership determination as the parent's own slot: a child
-      # slot reassigned to another task is not this child's to kill, reset,
-      # or return, so only its records are cleaned up. The preflight above
-      # already named the reassignment on stderr under the same lock.
-      child_owner_rc=0
-      if fm_treehouse_pool_slot "$child_proj" "$child_wt"; then
-        require_owned_worktree_slot_record "$child_id" "$child_wt" 2>/dev/null || child_owner_rc=$?
-      fi
-      if [ "$child_owner_rc" -eq "$TEARDOWN_SLOT_REASSIGNED_RC" ]; then
-        :
-      elif [ "$child_owner_rc" -ne 0 ]; then
-        require_owned_worktree_slot_record "$child_id" "$child_wt" || return 1
-      else
-        validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
-          "$child_wt/.opencode/plugins/fm-busy-state.js" \
-          "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
-        if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
-          if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree"; then
-            fm_treehouse_slot_owner_release "$child_wt" "$child_id"
-          else
-            child_return_rc=$?
-            if [ "$child_return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
-              return "$child_return_rc"
-            fi
-            safe_rm_rf_child_worktree "$child_wt" "$child_proj"
-          fi
+      validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+      rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
+        "$child_wt/.opencode/plugins/fm-busy-state.js" \
+        "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
+      remove_devin_managed_wiring "$child_meta" "$child_wt"
+      if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
+        if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree"; then
+          :
         else
+          child_return_rc=$?
+          if [ "$child_return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
+            return "$child_return_rc"
+          fi
           safe_rm_rf_child_worktree "$child_wt" "$child_proj"
         fi
+      else
+        safe_rm_rf_child_worktree "$child_wt" "$child_proj"
       fi
     fi
     remove_grok_turnend_auth "$sub_state" "$child_id" || return 1
@@ -3323,8 +3403,12 @@ remove_secondmate_registry_entry() {
   return "$rc"
 }
 
-require_exclusive_task_worktree_slot || exit 1
-require_owned_task_worktree_slot || exit 1
+if [ "$RETIRE_STALE_CLAIM" = 1 ]; then
+  validate_stale_claim_retirement || exit 1
+  TEARDOWN_RECORD_ONLY=1
+else
+  require_exclusive_task_worktree_slot || exit 1
+fi
 
 validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
 
@@ -3434,7 +3518,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
-if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
   else
@@ -3457,7 +3541,7 @@ fi
 # refuses before any destructive step.
 TEARDOWN_HERDR_SESSION=
 TEARDOWN_HERDR_PANE=
-if [ "$BACKEND" = herdr ]; then
+if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ "$BACKEND" = herdr ]; then
   teardown_herdr_preflight_target "$T" "$ID" || exit 1
   fm_backend_herdr_parse_target "$T" || exit 1
   TEARDOWN_HERDR_SESSION=$FM_BACKEND_HERDR_SESSION
@@ -3542,6 +3626,7 @@ else
   fi
 fi
 
+if [ "$TEARDOWN_RECORD_ONLY" != 1 ]; then
 # Every landed/discard-work refusal above has now passed (or --force skipped
 # them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
 # --force, and before ANY destructive step below - a still-parked run or a
@@ -3549,11 +3634,9 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
-if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
+if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
-elif [ "$KIND" != secondmate ]; then
-  reap_task_worktree_processes tasktmp "$TASK_TMP"
 fi
 
 # Fix 3 (see script header): sweep remote job workers abandoned by an already
@@ -3576,14 +3659,13 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
     rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
       "$WT/.opencode/plugins/fm-busy-state.js" \
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+    remove_devin_managed_wiring "$META" "$WT"
   fi
   if [ -n "$T_ORCA" ]; then
     fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" \
       || { endpoint_close_refusal "$ID" "$BACKEND" "$T" 0; exit 1; }
   fi
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
-elif [ "$KIND" != secondmate ] && ! teardown_owns_worktree; then
-  :
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$branch" != "HEAD" ]; then
@@ -3594,6 +3676,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
     "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  remove_devin_managed_wiring "$META" "$WT"
   # Kills remaining processes in the worktree (including the agent), resets, returns
   # to pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks
@@ -3606,11 +3689,6 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
   }
-  # The slot is back in the pool, so this task's claim on it is spent. Dropping
-  # it here - and only after a return that succeeded - keeps a returned slot
-  # unclaimed until its next holder claims it, and leaves the claim in place
-  # whenever the return did not actually happen.
-  fm_treehouse_slot_owner_release "$WT" "$ID"
 fi
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
@@ -3704,6 +3782,7 @@ if [ "$BACKEND" = herdr ]; then
     exit 1
   fi
 fi
+fi
 if [ "$KIND" != secondmate ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       "$SCRIPT_DIR/fm-inactive-reconcile.sh" report "$ID"; then
@@ -3735,7 +3814,7 @@ if [ "$KIND" = secondmate ]; then
 fi
 remove_grok_turnend_auth "$STATE" "$ID" || exit 1
 remove_kimi_turnend_auth "$STATE" "$ID" || exit 1
-fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
+[ "$TEARDOWN_RECORD_ONLY" = 1 ] || fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
@@ -3762,12 +3841,13 @@ if [ -n "$LAUNCH_HOME_TOKEN" ]; then
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
+fm_agy_teardown_retire "$STATE" "$ID" || exit 1
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
 status_retire_presentation_task "$STATE" "$ID" || exit 1
 fm_wake_queue_prune_task "$STATE" "$ID" "$T" 2>/dev/null || true
-rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
+rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" "$STATE/$ID.treehouse-lease" \
   "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.omp-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.muse-session" \
@@ -3777,6 +3857,8 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.reconcile-nudged" "$STATE/$ID.gemini-settings.json" "$STATE/$ID.devin-config.json" \
   "$STATE/.$ID.branch-outcome-index" \
   "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID"
+fm_devin_teardown_remove_state "$STATE" "$ID"
+fm_agy_teardown_remove_state "$STATE" "$ID"
 # The steering inbox (bin/fm-task-inbox-lib.sh) is runtime state for the
 # retired endpoint; teardown only runs after landing is confirmed, so any
 # leftover unhandled steer here is moot rather than unlanded work.
@@ -3788,8 +3870,10 @@ rm -rf "$STATE/$ID.inbox" "$STATE/$ID.git-hooks"
 # recorded pane is proven gone (the Herdr gate above) unless it still names a
 # live projected workspace - a version 2 binding of some other pane, or a
 # version 1 attempt whose token-bearing workspace is still present - which the
-# session-start sweep alone may judge (header).
-if [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; then
+# session-start sweep alone may judge (header). A record-only stale-claim
+# retirement proves no endpoint gone, so it leaves any journal to that sweep.
+if [ "$TEARDOWN_RECORD_ONLY" != 1 ] \
+  && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   if teardown_herdr_journal_orphaned; then
     rm -f "$HERDR_PRESENTATION_JOURNAL"
   else
@@ -3829,7 +3913,7 @@ else
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
-if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
+if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
 # A secondmate retirement may remove the home containing an overridden control
@@ -3837,11 +3921,11 @@ fi
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 fi
-if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
+if [ "$TEARDOWN_RECORD_ONLY" = 1 ]; then
+  echo "teardown $ID complete (stale claim retired; shared worktree $WT and every branch preserved)"
+elif [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
   echo "teardown $ID complete (window ${T:-none}, worktree $WT, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN)"
-elif teardown_owns_worktree; then
-  echo "teardown $ID complete (window ${T:-none}, worktree $WT)"
 else
-  echo "teardown $ID complete (window ${T:-none}; pool slot $WT left to task $TEARDOWN_SLOT_REASSIGNED_TO${TEARDOWN_SLOT_REASSIGNED_HOME:+ (home $TEARDOWN_SLOT_REASSIGNED_HOME)}, which it was reassigned to)"
+  echo "teardown $ID complete (window ${T:-none}, worktree $WT)"
 fi
 backlog_refresh_reminder

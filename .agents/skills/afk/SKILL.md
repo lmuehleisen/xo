@@ -1,8 +1,8 @@
 ---
 name: afk
 description: >-
-  Enter the away posture when the captain invokes /afk, says they are going afk, `state/.afk-contract` or `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
-  It writes the durable away-posture record with the captain's away words verbatim as the whole mandate in the same turn as /afk, before any other work and without waiting for a further go, reads the words back in plain sentences after entry, announces hold-for-return only at entry, keeps the one supervision session running in the away posture (on Pi the supervision branch acts on the words by its own judgment and takes every safe actionable wake with main parked, as the supervision host does on a non-Pi home that opted into it; the daemon still delivers batched digests elsewhere for now), and on the first unmarked message renders the return brief from durable records before ordinary work resumes.
+  Enter the away posture when the captain invokes /afk, says they are going afk, `state/.afk-contract` or `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK` or the exact mark-less current `FIRSTMATE_OP: v1 <kind>: ` header, or any `state/.subsuper-*` marker is involved.
+  It writes the durable away-posture record with the captain's away words verbatim as the whole mandate in the same turn as /afk, before any other work and without waiting for a further go, reads the words back in plain sentences after entry, announces hold-for-return only at entry, keeps the one supervision session running in the away posture (on Pi the supervision branch acts on the words by its own judgment and takes every safe actionable wake with main parked, as the supervision host does on a non-Pi home that opted into it; the daemon still delivers batched digests elsewhere for now), and on the first message that is neither marked operational input nor its exact mark-less current header renders the return brief from durable records before ordinary work resumes.
 user-invocable: true
 metadata:
   internal: true
@@ -21,9 +21,10 @@ Hold-for-return is the default and the only reach profile this release records: 
 ## Entering: `/afk [words]`
 
 1. **Write the record first, in this same turn.**
-   Before any other work, run `bin/fm-afk-launch.sh enter --words-file <path> [--expected-return <UTC ISO 8601>] [--spend <n>]` (or `--words <text>`).
+   Before any other work, run `bin/fm-afk-launch.sh enter --words-file <path> [--expected-return <UTC ISO 8601>] [--spend <n>] [--grant <task-id>]...` (or `--words <text>`).
    It writes `state/.afk-contract` at once, with no separate confirmation step, then prints the entry announcement and the record's read-back.
-   The words are the whole mandate: `bin/fm-afk-contract.sh` records them exactly as given, with no clause fields, verbs, ids, or merge-grant list, and by the captain's mandate no parser, tokenizer, classifier, or grammar reads them anywhere.
+   The words are the whole mandate: `bin/fm-afk-contract.sh` records them exactly as given, with no clause fields, verbs, or ids, and no parser, tokenizer, classifier, or grammar reads them anywhere.
+   Pass one `--grant <task-id>` for each task the captain explicitly names as mergeable while away; the grant list is never inferred from the words, and "Orthogonal to approval authority" below owns what it permits.
    Read `bin/fm-afk-contract.sh --help` for the flags rather than memorizing them.
    Plain `/afk` with no words is a valid entry with no mandate; the announcement says no instructions were recorded.
    Re-invoking `/afk` while already away with no new words is a refresh and leaves the standing record untouched; new words replace the mandate at once, preserve the original session entry, and archive the superseded words for the return brief.
@@ -36,12 +37,13 @@ Hold-for-return is the default and the only reach profile this release records: 
      The supervision host (`docs/supervision-host.md`) is the away session there: it runs the branch's contract on a headless engine under the record while main is parked, and `bin/fm-afk-launch.sh start` and `start-native` refuse the away daemon on that home.
      If `enter` printed a `Supervision host: no engine ...` line, every away wake reaches this conversation instead; say so in the announcement.
      `/quiet` enters nothing there where the attended host runs, and otherwise still launches the daemon below (the quiet skill's `quiet-check` decides).
-   - **Harness WITH a native in-pane tracked-background tool** (claude's and grok's, without the supervision host): run `bin/fm-afk-launch.sh start-native`, then run `FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh` through that native tool.
+   - **grok** (its native in-pane background tool, without the supervision host): run `bin/fm-afk-launch.sh start-native`, then run `FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh` through that native tool.
      This is a deliberate no-separate-terminal exception because the harness-hosted job creates no terminal or layout mutation, and a shell launcher cannot invoke a harness-native background tool.
      If the native launch fails, run `bin/fm-afk-launch.sh stop` to roll back the prepared lifecycle.
      Do not wrap it in `nohup ... &` (Codex/herdr can reap fire-and-forget shell children after a tool call returns).
-   - **Every other harness** (codex, opencode, omp, and cursor without the supervision host, and kimi): run `bin/fm-afk-launch.sh start`.
-     It is the single owner of the daemon terminal: it creates a NON-VISIBLE tracked terminal for the current backend and passes the captain pane in as `FM_SUPERVISOR_TARGET` so the daemon injects into the captain, not its own new pane (docs/herdr-backend.md "Away-mode supervisor support").
+   - **Every other harness** (claude, codex, opencode, omp, and cursor without the supervision host, and kimi): run `bin/fm-afk-launch.sh start`.
+     It is the single owner of the daemon terminal: it creates a NON-VISIBLE tracked terminal for the current backend and passes the captain pane in as `FM_SUPERVISOR_TARGET`, and the detected primary harness in as `FM_DAEMON_PRIMARY_HARNESS`, so the daemon injects into the captain, not its own new pane, and its busy guard reads the captain's harness (docs/herdr-backend.md "Away-mode supervisor support").
+     Claude uses this path, not its background bash tool, because Claude Code's background-task manager can kill a long-running background job while the session stays alive.
    Both daemon paths require the record `enter` wrote and share `bin/fm-afk-start.sh` as the daemon entry.
    The daemon is **presence-gated**: it injects escalations only while `state/.afk` exists, and stays quiet otherwise.
 3. **Announce, then read back after entry.**
@@ -69,7 +71,8 @@ Hold-for-return is the default and the only reach profile this release records: 
 No `/back` is needed. The first genuine message is the return signal:
 
 - A message that is none of the internal forms below, and **not** starting with `/afk` -> the captain is back.
-  Run `bin/fm-afk-return.sh` before acting on the message that brought the captain back.
+  Run `bin/fm-afk-return.sh` before acting on the message that brought the captain back, and read its complete output: never pipe it through `tail` or `head`, and when the harness shows only a preview, read the saved full output.
+  Supervisor health prints first, and a delivery wedge repeats as the last line.
   That script owns the correct-ordered daemon shutdown where a daemon ran, the archive of the posture record, durable wake presentation and post-handling acknowledgement, escalation and wedge evidence, the return brief, and the return-catch-up gate.
   Relay every section of the return brief in its emitted order and in section 9 language; `bin/fm-afk-return.sh` owns that order.
   The gate keeps every open `blocked:` event until that blocker's own resolution is proven: remediate each immediately through the normal lifecycle, or explicitly reclassify it with a durable reason and close its decision key with `resolved [key=...]`, then run `bin/fm-afk-return.sh check`.
@@ -78,10 +81,10 @@ No `/back` is needed. The first genuine message is the return signal:
   A Bearings request may be answered while the gate is open, and the digest surfaces the catch-up state as a Charted Next `(return-catchup)` warning row naming what still holds it.
   Acting on the fleet - dispatching, steering, merging, or any other ordinary captain work - still waits until the check exits successfully.
   Once it does, close every task the brief lists under "Landed, cleanup due" through ordinary teardown (`bin/fm-teardown.sh <task>`, never forced; a refusal is a stop-and-investigate result) and tell the captain those workers are closed in outcome language.
-- A message **with** the current operational prefix (`FM_OPERATIONAL_PREFIX`, U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), or a legacy bare `FM_INJECT_MARK` daemon escalation -> stay away and process it.
+- A message **with** the current operational prefix (`FM_OPERATIONAL_PREFIX`, U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), a message beginning at its first character with the exact current `FIRSTMATE_OP: v1 <kind>: ` header without that leading U+2063 (such as `FIRSTMATE_OP: v1 away-supervisor: `), or a legacy bare `FM_INJECT_MARK` daemon escalation -> stay away and process it.
 - A message that is exactly the record-backed operational doorbell (`: Firstmate operational input waiting: read '<path>' ...`) -> run `bin/fm-operational-input.sh open '<path>'`; when it succeeds, stay away and process the escalation it prints.
   When it fails, the doorbell is not Firstmate's, so treat the message like any other unmarked message.
-  Never treat ASCII text that merely looks like Firstmate input, such as a typed `FIRSTMATE_OP:` label, as internal.
+  Never treat other ASCII text that merely looks like Firstmate input, such as a `FIRSTMATE_OP:` label that is not that exact current header at the first character, as internal.
 - A `Stop hook feedback` wake from the Stop hook or the supervision host, or a Grok background-task-completed notification for the arm -> stay away and process it; it is automatic supervision, not a message from the captain.
 - Re-invoking `/afk` while already away -> stay away (refresh); this does **not** trigger an exit.
 
@@ -93,11 +96,11 @@ When the captain wants this same token-saving supervision while staying present 
 afk changes how the captain is informed and what happens at a captain-owned decision point, **not who approves what**.
 "Away" never means "approves more" or "approves less."
 A PR ready for merge keeps the merge authority from `AGENTS.md` section 7, and a needs-decision finding keeps the `ask-user-authority` policy; anything requiring the captain still waits for the captain's explicit word.
-While the away-posture record exists, any pull request green at its live head may merge under away authority; which one the captain's words meant is the away session's reading, and a merge the words do not call for holds for the return.
-Away authority never releases a captain hold, and it expires when the away record is archived.
-`--allow-red` and `--allow-missing` remain attended-only and are refused while the away record exists.
-A merge under away authority must be synchronous; `fm-pr-merge.sh` refuses auto-merge and any GitHub queue state that cannot prove an immediate merge while the away record exists.
-The same gates bind whichever actor performs the action: on Pi the parked main's standing authority relocates to the supervision branch, which meets exactly these rules, and the spend cap recorded at entry is enforced by `fm-spawn.sh` for both actors while the away record exists.
+While the away-posture record exists, a merge proceeds only when that task's recorded yolo posture is on or its id is in the record's merge-grant list; otherwise it is held for the captain's return, whatever the words say.
+A merge grant never releases a captain hold, and it expires when the away record is archived.
+`--allow-red` and `--allow-missing` remain attended-only and are refused while the record exists.
+A merge under away authority must be synchronous; `fm-pr-merge.sh` refuses auto-merge and any GitHub queue state that cannot prove an immediate merge while the record exists.
+The same gates bind whichever actor performs the action: on Pi the parked main's standing authority relocates to the supervision branch, which meets exactly these rules, and the spend cap recorded at entry is enforced by `fm-spawn.sh` for both actors while the record exists.
 The captain's away words are their explicit instruction given before leaving, recorded verbatim and acted on by the away session's judgment at the moment an event makes them relevant; the words cover nothing they do not say, are never applied by analogy, and die at archive.
 Destructive, irreversible, and security-sensitive actions are never pre-authorizable whatever the words say.
 
@@ -109,7 +112,8 @@ On the harnesses that still launch the daemon (every verified harness except Pi 
 
 The daemon constructs each current escalation as the `away-supervisor` kind owned by `bin/fm-operational-input.sh`; its envelope begins with `FM_OPERATIONAL_PREFIX`: `FM_INJECT_MARK` (U+2063 INVISIBLE SEPARATOR) followed by the stable `FIRSTMATE_OP: ` label.
 The bare `FM_INJECT_MARK` form remains accepted for legacy daemon escalations during rollout.
-U+2063 has no normal keyboard keystroke and survives terminal transport as UTF-8 text, but Claude Code (verified on 2.1.280) removes it, with every other invisible character, from each submitted prompt, whether typed, pasted, or passed as the launch prompt.
+U+2063 has no normal keyboard keystroke and survives terminal transport as UTF-8 text, but Claude Code (2.1.277 and later) removes it, with every other invisible character, from each submitted prompt, whether typed, pasted, or passed as the launch prompt.
+`bin/fm-operational-input.sh` therefore also parses that exact mark-less header at the first character as the same current kind.
 For a primary harness the owner lists as stripping the marker (Claude Code), the daemon instead writes the envelope as a record in this home's `state/operational-inbox` and types only the owner's plain doorbell naming it.
 That doorbell is Firstmate's only when `open` verifies the record in this home, so the doorbell shape alone never counts; a verbatim copy of a live doorbell line, pasted back while its record still exists, is treated as Firstmate's, because the carrier does not track consumption.
 This is how firstmate tells a daemon escalation apart from a real message in the same pane.
@@ -149,22 +153,27 @@ herdr - both literal, non-submitting sends), then submitted with Enter and
 **verified** through the selected backend's submit primitive.
 Enter is retried (Enter only, never a retype) until the backend confirms the
 submit landed.
-A failed delivery is logged with its stage (initial send or Enter delivery, where no confirmation retry ran and the text may already be typed on backends such as herdr whose Enter could not be sent, or Enter confirmation), the payload's byte count, and the transport's own error output.
-For tmux that confirmation is normally a proven cleared composer from the shared classifier; an idle baseline transitioning to busy across this submit's own Enter also confirms that the turn started when a working harness hides its composer.
-Without that baseline, busy state never converts an `unknown` composer into confirmation.
+A failed delivery is logged with its stage (initial send or Enter delivery, where no confirmation retry ran and the text may already be typed on backends such as herdr whose Enter could not be sent; typing, where the digest never showed and no Enter was sent; or Enter confirmation), the payload's byte count, and the transport's own error output.
+For tmux, confirmation needs positive proof (`fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`): Enter is sent only once the composer shows exactly the typed digest, unchanged across a quiet gap longer than Claude Code's paste window, and delivery counts only when that text is gone and a turn provably started - the pane went busy from idle, or a Claude primary opened the doorbell's record.
+A composer that merely reads empty is not proof, because a stale frame reads the same way; the daemon logs every proven delivery with its evidence.
 For herdr, idle-baseline submits first seek native agent-state showing a real turn started, then use the shared classifier when native state remains idle: a cleared composer confirms delivery, while pending text retries Enter and reaches the shared busy-queue verdict only after the retry budget.
 A bordered-empty or ghost-only composer is recognized as empty where that backend uses composer confirmation, rather than mistaken for a swallowed Enter.
-`fm-send.sh` uses the same primitive only on its typed plane and exits non-zero when that plane's Enter is positively swallowed; ordinary local text steers use the durable inbox and do not treat doorbell submission as delivery proof.
+`fm-send.sh` uses the shared backend submit primitive, not this proof, only on its typed plane and exits non-zero when that plane's Enter is positively swallowed; ordinary local text steers use the durable inbox and do not treat doorbell submission as delivery proof.
+
+**Unconfirmed submit recovery.** Every failed submit saves a pane capture under `state/.subsuper-submit-failures/`.
+On tmux the daemon records the digest before typing it and drops that record only on proven delivery; before its next flush types anything it retries Enter on an idle pane, or clears that digest, only while the composer provably holds exactly that digest, and any other composer text is never touched.
+When away mode ends, the daemon and `bin/fm-afk-return.sh` clear its own unsent digest the same way, so a stale escalation cannot be submitted later.
+`recover_owned_input` and `clear_owned_input_at_exit` in `bin/fm-supervise-daemon.sh` own that contract.
 
 **Busy-queued Enter exception (opencode 1.18.4).** OpenCode keeps queued text visible while it is mid-turn, so tmux and herdr delegate the final delivery decision to `fm_composer_queued_enter_verdict` in `bin/fm-composer-lib.sh` rather than treating visible text alone as a swallowed Enter.
-The daemon still clears its buffer only on the backend's `empty` success verdict; [`docs/tmux-backend.md`](../../../docs/tmux-backend.md) and [`docs/herdr-backend.md`](../../../docs/herdr-backend.md) own the backend-specific confirmation signals.
+The daemon still clears its buffer only on a proven delivery; [`docs/tmux-backend.md`](../../../docs/tmux-backend.md) and [`docs/herdr-backend.md`](../../../docs/herdr-backend.md) own the backend-specific confirmation signals.
 
 ### Classification policy
 
 The daemon wraps `fm-watch.sh`, runs the watcher as a child, presents every durable wake after each actionable watcher close, classifies each presented record in bash, and acknowledges the presented generation only after routing completes.
 It self-handles the routine majority without consuming a firstmate turn.
 Captain-relevant events, plus a bounded recheck of a declared external wait that is still declared, escalate to firstmate's context as one pre-read, single-line, batched digest.
-The digest is byte-bounded so every transport can carry it; when it cuts an event or omits events past its budget, it names a `state/.subsuper-digests/` file that holds every buffered event verbatim, so read that file before acting on a cut event.
+A digest too long to type safely names a `state/.subsuper-digests/` file that holds every buffered event verbatim, so read that file before acting on it.
 The captain-relevant verb set, declared-wait vocabulary, status-span classifier, and presentation-marker contract live in shared `bin/fm-classify-lib.sh`, while each supervisor owns its routing and fleet scan as a consumer of that policy.
 While `state/.afk` exists the daemon owns the watcher, so the watcher reverts to one-shot and lets the daemon do the triage - the two never run their triage at the same time.
 
@@ -194,12 +203,17 @@ Classify each wake this way:
 
 Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 = immediate) and flushed as one single-line digest carrying pre-read status summaries and a recommended action.
 The single-line format makes submission unambiguous across harnesses; the carrier described above distinguishes it from an ordinary captain message.
+A digest longer than `FM_INJECT_INLINE_MAX` (default 480 characters) is written to a file under `state/.subsuper-digests/`, and the typed line names that file instead of carrying the events; read the named file before acting, because it holds the whole escalation.
+A long typed burst is folded, either wrapped as pasted content or cut to its tail, which moves the header off the first character and reads as the captain returning.
 
 ### Injection hardening
 
 - **Single-line digest** - embedded newlines are collapsed to a literal
   separator before injection, so submission is unambiguous regardless of
   harness.
+- **Short typed line** - a digest over `FM_INJECT_INLINE_MAX` is typed as a
+  pointer to its digest file, so no typed line is long enough to be folded as
+  pasted content.
 - **Busy and composer guards on the supervisor pane** - before injecting, the daemon runs the detected-primary-harness rendered busy guard and reads `fm_backend_composer_state` directly.
   Only `empty` permits injection; `pending` protects half-typed or swallowed input, and `unknown` protects unreadable panes and bare dead-shell prompts.
   Every other result preserves the buffer for retry, so the daemon never merges its digest into the captain's half-typed line or types it into a shell.
@@ -219,9 +233,8 @@ The single-line format makes submission unambiguous across harnesses; the carrie
   no-op.
 - **Verified type-once submit model** - the digest is typed once (`send-keys -l`
   on tmux, `pane send-text` on herdr), then submitted with Enter and verified.
-  Enter is retried, Enter only and never a retype, until the backend submit
-  primitive reports `empty` as its caller-facing success verdict.
-  For tmux that verdict normally means the shared classifier proved the composer cleared; a baseline-gated idle-to-busy transition may instead prove this Enter started the turn.
+  Enter is retried, Enter only and never a retype, until delivery is proven.
+  For tmux that proof is the typed digest shown before Enter, then gone with a proven turn start (see Submit model above).
   For herdr's idle-baseline path it means native agent-state observed a turn start, the shared classifier proved the composer cleared, or the shared queued-Enter verdict proved delivery while busy.
   This lets ghost-only or bordered-empty composers count as empty where a composer read is the active confirmation signal.
 - **Marker strip** - `strip_injection_marker` removes the current operational

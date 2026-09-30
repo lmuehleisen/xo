@@ -66,6 +66,12 @@ fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
   fm_tmux_submit_core "$@"
 }
 
+# Shell execution verification is separate from agent-composer submission.
+# The shared owner takes already-typed text and a caller execution postcondition.
+fm_backend_tmux_submit_shell_enter() { # <target> <text> <postcondition> [args...]
+  fm_tmux_shell_submit_enter "$@"
+}
+
 # fm_backend_tmux_container_ensure: reuse the current tmux session when
 # firstmate itself runs inside tmux, else ensure a dedicated detached
 # "firstmate" session exists. Mirrors fm-spawn.sh's container-ensure block;
@@ -113,12 +119,15 @@ fm_backend_tmux_current_path() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
 }
 
-# fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
-# composer verification - used for the fixed spawn-time commands
-# (`treehouse get`, the GOTMPDIR export) that already ran this exact sequence
-# inline in fm-spawn.sh. Mirrors `tmux send-keys -t "$T" "<text>" Enter`.
-fm_backend_tmux_send_text_line() {  # <target> <text>
-  tmux send-keys -t "$1" "$2" Enter
+# fm_backend_tmux_send_text_line: shell TEXT followed by Enter by default.
+# --defer-enter preserves the shell-text transport while letting the caller
+# settle and use fm_backend_tmux_submit_shell_enter for execution verification.
+fm_backend_tmux_send_text_line() { # <target> <text> [--defer-enter]
+  case "${3:-}" in
+    '') tmux send-keys -t "$1" "$2" Enter ;;
+    --defer-enter) tmux send-keys -t "$1" "$2" ;;
+    *) return 1 ;;
+  esac
 }
 
 # fm_backend_tmux_send_literal: send TEXT as literal bytes with no
@@ -301,17 +310,106 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
       done
 }
 
+# fm_backend_tmux_target_presence: the one owner of tmux endpoint presence.
+# Prints `present`, `missing`, or `unreadable` for <target>, and both the cheap
+# probe (bin/fm-backend.sh's fm_backend_target_exists, which fm-crew-state.sh
+# also routes through) and the recovery-grade classifier below consume it.
+#
+# Presence is decided from an exact inventory, never from whether an addressed
+# read exits 0: `tmux display-message -t` exits 0 for ANY target while a server
+# runs (a missing window falls back to the session's active window, a missing
+# session prints empty fields), so a closed window or a restarted server read
+# alive. Unanchored targets also prefix-match, so the session is anchored with
+# `=`: `list-windows -t =<session>` is exact, while `list-panes -s -t
+# =<session>` is not unless the target ends in `:` (verified on tmux 3.7c).
+#
+# Accepted shapes: `<session>:<window-name>` (the recorded task form, one call),
+# `<session>:<index>`, `<session>:<window>.<pane-index|%pane-id>`,
+# `<session>:@window-id|%pane-id`, and a bare `%pane-id` or `@window-id` (the
+# supervisor pane from $TMUX_PANE). Anything else is `unreadable`.
+# A definitive no-session/no-server/no-socket answer is `missing`; any other
+# inventory failure is `unreadable`, so a transient tmux problem never
+# licenses a duplicate.
+fm_backend_tmux_target_presence() {  # <target> -> present|missing|unreadable
+  local target=$1 session='' window inventory status idx name pidx pid wid
+  case "$target" in
+    %?*)
+      if inventory=$(LC_ALL=C tmux list-panes -a -F '#{pane_id}' 2>&1); then status=0; else status=$?; fi
+      window=$target
+      ;;
+    @?*)
+      if inventory=$(LC_ALL=C tmux list-windows -a -F '#{window_id}' 2>&1); then status=0; else status=$?; fi
+      window=$target
+      ;;
+    *:*:*|'':*|*:'') printf 'unreadable'; return 0 ;;
+    *:*)
+      session=${target%%:*}
+      session=${session#=}
+      window=${target#*:}
+      window=${window#=}
+      [ -n "$session" ] && [ -n "$window" ] || { printf 'unreadable'; return 0; }
+      # fm_backend_tmux_window_inventory owns the missing-versus-unreadable
+      # verdict for a named session; only the id forms above classify here.
+      if inventory=$(fm_backend_tmux_window_inventory "=$session"); then status=0; else status=$?; fi
+      case $status in
+        0) ;;
+        2) printf 'missing'; return 0 ;;
+        *) printf 'unreadable'; return 0 ;;
+      esac
+      ;;
+    *) printf 'unreadable'; return 0 ;;
+  esac
+  if [ "$status" -ne 0 ]; then
+    case "$inventory" in
+      *"can't find session:"*|*"no server running on "*|*"error connecting to "*" (No such file or directory)"|*"error connecting to "*" (Connection refused)")
+        printf 'missing'
+        ;;
+      *)
+        printf 'unreadable'
+        ;;
+    esac
+    return 0
+  fi
+  if printf '%s\n' "$inventory" | grep -Fqx -- "$window"; then
+    printf 'present'
+    return 0
+  fi
+  # Only an index, a pane-qualified window, or an id can still name a pane the
+  # name inventory did not list, so a plain recorded name costs one call.
+  case "$session:$window" in
+    ?*:[0-9]*|?*:*.*|?*:[%@]*) ;;
+    *) printf 'missing'; return 0 ;;
+  esac
+  # `:` separates the fixed fields and the window name comes last, so any
+  # character in a name survives the read (tmux rewrites control-character
+  # separators under LC_ALL=C).
+  if inventory=$(LC_ALL=C tmux list-panes -s -t "=$session:" \
+      -F '#{window_index}:#{pane_index}:#{pane_id}:#{window_id}:#{window_name}' 2>&1); then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 0 ] || { printf 'unreadable'; return 0; }
+  while IFS=: read -r idx pidx pid wid name; do
+    [ -n "$pid" ] || continue
+    case "$window" in
+      "$idx"|"$wid"|"$pid"|"$idx.$pidx"|"$name.$pidx"|"$idx.$pid"|"$name.$pid")
+        printf 'present'
+        return 0
+        ;;
+    esac
+  done <<EOF
+$inventory
+EOF
+  printf 'missing'
+}
+
 # fm_backend_tmux_agent_state: recovery-grade harness-agent state for one
 # recorded target. See bin/fm-backend.sh's fm_backend_agent_state for the
 # shared state vocabulary and docs/tmux-backend.md "Agent liveness probe" for
-# the empirical basis. Tmux silently falls back to the active window when a
-# named target is absent, so the exact recorded window must appear in a
-# successful session inventory before its foreground command can be trusted.
-# An omitted window or a definitive missing-session/server response is
-# `missing`; any other inventory or pane read failure is `unreadable`, so a
-# transient tmux problem never licenses a duplicate.
-# fm_backend_tmux_window_inventory above owns that read classification, shared
-# with fm_backend_tmux_kill so both mean the same thing by an absent session.
+# the empirical basis. The recorded endpoint must be proven present by
+# fm_backend_tmux_target_presence above before its foreground command can be
+# trusted, and that owner's `missing` versus `unreadable` split carries through.
 #
 # The verdict combines two independent name sources rather than trusting either
 # alone. Either source naming a verified harness is enough for `alive`, because
@@ -320,29 +418,18 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
 # authoritative for the negative verdicts, since it is the only source that can
 # distinguish a truly idle pane from a rewritten process title.
 fm_backend_tmux_agent_state() {  # <target>
-  local target=$1 comm session window windows inventory_status
+  local target=$1 comm
   local foreground argv0s name pid fg_seen=0 fg_shell=0 fg_other=0
   case "$target" in
     *:*:*|'':*|*:'') printf 'unreadable'; return 0 ;;
     *:*) ;;
     *) printf 'unreadable'; return 0 ;;
   esac
-  session=${target%%:*}
-  window=${target#*:}
-  windows=$(fm_backend_tmux_window_inventory "$session")
-  inventory_status=$?
-  if [ "$inventory_status" -ne 0 ]; then
-    if [ "$inventory_status" -eq 2 ]; then
-      printf 'missing'
-    else
-      printf 'unreadable'
-    fi
-    return 0
-  fi
-  if ! printf '%s\n' "$windows" | grep -Fqx "$window"; then
-    printf 'missing'
-    return 0
-  fi
+  case "$(fm_backend_tmux_target_presence "$target")" in
+    present) ;;
+    missing) printf 'missing'; return 0 ;;
+    *) printf 'unreadable'; return 0 ;;
+  esac
 
   foreground=$(fm_backend_tmux_foreground_comms "$target")
   while IFS= read -r name; do

@@ -20,7 +20,7 @@
 set -u
 
 # shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh" || exit 1
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-control-lib.sh"
 # shellcheck source=/dev/null
@@ -35,17 +35,18 @@ BRIEF="$ROOT/bin/fm-brief.sh"
 X_LINK="$ROOT/bin/fm-x-link.sh"
 # fm_test_tmproot's own cleanup trap fires when its command substitution exits,
 # so recreate the root before resolving it and clean it up from this file's trap.
-TMP_ROOT=$(fm_test_tmproot fm-control-relaunch)
-mkdir -p "$TMP_ROOT"
-TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
+TMP_ROOT=$(fm_test_tmproot fm-control-relaunch) || exit 1
+mkdir -p "$TMP_ROOT" || exit 1
+TMP_ROOT=$(cd "$TMP_ROOT" && pwd) || exit 1
+fm_test_require_tmproot "$TMP_ROOT"
 TASK_TMPS=()
 
 relaunch_cleanup() {
   local d
   for d in "${TASK_TMPS[@]:-}"; do
-    [ -n "$d" ] && rm -rf "$d"
+    fm_test_remove_tree "${d:-}"
   done
-  rm -rf "$TMP_ROOT"
+  fm_test_remove_tree "${TMP_ROOT:-}"
 }
 trap relaunch_cleanup EXIT
 
@@ -72,6 +73,9 @@ case "${1:-}" in
     done
     payload=${1:-}
     if [ "$literal" = 1 ]; then
+      # The pane shows what was typed (the staged file's source line), while the
+      # literal log records the launch command that line runs.
+      typed=$payload
       case "$payload" in
         ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
       esac
@@ -82,13 +86,31 @@ case "${1:-}" in
           [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
         *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)
-          cat "$D/becomes" > "$D/command"
+          if [ -n "${FM_FAKE_DROP_LAUNCH_ENTER:-}" ]; then
+            printf '%s' "$typed" > "$D/pending-launch"
+          elif [ -n "${FM_FAKE_LAUNCH_INTERMEDIATE:-}" ]; then
+            printf 'launcher' > "$D/command"
+            printf '0' > "$D/launch-command-reads"
+          else
+            cat "$D/becomes" > "$D/command"
+          fi
           [ -z "${FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START:-}" ] || exit 1
           ;;
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
       case "$payload" in
+        Enter)
+          if [ -s "$D/pending-launch" ]; then
+            n=0; [ ! -f "$D/launch-enters" ] || n=$(cat "$D/launch-enters")
+            n=$((n + 1)); printf '%s' "$n" > "$D/launch-enters"
+            if [ "$FM_FAKE_DROP_LAUNCH_ENTER" != all ] && [ "$n" -gt 1 ]; then
+              cat "$D/becomes" > "$D/command"
+              : > "$D/pending-launch"
+            fi
+          fi
+          ;;
+        C-u) : > "$D/pending-launch" ;;
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
@@ -105,7 +127,13 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
-        *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
+        *pane_current_command*)
+          if [ -f "$D/launch-command-reads" ]; then
+            n=$(cat "$D/launch-command-reads"); n=$((n + 1))
+            printf '%s' "$n" > "$D/launch-command-reads"
+            [ "$n" -lt 3 ] || cat "$D/becomes" > "$D/command"
+          fi
+          cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
             : > "$FM_FAKE_CWD_RACE_READY"
@@ -116,6 +144,10 @@ case "${1:-}" in
     done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
+    if [ -s "$D/pending-launch" ]; then
+      printf '$ %s\n' "$(cat "$D/pending-launch")"
+      exit 0
+    fi
     [ -z "${FM_FAKE_COMPOSER_READ_FAIL:-}" ] || exit 1
     if [ -s "$D/composer" ]; then
       printf '╭────╮\n│ %s  │\n╰────╯\n' "$(cat "$D/composer")"
@@ -363,6 +395,44 @@ SH
 }
 
 # --- 1. same-harness relaunch -----------------------------------------------
+
+test_relaunch_recovers_dropped_enter() {
+  local dir out rc
+  dir=$(new_case lost-enter lost1)
+  add_ship_task "$dir" lost1 claude
+  out=$(FM_FAKE_DROP_LAUNCH_ENTER=first run_control "$dir" lost1 relaunch --note "retry submission"); rc=$?
+  expect_code 0 "$rc" "lost Enter relaunch failed: $out"
+  [ "$(cat "$dir/fake/launch-enters")" = 2 ] || fail "expected exactly one Enter retry"
+  # A Claude launch carries its brief as a record-backed doorbell (bin/fm-spawn.sh).
+  [ "$(grep -c -e 'encode launch-brief' -e 'Firstmate operational input waiting: read' "$dir/fake/literal")" = 1 ] \
+    || fail "launch was retyped"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "agent never ran"
+  pass "relaunch retries a lost Enter without retyping and proves an agent is running"
+}
+
+test_relaunch_accepts_launcher_before_agent() {
+  local dir out rc
+  dir=$(new_case intermediate launch3)
+  add_ship_task "$dir" launch3 claude
+  out=$(FM_FAKE_LAUNCH_INTERMEDIATE=1 run_control "$dir" launch3 relaunch --note "allow launcher startup"); rc=$?
+  expect_code 0 "$rc" "launcher transition failed: $out"
+  [ "$(cat "$dir/fake/launch-command-reads")" -ge 3 ] || fail "agent wait did not follow shell execution"
+  [ "$(journal_field "$dir" launch3 phase)" = complete ] || fail "agent was not confirmed"
+  pass "a changed foreground launcher confirms submission before control confirms the agent"
+}
+
+test_relaunch_clears_exhausted_submit() {
+  local dir out rc
+  dir=$(new_case lost-all lost2)
+  add_ship_task "$dir" lost2 claude
+  out=$(FM_FAKE_DROP_LAUNCH_ENTER=all run_control "$dir" lost2 relaunch --note "retry submission"); rc=$?
+  [ "$rc" -ne 0 ] || fail "unsubmitted relaunch succeeded"
+  [ "$(cat "$dir/fake/launch-enters")" = 3 ] || fail "retry budget not bounded"
+  [ ! -s "$dir/fake/pending-launch" ] || fail "owned launch left pending"
+  assert_contains "$out" 'cleared owned input' "cleanup not reported"
+  assert_present "$dir/wt" "failure lost worktree"
+  pass "relaunch clears its own command when all Enter attempts are lost"
+}
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   local dir out rc gen_before gen_after
@@ -1100,7 +1170,7 @@ test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch() {
 }
 
 test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
-  local dir home id brief launch out mode rule
+  local dir home id brief launch out mode effective rule
   for mode in no-mistakes direct-PR local-only; do
     id="rl-promoted-${mode}"
     dir=$(new_case "promoted-scout-$mode" "$id")
@@ -1143,7 +1213,9 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
     assert_grep 'Any earlier "Never push" or scout-only delivery language in this file is superseded' "$launch" \
       "$mode: the replacement launch left the stale scout prohibition readable at face value"
     case "$mode" in
-      direct-PR)
+      # This fork ships a no-mistakes token direct-PR unless config/no-mistakes
+      # opts the home into the pipeline, so it gets the direct-PR rule here.
+      direct-PR|no-mistakes)
         rule="1. Never push to the default branch (push only your \`fm/$id\` branch). Never merge a PR." ;;
       local-only)
         rule="1. Never push to any remote and never open a PR. Work only on your \`fm/$id\` branch; firstmate handles the merge into local \`main\`." ;;
@@ -1158,7 +1230,10 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
       "$mode: the replacement launch did not receive the scratch-state inventory step"
     assert_grep 'Carry over only the intended fix changes' "$launch" \
       "$mode: the replacement launch did not receive the carry-over boundary"
-    assert_grep "Delivery contract: mode=$mode" "$launch" \
+    # Without config/no-mistakes the no-mistakes token records its effective mode.
+    effective=$mode
+    [ "$mode" != no-mistakes ] || effective=direct-PR
+    assert_grep "Delivery contract: mode=$effective" "$launch" \
       "$mode: the replacement launch did not receive the actual ship delivery mode"
   done
   pass "fm-promote/fm-spawn --relaunch: the current ship contract supersedes stale scout delivery text"
@@ -2386,6 +2461,9 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
   pass "relaunch heals an item that drifted out of In flight while the task stayed live"
 }
 
+test_relaunch_recovers_dropped_enter
+test_relaunch_clears_exhausted_submit
+test_relaunch_accepts_launcher_before_agent
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven

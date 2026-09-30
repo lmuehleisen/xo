@@ -11,6 +11,7 @@ TMP_ROOT=$(fm_test_tmproot fm-on)
 # and physicalize macOS's /var -> /private/var alias before transport validation.
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
+fm_test_require_tmproot "$TMP_ROOT"
 cleanup() {
   local pid
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
@@ -22,7 +23,7 @@ cleanup() {
     FM_REMOTE_JOB_STATE="$TMP_ROOT/remote-jobs"
     fm_remote_job_stop_worker_tree "$pid" 2>/dev/null || true
   fi
-  rm -rf -- "$TMP_ROOT"
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
 }
 trap cleanup EXIT
 LOCAL_HOME="$TMP_ROOT/local-home"

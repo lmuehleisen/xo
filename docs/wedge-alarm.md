@@ -28,12 +28,20 @@ On timeout or daemon shutdown, the notifier process group is terminated and the 
 AppleScript receives the summary as an argv item rather than interpolated source, so summary text cannot alter the script.
 See [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
+## Away watchdog trigger
+
+The fork-only away watchdog (`bin/fm-afk-sentinel.sh`) fires the same channels.
+It runs detached, outside tmux and the harness, from `/afk` entry until the return, so it survives a lost fleet tmux server that takes the daemon down with it.
+It alarms when the fleet's tmux server process or the watcher's liveness beacon stops, at most once per hour, and the return brief reports each finding as a gap.
+Its script header owns the checks, thresholds, and files.
+
 ## Test safety
 
 Every notifier routes through `FM_WEDGE_ALARM_EXEC` in `wedge_alarm_emit`.
 When the daemon is sourced as a library, that seam defaults to `discard`, so a test cannot accidentally post a real notification.
 `tests/wake-helpers.sh` replaces it with a recorder when a suite needs to assert channel selection and summary propagation.
 Production leaves the seam unset and uses the configured real channels.
+The away watchdog sources the daemon for its channels and then restores the seam to exactly what its own environment set, because it is an executed production program, so its tests set the recorder explicitly.
 
 `tests/fm-daemon.test.sh` covers directive parsing, rate limiting, timeout and process-group cleanup, argv-safe dispatch, channel fallback, and safe `command:` summary delivery.
 [`verification/supervision.md`](verification/supervision.md#wedge-alarm-channels) records the bounded manual macOS and Herdr channel proof.

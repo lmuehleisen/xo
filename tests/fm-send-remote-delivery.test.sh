@@ -45,6 +45,7 @@ DRAIN="$ROOT/bin/fm-wake-drain.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-send-remote-delivery)
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
+fm_test_require_tmproot "$TMP_ROOT"
 
 # Stub tmux for the local typed-plane legs: logs literal typed text to
 # FM_SEND_LOG. The default composer reads empty (clean submit);
@@ -87,7 +88,7 @@ case "${1:-}" in
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
     exit 0 ;;
-  list-windows) exit 0 ;;
+  list-windows) printf '%s\n' win fm-t2 fm-lsm; exit 0 ;;
 esac
 exit 0
 SH

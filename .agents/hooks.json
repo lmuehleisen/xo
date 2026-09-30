@@ -1,0 +1,7 @@
+{
+  "firstmate-primary": {
+    "PreInvocation": [{"command": "../bin/fm-agy-hook.sh primary PreInvocation"}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"command": "../bin/fm-agy-hook.sh primary PreToolUse"}]}],
+    "Stop": [{"command": "../bin/fm-agy-hook.sh primary Stop"}]
+  }
+}

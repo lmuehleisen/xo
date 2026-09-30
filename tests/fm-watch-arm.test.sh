@@ -211,6 +211,74 @@ test_attached_arm_reports_the_delivered_wake() {
   pass "watch-arm: an attached arm reports the wake its cycle delivered instead of a false failure"
 }
 
+# An arm attached to a watcher it does not own honors the Stop hook's
+# FM_WATCH_DEADLINE by closing itself with the queued no-op wake, and leaves
+# that watcher running.
+test_attached_arm_closes_at_its_deadline() {
+  local dir state fakebin out armout status
+  dir=$(make_case attached-deadline)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  start_seed_watcher "$state" "$fakebin" "$out"
+  FM_WATCH_DEADLINE=$(( $(date +%s) + 2 )) start_attached_arm "$state" "$fakebin" "$armout" 1
+
+  wait_for_exit "$ARM_PID" 100
+  status=$?
+  expect_code 0 "$status" "an attached arm past its deadline must close successfully"
+  grep -q '^check: autoarm-deadline' "$armout" \
+    || fail "attached arm did not report the deadline wake: $(cat "$armout")"
+  grep -q "$(printf '\tcheck\tautoarm-deadline\t')" "$state/.wake-queue" \
+    || fail "the deadline wake was not queued for the drain"
+  is_live_non_zombie "$SEED_PID" || fail "the deadline close stopped a watcher the arm did not own"
+  grep -q 'reason=deadline' "$state/.watch-cycle-exits.log" \
+    || fail "the deadline close was not classified in the lifecycle ledger"
+  kill "$SEED_PID" 2>/dev/null || true
+  wait "$SEED_PID" 2>/dev/null || true
+  pass "watch-arm: an attached arm closes at the hook deadline with one queued no-op wake and leaves the watcher alone"
+}
+
+# The deadline is an independent timer, not a check between watcher sweeps: a
+# watcher parked in a 60-second poll, which defers TERM until that sleep ends,
+# is still stopped and the cycle closed within the short stop grace.
+test_started_arm_closes_at_its_deadline_while_the_watcher_is_parked() {
+  local dir state fakebin armout status start elapsed watcher i
+  dir=$(make_case started-deadline)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  start=$(date +%s)
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=60 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DEADLINE=$((start + 4)) \
+    "$WATCH_ARM" > "$armout" &
+  ARM_PID=$!
+  i=0
+  while [ "$i" -lt 60 ] && ! grep -q '^watcher: started ' "$armout" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  watcher=$(sed -n 's/^watcher: started pid=\([0-9]*\).*/\1/p' "$armout")
+  [ -n "$watcher" ] || fail "the arm did not start a watcher: $(cat "$armout")"
+  wait_for_exit "$ARM_PID" 150
+  status=$?
+  elapsed=$(( $(date +%s) - start ))
+  expect_code 0 "$status" "a started arm past its deadline must close successfully"
+  [ "$elapsed" -le 12 ] || fail "the deadline close took ${elapsed}s instead of the deadline plus its stop grace"
+  grep -q '^check: autoarm-deadline' "$armout" \
+    || fail "the started arm did not report the deadline wake: $(cat "$armout")"
+  grep -q "$(printf '\tcheck\tautoarm-deadline\t')" "$state/.wake-queue" \
+    || fail "the deadline wake was not queued for the drain"
+  ! is_live_non_zombie "$watcher" || fail "the deadline close left the arm's own watcher running"
+  grep -q 'reason=deadline' "$state/.watch-cycle-exits.log" \
+    || fail "the deadline close was not classified in the lifecycle ledger"
+  ! grep -q 'signal=KILL' "$state/.watch-cycle-exits.log" \
+    || fail "the parked watcher was killed instead of running its own cleanup"
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" != "$watcher" ] \
+    || fail "the stopped watcher left its lock behind"
+  pass "watch-arm: a started arm closes at the hook deadline even while its watcher is parked mid-poll, and the watcher cleans up"
+}
+
 test_attached_arm_reports_the_delivered_wake_after_drain() {
   local dir state fakebin out armout status
   dir=$(make_case attached-drained-wake)
@@ -1319,6 +1387,8 @@ test_reaper_stops_a_tracked_watcher() {
 
 test_attached_arm_reports_the_delivered_wake
 test_attached_arm_reports_the_delivered_wake_after_drain
+test_attached_arm_closes_at_its_deadline
+test_started_arm_closes_at_its_deadline_while_the_watcher_is_parked
 test_arm_refuses_an_unusable_launch_confirm_window
 test_arm_refuses_a_disposable_validation_checkout
 test_watcher_exits_when_its_state_directory_is_removed

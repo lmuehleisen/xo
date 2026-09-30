@@ -144,6 +144,13 @@ init_changed_fixture_repo() {
   mkdir -p "$repo/tests/fixtures/demo"
   : >"$repo/tests/fixtures/demo/demo-fixture.sh"
   printf '# tests/fixtures/demo\n' >>"$repo/tests/fm-backend-orca.test.sh"
+  # A recorded capture directory and a top-level Python repro helper, each
+  # named only by its one reader.
+  mkdir -p "$repo/tests/captures/demo-v1"
+  : >"$repo/tests/captures/demo-v1/idle.toon"
+  printf '# tests/captures/demo-v1/idle.toon\n' >>"$repo/tests/fm-afk-return.test.sh"
+  : >"$repo/tests/fm-demo-repro.py"
+  printf '# fm-demo-repro.py\n' >>"$repo/tests/fm-daemon.test.sh"
   # A shared helper with no curated family of its own, named by exactly ONE
   # script of the expensive real-Herdr family and consumed by one curated
   # watcher script. This is the shape that made a one-line helper change select
@@ -716,6 +723,7 @@ test_empty_selection_emits_summary() {
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
   printf 'documentation only\n' >"$repo/README.md"
+  printf 'bot profile, documentation only\n' >"$repo/GROK_BOT.md"
   out=$(cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --json "$tmp/artifacts/timing.json" 2>"$tmp/err") \
     || fail "empty valid changed selection must pass"
   printf '%s\n' "$out" | grep -Eq \
@@ -1372,9 +1380,24 @@ test_changed_shared_fixture_selects_its_readers() {
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-backend-orca.test.sh" \
     "a nested fixture selects the suite that reads its directory"
+  git -C "$repo" checkout -q -- tests/fixtures/demo/demo-fixture.sh
+
+  # A recorded capture selects the suite that reads its directory, and a
+  # top-level repro helper selects the suite that names it.
+  printf '\n' >>"$repo/tests/captures/demo-v1/idle.toon"
+  printf '\n' >>"$repo/tests/fm-demo-repro.py"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-afk-return.test.sh" \
+    "a recorded capture selects the suite that reads its directory"
+  assert_contains "$listed" "tests/fm-daemon.test.sh" \
+    "a repro helper selects the suite that names it"
+  case "$listed" in
+    *fm-backend-orca.test.sh*)
+      fail "capture and repro selection widened past their readers: $listed" ;;
+  esac
 
   rm -rf "$tmp"
-  pass "a changed shared test fixture selects its readers while an unread tests/ path still refuses"
+  pass "changed shared fixtures, captures, and repro helpers select their readers while an unread tests/ path still refuses"
 }
 
 # Workers are handed scripts in order, so the slowest script must start first or

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Security and regression tests for canonical PR parsing, static merge polls,
 # private atomic artifacts, authenticated custom checks, and teardown cleanup.
+# Metadata identity stays bound to the single pr=<url> even when later writers
+# such as fm-captain-hold.sh complete and fm-control.sh relaunch append keys
+# after that line; a genuinely altered or unbound poll is still refused.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -202,17 +205,6 @@ case " $* " in
     ;;
 esac
 SH
-  cat > "$fakebin/gh-axi" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
-case "${1:-} ${2:-}" in
-  "pr view")
-    [ "$#" -eq 5 ] && [ "${4:-}" = --repo ] || exit 2
-    printf 'pull_request:\n  number: %s\n  state: %s\n' "$3" "${FM_TEST_GH_MERGE_STATE:-merged}"
-    ;;
-esac
-exit "${FM_TEST_GH_AXI_RC:-0}"
-SH
   # Plain glab, reproducing the real CLI's contract: its field output on stdout
   # and exit 0 on success, and a non-zero exit with no stdout on any failure.
   cat > "$fakebin/glab" <<'SH'
@@ -266,10 +258,9 @@ if [ -n "${FM_TEST_NM_NEXT_ACTION:-}" ]; then
   printf '  next_action:\n    code: %s\n    command: no-mistakes axi status\n' "$FM_TEST_NM_NEXT_ACTION"
 fi
 SH
-  chmod +x "$fakebin/gh" "$fakebin/gh-axi" "$fakebin/glab" "$fakebin/gerrit-axi"
+  chmod +x "$fakebin/gh" "$fakebin/glab" "$fakebin/gerrit-axi"
   chmod +x "$fakebin/no-mistakes"
   : > "$dir/gh.log"
-  : > "$dir/gh-axi.log"
   : > "$dir/glab.log"
   : > "$dir/gerrit-axi.log"
   : > "$dir/guard.log"
@@ -287,8 +278,8 @@ write_task_meta() {
     "mode=no-mistakes"
 }
 
-# Extra "field=value" arguments are written before pr=, because
-# fm_pr_metadata_identity_parse rejects an unrecognised line after it.
+# Extra "field=value" arguments are written before pr=, leaving pr= last the
+# way bin/fm-pr-check.sh arms a record.
 write_poll_meta() {
   local state=$1 id=$2 url=$3 case_dir
   case_dir=$(cd "$state/../.." && pwd)
@@ -306,7 +297,7 @@ run_check_entry() {
   shift
   FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" \
     FM_TEST_GUARD_LOG="$dir/guard.log" FM_TEST_GH_LOG="$dir/gh.log" \
-    FM_TEST_GH_AXI_LOG="$dir/gh-axi.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
+    FM_TEST_GLAB_LOG="$dir/glab.log" \
     FM_TEST_GERRIT_AXI_LOG="$dir/gerrit-axi.log" \
     PATH="$dir/fakebin:$BASE_PATH" \
     "$PR_CHECK" "$@"
@@ -317,7 +308,7 @@ run_merge_entry() {
   shift
   FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" \
     FM_TEST_GUARD_LOG="$dir/guard.log" FM_TEST_GH_LOG="$dir/gh.log" \
-    FM_TEST_GH_AXI_LOG="$dir/gh-axi.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
+    FM_TEST_GLAB_LOG="$dir/glab.log" \
     FM_TEST_GERRIT_AXI_LOG="$dir/gerrit-axi.log" \
     PATH="$dir/fakebin:$BASE_PATH" \
     "$PR_MERGE" "$@"
@@ -621,7 +612,6 @@ test_invalid_entrypoints_have_zero_side_effects() {
   [ "$rc" -ne 0 ] || fail "merge entrypoint accepted zero arguments"
 
   [ ! -s "$dir/gh.log" ] || fail "invalid direct or merge data called gh"
-  [ ! -s "$dir/gh-axi.log" ] || fail "invalid direct or merge data called gh-axi"
   [ ! -s "$dir/guard.log" ] || fail "invalid direct or merge data called the guard"
   [ ! -e "$TMP_ROOT/escape.check.sh" ] || fail "task traversal wrote outside state"
   pass "PR and teardown entrypoints reject invalid arguments before every side effect"
@@ -1546,6 +1536,200 @@ SH
   pass "teardown removes safe poll artifacts and refuses directory-shaped check files without traversal"
 }
 
+# Arm a GitHub poll the way fm-pr-check.sh does, leaving pr= and pr_head= last.
+arm_github_poll() {  # <case-dir> <id> <url>
+  local dir=$1 id=$2 url=$3
+  write_task_meta "$dir" "$id"
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" "$id" "$url" >/dev/null 2>/dev/null \
+    || fail "could not arm the merge poll for $id"
+  fm_pr_poll_artifacts_valid "$dir/home/state" "$id" "$POLL" \
+    || fail "the armed merge poll for $id was not initially valid"
+}
+
+# fm-captain-hold.sh complete appends decisions_reviewed= and decision_keys=
+# onto the origin metadata. A complete that runs after arming used to land
+# them after pr= and disarm the poll. Drive the real writer.
+test_fm_captain_hold_complete_does_not_disarm_an_armed_poll() {
+  local dir state
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi is not installed, so the origin attestation is inert"
+    return 0
+  }
+  dir=$(make_case hold-complete-after-pr)
+  state="$dir/home/state"
+  arm_github_poll "$dir" task-a https://github.com/o/r/pull/10
+  cp "$ROOT/.tasks.toml" "$dir/home/.tasks.toml"
+  cat > "$dir/home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  (cd "$dir/home" && tasks-axi add task-a "poll identity fixture" --kind ship --start >/dev/null) \
+    || fail "could not file the origin for fm-captain-hold.sh complete"
+  PATH="$dir/fakebin:$(dirname "$(command -v tasks-axi)"):$PATH" \
+    FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$dir/home/data" \
+    FM_CONFIG_OVERRIDE="$dir/home/config" \
+    "$ROOT/bin/fm-captain-hold.sh" complete task-a --none >/dev/null \
+    || fail "fm-captain-hold.sh complete --none failed after the poll was armed"
+  assert_grep "decisions_reviewed=1" "$state/task-a.meta" \
+    "fm-captain-hold.sh complete did not attest on the origin"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "fm-captain-hold.sh complete after pr= disarmed the armed poll"
+  pass "fm-captain-hold.sh complete after pr= leaves the armed poll bound"
+}
+
+# fm-control.sh relaunch / fm-spawn.sh --relaunch preserve unowned keys such as
+# pr= and pr_head=, then write control_relaunch_tx= last. That published shape
+# used to fail the post-pr= whitelist and disarm the poll.
+test_fm_control_relaunch_does_not_disarm_an_armed_poll() {
+  local dir state
+  dir=$(make_case control-relaunch-after-pr)
+  state="$dir/home/state"
+  arm_github_poll "$dir" task-a https://github.com/o/r/pull/10
+  printf 'control_relaunch_tx=%s\n' '12345.20260907T000000Z.1' >> "$state/task-a.meta"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "fm-control.sh relaunch control_relaunch_tx= after pr= disarmed the armed poll"
+  pass "fm-control.sh relaunch after pr= leaves the armed poll bound"
+}
+
+# The parse still refuses a binding whose pr= no longer matches the sidecar,
+# a second pr= line, garbage after pr=, a malformed key after pr=, and an
+# invalid pr_head= after pr=.
+test_armed_poll_still_refuses_a_tampered_binding() {
+  local dir state before
+  dir=$(make_case tampered-pr-identity)
+  state="$dir/home/state"
+  arm_github_poll "$dir" task-a https://github.com/o/r/pull/10
+  before=$(cat "$state/task-a.meta")
+
+  awk -F= '
+    $1 == "pr" { print "pr=https://github.com/o/r/pull/99"; next }
+    { print }
+  ' "$state/task-a.meta" > "$state/task-a.meta.swapped"
+  mv "$state/task-a.meta.swapped" "$state/task-a.meta"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a swapped pr= URL remained bound to the original sidecar"
+
+  printf '%s\n' "$before" > "$state/task-a.meta"
+  printf 'pr=https://github.com/o/r/pull/99\n' >> "$state/task-a.meta"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a second pr= line remained an authenticated binding"
+
+  printf '%s\n' "$before" > "$state/task-a.meta"
+  printf '# not-a-key\n' >> "$state/task-a.meta"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a non-key line after pr= remained an authenticated binding"
+
+  printf '%s\n' "$before" > "$state/task-a.meta"
+  printf 'not a key=1\n' >> "$state/task-a.meta"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a malformed key after pr= remained an authenticated binding"
+
+  printf '%s\n' "$before" > "$state/task-a.meta"
+  printf 'pr_head=not-a-sha\n' >> "$state/task-a.meta"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "an invalid pr_head= after pr= remained an authenticated binding"
+
+  pass "a genuinely altered or unbound poll is still refused"
+}
+
+# Rewrite the device half of the identity lines <lines...> of <file> in place,
+# keeping its inode, mode, and every inode half, the way macOS APFS renumbers
+# st_dev across a reboot while the recorded registration keeps the old value.
+renumber_recorded_device() {  # <file> <line>...
+  local file=$1 tmp
+  shift
+  tmp="$file.renumber"
+  awk -v lines=" $* " '
+    index(lines, " " NR " ") && $0 ~ /^[0-9]+:[0-9]+$/ {
+      split($0, part, ":")
+      printf "%d:%s\n", part[1] + 7, part[2]
+      next
+    }
+    { print }
+  ' "$file" > "$tmp" || fail "could not renumber recorded devices in $file"
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+test_device_renumbering_keeps_the_poll_bound() {
+  local dir state reg before after live
+  dir=$(make_case device-renumbered)
+  state="$dir/home/state"
+  arm_github_poll "$dir" task-a https://github.com/o/r/pull/10
+  reg="$state/task-a.pr-poll-registration"
+  before=$(sed -n '10,11p' "$reg")
+  renumber_recorded_device "$reg" 10 11
+  after=$(sed -n '10,11p' "$reg")
+  [ "$after" != "$before" ] || fail "the device renumbering fixture changed nothing"
+  [ "${after##*:}" = "${before##*:}" ] || fail "the device renumbering fixture changed an inode"
+  live=$(fm_pr_file_identity "$state/task-a.check.sh")
+  [ "$(sed -n '11p' "$reg")" != "$live" ] || fail "the recorded check identity still equals the live one"
+  # Registrations compare strictly and are re-recorded once the device is
+  # proven the only difference (upstream's mechanism, fm-pr-lib.sh header).
+  fm_pr_poll_registration_rerecord_device "$state" task-a "$POLL" \
+    || fail "a device id renumbered after reboot could not be re-recorded although inodes and bytes match"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a device id renumbered after reboot disarmed a poll whose inodes and bytes match"
+  fm_pr_poll_snapshot_capture "$state" task-a "$POLL" \
+    || fail "the watcher snapshot refused a poll after device renumbering"
+
+  "$REAL_CP" "$state/task-a.check.sh" "$state/task-a.check.sh.new"
+  chmod 0600 "$state/task-a.check.sh.new"
+  "$REAL_MV" -f "$state/task-a.check.sh.new" "$state/task-a.check.sh"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a replaced check file with a new inode stayed bound after device renumbering"
+
+  dir=$(make_case device-renumbered-receipt)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/4
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/4
+  renumber_recorded_device "$state/task-a.pr-poll-registration" 10 11
+  fm_pr_poll_registration_rerecord_device "$state" task-a "$POLL" \
+    || fail "could not re-record the renumbered receipt fixture"
+  fm_pr_poll_snapshot_capture "$state" task-a "$POLL" || fail "could not snapshot the renumbered receipt fixture"
+  fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged \
+    || fail "could not publish a receipt for the renumbered fixture"
+  renumber_recorded_device "$state/task-a.pr-poll-retirement" 13
+  fm_pr_poll_retirement_recover_one "$state" task-a "$POLL" \
+    || fail "a device id renumbered after reboot stranded a pending retirement"
+  assert_poll_absent "$state" task-a
+  pass "a reboot that renumbers the state device keeps polls and receipts bound by inode"
+}
+
+test_watcher_names_a_mismatched_poll_plainly() {
+  local dir state rc
+  dir=$(make_case watcher-mismatch-label)
+  state="$dir/home/state"
+  arm_github_poll "$dir" task-a https://github.com/o/r/pull/10
+  printf 'pr=https://github.com/o/r/pull/99\n' >> "$state/task-a.meta"
+  printf '#!/usr/bin/env bash\nprintf "custom-ready\\n"\n' > "$state/custom.check.sh"
+  chmod 0700 "$state/custom.check.sh"
+  : > "$dir/gh.log"
+  set +e
+  FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=MERGED \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "watcher failed on a mismatched poll: $(cat "$dir/watch.err")"
+  assert_grep "check: PR merge polls skipped, their files no longer match their registration (re-arm with bin/fm-pr-check.sh <id> <url>): $state/task-a.check.sh; check: rejected unauthenticated state checks: $state/custom.check.sh" \
+    "$dir/watch.out" "watcher did not name the mismatched poll and the untrusted check separately"
+  assert_grep "$(printf '\tcheck\tpr-poll-registration-mismatch\t')" "$state/.wake-queue" \
+    "mismatched poll wake was not queued under its own key"
+  assert_grep "$(printf '\tcheck\tunauthenticated-state-checks\tcheck: rejected unauthenticated state checks: %s' "$state/custom.check.sh")" \
+    "$state/.wake-queue" "untrusted custom check wake lost its own row"
+  assert_no_grep "unauthenticated state checks: $state/task-a.check.sh" "$dir/watch.out" \
+    "a mismatched PR poll was still called unauthenticated"
+  # Upstream's contributions observer, armed by the same fm-pr-check.sh, may
+  # read the PR through gh; only the merge poll's state read is forbidden here.
+  assert_no_grep "json state" "$dir/gh.log" "a mismatched poll ran gh"
+  pass "watcher names a mismatched PR poll as a registration mismatch, apart from untrusted checks"
+}
+
 # The Gerrit watch must follow a change exactly as the GitHub watch follows a
 # pull request, on any server, and must never turn an unreadable or merely
 # submittable change into a merge. Its evidence against a real change is in
@@ -1966,6 +2150,41 @@ test_gerrit_nm_ready_gate_requires_recovered_custody() {
   pass "a no-mistakes Gerrit ready report requires the pipeline's fixes recovered into the published copy"
 }
 
+# Without config/no-mistakes a no-mistakes task never runs the pipeline, so spawn
+# records effective_mode=direct-PR and its Gerrit ready report is judged as
+# direct-PR: the published tree alone decides, and no run is consulted. A task
+# whose effective mode is no-mistakes still owes the pipeline's result.
+test_gerrit_remapped_no_mistakes_ready_gate_is_direct() {
+  local dir state url head rc
+  dir=$(make_case gerrit-remapped-gate)
+  state="$dir/home/state"
+  ln -sf "$REAL_JQ" "$dir/fakebin/jq"
+  url=https://gerrit.example/c/group/apps/console/+/4202
+  printf 'value\n' > "$dir/wt/doc"
+  git -C "$dir/wt" add doc
+  git -C "$dir/wt" commit -q -m "Document the value"
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+
+  : > "$dir/nm.log"
+  write_task_meta "$dir" task-remapped
+  printf 'effective_mode=direct-PR\n' >> "$state/task-remapped.meta"
+  FM_TEST_GERRIT_REVISION=$head FM_TEST_NM_FAIL=1 FM_TEST_NM_LOG="$dir/nm.log" \
+    run_check_entry "$dir" task-remapped "$url" >/dev/null \
+    || fail "a remapped no-mistakes Gerrit publish was refused over a pipeline it never runs"
+  grep -qxF "pr=$url" "$state/task-remapped.meta" || fail "the remapped publish was not recorded"
+  [ ! -s "$dir/nm.log" ] || fail "a remapped no-mistakes Gerrit publish consulted no-mistakes"
+
+  url=https://gerrit.example/c/group/apps/console/+/4203
+  write_task_meta "$dir" task-opted
+  printf 'effective_mode=no-mistakes\n' >> "$state/task-opted.meta"
+  set +e
+  FM_TEST_GERRIT_REVISION=$head FM_TEST_NM_FAIL=1 run_check_entry "$dir" task-opted "$url" >/dev/null 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an opted-in no-mistakes Gerrit publish was accepted without a readable passed run"
+  pass "a remapped no-mistakes Gerrit ready report is judged as direct-PR"
+}
+
 # The GitLab watch must follow a merge request exactly as the GitHub watch
 # follows a pull request, on any instance, and must never turn an unreadable
 # merge request into a merge. Its evidence against the public fixture project
@@ -2074,7 +2293,7 @@ EOF
   [ "$rc" -ne 0 ] || fail "merge wrapper merged a GitLab merge request it could not read"
   grep -qF 'could not read the GitLab merge request state before merging' "$dir/merge-c.err" \
     || fail "merge wrapper refused for some reason other than the state it could not read"
-  [ ! -s "$dir/gh-axi.log" ] || fail "merge wrapper reached the GitHub CLI for a GitLab URL"
+  [ ! -s "$dir/gh.log" ] || fail "merge wrapper reached the GitHub CLI for a GitLab URL"
   grep -qF "mr view 7 -R https://gitlab.example/group/subgroup/project" "$dir/glab.log" \
     || fail "merge wrapper did not read the merge request through glab at its own instance"
   ! grep -qF ' mr merge ' "$dir/glab.log" \
@@ -2892,19 +3111,18 @@ test_merged_poll_row_carries_the_merge_authority() {
   local dir state url expected posture
   url=https://github.com/o/r/pull/1
 
-  # Both a yolo=on task and an ordinary one merge under the record's away
-  # authority; the words model retired the per-task grant and the yolo tag.
-  for posture in yolo words; do
+  for posture in yolo grant; do
     dir=$(make_case "queued-merge-authority-$posture")
     state="$dir/home/state"
     write_task_meta "$dir" task-a
     if [ "$posture" = yolo ]; then
       printf 'yolo=on\n' >> "$state/task-a.meta"
       write_away_record "$dir"
+      expected=yolo
     else
-      write_away_record "$dir" --words 'merge task-a when green'
+      write_away_record "$dir" --grant task-a
+      expected=away-grant
     fi
-    expected=away
     run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/seed.err" \
       || fail "$posture: could not arm the merge poll"
     queue_merge "$dir" "$url"
@@ -2916,7 +3134,7 @@ test_merged_poll_row_carries_the_merge_authority() {
       || fail "$posture: published merge left its authority record behind"
   done
 
-  pass "queued merges retain their away authority after captain return"
+  pass "queued merges retain yolo and away-grant after captain return"
 }
 
 test_merged_poll_row_names_no_authority_when_no_record_grants_one() {
@@ -3042,7 +3260,7 @@ test_teardown_cannot_race_authority_consumption() {
   rc=0
   wait "$watcher_pid" || rc=$?
   [ "$rc" -eq 0 ] || fail "teardown race: watcher failed with $rc: $(cat "$dir/watch.err")"
-  [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url away" ] \
+  [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url yolo" ] \
     || fail "teardown race: concurrent cleanup downgraded the merge authority"
   pass "teardown cannot race merged-poll authority consumption"
 }
@@ -3290,8 +3508,11 @@ SH
     set -e
     [ "$rc" -eq 0 ] || fail "$mutation watcher failed: $(cat "$dir/watch.err")"
     out=$(cat "$dir/watch.out")
+    # This fork reports a registered poll whose files no longer match as its
+    # own re-arm wake rather than a generic unauthenticated check.
     case "$out" in
       "check: rejected unauthenticated state checks:"*"task-a.check.sh"*) ;;
+      "check: PR merge polls skipped, their files no longer match their registration"*"task-a.check.sh"*) ;;
       *) fail "$mutation on a renumbered registration was not refused: $out" ;;
     esac
     [ "$(fm_pr_sha256 "$state/task-a.pr-poll-registration")" = "$registration_sha" ] \
@@ -3445,6 +3666,7 @@ test_gerrit_merge_watch
 test_gerrit_arming_records_no_patch_set_revision
 test_gerrit_ready_gate_reads_the_published_tree
 test_gerrit_nm_ready_gate_requires_recovered_custody
+test_gerrit_remapped_no_mistakes_ready_gate_is_direct
 test_merged_poll_retires_once
 test_merged_poll_reregistration_after_notification_is_absorbed
 test_merged_poll_retries_a_failed_upward_report
@@ -3484,3 +3706,8 @@ test_bootstrap_leaves_unauthenticated_checks
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
 test_teardown_removes_poll_artifacts
+test_fm_captain_hold_complete_does_not_disarm_an_armed_poll
+test_fm_control_relaunch_does_not_disarm_an_armed_poll
+test_armed_poll_still_refuses_a_tampered_binding
+test_device_renumbering_keeps_the_poll_bound
+test_watcher_names_a_mismatched_poll_plainly

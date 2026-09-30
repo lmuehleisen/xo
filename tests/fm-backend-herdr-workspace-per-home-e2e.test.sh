@@ -29,6 +29,8 @@
 #   - teardown closing the right tab (and no other)
 #   - list-live recovery seeing only its own home's tabs, for both homes
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -73,9 +75,12 @@ cleanup_all() {
   [ -n "$WT1" ] && command -v treehouse >/dev/null 2>&1 && treehouse return --force "$WT1" >/dev/null 2>&1
   [ -n "$WT2" ] && command -v treehouse >/dev/null 2>&1 && treehouse return --force "$WT2" >/dev/null 2>&1
   herdr_safe_stop_and_delete "$SESSION"
-  # Spawn leaves each state/<id>.git-hooks strip dir read-only.
-  find "$TMP_ROOT" -type d -exec chmod u+rwx {} + 2>/dev/null
-  rm -rf "$TMP_ROOT"
+  # Spawn leaves each state/<id>.git-hooks strip dir read-only; only a path the
+  # tmproot guard accepts is made writable before the guarded removal.
+  if [ -n "${TMP_ROOT:-}" ] && ! fm_test_tmproot_guard_reason "$TMP_ROOT" >/dev/null; then
+    find "$TMP_ROOT" -type d -exec chmod u+rwx {} + 2>/dev/null
+  fi
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
 }
 trap cleanup_all EXIT
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"

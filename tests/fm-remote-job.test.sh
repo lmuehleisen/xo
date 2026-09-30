@@ -9,6 +9,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-job)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
+fm_test_require_tmproot "$TMP_ROOT"
 REMOTE_ROOT="$TMP_ROOT/remote-root"
 REMOTE_HOME="$TMP_ROOT/remote-home"
 ACCOUNT_HOME="$TMP_ROOT/account"
@@ -48,7 +49,7 @@ cleanup_remote_job_fixture() {
   if [ -f "$STATE_ROOT/worker.pid" ]; then
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
   fi
-  rm -rf -- "$TMP_ROOT"
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
 }
 trap cleanup_remote_job_fixture EXIT
 

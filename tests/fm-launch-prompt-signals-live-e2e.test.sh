@@ -54,7 +54,7 @@ cleanup_all() {
   [ -z "${REAL_TMUX:-}" ] || "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
   local lab
   for lab in "${LABS[@]:-}"; do
-    [ -z "$lab" ] || rm -rf -- "$lab"
+    fm_test_rm_tmproot "${lab:-}"
   done
 }
 trap cleanup_all EXIT

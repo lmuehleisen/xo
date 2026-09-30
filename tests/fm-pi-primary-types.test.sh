@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Strict no-emit contract check for the tracked Firstmate Pi extensions.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -22,7 +24,7 @@ fi
 
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-pi-primary-types.XXXXXX")
 cleanup() {
-  rm -rf "$TMP_ROOT"
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
 }
 trap cleanup EXIT
 

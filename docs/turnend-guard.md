@@ -262,10 +262,17 @@ Each enabled primary harness adapts its own turn-end mechanism to the shared gua
 | omp | `session_stop` in `.omp/extensions/fm-primary-turnend-guard.ts` | Blocking hook that compels one continuation |
 | Cursor | `stop` hook in `.cursor/hooks.json` | Cannot block, so it parks and returns at most one follow-up |
 | Grok | `Stop` hook in `.grok/hooks/fm-primary-turnend-guard.json` | Native blocking, or one legacy `grok --resume` fallback |
+| Agy | `Stop` in `.agents/hooks.json` | Maps a repeated execution to the shared loop guard and turns exit status 2 into one continuation |
 
 The registrations in detail:
 
+- Agy registers native `Stop` in `.agents/hooks.json`; `bin/fm-agy-hook.sh` maps `executionNum > 0` to the shared loop guard and translates exit 2 into `decision: "continue"` with the recovery reason.
+  Native background-command completion begins a fresh execution, so normal watcher wakes do not consume the one-recovery-continuation budget of a prior execution.
 - Claude registers two `Stop` hooks in `.claude/settings.json`, both anchored through `CLAUDE_PROJECT_DIR`: `bin/fm-turnend-guard.sh --claude`, and `bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
+  The auto-arm reads that declared timeout back to set its own earlier deadline instead of keeping a second copy of the number, and the script header owns the derivation.
+  Beside them it registers one `StopFailure` hook, `bin/fm-claude-stop-autoarm.sh --stop-failure`, with the same `asyncRewake` and timeout, because Claude Code fires `StopFailure` instead of `Stop` when a turn ends on an API error, so neither `Stop` hook runs for that turn.
+  After a usage limit it waits for the reset, after another transient error it waits a bounded backoff, and then it starts one recovery turn whose normal `Stop` re-arms; it stands down in away mode, and the script header owns the full contract.
+  A manual Escape interrupt fires neither `Stop` nor `StopFailure`, so an interrupted turn remains unguarded; a person is present by definition there.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
 - OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
 - Pi listens for `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts`, runs once per logical agent run, and calls `pi.sendUserMessage(..., { deliverAs: "followUp" })` once when the guard returns 2.
@@ -277,7 +284,7 @@ The registrations in detail:
   Cursor also loads `<project>/.claude/settings.json`, so every tracked Claude-shaped entrypoint whose event Cursor covers stands down on a Cursor-delivered payload through `bin/fm-hook-host-lib.sh`.
   That predicate reads the delivered payload's own `cursor_version`, never the environment.
   Cursor exports `CURSOR_INVOKED_AS`, `CURSOR_PROJECT_DIR`, and `CURSOR_VERSION` into every child process, so an environment guard would also disable the hooks of a Claude session started by hand from a Cursor pane, which is the hazard the `GROK_SESSION_ID` exclusion below records.
-  The guarded set is the `SessionStart` entry, the two `PreToolUse` Bash entries, and both `Stop` entries.
+  The guarded set is the `SessionStart` entry, the two `PreToolUse` Bash entries, both `Stop` entries, and the `StopFailure` entry.
   Cursor 2026.08.11-e8db854 does not fire the Claude-shaped `Stop` entry at all, but it is guarded anyway because Cursor has no `asyncRewake`.
   If a later build did fire it, `bin/fm-claude-stop-autoarm.sh` would run synchronously inside Cursor's stop step and hold that turn open for its declared multi-hour timeout, exactly the wedge grok 1.0.0 produced.
 - Grok registers a `Stop` hook in `.grok/hooks/fm-primary-turnend-guard.json` and delegates capability selection to `bin/fm-turnend-guard-grok.sh`.
@@ -289,6 +296,7 @@ The registrations in detail:
   Do NOT widen this guard to `GROK_SESSION_ID`: Grok injects that into every child process, so it can survive into a Claude session that Grok launched and would silently disable Claude's own continuity.
   The same marker guard carries every tracked `.claude/settings.json` entry whose event Grok already covers through its own `.grok/hooks/` registration, which is both `Stop` entries, the `SessionStart` entry, and the two `PreToolUse` Bash entries.
   `bin/fm-subagent-pretool-check.sh` is the one deliberate unguarded exception because no Grok registration covers the subagent-spawn event, recorded in [`subagent-guard.md`](subagent-guard.md) "Known residual gap".
+  The `StopFailure` entry has no Grok counterpart but carries the guard anyway, because Grok has no `asyncRewake` and would run its hours-long wait synchronously.
   `tests/fm-turnend-guard.test.sh` pins that inventory so neither the guarded set nor the exception can change silently.
 - pi-code, Pi's Claude-hook compatibility extension, also loads `<project>/.claude/settings.json` and has no `asyncRewake`, so it awaits every Stop hook it delivers.
   `bin/fm-claude-stop-autoarm.sh` therefore stands down on a pi-code-delivered payload.
@@ -382,9 +390,9 @@ An upgrade mid-session can therefore neither double-arm nor deadlock, and a fail
 Fresh `failed` and `failed-suppressed` outcomes enter or advance the failure progression instead of acting as unconditional recovery proof.
 The auto-arm itself rechecks the healthy watcher predicate and retries a bounded number of times before reporting a genuine failure.
 
-The foreground arm legitimately follows a healthy watcher until its next wake.
-The hook therefore catches HUP, TERM, and INT from host timeout or teardown and commits the ordinary durable failed outcome and failure-notice marker before exiting 2 for a recovery turn.
-Claude drops that exit 2 when it terminated the hook at the configured timeout itself, so a park that outlives the timeout ends without a rewake (`bin/fm-claude-stop-autoarm.sh` header).
+The foreground arm legitimately follows a healthy watcher until its next wake, but Claude kills the hook's whole process tree at its declared timeout and delivers nothing from a killed hook, so a quiet park that outlasted that timeout would leave the home unwatched; upstream measured the dropped exit 2 on Claude Code 2.1.278 and 2.1.281 ([supervision verification](verification/supervision.md)).
+The hook therefore passes the arm a deadline comfortably below that timeout, and an independent timer in the arm closes a cycle with nothing to report there, whatever the watcher is doing, with one queued `check: autoarm-deadline` wake that the rewake turn acknowledges as a no-op; that turn's own Stop re-arms with a fresh timeout.
+The hook still catches HUP, TERM, and INT from teardown or an unexpected host kill and commits the ordinary durable failed outcome and failure-notice marker before exiting 2 for a recovery turn.
 
 The first fresh exhausted-failure epoch preserves its handoff without consuming a blocked-stop count.
 Later fresh failed epochs advance the same monotonic progression instead of resetting it.
@@ -411,9 +419,10 @@ The one loud attended fail-open is available only when all of these hold:
 - The block budget is exhausted.
 - A final check finds neither a healthy watcher nor an automatic continuation.
 
-After that alarm, the Stop auto-arm suppresses further exit-2 continuations until positive watcher recovery, so the final fail-open remains reachable.
+After that alarm, the Stop auto-arm suppresses further failure continuations until positive watcher recovery, so the final fail-open remains reachable.
 The alarm cannot repeat during that failure episode, and a later unhealthy stop blocks again.
-A positively verified healthy watcher clears the failure notice, alarm, and block budget for a future independent episode.
+A positively verified healthy watcher or an actionable arm close clears the failure notice, alarm, and block budget for a future independent episode.
+An actionable close always rewakes, so an episode left by a host kill or by another session's attended fail-open never silences a real wake in the live session.
 A Claude failure notice describes the automatic mechanism as broken and does not direct a routine manual background arm.
 
 ### Passive adapters
@@ -518,6 +527,8 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 
 ## Compatibility limits
 
+- Agy does not emit `Stop` on manual interruption; that boundary is unguarded, as on omp, and lifecycle control makes no semantic cancellation claim.
+- Agy primary supervision is interactive only; its headless streaming protocol has no verified Firstmate primary integration.
 - Child crewmate and scout worktrees are outside scope.
 - A valid secondmate home is in scope.
   An idle secondmate endpoint with no Relay poll remains healthy because it has no supervision need.

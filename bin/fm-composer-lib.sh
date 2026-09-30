@@ -56,7 +56,7 @@
 #                still starts and ends with the family's rule glyph is
 #                tolerated, including Grok 1.0.5's three-column title overhang.
 #   bare       - an agent prompt glyph row with no border at all (claude `❯`,
-#                codex `›`, muse `⟩`, cursor `→`). The agent glyph is itself the container
+#                codex `›`, muse `⟩`, cursor `→`, devin `❭`). The agent glyph is itself the container
 #                proof; a bare SHELL glyph (`>` `$` `%` `#`) never is.
 #                A bare composer's WRAP region (typed input continuing on the
 #                rows beneath the glyph row) is bounded by blank rows, by
@@ -77,6 +77,16 @@
 #                different, self-proving thing: real claude 2.x draws exactly
 #                that (`─` rule, `❯`+NBSP, `─` rule), so the glyph inside the
 #                pair carries the shape and no identity is needed.
+#   agy        - a `>` row between solid rules, followed immediately by its
+#                shortcuts/cancel footer and model cell. The full structure,
+#                never a bare shell glyph, proves this input region. Agy's
+#                accept-edits hint needs styling to distinguish it from text;
+#                without that evidence a matching hint remains unknown.
+#   devin      - a `❭` row between a top mode rule and a solid bottom rule,
+#                followed immediately by its model/context footer. The full
+#                structure proves this input region. Its selector lives in
+#                fork-only bin/fm-composer-devin-lib.sh, sourced below; this
+#                classifier stays the only caller.
 #
 # THE COMPOSER FOOTER ZONE (task firstmate-doorbell-vals-pending-p1): a
 # harness draws its own furniture BELOW the composer - a user statusLine, a
@@ -136,9 +146,10 @@
 # draws its `Ask Codex to do anything` placeholder as SGR-2 dim text after the
 # bare `›` glyph, which fm_composer_strip_ghost removes.
 # fm_composer_strip_ghost is the ONE ANSI-aware extractor of "real typed
-# content": it drops every de-emphasized run - dim/faint (SGR 2) AND a
-# dark/muted TRUECOLOR foreground - and keeps only normal-intensity,
-# normally-coloured text.
+# content": by default it drops every de-emphasized run - dim/faint (SGR 2) AND
+# a dark/muted TRUECOLOR foreground - and keeps only normal-intensity,
+# normally-coloured text. Its `codex-animation` mode instead normalizes an
+# exact styled three-row region as documented on the function.
 # Ghost stripping is a STYLE test, so it cannot see furniture a harness draws
 # at normal intensity: codex-cli 0.154.0 animates a braille "starfield" around
 # its idle composer in greys on both sides of the ghost luminance ceiling, so
@@ -165,6 +176,9 @@
 #
 # Re-sourcing is a cheap idempotent redefinition, so this file needs no
 # include guard (matching bin/fm-tmux-lib.sh).
+
+# shellcheck source=bin/fm-composer-devin-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-composer-devin-lib.sh"
 
 # fm_composer_strip_ansi: drop every CSI escape sequence, leaving plain text.
 # Used for STRUCTURAL row/shape detection, where ghost text must be KEPT so the
@@ -231,11 +245,42 @@ fm_composer_normalize_trim_var() {  # <varname>
   printf -v "$__fmnt_name" '%s' "$__fmnt_text"
 }
 
-# fm_composer_strip_ghost: the ONE fleet-wide ANSI-aware extractor of "real typed
-# content" from a captured, styled composer row. Reads the styled line on stdin
-# (from `tmux capture-pane -e`, `herdr pane read --format ansi`, or
-# `zellij action dump-screen --ansi`) and prints the
-# plain, non-ghost text on stdout, dropping:
+# fm_composer_holds_owned_text: 0 when a composer's <rows>, as
+# fm_composer_extract_selected_content prints them with a U+001F separator,
+# show exactly the sender's <text>. Each row must continue the text where the
+# previous row stopped, and only the whitespace a row break swallowed may be
+# skipped between rows, so a draft whose words or spacing changed inside a row
+# is not the sender's. U+2063, the operational mark Claude Code removes from
+# its composer, is ignored. With `residue`, rows that show a non-empty leading
+# part of <text> also match: Ctrl+U deletes one wrapped row per press from the
+# end of a Claude draft, so a cleanup in progress leaves a prefix.
+fm_composer_holds_owned_text() {  # <text> <rows> [residue]
+  local text=$1 rows=$2 row rest matched=0
+  local -a parts=()
+  text=${text//$'\xE2\x81\xA3'/}
+  rows=${rows//$'\xE2\x81\xA3'/}
+  fm_composer_normalize_spaces_var text
+  rest="${text#"${text%%[![:space:]]*}"}"
+  [ -n "$rows" ] || return 1
+  IFS=$'\x1f' read -r -a parts <<< "$rows" || true
+  for row in "${parts[@]}"; do
+    [ -n "$row" ] || continue
+    case "$rest" in
+      "$row"*) rest=${rest#"$row"} ;;
+      *) return 1 ;;
+    esac
+    matched=1
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+  done
+  [ "$matched" = 1 ] || return 1
+  [ -z "$rest" ] || [ "${3:-}" = residue ]
+}
+
+# fm_composer_strip_ghost [codex-animation]: the ONE fleet-wide ANSI-aware
+# extractor of "real typed content" from a styled capture. With no argument it
+# reads styled rows on stdin (from `tmux capture-pane -e`, `herdr pane read
+# --format ansi`, or `zellij action dump-screen --ansi`) and prints their plain,
+# non-ghost text on stdout, dropping:
 #   - dim/faint runs (SGR 2): how claude and codex render ghost/suggestion text.
 #     A reset (SGR 0) or normal-intensity (SGR 22) ends a dim run.
 #   - dark/muted TRUECOLOR foreground runs (SGR 38;2;r;g;b or the colon form
@@ -255,12 +300,23 @@ fm_composer_normalize_trim_var() {  # <varname>
 # the tightest margin over the 128 default in the fleet. Above ~150 that glyph is
 # stripped as ghost text, which is why the bare-glyph fallback below must also
 # recognise every agent glyph from the UNSTRIPPED plain row.
-# The dim/faint and dark-foreground states are tracked together as "de-emphasis";
-# codes are processed left to right within a sequence, so "ESC[0;2m" reads as dim.
-# LC_ALL=C makes awk walk bytes, so multibyte glyphs (e.g. ❯) and de-emphasised
-# runs alike pass through or drop intact without locale-dependent classes.
+# In default mode the dim/faint and dark-foreground states are tracked together
+# as "de-emphasis"; codes are processed left to right within a sequence, so
+# "ESC[0;2m" reads as dim. LC_ALL=C makes awk walk bytes, so multibyte glyphs
+# (e.g. ❯) and de-emphasised runs alike pass through or drop intact without
+# locale-dependent classes.
+#
+# `codex-animation` requires exactly three rows sharing one TRUECOLOR background:
+# decoration-only outer rows around a Codex prompt row. Any dim middle-row text
+# must be the exact placeholder; when it is absent, the row must contain real
+# input. A match strips only padding, the placeholder, and separately RGB-painted
+# single-dot braille while preserving normal input, including typed braille. A
+# mismatch exits nonzero without output so the caller retains the original screen
+# for conservative classification.
 fm_composer_strip_ghost() {
-  LC_ALL=C awk -v lumamax="${FM_COMPOSER_GHOST_LUMA_MAX:-128}" '
+  LC_ALL=C awk -v codex_animation="${1:-}" \
+    -v codex_prompt="$FM_COMPOSER_CODEX_PROMPT_GLYPH" \
+    -v lumamax="${FM_COMPOSER_GHOST_LUMA_MAX:-128}" '
     function sgr_code(v, b) {
       b = v
       sub(/:.*/, "", b)
@@ -292,8 +348,17 @@ fm_composer_strip_ghost() {
       r = a[p + 2] + 0; g = a[p + 3] + 0; b = a[p + 4] + 0
       return ((299*r + 587*g + 114*b) / 1000 < lumamax) ? 1 : 0
     }
+    function codex_animation_decoration_width(line, pos, n, rgbfg, bg,   glyph) {
+      if (substr(line, pos, 1) == " " && bg != "") return 1
+      if (!rgbfg || bg == "" || pos + 2 > n) return 0
+      glyph = substr(line, pos, 3)
+      if (glyph == "⠁" || glyph == "⠂" || glyph == "⠄" || glyph == "⠈" ||
+          glyph == "⠐" || glyph == "⠠" || glyph == "⡀" || glyph == "⢀") return 3
+      return 0
+    }
     {
-      line = $0; out = ""; dim = 0; darkfg = 0; n = length(line); i = 1
+      line = $0; if (codex_animation == "codex-animation") sub(/\r$/, "", line)
+      out = ""; dim = 0; darkfg = 0; rgbfg = 0; bg = ""; ghost = ""; n = length(line); i = 1
       while (i <= n) {
         c = substr(line, i, 1)
         if (c == "\033") {            # ESC: consume a CSI ... final-byte sequence
@@ -311,26 +376,68 @@ fm_composer_strip_ghost() {
               for (p = 1; p <= k; p++) {
                 v = a[p]; code = sgr_code(v)
                 if (code == "38") {
+                  rgbfg = (a[p + 1] == "2" && p + 4 <= k)
                   darkfg = fg38_is_dark(a, p, k, lumamax)
                   p = skip_color_payload(a, p, k)
-                } else if (code == "48" || code == "58") {
+                } else if (code == "48") {
+                  if (a[p + 1] == "2" && p + 4 <= k)
+                    bg = a[p + 2] "," a[p + 3] "," a[p + 4]
+                  else bg = ""
+                  p = skip_color_payload(a, p, k)
+                } else if (code == "58") {
                   p = skip_color_payload(a, p, k)
                 } else if (code == "2") dim = 1
-                else if (code == "0") { dim = 0; darkfg = 0 }
+                else if (code == "0") { dim = 0; darkfg = 0; rgbfg = 0; bg = "" }
                 else if (code == "22") dim = 0
-                else if (code == "39") darkfg = 0
-                else if (code + 0 >= 30 && code + 0 <= 37) darkfg = 0
-                else if (code + 0 >= 90 && code + 0 <= 97) darkfg = 0
+                else if (code == "39") { darkfg = 0; rgbfg = 0 }
+                else if (code == "49") bg = ""
+                else if (code + 0 >= 30 && code + 0 <= 37) { darkfg = 0; rgbfg = 0 }
+                else if (code + 0 >= 90 && code + 0 <= 97) { darkfg = 0; rgbfg = 0 }
               }
             }
             if (j <= n) { i = j + 1; continue }
           }
           i = i + 1; continue          # lone/other ESC: drop the ESC byte only
         }
-        if (dim == 0 && darkfg == 0) out = out c   # keep only non-de-emphasised bytes
+        if (codex_animation == "codex-animation") {
+          # Every cell must share the placeholder background; the padding must
+          # contain only coloured decoration, never normal-intensity input.
+          if (bg == "") invalid = 1
+          if (background == "") background = bg
+          if (bg != background) invalid = 1
+          if (dim) {
+            ghost = ghost c
+          } else {
+            decoration = codex_animation_decoration_width(line, i, n, rgbfg, bg)
+            if (decoration > 0) {
+              if (c == " ") out = out c
+              i += decoration - 1
+            }
+            else out = out c
+          }
+        } else if (dim == 0 && darkfg == 0) out = out c
         i++
       }
-      print out
+      if (codex_animation == "codex-animation") {
+        gsub(/^[ \t]+|[ \t]+$/, "", out)
+        clean[NR] = out
+        if (NR == 2) {
+          if (substr(out, 1, length(codex_prompt)) != codex_prompt) invalid = 1
+          real = substr(out, length(codex_prompt) + 1)
+          gsub(/^[ \t]+|[ \t]+$/, "", real)
+          if (ghost == "Ask Codex to do anything") placeholder = 1
+          else if (ghost != "") invalid = 1
+          if (!placeholder && real == "") invalid = 1
+        } else if (out != "" || ghost != "") invalid = 1
+      } else print out
+    }
+    END {
+      if (codex_animation == "codex-animation") {
+        if (NR != 3 || invalid) exit 1
+        print " "
+        print clean[2]
+        print " "
+      }
     }
   '
 }
@@ -373,15 +480,18 @@ fm_composer_strip_ghost() {
 # part of that union for the same reason the others are: without it a cursor
 # submit could never be acknowledged, because cursor parks its terminal cursor
 # outside its composer and the composer verdict is therefore always `unknown`.
-# agy's `esc to cancel` is part of the union for the same reason: an explicit
-# tmux agy endpoint reaches the submit core with no recorded harness, and its
-# bare `>` composer verdict is `unknown`, so the busy footer is the only
-# turn-started acknowledgement that path can read.
-FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel|esc twice to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
+# agy's `esc to cancel` is part of the union for the same delivery reason: an
+# explicit tmux agy endpoint reaches the submit core with no recorded harness,
+# and when its composer becomes unreadable during a turn the idle-to-busy footer
+# transition must acknowledge the submit so callers do not retry an already
+# accepted command.
+FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel|esc (twice|again) to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
 FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
 # Devin 3000.11.1: the working composer and interrupt hint are independent
-# delivery signals. Neither is used as semantic worker-state evidence.
-FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT='esc twice to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
+# delivery signals. Neither is used as semantic worker-state evidence. Devin
+# 3000.10.21 rendered the hint in parentheses, and after one Escape as `esc
+# again to interrupt`; both spellings match.
+FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT='esc (twice|again) to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
 FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
@@ -417,7 +527,7 @@ FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT='ctrl\+c to stop'
 # `Generating...` spinner word beside it is a free-floating output line and is
 # deliberately not matched, so echoed worker output cannot fake an
 # acknowledgement. Delivery guard only; recorded worker state comes from the
-# agy-regex fold in bin/fm-busy-lib.sh.
+# native agy hooks through bin/fm-busy-lib.sh.
 FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT='esc[[:space:]]+to[[:space:]]+cancel'
 FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘)[[:space:]]+·[[:space:]]+'
 
@@ -455,7 +565,8 @@ fm_busy_lines_match() {  # [harness]
 # a dead-shell prompt and must never read `empty`. Newline-separated and
 # consumed by `read` rather than word splitting, so `$`, `%`, and `#` stay
 # literal and no entry is ever exposed to pathname expansion.
-FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩' '→' '❭')
+FM_COMPOSER_CODEX_PROMPT_GLYPH='›'
+FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' "$FM_COMPOSER_CODEX_PROMPT_GLYPH" '⟩' '→' '❭')
 FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 
 # The ONE fleet-wide idle-placeholder set: composer text a harness renders in
@@ -469,7 +580,12 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # fix bugs, or work on your code` as dim text after its `❭` glyph (verified
 # live, devin 3000.11.1). FM_COMPOSER_IDLE_RE overrides for an unverified harness;
 # matching is case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$'
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$|^Guide Devin while it works$'
+FM_COMPOSER_AGY_HINT='Accept-edits mode: file edits auto-approved (shift+tab to cycle)'
+# Agy 1.2.0 renders this one hint in SGR 90, not dim/truecolor. Remove only
+# this exact styled hint within the proven Agy shape; palette colours in any
+# other text or harness retain the generic stripper's conservative handling.
+FM_COMPOSER_AGY_HINT_STYLED=$(printf '\033[90m%s\033[39m' "$FM_COMPOSER_AGY_HINT")
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
@@ -519,7 +635,11 @@ FM_COMPOSER_PI_STATUS_RE_DEFAULT='^\$[0-9]+(\.[0-9]+)?([[:space:]]|$)'
 #     furniture; it never counts as wrapped typed content and it bounds a bare
 #     composer's wrap region exactly as the status rows above do;
 #   - braille cells behind the glyph row's content are stripped before that
-#     row's emptiness decision when NOTHING else follows the glyph;
+#     row's emptiness decision only when NOTHING else follows the glyph AND
+#     the capture is styled AND every one of those cells carries its own
+#     truecolor foreground (fm_composer_strip_painted_braille below) - the
+#     animation's positive signature, because typed input renders in the
+#     default foreground, so a braille-only draft such as `❯ ⠁⠂` stays input;
 #   - a row that mixes braille with any other non-whitespace text stays typed
 #     content, because a human can type a braille character.
 # fm_composer_strip_braille is the ONE byte-exact remover: under LC_ALL=C awk
@@ -534,6 +654,48 @@ fm_composer_strip_braille() {
       while (i <= n) {
         c = substr(line, i, 1)
         if (c == "\342" && i + 2 <= n) {
+          c2 = substr(line, i + 1, 1); c3 = substr(line, i + 2, 1)
+          if (c2 >= "\240" && c2 <= "\243" && c3 >= "\200" && c3 <= "\277") {
+            i += 3; continue
+          }
+        }
+        out = out c; i++
+      }
+      print out
+    }
+  '
+}
+
+# fm_composer_strip_painted_braille: drop only the braille cells painted with a
+# truecolor foreground (SGR 38;2;R;G;B still active when the cell is drawn),
+# keeping every other byte, escapes included. A braille cell in the default or
+# a palette foreground survives, so feeding the result through
+# fm_composer_strip_ansi and fm_composer_strip_braille distinguishes animation
+# cells from typed ones. Reads stdin, prints each line.
+fm_composer_strip_painted_braille() {
+  LC_ALL=C awk '
+    {
+      line = $0; out = ""; n = length(line); i = 1; painted = 0
+      while (i <= n) {
+        c = substr(line, i, 1)
+        if (c == "\033" && substr(line, i + 1, 1) == "[") {
+          j = i + 2
+          while (j <= n && substr(line, j, 1) ~ /[0-9;:?]/) j++
+          if (j <= n && substr(line, j, 1) == "m") {
+            np = split(substr(line, i + 2, j - i - 2), p, /[;:]/)
+            if (np == 0) painted = 0
+            for (k = 1; k <= np; k++) {
+              if (p[k] == "" || p[k] + 0 == 0 || p[k] + 0 == 39) painted = 0
+              else if (p[k] + 0 == 38 && p[k + 1] + 0 == 2) { painted = 1; k += 4 }
+              else if (p[k] + 0 == 38 && p[k + 1] + 0 == 5) { painted = 0; k += 2 }
+              else if ((p[k] + 0 >= 30 && p[k] + 0 <= 37) || (p[k] + 0 >= 90 && p[k] + 0 <= 97)) painted = 0
+              else if (p[k] + 0 == 48 && p[k + 1] + 0 == 2) k += 4
+              else if (p[k] + 0 == 48 && p[k + 1] + 0 == 5) k += 2
+            }
+          }
+          out = out substr(line, i, j - i + 1); i = j + 1; continue
+        }
+        if (painted && c == "\342" && i + 2 <= n) {
           c2 = substr(line, i + 1, 1); c3 = substr(line, i + 2, 1)
           if (c2 >= "\240" && c2 <= "\243" && c3 >= "\200" && c3 <= "\277") {
             i += 3; continue
@@ -1184,8 +1346,8 @@ _fm_composer_classify_bare_row() {  # <screen> <styled> <row>
   raw=$(_fm_composer_screen_row "$row" "$screen")
   content=$(_fm_composer_row_content "$raw" "$styled")
   plain=$(_fm_composer_row_content "$raw" 0)
-  _fm_composer_bare_row_strip_furniture_var content
-  _fm_composer_bare_row_strip_furniture_var plain
+  _fm_composer_bare_row_strip_furniture_var content "$raw" "$styled"
+  _fm_composer_bare_row_strip_furniture_var plain "$raw" "$styled"
   state=$(fm_composer_classify_content 0 "$content" \
     "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive "$plain" 0 "$styled")
   if [ "$styled" != 1 ] && [ "$state" = pending ]; then
@@ -1228,14 +1390,20 @@ _fm_composer_row_is_braille_furniture() {  # <row>
 # in place through the named variable; a row whose tail carries anything else,
 # and a row with no agent glyph, are left untouched. This is the glyph-row half
 # of the braille rule: codex 0.154's starfield cells behind its (stripped)
-# placeholder must not stand in for typed input.
-_fm_composer_bare_row_strip_furniture_var() {  # <varname>
-  local __fmbf_name=$1 __fmbf_text=${!1} __fmbf_glyph='' __fmbf_body
+# placeholder must not stand in for typed input. Furniture needs positive
+# animation evidence from the raw row: a styled capture whose every braille
+# cell is truecolor-painted. An unstyled capture, or any default-foreground
+# braille, keeps the tail as a possible braille-only draft.
+_fm_composer_bare_row_strip_furniture_var() {  # <varname> <raw-row> <styled>
+  local __fmbf_name=$1 __fmbf_text=${!1} __fmbf_raw=$2 __fmbf_glyph='' __fmbf_body __fmbf_rest
+  [ "$FM_COMPOSER_CODEX_ANIMATION_NORMALIZED" != 1 ] || return 0
+  [ "$3" = 1 ] || return 0
   fm_composer_leading_agent_glyph_var __fmbf_glyph "$__fmbf_text" || return 0
   __fmbf_body=${__fmbf_text#*"$__fmbf_glyph"}
-  if _fm_composer_row_is_braille_furniture "$__fmbf_body"; then
-    printf -v "$__fmbf_name" '%s' "$__fmbf_glyph"
-  fi
+  _fm_composer_row_is_braille_furniture "$__fmbf_body" || return 0
+  __fmbf_rest=$(printf '%s\n' "$__fmbf_raw" | fm_composer_strip_painted_braille | fm_composer_strip_ansi)
+  [ "$__fmbf_rest" = "$(printf '%s\n' "$__fmbf_rest" | fm_composer_strip_braille)" ] || return 0
+  printf -v "$__fmbf_name" '%s' "$__fmbf_glyph"
 }
 
 # _fm_composer_wrap_region_ok: 0 when every row STRICTLY BELOW <glyph-row>
@@ -1272,7 +1440,7 @@ _fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <cursor-row
     raw=$(_fm_composer_screen_row "$row" "$screen")
     content=$(_fm_composer_row_content "$raw" "$styled")
     if [ "$row" -eq "$g" ]; then
-      _fm_composer_bare_row_strip_furniture_var content
+      _fm_composer_bare_row_strip_furniture_var content "$raw" "$styled"
       if fm_composer_leading_agent_glyph_var glyph "$content"; then
         content=${content#*"$glyph"}
       fi
@@ -1536,8 +1704,76 @@ _fm_composer_select_cursorless() {
   [ -n "$FM_COMPOSER_SELECTED_KIND" ]
 }
 
-fm_composer_extract_selected_content() {  # <caps> <screen>
-  local caps=$1 screen=$2 styled=0 kv plain row raw content glyph joined='' footer_re prompt_row=-1
+# Agy's separated prompt needs its own footer proof; the same `>` between
+# transcript rules without that footer can be an exited shell, never empty.
+_fm_composer_select_agy() {  # <plain-screen>
+  local plain=$1 first last row text footer
+  [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" = 1 ] || return 1
+  first=$((FM_COMPOSER_SCAN_PI_OPEN + 1))
+  last=$((FM_COMPOSER_SCAN_PI_CLOSE - 1))
+  text=$(_fm_composer_screen_row "$first" "$plain")
+  case "$text" in '>'|'>'\ *) ;; *) return 1 ;; esac
+  footer=$(_fm_composer_screen_row "$((last + 2))" "$plain")
+  # Typing hides the shortcut hint; accept-edits keeps its right-aligned mode
+  # cell. A model name alone cannot prove the manual-mode input container.
+  printf '%s\n' "$footer" | LC_ALL=C grep -qE '^(\? for shortcuts|esc to cancel)[[:space:]]{2,}[^[:space:]]|^[[:space:]]{8,}accept-edits[[:space:]]+·[[:space:]]+' || return 1
+  # No later input or popup may hide behind the recognized footer.
+  row=$((last + 3))
+  text=$(printf '%s\n' "$plain" | tail -n "+$((row + 1))")
+  fm_composer_normalize_trim_var text
+  [ -z "$text" ] || return 1
+  FM_COMPOSER_SELECTED_KIND=agy
+  FM_COMPOSER_SELECTED_FIRST=$first
+  FM_COMPOSER_SELECTED_LAST=$last
+}
+
+_fm_composer_agy_verdict() {  # <screen> <styled>
+  local screen=$1 styled=$2 row raw content plain body
+  if [ "$styled" = 1 ]; then screen=${screen//"$FM_COMPOSER_AGY_HINT_STYLED"/}; fi
+  row=$FM_COMPOSER_SELECTED_FIRST
+  raw=$(_fm_composer_screen_row "$row" "$screen")
+  plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
+  body=${plain#>}
+  fm_composer_normalize_trim_var body
+  content=$(_fm_composer_row_content "$raw" "$styled")
+  if [ "$body" = "$FM_COMPOSER_AGY_HINT" ] && [ "$content" = "$plain" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  _fm_composer_classify_rows "$screen" "$styled" 0 \
+    "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST"
+}
+
+# Normalize the exact animated region around the bottom-most bare prompt.
+# Leave unstyled or nonmatching screens unchanged so classification stays conservative.
+# FM_COMPOSER_CODEX_ANIMATION_NORMALIZED is 1 only after this call normalized
+# the exact styled region; the braille furniture rule then leaves the glyph row
+# alone, because any braille still on it was typed rather than animated.
+FM_COMPOSER_CODEX_ANIMATION_NORMALIZED=0
+_fm_composer_normalize_codex_animation_screen_var() {  # <varname> <styled> [cursor-row]
+  local __fmc_name=$1 __fmc_styled=$2 __fmc_cy=${3:-} __fmc_screen=${!1}
+  local __fmc_plain __fmc_g __fmc_candidate
+  FM_COMPOSER_CODEX_ANIMATION_NORMALIZED=0
+  [ "$__fmc_styled" = 1 ] || return 0
+  __fmc_plain=$(printf '%s\n' "$__fmc_screen" | fm_composer_strip_ansi)
+  _fm_composer_scan_screen "$__fmc_plain" "$__fmc_cy"
+  [ "$FM_COMPOSER_SCAN_BARE_ROW" -ge 1 ] || return 0
+  __fmc_g=$FM_COMPOSER_SCAN_BARE_ROW
+  __fmc_candidate=$(printf '%s\n' "$__fmc_screen" | sed -n "$((__fmc_g)), $((__fmc_g + 2))p" |
+    fm_composer_strip_ghost codex-animation) || return 0
+  __fmc_screen=$(
+    if [ "$__fmc_g" -gt 1 ]; then
+      printf '%s\n' "$__fmc_screen" | sed -n "1,$((__fmc_g - 1))p"
+    fi
+    printf '%s\n' "$__fmc_candidate"
+    printf '%s\n' "$__fmc_screen" | sed -n "$((__fmc_g + 3)),\$p"
+  )
+  printf -v "$__fmc_name" '%s' "$__fmc_screen"
+  FM_COMPOSER_CODEX_ANIMATION_NORMALIZED=1
+}
+
+fm_composer_extract_selected_content() {  # <caps> <screen> [row-separator]
+  local caps=$1 screen=$2 separator=${3:-} styled=0 kv plain row raw content glyph joined='' footer_re prompt_row=-1
   local leading_blank=1 placeholder_position=0 prompt_is_shell=0
   footer_re=${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}
   while IFS= read -r kv; do
@@ -1545,9 +1781,13 @@ fm_composer_extract_selected_content() {  # <caps> <screen>
   done <<EOF
 $caps
 EOF
+  _fm_composer_normalize_codex_animation_screen_var screen "$styled"
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   _fm_composer_scan_screen "$plain" '' 1
-  _fm_composer_select_cursorless "$plain" || return 1
+  _fm_composer_select_devin "$plain" || _fm_composer_select_agy "$plain" || _fm_composer_select_cursorless "$plain" || return 1
+  if [ "$FM_COMPOSER_SELECTED_KIND" = agy ] && [ "$styled" = 1 ]; then
+    screen=${screen//"$FM_COMPOSER_AGY_HINT_STYLED"/}
+  fi
   row=$FM_COMPOSER_SELECTED_FIRST
   while [ "$row" -le "$FM_COMPOSER_SELECTED_LAST" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")
@@ -1572,7 +1812,7 @@ EOF
           leading_blank=0
         fi
         ;;
-      box)
+      box|agy|devin)
         if [ "$prompt_row" -lt 0 ] \
            && fm_composer_leading_prompt_glyph_var glyph "$content"; then
           prompt_row=$row
@@ -1597,7 +1837,8 @@ EOF
     # idle-regex exceptions here.
     if [ -z "$content" ] \
        || { { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
-              || { [ "$FM_COMPOSER_SELECTED_KIND" = box ] && [ "$prompt_is_shell" = 1 ]; }; } \
+              || { [ "$FM_COMPOSER_SELECTED_KIND" = box ] && [ "$prompt_is_shell" = 1 ]; } \
+              || [ "$FM_COMPOSER_SELECTED_KIND" = devin ]; } \
             && [ "$placeholder_position" = 1 ] \
             && fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive; } \
        || { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
@@ -1606,9 +1847,19 @@ EOF
       row=$((row + 1))
       continue
     fi
-    joined="${joined}${joined:+ }$content"
+    if [ -n "$separator" ]; then
+      joined="${joined}${joined:+$separator}$content"
+    else
+      joined="${joined}${joined:+ }$content"
+    fi
     row=$((row + 1))
   done
+  # A row separator keeps each row exactly as shown, for callers that compare
+  # rows; otherwise whitespace runs collapse into the one joined line.
+  if [ -n "$separator" ]; then
+    printf '%s' "$joined"
+    return 0
+  fi
   printf '%s\n' "$joined" | LC_ALL=C awk '{$1=$1; printf "%s", $0}'
 }
 
@@ -1628,8 +1879,25 @@ EOF
   if [ -n "$cy" ]; then
     case "$cy" in *[!0-9]*) printf 'unknown'; return 0 ;; esac
   fi
+  _fm_composer_normalize_codex_animation_screen_var screen "$styled" "$cy"
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   _fm_composer_scan_screen "$plain" "$cy"
+  if _fm_composer_select_devin "$plain"; then
+    if [ -n "$cy" ] && { [ "$cy" -lt "$FM_COMPOSER_SELECTED_FIRST" ] || [ "$cy" -gt "$FM_COMPOSER_SELECTED_LAST" ]; }; then
+      printf 'unknown'
+    else
+      _fm_composer_devin_verdict "$screen" "$styled"
+    fi
+    return 0
+  fi
+  if _fm_composer_select_agy "$plain"; then
+    if [ -n "$cy" ] && { [ "$cy" -lt "$FM_COMPOSER_SELECTED_FIRST" ] || [ "$cy" -gt "$FM_COMPOSER_SELECTED_LAST" ]; }; then
+      printf 'unknown'
+    else
+      _fm_composer_agy_verdict "$screen" "$styled"
+    fi
+    return 0
+  fi
   if [ -n "$cy" ]; then
     # Cursor mode (tmux): the shape CONTAINING the cursor is the composer.
     if [ "$FM_COMPOSER_SCAN_UNSAFE" = 1 ]; then

@@ -57,6 +57,9 @@ codex_global_flags() {
   local launch=$1 flags
   flags=${launch#*codex }
   flags=${flags%%\"\$(*}
+  # This fork ends its reviewed flags with `--` before the brief; drop it so
+  # `features list` stays a subcommand.
+  flags=${flags% -- }
   printf '%s' "$flags"
 }
 

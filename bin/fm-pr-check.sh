@@ -133,7 +133,9 @@ if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/d
   fi
 fi
 
-MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
+# The gate judges the effective mode (bin/fm-dod-lib.sh's fm_dod_task_mode), so
+# a no-mistakes token this home remaps to direct-PR is gated as direct-PR.
+MODE=$(fm_dod_task_mode "$META")
 PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
 # The gate is asked about the ready report this task's worker was told to give;
 # on a Gerrit change both publishing modes report the same published line.

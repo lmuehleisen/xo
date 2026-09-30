@@ -451,6 +451,14 @@ jobs:
             exit 1
           }
 
+          captain_hold_snapshot_output=$(/bin/bash tests/fm-fleet-snapshot-captain-hold.test.sh)
+          printf '%s\n' "$captain_hold_snapshot_output"
+          captain_hold_snapshot_count=$(printf '%s\n' "$captain_hold_snapshot_output" | grep -c '^ok - ')
+          [ "$captain_hold_snapshot_count" -eq 1 ] || {
+            echo "::error::expected 1 captain-hold snapshot test, got $captain_hold_snapshot_count"
+            exit 1
+          }
+
           bearings_output=$(/bin/bash tests/fm-bearings-snapshot.test.sh)
           printf '%s\n' "$bearings_output"
           bearings_count=$(printf '%s\n' "$bearings_output" | grep -c '^ok - ')
@@ -502,6 +510,38 @@ jobs:
             echo "::error::expected 2 backend adapter-file bash 3.2 regressions, got $backend_count"
             exit 1
           }
+
+  # Publish identity and leak check; bin/fm-publish-gate.sh ci-commits owns it.
+  # Every commit not in upstream main must carry only the owner's noreply
+  # identity (repository variable FM_PUBLISH_IDENTITY_EMAIL, or any
+  # users.noreply.github.com address when it is unset) or noreply@github.com,
+  # and its added lines, paths, and message must pass the generic patterns and
+  # gitleaks. No private list is needed or used here: the private denylist runs
+  # only in the local pre-push gate. CI runs after publication, so this is a
+  # merge block and detection, not prevention.
+  publish-identity:
+    name: Publish identity and leak check
+    runs-on: ubuntu-latest
+    # Normal tier (see the timeout policy above).
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned gitleaks
+        run: |
+          set -eu
+          bin/fm-install-gitleaks.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Check commits not in upstream
+        env:
+          FM_PUBLISH_IDENTITY_EMAIL: ${{ vars.FM_PUBLISH_IDENTITY_EMAIL }}
+        run: |
+          set -eu
+          git fetch --no-tags https://github.com/kunchenguid/firstmate.git main:refs/remotes/upstream/main
+          set -- --base refs/remotes/upstream/main --head HEAD
+          [ -z "${FM_PUBLISH_IDENTITY_EMAIL:-}" ] || set -- "$@" --identity-email "$FM_PUBLISH_IDENTITY_EMAIL"
+          bin/fm-publish-gate.sh ci-commits "$@"
 
   invariants:
     name: Repo invariants

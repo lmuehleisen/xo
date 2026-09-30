@@ -13,3 +13,7 @@ __pycache__/
 config/
 
 .tools/
+
+# Local skills: installation-private skills that harnesses load from
+# .agents/skills/ (and .claude/skills) but that are never committed.
+.agents/skills/local-*/

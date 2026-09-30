@@ -10,9 +10,9 @@
 # default-branch base, the immutable ship branch, and - rendered from
 # bin/fm-dod-lib.sh, the single owner an ordinary ship brief also uses - the
 # mode-specific Definition of done, so a promoted worker receives exactly the same
-# delivery contract as a briefed one, including the no-mistakes mode's ask-user
-# escalation rule and --yes ban. The instructions also carry `# Task` with
-# `## Captain's intent` preserved from the scout brief and promotion's ship-time
+# delivery and verification contract as a briefed one, including the no-mistakes
+# pipeline's ask-user escalation rule when config/no-mistakes opts this home in.
+# The instructions carry `# Task` with `## Captain's intent` preserved from the scout brief and promotion's ship-time
 # instructions under `## Firstmate spec`; the scout-time spec remains context but
 # is not relabeled as the ship spec. Promotion refuses leftover `{TASK}` /
 # `{FIRSTMATE_SPEC}` placeholders and a `## Captain's intent` line opening with
@@ -23,7 +23,9 @@
 # A scout records no delivery posture, so promotion is where this task's delivery
 # contract is decided: --mode, --yolo, and the ship branch resolved from
 # --branch-prefix are written into the meta alongside the kind= flip. Firstmate resolves all three at promotion time, having just
-# read the scout's report (AGENTS.md section 7); data/projects.md holds the
+# read the scout's report (AGENTS.md section 7); the meta also records
+# effective_mode=, the mode bin/fm-dod-lib.sh resolves for config/no-mistakes,
+# which the named-head gate judges the task by; data/projects.md holds the
 # captain's standing posture as context, and this script never looks that posture
 # up. The registry IS read for one thing only: the project's forge binding, which
 # is a project fact rather than a per-task decision, so promotion takes it from
@@ -43,6 +45,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
@@ -113,6 +116,15 @@ case "$YOLO" in
   on|off) ;;
   *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
 esac
+# config/no-mistakes turns an explicit no-mistakes promotion into the real
+# pipeline contract; without it the effective mode is direct-PR
+# (bin/fm-dod-lib.sh). A missing CLI refuses rather than quietly delivering
+# direct-PR instructions for a pipeline task.
+if [ "$MODE" = no-mistakes ] && [ "$(fm_no_mistakes_pipeline_state "$CONFIG")" = unavailable ]; then
+  echo "error: config/no-mistakes is set but no no-mistakes binary is on PATH; install it or promote with another mode - a pipeline promotion never falls back to direct-PR" >&2
+  exit 1
+fi
+EFFECTIVE_MODE=$(fm_effective_delivery_mode "$MODE" "$CONFIG")
 # A posture this forge cannot carry is refused once the registry binding has been
 # read. Merge authority on a Gerrit forge is refused rather than quietly dropped,
 # on the captain's decision of 2026-09-15 (bin/fm-project-mode.sh's header carries
@@ -230,7 +242,7 @@ fi
 # the --yes ban is the delivery hole this file used to leave open.
 INSTRUCTIONS="$DATA/$ID/ship-instructions.md"
 PROMOTION_ASK_USER_BLOCK=
-if [ "$MODE" = no-mistakes ]; then
+if [ "$EFFECTIVE_MODE" = no-mistakes ]; then
   PROMOTION_ASK_USER_BLOCK=$(fm_ask_user_escalation_block "$DATA" "$ID")
 fi
 IFS= read -r -d '' PROMOTION_SHIP_SPEC <<EOF || true
@@ -254,13 +266,14 @@ The mode-specific Definition of done below is the current delivery contract.
 
 # Current ship safety rule
 EOF
-  fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE"
+  fm_ship_rule_one "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE"
   if [ -n "$PROMOTION_ASK_USER_BLOCK" ]; then
     printf '\nThe no-mistakes ask-user escalation below supersedes the scout rule 6 escalation shape.\n'
     printf '%s\n' "$PROMOTION_ASK_USER_BLOCK"
   fi
   printf '\n'
-  fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE"
+  fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" || return 1
+  [ "$EFFECTIVE_MODE" = "$MODE" ] || fm_no_mistakes_remap_note
 }
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }
@@ -313,10 +326,11 @@ fi
 BRIEF_REPLACEMENT=
 
 TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' "$META" > "$TMP"
+grep -v -e '^kind=' -e '^mode=' -e '^effective_mode=' -e '^yolo=' -e '^branch=' "$META" > "$TMP"
 {
   echo "kind=ship"
   echo "mode=$MODE"
+  echo "effective_mode=$EFFECTIVE_MODE"
   echo "yolo=$YOLO"
   echo "branch=$BRANCH"
 } >> "$TMP"

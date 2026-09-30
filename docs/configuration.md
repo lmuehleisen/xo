@@ -9,7 +9,8 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| Worker permissions, accounts, or environment | [worker permission mode](#worker-permission-mode-configcrew-permissions), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| What reaches a public forge, and as whom | [Publish guard](#publish-guard-configpublish-guard) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -127,6 +128,16 @@ Untracked files and directories whose names begin with `scratchpad` are also git
 The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md).
 Edit it like any prompt when the fleet is empty.
 While tasks are in flight, dispatch shared-repo edits to a crewmate.
+
+## Remote-less local projects
+
+A ship task explicitly dispatched as `local-only` can run in a project with no Git remotes; no bare origin or GitHub repository is needed.
+Its worker starts from the committed local `main` branch, or `master` when `main` is absent, in an isolated worktree.
+Other local default-branch names currently require an implementation change rather than guessing from the primary checkout's current branch.
+Dirty worktrees and commits outside the local default's history block dispatch without discarding work.
+Any configured remote retains the normal origin refresh requirement; an unreachable origin never silently becomes an offline launch.
+This exception is for ship tasks, not scouts or PR delivery, and does not grant merge permission.
+`bin/fm-spawn.sh` owns the exact base-refresh checks.
 
 ## Calm preference (config/calm)
 
@@ -582,6 +593,18 @@ The bound is required rather than cosmetic because churn and pane staleness read
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes, which run their own crew mix.
 [`architecture.md`](architecture.md) owns the triage contract and `bin/fm-watch.sh`'s `signal_turnend_panes_churned` owns the exact evidence and fail-closed boundaries.
 
+## No-mistakes pipeline opt-in (config/no-mistakes)
+
+The optional local, gitignored `config/no-mistakes` presence flag lets this home run the real no-mistakes pipeline for an experiment without making the CLI a required tool.
+With the flag absent, a `no-mistakes` mode token ships exactly as `direct-PR`, and bootstrap stays silent about no-mistakes whether or not the CLI is installed.
+The brief and a scout promotion then render the `direct-PR` contract, whose `Delivery contract:` line records `mode=direct-PR` and which ends with a note naming the `no-mistakes` token, while the task record keeps `mode=no-mistakes` beside `effective_mode=direct-PR`; the ready-report gate judges the task by that effective mode on every forge, including Gerrit, and judges a record without the field by its recorded mode ([`bin/fm-dod-lib.sh`](../bin/fm-dod-lib.sh) owns the resolution).
+With the flag present, a ship task firstmate explicitly resolves to `--mode no-mistakes` gets the pipeline contract: its brief carries the doctor-and-init setup step, the shared-daemon rule, the ask-user escalation format, and the pipeline definition of done, a scout promotion to that mode delivers the same contract, and the spawn adds the captain-intent overlay for `--intent`.
+A `[no-mistakes]` or `[no-mistakes-prod-only]` token in `data/projects.md` still maps to `direct-PR` with the flag present, so no registered project moves onto the pipeline by default, and secondmate seeding never initializes a gate.
+When the flag is present and no `no-mistakes` binary is on PATH, bootstrap prints one non-blocking `BOOTSTRAP_INFO: no-mistakes pipeline unavailable` line, and a pipeline spawn or promotion refuses rather than falling back to `direct-PR`.
+A pipeline brief records a `Delivery pipeline: no-mistakes` line; with the flag present the spawn refuses a brief whose pipeline contract disagrees with its mode, and with the flag absent every launch, including a relaunch, of a brief whose contract line still says `mode=no-mistakes` supersedes that contract with `direct-PR` delivery.
+The flag is not inherited by secondmate homes.
+`bin/fm-dod-lib.sh` owns the resolver and the pipeline contract text.
+
 ## Parked-gate wait deferral (config/wedge-defer-parked-gate)
 
 The optional local, gitignored `config/wedge-defer-parked-gate` presence flag opts this home into a default-off second form of wait evidence in the watcher's wedge timer.
@@ -598,13 +621,10 @@ The flag is a home-local supervision-noise preference and is not inherited by se
 
 ## Gate defaults (.no-mistakes.yaml)
 
-The tracked `.no-mistakes.yaml` sets `test.evidence.store_in_repo: true` and pins `commands.lint` to `bin/fm-lint.sh`, the same owner CI invokes.
-Storing evidence in the repo publishes each run's test artifacts to the orphan `no-mistakes/evidence` branch and links them from the PR body, instead of keeping them on local disk under the no-mistakes home.
-
-That branch shares no history with code branches, so evidence never enters a pushed feature branch or the default branch; the worktree's `.no-mistakes/` stays local and CI rejects tracked entries under that path.
-The [`firstmate-coding-guidelines` skill](../.agents/skills/firstmate-coding-guidelines/SKILL.md#no-mistakes-test-configuration) owns why `commands.test` stays absent and targeted validation belongs to the evidence path.
-
-`commands.test` executes code, so no-mistakes honors it only from the default-branch copy of `.no-mistakes.yaml`; a pushed branch cannot change what the gate runs.
+The tracked `.no-mistakes.yaml` is retained only for compatibility with pull requests submitted to the upstream repository and repositories that keep its inherited workflow.
+This fork does not initialize or run no-mistakes for normal development or secondmate provisioning, and runs it for project delivery only under the opt-in above.
+Local and direct-PR validation uses the relevant repository tests and `bin/fm-lint.sh`, while GitHub operations use `gh` directly.
+The worktree's `.no-mistakes/` stays local and CI rejects tracked entries under that path.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the firstmate-specific local test policy and entry points.
 
 Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](fm-test-portable-shards.md); [herdr-backend.md](herdr-backend.md#destructive-lab-safety) owns the real-Herdr lane's isolation boundary, and [runtime-backends.md](verification/runtime-backends.md#herdr) owns active evidence.
@@ -689,8 +709,8 @@ Teardown of a leased home fails closed if `treehouse return` cannot release the 
 
 ### Project modes and backlog handoff
 
-Secondmate routes cover `no-mistakes` and `direct-PR` projects; `local-only` projects remain main-firstmate work.
-For `no-mistakes` projects, seeding initializes only projects newly cloned into a secondmate home and refuses to mutate a preexisting clone that is not already initialized.
+Secondmate routes cover `direct-PR` projects and legacy `no-mistakes` registry tokens remapped to direct-PR; `local-only` projects remain main-firstmate work.
+Seeding never initializes no-mistakes in a newly cloned or preexisting project.
 
 After creating a secondmate, move existing main-backlog queued items that you have judged in-scope with `fm-backlog-handoff.sh <secondmate-id> <item-key>...`; it refuses In flight, Done, or non-secondmate homes, and its [script header](../bin/fm-backlog-handoff.sh) owns route-specific wake outcomes and retries.
 Set `FM_SECONDMATE_CHARTER` to seed from inline charter text when no filled charter brief exists; set `FM_SECONDMATE_SCOPE` when the routing scope should differ from the charter text.
@@ -707,9 +727,35 @@ An existing linked-worktree home that predates this rule advances through its ma
 
 A local standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate`'s origin refresh instead.
 
+## Worker permission mode (config/crew-permissions)
+
+Claude, Codex, and agy workers use reviewed execution rather than permission bypass by default.
+An optional home-local `config/crew-permissions` selects `auto` (the default) or `manual`; `bin/fm-spawn.sh --help` owns exact launch flags, validation, directory grants, and exclusions.
+The setting is read for each new launch or relaunch, including a secondmate agent launched by this home; it does not change already-running agents or the primary's permission mode.
+The primary's file is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), so a secondmate's own workers use the same review posture, and removing the primary's file restores the default there too.
+No global agent settings or hooks are installed by selecting a mode.
+Other harness adapters and explicit raw launch commands retain their existing permission behavior.
+This is the only worker permission setting: no value selects Claude's `--dangerously-skip-permissions`, and the upstream-only `config/claude-permission-mode` file is not read.
+
+Auto requests Claude's classifier-backed permission mode and Codex's automatic approval reviewer with workspace-write sandboxing.
+agy has no reviewed-auto mode of its own, so Auto selects its accept-edits mode, which approves file edits inside the granted directories while still asking for every shell command; its blanket bypass is never selected by either setting.
+An agy worker therefore pauses for approval more often than a Claude or Codex worker, including for the shell command that appends its own status lines, and that pause is a visible prompt in its window rather than a silent stop.
+A separate per-spawn `bin/fm-spawn.sh --agy-bypass` flag exists that pairs agy's bypass flag with firstmate's own hook permission layer, and it stays unselected unless a launch names it; [`docs/verification/runtime-backends.md`](verification/runtime-backends.md) and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) own its gates and decision surface.
+Availability depends on the installed CLI, account, and managed policy; an unsupported or denied request must be reported, never retried with bypass permissions.
+Manual keeps approval prompts available for human review, so an unattended task may wait for intervention.
+Both modes preserve the separate project delivery and merge-approval rules.
+Workers receive additional access to the owning home's shared state directory and their brief/report directory, not the entire home; the shared state layout is not a per-task security boundary.
+Every Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.
+Claude Code path-checks its Read, Glob, and Grep tools against its working directories, and since 2.1.257 the first outside read in auto mode parks the pane on a one-time question, so the grant keeps those channels readable without that question.
+Protected Git writes and operations outside the allowed sandbox still require the harness's normal review.
+
+For a Claude primary with mostly Codex workers, launch `claude` in this home, set `config/crew-harness` to `codex`, and keep `config/backend` at `tmux`.
+Select Claude explicitly for an individual review when wanted; a dispatch-profile file is unnecessary for this simple default.
+Choose the primary's own Auto mode through its CLI or interface rather than changing global settings on behalf of unrelated sessions.
+
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and omp are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only, and [README requirements](../README.md#requirements) own the set supported for the primary session.
+claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, omp, and agy are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only, and [README requirements](../README.md#requirements) own the set supported for the primary session.
 
 ### Harness restrictions and credentials
 
@@ -724,11 +770,9 @@ muse also needs a worker-reachable credential before spawning, and the portable 
 
 gemini is likewise refused for secondmates because it has no primary supervision protocol; [its adapter reference](../.agents/skills/harness-adapters/references/harness/gemini.md) owns the credential precondition, canonical-launch wiring, and raw-launch limitations.
 rovo is likewise verified for crewmate and scout launches ONLY, refused for a secondmate for the same reason - no turn-end hook and no primary supervision protocol; [`docs/verification/rovo.md`](verification/rovo.md) owns that evidence, including the OAuth token's silent background refresh from a stored refresh token and both tmux and herdr pane liveness (herdr placement is verified live, with a Herdr-side agent-detection gap left open for recovery classification).
-
-agy is likewise verified for crewmate and scout launches ONLY, refused for a secondmate for the same reason - no hook surface and no primary supervision protocol; [`docs/verification/agy.md`](verification/agy.md) owns that evidence, including the spawn-time worktree trust pre-registration through `bin/fm-agy-trust.sh` and Herdr's native agy pane recognition.
 devin is verified for crewmate and scout launches only; a secondmate is refused because Devin has no verified primary supervision protocol.
 
-Its private worker config disables Claude Code imports (including the captain's hooks) and, unless the home sets `config/keep-ai-trailers` (see "Commit attribution"), Devin commit attribution without editing user or project config; [`fm-devin-config.sh`](../bin/fm-devin-config.sh) owns these enforced settings and [Devin verification](verification/devin.md) owns the live evidence and observed model availability.
+Its worker configuration is a private per-task copy of the user config under `state/`, passed with `--config`, never written over the user or project config or into the task's local copy; unless the home sets `config/keep-ai-trailers` (see "Commit attribution"), it turns Devin commit attribution off, and the [Devin adapter reference](../.agents/skills/harness-adapters/references/harness/devin.md) owns its reviewed permission modes, the firstmate permission-policy hooks, and the live evidence.
 
 ### Verification and primary supervision
 
@@ -746,7 +790,7 @@ Enabled primary-session turn-end guard integrations are tracked as repo-level ho
 Kimi remains outside the primary turn-end guard integrations; [`docs/turnend-guard.md`](turnend-guard.md#compatibility-limits) owns its separate captain-approved crew wake hook.
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 
-Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Grok uses background-notify cycles, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, omp uses its own two tracked `.omp/extensions/` files with a blocking `session_stop` turn-end hook, and OpenCode uses its TUI plugin.
+Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Grok uses background-notify cycles, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, omp uses its own two tracked `.omp/extensions/` files with a blocking `session_stop` turn-end hook, OpenCode uses its TUI plugin, and Agy uses native Stop continuation and background-task completion.
 
 ### Choose the worker harness
 
@@ -792,39 +836,6 @@ Its `remove` action excises only the marker-delimited Firstmate region and remov
 For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected executable with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
 
 For omp secondmate launches, `fm-spawn.sh` passes no `-e` at all: omp auto-discovers the home's tracked `.omp/extensions/` with no trust gate, and naming a discovered file with `-e` as well loads it twice; every omp launch instead carries the tracked `.omp/fm-worker-overlay.yml` posture overlay through `--config`, which [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns.
-
-## Claude permission mode (config/claude-permission-mode)
-
-The optional local, gitignored `config/claude-permission-mode` selects the permission flag for every Claude worker launch: crewmates, scouts, Claude secondmates, and control-plane relaunches.
-
-### Accepted values and refusals
-
-The token is the file's whitespace-trimmed content.
-
-| Token | Launch permission flag |
-| --- | --- |
-| `bypass` | `claude --dangerously-skip-permissions` |
-| `auto` | `--permission-mode auto` |
-
-An absent file defaults to bypass, so an unconfigured home launches with the bypass permission flag.
-Auto is Claude Code's classifier-reviewed permission mode, for a captain who refuses to run workers in bypass mode.
-Only the permission flag changes between the two modes.
-The environment prefix, inline settings, model, effort flags, and the task-channel `--add-dir` grant below stay the same in both.
-
-Every Claude launch, in both modes, also passes `--add-dir` for exactly this task's Firstmate channel directories, resolved to real paths: a secondmate gets the parent home's `state/<id>.inbox` it reads its steers from; a ship or scout worker gets this home's `state/operational-inbox` (its launch record), `state/<id>.inbox` (its steers), `data/<id>` (its brief and report), and the code root's `.agents/skills`.
-The grant exists because Claude Code path-checks the Read/Glob/Grep file tools against cwd plus `--add-dir`, and since 2.1.257 the first outside read in `auto` mode parks the pane on a one-time interactive question, while a "Block" answer there writes `permissions.blockReadsOutsideWorkingDirectories` into user settings and then refuses the same reads under bypass too.
-It never covers the whole `state/` or anything wider.
-
-Any other value or an unreadable file refuses every spawn from that home, whichever harness it would launch.
-This happens before any endpoint, worktree, or task record exists.
-The diagnostic names the accepted values; Firstmate never falls back to a permission posture the captain did not choose.
-
-### When changes apply and inheritance
-
-`bin/fm-spawn.sh` reads the file on every spawn and relaunch, so a change takes effect at the next launch without a restart.
-The file is a captain-wide safety preference, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract; a secondmate's own Claude crewmates then launch on the same posture.
-
-The [Claude adapter reference](../.agents/skills/harness-adapters/references/harness/claude.md) records the permission-mode observations and the distinct startup dialogs.
 
 ## Worker account pin (config/claude-account, config/pi-account)
 
@@ -875,6 +886,37 @@ Pins are not inherited into secondmate homes: a local secondmate agent launches 
 A remote secondmate is launched on its host from its own home's configuration, so create the file in that remote home.
 
 [`bin/fm-worker-account-lib.sh`](../bin/fm-worker-account-lib.sh) owns parsing, the sign-in check, and the full list of credentials a Claude launch unsets; [runtime backend verification](verification/runtime-backends.md#worker-account-pin-sign-in-check) records the check against the real runners.
+
+## Publish guard (config/publish-guard/)
+
+The publish guard keeps private identities, names, and old history off public forges.
+It is one directory of private files that `bin/fm-publish-gate.sh` reads; that script's header owns the file formats, the destination classes, and every check.
+
+| File | Holds |
+| --- | --- |
+| `identity` | The only commit identity allowed on public commits; when present, every spawned worker is pinned to it, and its noreply login is the default owner below |
+| `allowlist` | Every public destination a push or `gh` publish may reach, and any private one outside the owners below, each marked public or private |
+| `owners` | Optional: GitHub owners whose repositories pass as private without an allowlist entry while the live privacy check confirms them; without it, the login in the identity's noreply address |
+| `denylist` | Private terms and patterns that must never appear in public commits, branch names, or PR text |
+| `poison-commits` | Old commit ids that must never reach a public destination |
+| `upstream` | Optional: public repositories, such as the one this project merges from, whose branches and tags a public push treats as already published, read live at push time; without it their commits are scanned like new ones |
+| `gh` | Optional: the gh binary that answers the live privacy check, instead of a fixed install location; never looked up on `PATH` |
+| `git` | Optional: the git binary that reads what a public destination and each `upstream` entry advertise at push time, instead of a fixed install location; never looked up on `PATH` |
+| `private-verdicts` | Written by the gate: each repository the live check confirmed private, with the time, so a push within 24 hours still passes when the check cannot answer |
+| `judge-overrides` | Content hashes the captain approved past the publish judge, written only by `bin/fm-publish-judge.sh override` |
+| `codex`, `pi` | Optional: the absolute path of each publish judge executable, instead of its fixed install locations; never looked up on `PATH` |
+
+`bin/fm-publish-gate.sh suggest-allowlist` prints private rows for project repositories outside the owners above after a live privacy check.
+Every file above except the executable paths (`gh`, `git`, `codex`, `pi`), `private-verdicts`, and `judge-overrides` flows from the primary home into each secondmate home through the inherited-configuration contract (`bin/fm-config-inherit-lib.sh`), so a secondmate pushes to the same private repositories from its first launch; bootstrap reports a missing `gitleaks` in any home that has this directory.
+Each spawned worker's hooks run the gate on commit (a staged-change check, then the message) and on push, and its launch carries the identity pin; `bin/fm-publish-gate.sh install` adds the same hooks to a checkout such as the installation itself.
+A push to a network destination that is neither allowlisted nor a confirmed-private repository of an owner is refused, and a push to a public destination is refused while `identity`, `denylist`, `poison-commits`, or `gitleaks` (`bin/fm-install-gitleaks.sh`) is missing, so a missing file never lets a public push through.
+Every refusal names the one command or edit that fixes it.
+The `gh` guard refuses every command that changes a repository's visibility (`gh repo edit --visibility`, an API write of `private` or `visibility`, a template generate, or a Pages write), whatever the destination's class, because it publishes everything the repository holds and no text check covers that.
+Making a repository public is a manual change the captain makes in the repository's settings, after reviewing everything it holds: every branch and tag (`bin/fm-publish-gate.sh ci-commits` over the history), releases, issues, and pull requests.
+
+A public push or public `gh` text that passes those checks then goes to the publish judge, `bin/fm-publish-judge.sh`, a model that reviews it by policy category and catches what literal patterns miss; private and local destinations never reach it.
+It runs Codex (`codex login`) and falls back to Pi with an xAI key, so at least one must be signed in on every machine that publishes publicly; when neither answers, the publication is refused with the fix.
+The judge never receives this directory's files, caches each verdict by content so identical content is judged once, and names a content hash the captain can approve from their own terminal; its header owns the judges, the policy categories, the cache, and the override.
 
 ## Lavish server address (config/lavish-axi-host)
 
@@ -974,10 +1016,10 @@ This applies only to agents Firstmate launches; the captain's own primary Firstm
 
 The optional local, gitignored `config/keep-ai-trailers` presence flag opts this home into keeping AI co-author trailers on its launched workers.
 With the flag absent, every Claude launch's inline `--settings` JSON carries `"attribution":{"commit":"","pr":"","sessionUrl":false}`, every Devin worker config sets `"attribution": false`, and every fleet launch receives a pane-scoped `GIT_CONFIG` `core.hooksPath` pointing at `state/<id>.git-hooks`, where git's `commit-msg` hook strips known AI trailers even when a runtime injects them after the typed message.
-When the flag is present, Claude launches omit those attribution-off settings, Devin worker configs keep the user config's `attribution` setting (Devin's default is on), and fleet launches do not install or select the strip hooks, so Git uses the repository's configured hooks directly.
-`bin/fm-git-strip-ai-trailers.sh` owns the identities, the install, and chaining the hooks of whichever repository git is running in, including when `git -c core.hooksPath` supplies the pane's hook override, so a project hook such as husky still runs when stripping is enabled.
+When the flag is present, Claude launches omit those attribution-off settings, Devin worker configs keep the user config's `attribution` setting (Devin's default is on), and the `commit-msg` hook in `state/<id>.git-hooks` skips the strip; fleet launches still select those hooks because they also run the publish gate (see "Publish guard").
+`bin/fm-git-strip-ai-trailers.sh` owns the identities, the install, and chaining the hooks of whichever repository git is running in, including when `git -c core.hooksPath` supplies the pane's hook override, so a project hook such as husky still runs.
 If the wrapper cannot resolve that repository's hooks directory, the git operation fails rather than silently skipping a project hook such as a pre-push guard.
-When stripping is enabled, the hooks directory is read-only, so a hook manager run inside a fleet pane (lefthook's npm postinstall, `pre-commit install`) fails instead of displacing the strip; install a project's hooks from outside the pane, where the wrappers chain them.
+The hooks directory is read-only, so a hook manager run inside a fleet pane (lefthook's npm postinstall, `pre-commit install`) fails instead of displacing the strip and the publish gate; install a project's hooks from outside the pane, where the wrappers chain them.
 The flag is a home-wide attribution choice, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract and a secondmate's own workers keep AI trailers too.
 Per-machine Cursor `cli-config.json` attribution-off is not this contract: it does not travel with Firstmate, defaults back to on when unset, and only feeds the CLI's request to the server, so it suppresses the trailer rather than preventing it.
 
@@ -1217,17 +1259,14 @@ Every home requires:
 
 - node and git.
 - gh, with GitHub authentication through `gh auth login`.
-- no-mistakes v1.46.0 or newer.
-- Compatible gh-axi.
-- chrome-devtools-axi.
 - Compatible tasks-axi, as specified in "Backlog backend" above.
 - Compatible quota-axi.
 
-[`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the axi-family floor policy and the gh-axi and lavish-axi floors, while [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
+[`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 
-In that list, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
-Lavish is a presentation-only dependency for visual decisions and reports; nonvisual work can proceed with plain text when it is unavailable.
+In that list, `gh` covers GitHub operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
+This home does not require no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi.
 
 **Backend requirements**
 
@@ -1258,15 +1297,10 @@ A herdr, zellij, or cmux home is therefore never told `tmux` is missing, and the
 
 **Missing-tool diagnostics**
 
-`tasks-axi` and `quota-axi` are essential bootstrap tools in every profile.
+`tasks-axi` and `quota-axi` are required bootstrap tools in every profile.
 
 - An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual`, a home with a configured non-markdown adapter or a markdown backlog refuses lifecycle mutation until compatible `tasks-axi` is on `PATH`, while a manual-backend home keeps its backlog hand-edited.
-- An absent or incompatible `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)`.
-- An absent or incompatible `lavish-axi` reports `PRESENTATION_UNAVAILABLE` with its required floor, install command, and explicit text fallback; [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns the response and compatibility check before visual use.
 - An absent or too-old `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; firstmate cannot resolve a profile array without a compatible binary.
-
-**Checkout diagnostics**
-
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
 
@@ -2005,7 +2039,7 @@ Some built-in sources carry the captain's answer to a captain-held task, and wha
 
 **Reconcile selections and handling boundaries**
 
-- The reserved Reconcile selection uses the parallel optional `reconciles` adapter command and binding-verified `reconcile-requests` intake rather than entering keyed answers; [`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#reconcile-re-check-reality-never-a-blind-close) owns those semantics.
+- An explicitly captured review artifact may use the parallel optional `reconciles` adapter command and binding-verified `reconcile-requests` intake rather than entering keyed answers; the static Bearings board never emits that selection or binds an answer source, and [`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#evidence-backed-reconciliation-is-not-a-board-control) owns the lifecycle semantics.
 - Feeding is independent of handling: it never acknowledges a result and never suppresses a wake, because recording the answer or request is transcription while acting on it is firstmate's judgement.
 - An unbound built-in source, a built-in adapter without the corresponding command, and a failure on either side all leave the capture untouched and still announced.
 - External binding responses never enter either authority-bearing intake.
@@ -2428,3 +2462,18 @@ A live lock, a missing `lsof`, any failed check, or any other fetch failure keep
 Every wait, retry, and removal is printed to stderr, and a successful recovery also prints one `recovered:` summary line to stdout so a session-start refresh - which discards fleet-sync stderr and relays only stdout - still surfaces it.
 
 The shared staleness proof lives in `bin/fm-lock-lib.sh`, which both `fm-teardown.sh` and `fm-fleet-sync.sh` use.
+
+## Agy primary
+
+Start Antigravity CLI from the Firstmate home with a physically resolved workspace grant:
+
+```sh
+agy --mode accept-edits --add-dir "$(pwd -P)"
+```
+
+The tracked `.agents/hooks.json` supplies the native primary integration; worker dispatch installs separate Firstmate-owned hooks through `bin/fm-agy-hook.sh`.
+The existing crew-permissions setting above owns Agy's approval posture, including its interactive shell review requirement.
+[`supervision-protocols/agy.md`](supervision-protocols/agy.md) owns the native background-command wake procedure.
+[`turnend-guard.md`](turnend-guard.md) and [`sessionstart-nudge.md`](sessionstart-nudge.md) own turn-end and startup compatibility, including interruption and compaction limits.
+Agy runs local secondmates through the same primary integration, while model and effort selection retains the adapter's existing dispatch axes.
+Remote secondmates remain outside this integration; the [Agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) records that refusal and the remaining unsupported surfaces.

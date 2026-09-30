@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Behavioral tests for bin/fm-procevent-quota.sh.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -9,7 +11,7 @@ LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-procevent-quota.XXXXXX")
 FAKEBIN="$LAB/fakebin"
 COUNT="$LAB/count"
 
-cleanup() { rm -rf "$LAB"; }
+cleanup() { fm_test_rm_tmproot "${LAB:-}"; }
 trap cleanup EXIT
 mkdir -p "$FAKEBIN"
 

@@ -295,24 +295,31 @@ SH
   chmod +x "$fakebin/ps"
 }
 
-# make_fake_tmux <fakebin> <live-target>: display-message succeeds only for
-# the given "session:window" target - the exact primitive
-# fm_backend_target_exists uses for a tmux endpoint liveness read.
+# make_fake_tmux <fakebin> <live-target>: models real tmux for a server whose
+# only window is the given "session:window" target. display-message exits 0 for
+# ANY target, as real tmux does by falling back to an active window, so only
+# the exact session inventory fm_backend_target_exists reads can tell a live
+# endpoint from a gone one.
 make_fake_tmux() {
   local fakebin=$1 live=$2
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+target=""
+prev=""
+for a in "\$@"; do
+  [ "\$prev" = "-t" ] && target="\$a"
+  prev="\$a"
+done
 case "\${1:-}" in
   display-message)
-    target=""
-    prev=""
-    for a in "\$@"; do
-      [ "\$prev" = "-t" ] && target="\$a"
-      prev="\$a"
-    done
-    [ "\$target" = "$live" ] && { printf '%%1\n'; exit 0; }
-    exit 1
+    printf '%%1\n'
+    exit 0
+    ;;
+  list-windows)
+    [ "\$target" = "=${live%%:*}" ] || { printf "can't find session: %s\n" "\${target#=}" >&2; exit 1; }
+    printf '%s\n' "${live#*:}"
+    exit 0
     ;;
 esac
 exit 1
@@ -1391,12 +1398,14 @@ EOF
 
   printf 'window=fm-sess:live-window\nkind=ship\n' > "$home/state/task-live.meta"
   printf 'window=fm-sess:dead-window\nkind=ship\n' > "$home/state/task-dead.meta"
+  printf 'window=gone-sess:live-window\nkind=ship\n' > "$home/state/task-gone-session.meta"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "endpoint: alive (backend=tmux window=fm-sess:live-window)" "live tmux endpoint not reported alive"
-  assert_contains "$out" "endpoint: dead (backend=tmux window=fm-sess:dead-window)" "dead tmux endpoint not reported dead"
+  assert_contains "$out" "endpoint: dead (backend=tmux window=fm-sess:dead-window)" "gone window on a live server not reported dead"
+  assert_contains "$out" "endpoint: dead (backend=tmux window=gone-sess:live-window)" "window in a missing session not reported dead"
 
-  pass "tmux endpoint liveness is reported per task: alive for a live window, dead for a gone one"
+  pass "tmux endpoint liveness is reported per task from the exact inventory: alive for a live window, dead for a gone window or session"
 }
 
 test_endpoint_liveness_herdr() {

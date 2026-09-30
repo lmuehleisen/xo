@@ -64,7 +64,10 @@ PARENT="$HOME_REAL/$(dirname "$REL")"
 [ ! -L "$PARENT" ] || die "inherited destination parent is a symlink"
 mkdir -p "$PARENT" || die "cannot create inherited destination parent"
 PARENT_REAL=$(CDPATH='' cd -- "$PARENT" && pwd -P)
-case "$PARENT_REAL" in "$HOME_REAL/config"|"$HOME_REAL/data") ;; *) die "inherited destination escapes FM_HOME" ;; esac
+# The parent must be exactly the item's own directory under config/ or data/
+# (config/publish-guard for its files), with no symlink redirecting it.
+case "$(dirname "$REL")" in config|config/*|data) ;; *) die "inherited destination escapes FM_HOME" ;; esac
+[ "$PARENT_REAL" = "$HOME_REAL/$(dirname "$REL")" ] || die "inherited destination escapes FM_HOME"
 DEST="$PARENT_REAL/$(basename "$REL")"
 [ ! -L "$DEST" ] || die "inherited destination is a symlink"
 if [ -e "$DEST" ]; then

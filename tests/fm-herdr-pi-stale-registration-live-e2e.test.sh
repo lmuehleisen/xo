@@ -55,7 +55,7 @@ export HERDR_SESSION="$SESSION"
 SCRATCH=
 cleanup_all() {
   local status=$?
-  [ -n "$SCRATCH" ] && rm -rf "$SCRATCH"
+  fm_test_rm_tmproot "${SCRATCH:-}"
   herdr_safe_stop_and_delete "$SESSION"
   exit "$status"
 }
@@ -64,6 +64,7 @@ fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab se
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-pi-stale.XXXXXX")
 SCRATCH=$(cd "$SCRATCH" && pwd)
+fm_test_require_tmproot "$SCRATCH"
 mkdir -p "$SCRATCH/cwd"
 
 # shellcheck source=/dev/null

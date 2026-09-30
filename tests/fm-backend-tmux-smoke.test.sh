@@ -7,6 +7,8 @@
 # server, isolated on a private socket (`-L`) so it never touches the host's
 # actual sessions.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -34,13 +36,15 @@ trap cleanup_all EXIT
 
 cleanup_all() {
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
-  [ -n "${SHIM_DIR:-}" ] && rm -rf "$SHIM_DIR"
+  fm_test_rm_tmproot "${SHIM_DIR:-}"
 }
 
 # A `tmux` shim on PATH that transparently redirects every call to the private
 # socket, so bin/backends/tmux.sh's bare `tmux ...` invocations never touch the
 # host's real sessions.
-SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-backend-smoke.XXXXXX")
+SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-backend-smoke.XXXXXX") || exit 1
+SHIM_DIR=$(cd "$SHIM_DIR" && pwd -P) || exit 1
+fm_test_require_tmproot "$SHIM_DIR"
 cat > "$SHIM_DIR/tmux" <<SH
 #!/usr/bin/env bash
 exec "$REAL_TMUX" -L "$SOCKET" "\$@"
@@ -155,6 +159,93 @@ if fm_backend_tmux_resolve_bare_selector "no-such-window-xyz" 2>/dev/null; then
   fail "fm_backend_tmux_resolve_bare_selector should fail for a nonexistent window"
 fi
 pass "real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist"
+
+# Exercise shell submit against real line editors on this suite's private server.
+# Only the transport drops Enter; cwd/process/file postconditions stay real.
+submit_test_enters=0
+submit_test_drop=first
+submit_test_target=
+tmux() {
+  if [ "${1:-}" = send-keys ] && [ "${3:-}" = "$submit_test_target" ] && [ "${4:-}" = Enter ]; then
+    submit_test_enters=$((submit_test_enters + 1))
+    if [ "$submit_test_drop" = all ] || { [ "$submit_test_drop" = first ] && [ "$submit_test_enters" = 1 ]; }; then
+      return 0
+    fi
+  fi
+  command tmux "$@"
+}
+submit_test_cwd() {
+  [ "$(fm_backend_tmux_current_path "$submit_test_target")" = "$SHIM_DIR" ]
+}
+submit_test_process() {
+  [ "$(fm_backend_tmux_current_command "$submit_test_target")" = sleep ]
+}
+submit_test_file() { [ -f "$SHIM_DIR/executed" ]; }
+for submit_shell in /bin/bash /bin/zsh; do
+  [ -x "$submit_shell" ] || { echo "skip: shell submit $submit_shell unavailable"; continue; }
+  submit_test_target="$SESSION:submit-${submit_shell##*/}"
+  case "$submit_shell" in
+    */bash) submit_shell_args='--noprofile --norc -i' ;;
+    */zsh) submit_shell_args='-f -i' ;;
+  esac
+  command tmux new-window -d -t "$SESSION:" -n "submit-${submit_shell##*/}" \
+    "env PS1='submit-ready> ' $submit_shell $submit_shell_args"
+  wait_for_capture_text "$submit_test_target" 'submit-ready>' || fail "shell did not become ready"
+  submit_test_enters=0
+  submit_test_drop=first
+  submit_line="cd -- '$SHIM_DIR'"
+  fm_backend_tmux_send_literal "$submit_test_target" "$submit_line"
+  sleep 0.3
+  fm_tmux_shell_submit_enter "$submit_test_target" "$submit_line" submit_test_cwd \
+    || fail "real $submit_shell cd did not recover dropped Enter"
+  [ "$submit_test_enters" = 2 ] || fail "real cd did not retry exactly once"
+  pass "real $submit_shell cwd confirms shell submit after first Enter is dropped"
+
+  submit_test_enters=0
+  # Make the launch span multiple wrapped rows. The suffix must be captured at
+  # the cursor, not guessed from a nearby transcript occurrence.
+  submit_padding=$(printf '%0600d' 0)
+  submit_line="SUBMIT_PADDING=$submit_padding sleep 30"
+  fm_backend_tmux_send_literal "$submit_test_target" "$submit_line"
+  sleep 0.3
+  fm_tmux_shell_submit_enter "$submit_test_target" "$submit_line" submit_test_process \
+    || fail "real $submit_shell wrapped launch did not recover dropped Enter"
+  [ "$submit_test_enters" = 2 ] || fail "real launch did not retry exactly once"
+  command tmux send-keys -t "$submit_test_target" C-c
+  sleep 0.3
+  pass "real $submit_shell process confirms wrapped launch after first Enter is dropped"
+
+  # Keep the foreground process a shell while its builtin read delays the
+  # postcondition. Accepted Enter leaves the cursor on an empty row meanwhile.
+  submit_test_enters=0
+  submit_test_drop=none
+  submit_line="read -r -t 2 submit_unused; touch '$SHIM_DIR/executed'"
+  fm_backend_tmux_send_literal "$submit_test_target" "$submit_line"
+  sleep 0.3
+  fm_tmux_shell_submit_enter "$submit_test_target" "$submit_line" submit_test_file \
+    || fail "real $submit_shell delayed execution was not confirmed"
+  [ "$submit_test_enters" = 1 ] || fail "accepted Enter was retried into the shell builtin"
+  rm "$SHIM_DIR/executed"
+  pass "real $submit_shell accepted Enter waits on a blank cursor without retrying"
+
+  submit_test_enters=0
+  submit_test_drop=all
+  submit_line="touch '$SHIM_DIR/executed'"
+  fm_backend_tmux_send_literal "$submit_test_target" "$submit_line"
+  sleep 0.3
+  if fm_tmux_shell_submit_enter "$submit_test_target" "$submit_line" submit_test_file; then
+    fail "all lost Enters unexpectedly executed"
+  fi
+  [ "$submit_test_enters" = 3 ] || fail "real retry budget exceeded"
+  submit_test_drop=none
+  # An empty Enter after failure must not execute the abandoned command.
+  command tmux send-keys -t "$submit_test_target" Enter
+  sleep 0.3
+  [ ! -f "$SHIM_DIR/executed" ] || fail "failed submission left executable text behind"
+  pass "real $submit_shell exhausted submit clears its owned input"
+  command tmux kill-window -t "$submit_test_target"
+done
+unset -f tmux
 
 # --- kill and recovery-grade missing-window classification ------------------
 

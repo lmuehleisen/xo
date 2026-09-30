@@ -23,6 +23,8 @@
 # operation goes through bin/fm-herdr-lab.sh, which appends the named session
 # flag and verifies the default fleet session is unchanged after teardown.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -69,9 +71,12 @@ cleanup_all() {
   done
   WORKTREES=()
   "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || status=$?
-  # Spawn leaves each state/<id>.git-hooks strip dir read-only.
-  find "$TMP_ROOT" -type d -exec chmod u+rwx {} + 2>/dev/null
-  rm -rf "$TMP_ROOT"
+  # Spawn leaves each state/<id>.git-hooks strip dir read-only; only a path the
+  # tmproot guard accepts is made writable before the guarded removal.
+  if [ -n "${TMP_ROOT:-}" ] && ! fm_test_tmproot_guard_reason "$TMP_ROOT" >/dev/null; then
+    find "$TMP_ROOT" -type d -exec chmod u+rwx {} + 2>/dev/null
+  fi
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
   return "$status"
 }
 trap cleanup_all EXIT

@@ -63,9 +63,19 @@
 # report, read back from the forge; a lane that deliberately holds a draft
 # declares a paused wait instead. bin/fm-pr-check.sh refuses to arm merge
 # monitoring on a draft through the same reading bin/fm-pr-merge.sh uses.
-# This file is the one owner of the no-mistakes `--intent` contract: only the
-# brief's `## Captain's intent` subsection plus later captain words, never
-# `## Firstmate spec` and never the worker's own tradeoffs.
+# Every block that publishes or readies work without the pipeline tells the
+# worker to run the project's relevant tests and lint checks and report them.
+# no-mistakes remains a compatibility token and delivers through direct-PR
+# unless this home opts in with config/no-mistakes (docs/configuration.md); the
+# fork helpers at the end of this file own that remap, so callers hand the
+# functions above an already-resolved effective mode. The no-mistakes pipeline
+# contract carries the fixed "Delivery pipeline: no-mistakes" line
+# bin/fm-spawn.sh reads, and names the no-mistakes skill without a harness
+# prefix, because a brief or promotion is rendered before any harness is chosen;
+# each harness's invocation form is owned by .agents/skills/harness-adapters.
+# This file is the one owner of the no-mistakes `--intent` contract for that
+# pipeline: only the brief's `## Captain's intent` subsection plus later captain
+# words, never `## Firstmate spec` and never the worker's own tradeoffs.
 # Author the subsection body and later relays as the actual words, without
 # adding speaker labels or direct address: the heading supplies provenance and
 # is not part of --intent. A legacy mixed Task instead marks each captain line
@@ -288,7 +298,7 @@ fm_nm_driving_block() {  # <forge>
   fi
   cat <<EOF
 You drive no-mistakes by responding to its gates, not by implementing fixes.
-Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
+Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke the no-mistakes skill, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
 When starting no-mistakes, pass \`--intent\` as only this brief's \`## Captain's intent\` subsection body, not its heading, plus any later words the captain actually said.
 Preserve the actual words without adding speaker labels or direct address; the subsection heading supplies provenance outside the pipeline input.
 For a legacy brief with no such subsection, include only words on lines marked \`[captain] \`, excluding that metadata prefix; never copy its mixed \`# Task\` wholesale.
@@ -334,7 +344,7 @@ Publish from this copy with \`gerrit-axi\`, never with \`git push\`:
 Then append \`done [at=<epoch>]: PR {change url} published for review\` to the status file and stop. You are finished.
 That \`done:\` is accepted only when the change's current patch set on the server carries this copy's HEAD tree, so commit nothing after publishing; if you must change the work, commit it and publish again before reporting done.
 A \`done:\` whose URL is not the canonical \`https://<host>/c/<project>/+/<number>\` change URL is refused.
-There is no pull request, no \`gh-axi\` call, and no forge CI result to report: a human reviewer approves and submits the change on the server, and firstmate relays that outcome.
+There is no pull request, no \`gh\` call, and no forge CI result to report: a human reviewer approves and submits the change on the server, and firstmate relays that outcome.
 EOF
 }
 
@@ -351,6 +361,7 @@ Ship branch: $branch
 This task ships **direct-PR** to a Gerrit review server: you publish the change yourself, without the no-mistakes pipeline.
 Gerrit has no pull requests, so there is nothing to open; publishing creates the change.
 The task is complete only when committed on your branch.
+Run the project's relevant tests and lint checks before reporting ready; report the commands, results, and anything you could not verify.
 When it is implemented and committed, publish it.
 EOF
       fm_gerrit_publish_block
@@ -362,13 +373,14 @@ EOF
       cat <<EOF
 # Definition of done
 Delivery contract: mode=no-mistakes forge=gerrit shape=squash
+Delivery pipeline: no-mistakes
 Ship branch: $branch
 This project's review server is Gerrit: it has no pull requests and no forge CI the pipeline can watch, so **no-mistakes runs here as a review pass that ends at a ready branch**, and you then publish that branch as one change.
 Pass \`--skip push,pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, and \`lint\` are the whole point of the run.
 Those three are the only steps that reach a forge, and skipping them is a supported outcome, not a degraded one.
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate.
+Firstmate will then instruct you to invoke the no-mistakes skill, in your harness's own skill-invocation form, to validate.
 That first \`done:\` is the handoff that starts the pipeline; it is not a request to publish.
 
 EOF
@@ -397,8 +409,9 @@ Delivery contract: mode=direct-PR
 Ship branch: $branch
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\` that is ready for review, not a draft.
-Before you report done, read the PR back from the forge and confirm it is not a draft (\`gh-axi pr view <number>\` must print \`draft: no\`, where <number> is the PR number from your PR URL); if it is a draft, mark it ready with \`gh-axi pr ready <number>\`.
+Run the project's relevant tests and lint checks before reporting ready; report the commands, results, and anything you could not verify.
+When it is implemented and committed, push your branch and open a PR with \`gh\` that is ready for review, not a draft.
+Before you report done, read the PR back from the forge and confirm it is not a draft (\`gh pr view <url> --json isDraft --jq .isDraft\` must print false); if it is a draft, mark it ready with \`gh pr ready\`.
 A draft cannot be merged, so a done report on one leaves the merge unasked.
 Then append \`done [at=<epoch>]: PR {url}\` to the status file and stop.
 That \`done:\` is accepted only when this copy's HEAD - your latest commit - is pushed to your PR branch; the check tests that commit, not merely that a branch moved.
@@ -413,6 +426,7 @@ Delivery contract: mode=local-only
 Ship branch: $branch
 This task ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`$branch\`. Do NOT push, do NOT open a PR, do NOT merge.
+Run the project's relevant tests and lint checks before reporting ready; report the commands, results, and anything you could not verify.
 A \`done:\` is accepted when the named head is on this project's shared local branch, not only on a detached copy; the check tests that head, not merely that a branch moved.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
 When it is implemented and committed, append \`done [at=<epoch>]: ready in branch $branch\` to the status file and stop.
@@ -423,20 +437,21 @@ EOF
       cat <<EOF
 # Definition of done
 Delivery contract: mode=no-mistakes
+Delivery pipeline: no-mistakes
 Ship branch: $branch
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
+Firstmate will then instruct you to invoke the no-mistakes skill, in your harness's own skill-invocation form, to validate and ship a PR.
 That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
 
 EOF
       fm_nm_driving_block "$forge"
       cat <<EOF
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), read the PR back from the forge and confirm it is not a draft (\`gh-axi pr view <number>\` must print \`draft: no\`, where <number> is the PR number from your PR URL); if it is a draft, mark it ready with \`gh-axi pr ready <number>\`.
+After the no-mistakes skill reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), read the PR back from the forge and confirm it is not a draft (\`gh pr view <url> --json isDraft --jq .isDraft\` must print false); if it is a draft, mark it ready with \`gh pr ready\`.
 A draft cannot be merged, so a done report on one leaves the merge unasked.
 Then append \`done [at=<epoch>]: PR {url} checks green\` and stop. You are finished.
-That CI-ready \`done:\` is accepted only when this copy's HEAD - your latest commit - is one the /no-mistakes run pushed, so commit nothing after the run; the check tests that commit, not merely that a branch moved.
+That CI-ready \`done:\` is accepted only when this copy's HEAD - your latest commit - is one the no-mistakes run pushed, so commit nothing after the run; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 EOF
       ;;
@@ -668,4 +683,68 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
   fi
   printf '%s\n' "named head $sha is unreachable outside the worker copy"
   return 1
+}
+
+# --- Fork: config/no-mistakes remap ------------------------------------------
+# This fork ships a no-mistakes task through direct-PR unless this home opts in
+# with config/no-mistakes (docs/configuration.md). The recorded token stays
+# no-mistakes in the registry and in the task's mode= meta; every renderer and
+# gate works on the effective mode these helpers resolve, so the upstream
+# functions above stay unchanged.
+# fm_no_mistakes_pipeline_state <config-dir> is the opt-in's one resolver:
+# `off` when the presence flag is absent, `available` when it is present and a
+# no-mistakes binary is on PATH, `unavailable` otherwise.
+# fm_effective_delivery_mode <mode> <config-dir> prints direct-PR for a
+# no-mistakes token when that state is off, and the mode unchanged otherwise;
+# bin/fm-brief.sh, bin/fm-spawn.sh, and bin/fm-promote.sh call it before
+# fm_dod_block and fm_ship_rule_one, and the latter two refuse `unavailable`.
+# fm_no_mistakes_remap_note prints the line a remapped Definition of done ends
+# with, so the worker learns why no pipeline runs.
+# fm_dod_pipeline_recorded <brief> reads the "Delivery pipeline: no-mistakes"
+# line only from the brief's last `# Definition of done` section, the
+# machine-owned block this file renders, so the same text inside Task prose or
+# an example never counts.
+# fm_dod_task_mode <meta> is the mode the named-head gate judges a task by: the
+# effective_mode= bin/fm-spawn.sh and bin/fm-promote.sh record beside mode=, or
+# the recorded mode for a record written before that field existed. A remapped
+# no-mistakes task is therefore judged as direct-PR on every forge, including
+# Gerrit, where the no-mistakes gate would demand a passed pipeline run that
+# never happens.
+
+fm_no_mistakes_pipeline_state() {  # <config-dir>
+  if [ ! -f "$1/no-mistakes" ]; then
+    echo off
+  elif command -v no-mistakes >/dev/null 2>&1; then
+    echo available
+  else
+    echo unavailable
+  fi
+}
+
+fm_effective_delivery_mode() {  # <mode> <config-dir>
+  if [ "$1" = no-mistakes ] && [ "$(fm_no_mistakes_pipeline_state "$2")" = off ]; then
+    echo direct-PR
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+fm_no_mistakes_remap_note() {
+  printf '%s\n' "This task's recorded mode is no-mistakes, but this home does not run the no-mistakes pipeline (config/no-mistakes is absent), so it ships through the direct-PR contract above."
+}
+
+fm_dod_pipeline_recorded() {  # <brief>
+  awk '
+    /^# Definition of done$/ { in_dod = 1; pipeline = 0; next }
+    /^# / { in_dod = 0; next }
+    in_dod && $0 == "Delivery pipeline: no-mistakes" { pipeline = 1 }
+    END { exit !pipeline }
+  ' "$1"
+}
+
+fm_dod_task_mode() {  # <meta>
+  local effective
+  effective=$(fm_dod_meta_value "$1" effective_mode)
+  [ -n "$effective" ] || effective=$(fm_dod_meta_value "$1" mode)
+  printf '%s\n' "$effective"
 }

@@ -6,11 +6,11 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # bin/fm-harness.sh answers from environment markers and process ancestry. A
-# suite run from inside Cursor, Claude, Pi, or Grok inherits those markers and
-# its own real ancestry, either of which can decide a case the detection cases
-# meant to control. Drop the ambient markers so the asserted verdict does not
-# depend on which harness launched the suite.
-unset CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT CURSOR_AGENT CURSOR_INVOKED_AS
+# suite run from inside Cursor, Claude, Pi, Grok, or Agy inherits those markers
+# and its own real ancestry, either of which can decide a case the detection
+# cases meant to control. Drop the ambient markers so the asserted verdict does
+# not depend on which harness launched the suite.
+unset CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT CURSOR_AGENT CURSOR_INVOKED_AS JETSKI_APP_DATA_DIR
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
@@ -30,9 +30,9 @@ ai_trailer_hooks_prefix() {  # <home> <id>
 }
 
 cleanup_kimi_harness() {
-  [ -z "$KIMI_RUNTIME_TASK_TMP" ] || fm_test_remove_tree "$KIMI_RUNTIME_TASK_TMP"
-  [ -z "$KIMI_RUNTIME_LAUNCH_DIR" ] || fm_test_remove_tree "$KIMI_RUNTIME_LAUNCH_DIR"
-  fm_test_remove_tree "$TMP_ROOT"
+  fm_test_remove_tree "${KIMI_RUNTIME_TASK_TMP:-}"
+  fm_test_remove_tree "${KIMI_RUNTIME_LAUNCH_DIR:-}"
+  fm_test_remove_tree "${TMP_ROOT:-}"
 }
 trap cleanup_kimi_harness EXIT
 
@@ -213,7 +213,8 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse gh-axi gh
+  fm_fake_exit0 "$fakebin" gh-axi gh
+  fm_fake_treehouse_lease "$fakebin"
   fm_fake_exit0 "$fakebin" kimi
   ln -s "$JQ_BIN" "$fakebin/jq"
   printf '%s\n' "$fakebin"
@@ -300,8 +301,19 @@ test_kimi_launch_then_send_is_verified() {
   assert_contains "$out" "spawned $id harness=kimi" "kimi spawn did not report success"
 
   launch=$(cat "$CASE_DIR/launch.log")
-  [ "$launch" = "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$HOME_DIR" "$id")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI '$FAKEBIN_DIR/kimi' --model 'kimi-code/k3' --auto" ] \
+  [ "$launch" = "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$HOME_DIR" "$id")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI '$FAKEBIN_DIR/kimi' --model 'kimi-code/k3' --auto" ] \
     || fail "kimi launch did not use the absolute binary, model, and --auto only: $launch"
+  # Kimi has no native marker: an inherited Agy marker would outrank its
+  # process ancestry. Execute the emitted launch to prove the boundary scrubs
+  # it, with an unsanitized invocation proving the fixture can observe it.
+  cat > "$FAKEBIN_DIR/kimi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${JETSKI_APP_DATA_DIR-unset}"
+SH
+  out=$(JETSKI_APP_DATA_DIR=antigravity-cli "$FAKEBIN_DIR/kimi")
+  [ "$out" = antigravity-cli ] || fail 'Kimi marker probe did not inherit the Agy marker'
+  out=$(JETSKI_APP_DATA_DIR=antigravity-cli bash -c "$launch")
+  [ "$out" = unset ] || fail 'the Kimi launch retained its Agy parent identity'
   assert_not_contains "$launch" "--effort" "kimi launch emitted a nonexistent effort flag"
   assert_not_contains "$launch" "turn-ended" "kimi launch embedded a turn-end path"
   assert_not_contains "$launch" "__TURNEND__" "kimi launch retained a turn-end placeholder"
@@ -676,7 +688,7 @@ test_kimi_falls_back_to_expanded_home_binary() {
   rc=$?
   expect_code 0 "$rc" "Kimi HOME fallback spawn should succeed"
   launch=$(cat "$CASE_DIR/launch.log")
-  [ "$launch" = "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$HOME_DIR" "$id")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI '$fallback' --auto" ] \
+  [ "$launch" = "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$HOME_DIR" "$id")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI '$fallback' --auto" ] \
     || fail "Kimi fallback did not expand HOME into an absolute executable: $launch"
   pass "fm-spawn: Kimi fallback expands the active HOME"
 }

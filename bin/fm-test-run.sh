@@ -283,8 +283,12 @@ family_for_basename() {
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
+    fm-composer-agy.test.sh|fm-composer-devin.test.sh|\
     fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|\
+    fm-captain-hold-completed-ship.test.sh|fm-captain-hold-rehold.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
+    fm-devin-permission-policy.test.sh|fm-devin-rate-limit-retry.test.sh|fm-devin-fork-harness.test.sh|\
+    fm-agy-permission-policy.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
     fm-kimi-harness.test.sh|fm-devin-harness.test.sh|fm-muse-harness.test.sh|fm-rovo-harness.test.sh|fm-agy-harness.test.sh|fm-omp-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
@@ -297,6 +301,7 @@ family_for_basename() {
     fm-supervision-instructions.test.sh|fm-task-delivery.test.sh|\
     fm-timeout-lib.test.sh|\
     fm-tmux-submit-busy.test.sh|fm-trace-context-lib.test.sh|\
+    fm-tmux-submit-busy-agy.test.sh|\
     fm-transition-lib.test.sh|\
     fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
       printf '%s\n' pure-contract-unit
@@ -310,6 +315,7 @@ family_for_basename() {
     fm-turnend-foreign-owner-arm-fix.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
     fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
+    fm-watch-completed-ship-hold.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
@@ -345,8 +351,8 @@ family_for_basename() {
       printf '%s\n' session-bootstrap
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
-    fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
+    fm-claude-stopfailure-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
@@ -357,6 +363,9 @@ family_for_basename() {
     fm-harness-liveness-drift-live-e2e.test.sh|\
     fm-devin-signals-live-e2e.test.sh|fm-muse-signals-live-e2e.test.sh|fm-rovo-signals-live-e2e.test.sh|fm-agy-signals-live-e2e.test.sh|\
     fm-launch-prompt-signals-live-e2e.test.sh|\
+    fm-agy-primary-live-e2e.test.sh|fm-agy-observer-live-e2e.test.sh|\
+    fm-agy-bypass-live-e2e.test.sh|\
+    fm-devin-permission-policy-live-e2e.test.sh|fm-devin-rate-limit-retry-live-e2e.test.sh|\
     fm-herdr-version-floor-live-e2e.test.sh|\
     fm-herdr-pi-stale-registration-live-e2e.test.sh|\
     fm-worker-account-live-e2e.test.sh|\
@@ -370,6 +379,7 @@ family_for_basename() {
     fm-quota-array-dispatch-live-e2e.test.sh|fm-send-secondmate-marker-herdr-e2e.test.sh|\
     fm-send-inbox-doorbell-live-e2e.test.sh|\
     fm-calm-claude-mod-plugin.test.sh|fm-calm-claude-mod-live-e2e.test.sh|\
+    fm-afk-claude-long-digest-live-e2e.test.sh|\
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
     fm-herdr-submit-confirm-live-e2e.test.sh)
       printf '%s\n' live-harness-optin
@@ -377,12 +387,14 @@ family_for_basename() {
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
     fm-tmux-agent-liveness.test.sh|\
     fm-control.test.sh|fm-control-relaunch.test.sh|\
+    fm-control-relaunch-bindings.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
     fm-worker-account.test.sh|\
     fm-git-strip-ai-trailers.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
+    fm-spawn-prelaunch-rollback.test.sh|fm-spawn-prelaunch-lease-return.test.sh|\
     fm-spawn-compact-adviser-disable.test.sh|\
     fm-spawn-compact-adviser-disable-remote.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
@@ -393,11 +405,13 @@ family_for_basename() {
     fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
       printf '%s\n' pr-forge
       ;;
-    fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|\
+    fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-owned-digest-recovery.test.sh|\
+    fm-afk-inject-delivery-proof.test.sh|fm-afk-return.test.sh|fm-afk-sentinel.test.sh|\
     fm-supervision-host.test.sh|fm-host-mirror.test.sh)
       printf '%s\n' afk
       ;;
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|fm-contributions.test.sh|\
+    fm-fleet-snapshot-captain-hold.test.sh|\
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
@@ -415,7 +429,7 @@ family_for_basename() {
     fm-claude-stop-autoarm.test.sh|fm-cursor-harness.test.sh|\
     fm-dispatch-resolve.test.sh|\
     fm-extension-binding.test.sh|fm-gitignore-config.test.sh|\
-    fm-no-mistakes-required.test.sh|fm-peek-remote.test.sh|\
+    fm-peek-remote.test.sh|\
     fm-pending-reply.test.sh|fm-pi-branch-extension.test.sh|\
     fm-procevent-quota.test.sh|fm-procevent-when.test.sh|fm-procevent.test.sh|\
     fm-live-gate.test.sh|\
@@ -678,11 +692,18 @@ list_portable_serial() {
 # balance rather than coverage. That doc owns the refresh procedure.
 portable_serial_weight_hints() {
   cat <<'EOF'
+tests/fm-afk-claude-long-digest-live-e2e.test.sh 53
 tests/fm-afk-contract.test.sh 15645
 tests/fm-afk-inject-e2e.test.sh 35889
+tests/fm-afk-owned-digest-recovery.test.sh 57686
 tests/fm-afk-pi-herdr-return-e2e.test.sh 45
 tests/fm-afk-return.test.sh 20385
+tests/fm-afk-sentinel.test.sh 13796
+tests/fm-agy-bypass-live-e2e.test.sh 156
 tests/fm-agy-harness.test.sh 47933
+tests/fm-agy-observer-live-e2e.test.sh 53
+tests/fm-agy-permission-policy.test.sh 21370
+tests/fm-agy-primary-live-e2e.test.sh 53
 tests/fm-agy-signals-live-e2e.test.sh 49
 tests/fm-ask-user-authority.test.sh 131
 tests/fm-backend-cmux-smoke.test.sh 33
@@ -708,34 +729,51 @@ tests/fm-calm-claude-mod-live-e2e.test.sh 46
 tests/fm-calm-claude-mod-plugin.test.sh 172
 tests/fm-calm-claude-mod.test.sh 1252
 tests/fm-calm-pi-extension.test.sh 45128
+tests/fm-calm-pi-queue-retention-live-e2e.test.sh 1358
+tests/fm-captain-hold-completed-ship.test.sh 8698
+tests/fm-captain-hold-rehold.test.sh 16495
 tests/fm-check-unregister.test.sh 464
 tests/fm-ci-workflow.test.sh 2073
 tests/fm-classify-corr-token.test.sh 49294
 tests/fm-classify-decision-key.test.sh 3336
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 45
 tests/fm-claude-stop-autoarm.test.sh 60797
+tests/fm-claude-stopfailure-live-e2e.test.sh 78
 tests/fm-claude-trust.test.sh 10410
 tests/fm-cmux-claude-composer-live-e2e.test.sh 47
 tests/fm-codex-continuity-live-e2e.test.sh 71
 tests/fm-codex-hook-layer-live-e2e.test.sh 47
+tests/fm-composer-agy.test.sh 1041
 tests/fm-composer-codex-idle-live-e2e.test.sh 229
+tests/fm-composer-devin.test.sh 3167
 tests/fm-composer-matrix-live-e2e.test.sh 47
 tests/fm-contributions.test.sh 35676
+tests/fm-control-relaunch-bindings.test.sh 8566
 tests/fm-control-relaunch.test.sh 137013
 tests/fm-control.test.sh 39524
 tests/fm-cursor-harness.test.sh 30212
 tests/fm-cursor-primary-live-e2e.test.sh 72
 tests/fm-cursor-primary.test.sh 52269
 tests/fm-daemon.test.sh 27262
+tests/fm-devin-fork-harness.test.sh 73275
+tests/fm-devin-harness.test.sh 4576
+tests/fm-devin-permission-policy-live-e2e.test.sh 54
+tests/fm-devin-permission-policy.test.sh 42089
+tests/fm-devin-rate-limit-retry-live-e2e.test.sh 79
+tests/fm-devin-rate-limit-retry.test.sh 85973
+tests/fm-devin-signals-live-e2e.test.sh 169
 tests/fm-dispatch-resolve.test.sh 4397
 tests/fm-documentation-audiences.test.sh 847
 tests/fm-dod-lib.test.sh 4000
 tests/fm-extension-binding.test.sh 9053
+tests/fm-fleet-ledger.test.sh 22691
+tests/fm-fleet-snapshot-captain-hold.test.sh 215
 tests/fm-fleet-snapshot-view.test.sh 17465
 tests/fm-fleet-sync.test.sh 35983
 tests/fm-forge-detect.test.sh 160
 tests/fm-gate-refuse.test.sh 5328
 tests/fm-gemini-harness.test.sh 938
+tests/fm-git-strip-ai-trailers.test.sh 1859
 tests/fm-gitignore-config.test.sh 58
 tests/fm-gotmp.test.sh 1320
 tests/fm-grok-continuity-live-e2e.test.sh 45
@@ -750,8 +788,12 @@ tests/fm-herdr-session-cleanup.test.sh 6828
 tests/fm-herdr-submit-confirm-live-e2e.test.sh 46
 tests/fm-herdr-version-floor-live-e2e.test.sh 72
 tests/fm-home-summary-refresh.test.sh 37264
+tests/fm-host-mirror-live-e2e.test.sh 54
+tests/fm-host-mirror.test.sh 11187
 tests/fm-inactive-reconcile.test.sh 53178
+tests/fm-inbox.test.sh 6414
 tests/fm-kimi-harness.test.sh 19151
+tests/fm-launch-prompt-signals-live-e2e.test.sh 110
 tests/fm-lint-workflows.test.sh 785
 tests/fm-live-gate.test.sh 1755
 tests/fm-mail-check.test.sh 9162
@@ -794,6 +836,7 @@ tests/fm-remote-job.test.sh 59354
 tests/fm-remote-reply.test.sh 118669
 tests/fm-remote-secondmate-lifecycle-e2e.test.sh 241208
 tests/fm-remote-secondmate-parent-binding.test.sh 32176
+tests/fm-remote-secondmate-relaunch.test.sh 943
 tests/fm-remote-secondmate-trace-context.test.sh 59689
 tests/fm-remote-transport-lanes.test.sh 62635
 tests/fm-rovo-harness.test.sh 14322
@@ -818,12 +861,17 @@ tests/fm-sessionstart-hook-live-e2e.test.sh 97
 tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh 46
 tests/fm-sessionstart-nudge.test.sh 66247
 tests/fm-shared-captain-inheritance.test.sh 5687
+tests/fm-spawn-compact-adviser-disable-remote.test.sh 33321
+tests/fm-spawn-compact-adviser-disable.test.sh 24795
 tests/fm-spawn-dispatch-profile.test.sh 138433
 tests/fm-spawn-pool-base-freshen.test.sh 62249
+tests/fm-spawn-prelaunch-lease-return.test.sh 2053
+tests/fm-spawn-prelaunch-rollback.test.sh 13454
 tests/fm-spawn-worktree-settle.test.sh 8482
 tests/fm-startup-memory-budget.test.sh 7392
 tests/fm-startup-network.test.sh 61336
 tests/fm-stat-shadowing.test.sh 48
+tests/fm-stow-audit.test.sh 1604
 tests/fm-stow-cascade.test.sh 3022
 tests/fm-subagent-pretool-check.test.sh 949
 tests/fm-supervision-events.test.sh 659
@@ -840,12 +888,14 @@ tests/fm-test-fixtures.test.sh 1562
 tests/fm-test-isolation-proof.test.sh 2692
 tests/fm-timeout-lib.test.sh 8541
 tests/fm-tmux-agent-liveness.test.sh 1953
+tests/fm-tmux-submit-busy-agy.test.sh 1272
 tests/fm-tool-update-check.test.sh 13832
 tests/fm-trace-context-lib.test.sh 227
 tests/fm-trace-context-spawn.test.sh 49071
 tests/fm-turnend-foreign-owner-arm-fix.test.sh 2397
 tests/fm-turnend-guard.test.sh 33450
 tests/fm-update.test.sh 11572
+tests/fm-upstream-callsite-scan.test.sh 527
 tests/fm-vendor-auth-probe.test.sh 45255
 tests/fm-voice-relay.test.sh 32486
 tests/fm-wake-daemon-lifecycle-e2e.test.sh 7477
@@ -856,9 +906,12 @@ tests/fm-wake-drain-unread-status.test.sh 16169
 tests/fm-wake-queue.test.sh 85252
 tests/fm-watch-arm.test.sh 68479
 tests/fm-watch-checkpoint.test.sh 6076
+tests/fm-watch-completed-ship-hold.test.sh 12041
 tests/fm-watch-recovery-loop.test.sh 58946
 tests/fm-watch-triage.test.sh 697969
 tests/fm-watcher-lock.test.sh 108940
+tests/fm-worker-account-live-e2e.test.sh 3272
+tests/fm-worker-account.test.sh 47148
 EOF
 }
 
@@ -1361,7 +1414,7 @@ families_for_unmapped_bin() {
 # Conservative path → family map. Over-selects rather than under-selects.
 # Never expands to the complete suite.
 families_for_changed_path() {
-  local path=$1 fixture_ref
+  local path=$1 fixture_ref fixture_rest
   case "$path" in
     tests/fm-backend-herdr-eventwait.test.py)
       printf '%s\n' real-herdr-gated
@@ -1514,6 +1567,44 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-pi-primary-types.test.sh
       printf '%s\n' live-harness-optin
       ;;
+    bin/fm-devin-lib.sh)
+      printf '%s\n' __script__:fm-devin-harness.test.sh
+      printf '%s\n' __script__:fm-devin-fork-harness.test.sh
+      printf '%s\n' __script__:fm-devin-permission-policy.test.sh
+      printf '%s\n' __script__:fm-devin-rate-limit-retry.test.sh
+      printf '%s\n' backend-dispatch
+      printf '%s\n' pure-contract-unit
+      ;;
+    bin/fm-devin-rate-limit-retry.sh)
+      printf '%s\n' __script__:fm-devin-rate-limit-retry.test.sh
+      printf '%s\n' __script__:fm-devin-fork-harness.test.sh
+      printf '%s\n' __script__:fm-devin-rate-limit-retry-live-e2e.test.sh
+      ;;
+    bin/fm-agy-lib.sh)
+      printf '%s\n' __script__:fm-agy-harness.test.sh
+      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
+      printf '%s\n' backend-dispatch
+      printf '%s\n' pure-contract-unit
+      ;;
+    bin/fm-agy-hook.sh|.agents/hooks.json|tests/agy-primary-live-probe.py)
+      printf '%s\n' __script__:fm-agy-harness.test.sh
+      printf '%s\n' __script__:fm-agy-signals-live-e2e.test.sh
+      printf '%s\n' __script__:fm-agy-primary-live-e2e.test.sh
+      printf '%s\n' __script__:fm-agy-observer-live-e2e.test.sh
+      ;;
+    bin/fm-agy-permission-policy.sh)
+      printf '%s\n' __script__:fm-agy-permission-policy.test.sh
+      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
+      ;;
+    bin/fm-command-policy-lib.sh|bin/fm-devin-permission-policy.sh)
+      # The shared command policy binds both adapters: a change to it or to
+      # the Devin adapter's shell selects both portable suites plus each
+      # adapter's live guard.
+      printf '%s\n' __script__:fm-devin-permission-policy.test.sh
+      printf '%s\n' __script__:fm-agy-permission-policy.test.sh
+      printf '%s\n' __script__:fm-devin-permission-policy-live-e2e.test.sh
+      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
+      ;;
     .claude/mods/firstmate-calm/*|.pi/extensions/lib/fm-calm-working-ship.ts|\
     .pi/extensions/lib/fm-calm-working-ship-sprite.ts)
       # The Claude Code Calm mod and the sprite core it shares with the Pi Calm
@@ -1563,6 +1654,10 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       printf '%s\n' pr-forge
       ;;
+    bin/fm-worktree-claims-lib.sh)
+      printf '%s\n' "__script__:fm-spawn-worktree-settle.test.sh"
+      printf '%s\n' "__script__:fm-teardown-endpoint-safety.test.sh"
+      ;;
     bin/fm-control-lib.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' session-bootstrap
@@ -1575,6 +1670,17 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       printf '%s\n' live-harness-optin
+      ;;
+    bin/fm-publish-gate.sh|bin/fm-gh-publish-policy.mjs|bin/fm-install-gitleaks.sh|\
+    bin/fm-publish-judge.sh)
+      # The publish gate, its PreToolUse policy, its pinned scanner, and its
+      # semantic judge: the seeded validation corpus, the judge's plumbing, the
+      # per-task hook wiring that runs the gate, and the spawn identity pin that
+      # reads its identity file.
+      printf '%s\n' __script__:fm-publish-gate.test.sh
+      printf '%s\n' __script__:fm-publish-judge.test.sh
+      printf '%s\n' __script__:fm-git-strip-ai-trailers.test.sh
+      printf '%s\n' __script__:fm-spawn-identity-pin.test.sh
       ;;
     bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh|\
     bin/fm-peek.sh|bin/fm-composer*)
@@ -1638,19 +1744,28 @@ families_for_changed_path() {
       families_for_test_reference git-config-helpers.sh lib.sh herdr-test-safety.sh \
         || printf '%s\n' "__unmapped__:$path"
       ;;
-    tests/fixtures/*/*)
-      # A fixture belongs to whichever suite reads its directory, found by the
-      # same reference scan used for shared helpers. Keyed on the directory
-      # rather than the file so adding a fixture selects the same suite.
-      # A removed fixture directory has no consuming suite left to select.
-      fixture_ref=${path#tests/fixtures/}
-      fixture_ref=${fixture_ref%%/*}
-      if [ -d "tests/fixtures/$fixture_ref" ]; then
-        families_for_test_reference "fixtures/$fixture_ref" \
+    tests/tmproot-guard.sh)
+      # Same non-transitive reference scan: most suites reach the guard only
+      # through tests/lib.sh, so match that library as well.
+      families_for_test_reference tmproot-guard.sh lib.sh \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
+    tests/fixtures/*/*|tests/captures/*/*)
+      # A fixture or recorded capture belongs to whichever suite reads its
+      # directory, found by the same reference scan used for shared helpers.
+      # Keyed on the directory rather than the file so adding a fixture
+      # selects the same suite. A removed directory has no consuming suite
+      # left to select.
+      fixture_ref=${path#tests/}
+      fixture_rest=${fixture_ref#*/}
+      fixture_ref=${fixture_ref%%/*}/${fixture_rest%%/*}
+      if [ -d "tests/$fixture_ref" ]; then
+        families_for_test_reference "$fixture_ref" \
           || printf '%s\n' "__unmapped__:$path"
       fi
       ;;
-    tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh|tests/*-fixture.sh)
+    tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh|tests/*-fixture.sh|\
+    tests/*-repro.py|tests/*-probe.py)
       # Shared top-level test files, selected by the suites that name them.
       # Must stay below the tests/fixtures/*/* arm: a case glob's * spans /, so
       # tests/*-fixture.sh would otherwise swallow a nested
@@ -1671,7 +1786,8 @@ families_for_changed_path() {
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;
-    README.md|LICENSE|assets/*|docs/*|.gitignore)
+    README.md|GROK_BOT.md|LICENSE|assets/*|docs/*|.gitignore)
+      # Documentation only: no script or suite reads these, so they select nothing.
       ;;
     *)
       if [ -e "$path" ]; then

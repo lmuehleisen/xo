@@ -610,11 +610,13 @@ test_classify_check_and_unknown_escalate() {
   local out
   out=$(classify_check "check: /s/c.check.sh: merged: https://x")
   case "$out" in escalate\|*) ;; *) fail "check did not escalate: $out" ;; esac
+  out=$(classify_check "check: autoarm-deadline - the Stop hook closed its watcher cycle")
+  case "$out" in self\|*) ;; *) fail "the Stop hook's pre-timeout close did not self-handle: $out" ;; esac
   out=$(classify_unknown "frobnicate: weird")
   case "$out" in escalate\|*) ;; *) fail "unknown did not fail-safe escalate: $out" ;; esac
   out=$(classify_heartbeat)
   case "$out" in self\|*) ;; *) fail "heartbeat did not self-handle: $out" ;; esac
-  pass "check + unknown escalate; heartbeat self-handles"
+  pass "check + unknown escalate; heartbeat and the Stop hook's pre-timeout close self-handle"
 }
 
 # An unrecognized wake escalates once per identity. Delivery acknowledges that
@@ -1591,6 +1593,81 @@ test_escalate_batches_into_one_digest() {
   pass "multiple escalations flush as a single batched digest"
 }
 
+# The pointer bound protects every primary that receives the typed envelope, so
+# these cases pin a marker-preserving primary; a Claude Code primary receives the
+# same digest or pointer inside a record-backed doorbell instead.
+test_escalate_long_digest_types_a_pointer() {
+  local dir state fakebin sent capture i long typed file n
+  dir=$(make_supercase long-digest)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  capture="$dir/pane.txt"; printf '\342\235\257 \n' > "$capture"
+  long=$(printf 'x%.0s' $(seq 1 300))
+  for i in 1 2 3 4 5 6 7 8; do escalate_add "$state" "task-$i.status: blocked: event $i $long"; done
+  afk_enter "$state"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 FM_DAEMON_PRIMARY_HARNESS=codex escalate_flush "$state" \
+    || fail "long escalate_flush failed"
+  typed=$(grep -v '\[ENTER\]' "$sent")
+  case "$typed" in
+    *'FIRSTMATE_OP: v1 away-supervisor: Supervisor escalate (8 event(s)): '*) : ;;
+    *) fail "long digest pointer lacks the away-supervisor header and event count: $typed" ;;
+  esac
+  [ "${#typed}" -le "$INJECT_INLINE_MAX_DEFAULT" ] \
+    || fail "long digest typed ${#typed} characters, over the inline max"
+  case "$typed" in *"$long"*) fail "long digest events were typed instead of written to a file" ;; esac
+  file=${typed#*read it from }; file=${file%% (pre-read*}
+  case "$file" in "$state/.subsuper-digests/"*.txt) : ;; *) fail "pointer does not name a digest file: $file" ;; esac
+  for i in 1 2 3 4 5 6 7 8; do
+    grep -F -- "- task-$i.status: blocked: event $i $long" "$file" >/dev/null \
+      || fail "digest file is missing event $i"
+  done
+  [ -s "$state/.subsuper-escalations" ] && fail "escalation buffer not cleared after pointer flush"
+  n=$(grep -c '\[ENTER\]' "$sent")
+  [ "$n" -eq 1 ] || fail "expected one pointer submit, got $n"
+  : > "$sent"
+  escalate_add "$state" "task-9.status: blocked: short event"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 FM_DAEMON_PRIMARY_HARNESS=codex escalate_flush "$state" \
+    || fail "short escalate_flush failed"
+  grep -F 'Supervisor escalate (1 event(s)): task-9.status: blocked: short event (pre-read' "$sent" >/dev/null \
+    || fail "short digest was not typed inline"
+  pass "a digest over the inline max types a short pointer to a file holding every event"
+}
+
+test_escalate_pointer_line_is_bounded() {
+  local dir state fakebin sent capture i long typed max
+  dir=$(make_supercase pointer-bound)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  capture="$dir/pane.txt"; printf '\342\235\257 \n' > "$capture"
+  long=$(printf 'x%.0s' $(seq 1 300))
+  for i in 1 2 3; do escalate_add "$state" "task-$i.status: blocked: event $i $long"; done
+  afk_enter "$state"
+  # Room for the bare locator but not the explanatory pointer.
+  max=$(( ${#state} + 130 ))
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 FM_DAEMON_PRIMARY_HARNESS=codex FM_INJECT_INLINE_MAX=$max escalate_flush "$state" \
+    || fail "escalate_flush failed with a pointer-sized max"
+  typed=$(grep -v '\[ENTER\]' "$sent")
+  [ "${#typed}" -le "$max" ] || fail "pointer typed ${#typed} characters, over FM_INJECT_INLINE_MAX=$max: $typed"
+  case "$typed" in
+    *"FIRSTMATE_OP: v1 away-supervisor: Supervisor escalate (3 event(s)): read it from $state/.subsuper-digests/"*.txt) : ;;
+    *) fail "a tight max did not fall back to the bare locator: $typed" ;;
+  esac
+  : > "$sent"
+  escalate_add "$state" "task-4.status: blocked: event 4 $long"
+  if PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 FM_DAEMON_PRIMARY_HARNESS=codex FM_INJECT_INLINE_MAX=40 escalate_flush "$state"; then
+    fail "escalate_flush reported success with a pointer that cannot fit"
+  fi
+  [ -s "$sent" ] && fail "a pointer over FM_INJECT_INLINE_MAX was typed: $(cat "$sent")"
+  grep -F 'task-4.status' "$state/.subsuper-escalations" >/dev/null || fail "unsent escalation was not kept in the buffer"
+  pass "the pointer line stays within FM_INJECT_INLINE_MAX or is not typed at all"
+}
+
 test_escalate_marker_preserving_primary_types_envelope() {
   local dir state fakebin sent capture
   dir=$(make_supercase batch-typed-envelope)
@@ -1632,7 +1709,9 @@ test_record_doorbell_detection() {
   missing=${doorbell%.msg\'*}-gone.msg${doorbell##*.msg}
   should_exit_afk "$state" "$missing" \
     || fail "a doorbell naming no record kept afk"
-  should_exit_afk "$state" "FIRSTMATE_OP: v1 away-supervisor: Supervisor escalate: done" \
+  # This fork also accepts the exact mark-less current header (bin/fm-operational-input.sh),
+  # so the near miss here is an ASCII label that is not that header.
+  should_exit_afk "$state" "FIRSTMATE_OP: away-supervisor: Supervisor escalate: done" \
     || fail "a typed ASCII FIRSTMATE_OP label kept afk"
   rm -f "$state"/operational-inbox/*.msg
   should_exit_afk "$state" "$doorbell" \
@@ -1934,7 +2013,22 @@ test_marker_detection() {
     && fail "marker message should not exit afk (internal escalation)"
   should_exit_afk "$state" "status update please" \
     || fail "plain message should exit afk (captain is back)"
-  pass "marker detection: marker -> stay afk, no marker -> exit afk"
+  # Claude Code 2.1.277+ removes U+2063 on submit, so a daemon escalation reaches
+  # the first mate as the exact mark-less typed header.
+  local encoded unmarked
+  fm_operational_input_encode away-supervisor "Supervisor escalate (1 event(s)): done" encoded \
+    || fail "could not encode an away-supervisor escalation"
+  unmarked=${encoded#"$FM_INJECT_MARK"}
+  [ "$unmarked" != "$encoded" ] || fail "encoded escalation lost its leading mark"
+  message_is_injection "$unmarked" \
+    || fail "mark-less away-supervisor escalation not detected as injection"
+  should_exit_afk "$state" "$unmarked" \
+    && fail "mark-less away-supervisor escalation should not exit afk"
+  should_exit_afk "$state" "Captain here: $unmarked" \
+    || fail "a captain message quoting an escalation should exit afk"
+  should_exit_afk "$state" "FIRSTMATE_OP: v1 bogus-kind: hello" \
+    || fail "a mark-less header with an unknown kind should exit afk"
+  pass "marker detection: marker or exact mark-less header -> stay afk, anything else -> exit afk"
 }
 
 test_afk_turn_exemption() {
@@ -2352,7 +2446,7 @@ test_normal_flush_clears_stale_wedge_marker() {
 # buffered item, so a first digest can exceed the 131,071 bytes one transport
 # argument can carry. The fake tmux refuses any literal send above that.
 test_oversized_digest_is_bounded_and_kept_durable() {
-  local dir state fakebin sent raw digest full i item
+  local dir state fakebin sent raw digest full i item line
   dir=$(make_bordered_case digest-oversized)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
@@ -2373,40 +2467,18 @@ test_oversized_digest_is_bounded_and_kept_durable() {
   [ "$(printf '%s\n' "$digest" | wc -l | tr -d ' ')" -eq 1 ] || fail "expected exactly one typed digest"
   [ "$(printf '%s' "$digest" | LC_ALL=C wc -c | tr -d ' ')" -le 16384 ] \
     || fail "delivered digest is not bounded well below the transport ceilings"
-  assert_contains "$digest" 'Supervisor escalate (4 event(s)): secondmate-a.status: done:' "digest lost its header or first event"
-  assert_contains "$digest" 'secondmate-a.status: needs-decision [key=pick]: pick A or B' "a short event did not survive whole"
-  printf '%s' "$digest" | grep -E '\[\+[0-9]+ bytes\]' >/dev/null || fail "truncated items carry no omitted-bytes marker"
+  assert_contains "$digest" 'Supervisor escalate (4 event(s)): ' "digest lost its header or event count"
   if command -v iconv >/dev/null 2>&1; then
-    printf '%s' "$digest" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || fail "truncation split a UTF-8 sequence"
+    printf '%s' "$digest" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || fail "the delivered digest is not valid UTF-8"
   fi
-  full=$(printf '%s' "$digest" | sed -n 's/.*full text of every event: \([^ )]*\).*/\1/p')
-  [ -n "$full" ] && [ -f "$full" ] || fail "bounded digest names no readable full-text file: $digest"
-  cmp -s "$full" "$dir/buffer.orig" || fail "full-text file does not hold every buffered event verbatim"
-  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after the bounded digest was delivered"
-  pass "an oversized buffered digest is delivered bounded, with the full text kept durable"
-}
-
-test_digest_budget_counts_omitted_events() {
-  local dir state fakebin sent digest full i shown more
-  dir=$(make_bordered_case digest-many)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  sent="$dir/sent.log"; : > "$sent"
-  for i in $(seq 1 20); do
-    escalate_add "$state" "event $i: $(printf 'x%.0s' $(seq 1 1000))"
-  done
-  cp "$state/.subsuper-escalations" "$dir/buffer.orig"
-  afk_enter "$state"
-  LOG="$dir/daemon.log" PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
-    FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state" || fail "many-event digest was not delivered"
-  digest=$(delivered_digest "$sent" | grep -F 'Supervisor escalate')
-  assert_contains "$digest" 'Supervisor escalate (20 event(s)): event 1: x' "digest header must count every buffered event"
-  more=$(printf '%s' "$digest" | sed -n 's/.* | +\([0-9][0-9]*\) more event(s).*/\1/p')
-  [ -n "$more" ] || fail "an exhausted budget left no '+K more event(s)' tail: $digest"
-  shown=$(printf '%s' "$digest" | grep -o 'event [0-9][0-9]*: x' | wc -l | tr -d ' ')
-  [ "$((shown + more))" -eq 20 ] || fail "shown ($shown) plus omitted ($more) events do not account for all 20"
-  full=$(printf '%s' "$digest" | sed -n 's/.*full text of every event: \([^ )]*\).*/\1/p')
-  cmp -s "$full" "$dir/buffer.orig" || fail "omitted events are missing from the full-text file"
-  pass "a digest past its byte budget counts the omitted events and keeps them in the full text"
+  # This fork types a pointer to a file holding every event (escalate_flush).
+  full=${digest#*read it from }; full=${full%% (pre-read*}
+  [ -n "$full" ] && [ -f "$full" ] || fail "the pointer names no readable digest file: $digest"
+  while IFS= read -r line; do
+    grep -Fqx -- "- $line" "$full" || fail "the digest file does not hold a buffered event verbatim"
+  done < "$dir/buffer.orig"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after the pointer digest was delivered"
+  pass "an oversized buffered digest is delivered as a bounded pointer, with every event kept durable"
 }
 
 test_inject_send_failure_logs_stage_stderr_and_bytes() {
@@ -2458,7 +2530,7 @@ test_inject_enter_failure_logs_confirmation_stage() {
     escalate_flush "$state"; then
     fail "escalate_flush reported success on a swallowed Enter"
   fi
-  grep -E 'inject failed at Enter confirmation: submit unconfirmed after 3 retries \(verdict=pending[a-z-]*, bytes=[0-9]+, text may be in composer\)' "$log" >/dev/null \
+  grep -E 'inject failed at Enter confirmation: delivery unproven after 3 Enter attempt\(s\) \(verdict=pending, bytes=[0-9]+, text may be in composer\)' "$log" >/dev/null \
     || fail "Enter-confirmation failure did not log its stage and byte count: $(cat "$log")"
   if grep -F 'initial send' "$log" >/dev/null; then
     fail "an Enter-confirmation failure was reported as an initial-send failure"
@@ -2475,7 +2547,6 @@ test_bounded_digest_full_text_kept_after_typing() {
   item="secondmate-c.status: "
   while [ "${#item}" -lt 5000 ]; do item+="blocked: waiting on review ; "; done
   escalate_add "$state" "$item"
-  cp "$state/.subsuper-escalations" "$dir/buffer.orig"
   afk_enter "$state"
   if LOG="$log" PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_INJECT_CONFIRM_SLEEP=0.05 \
@@ -2483,22 +2554,19 @@ test_bounded_digest_full_text_kept_after_typing() {
     fail "escalate_flush reported success on a swallowed Enter"
   fi
   digest=$(delivered_digest "$sent" | grep -F 'Supervisor escalate')
-  full=$(printf '%s' "$digest" | sed -n 's/.*full text of every event: \([^ )]*\).*/\1/p')
-  [ -n "$full" ] && [ -f "$full" ] || fail "a typed bounded digest names a full-text file that was removed: $digest"
-  cmp -s "$full" "$dir/buffer.orig" || fail "kept full-text file does not hold the buffered event verbatim"
-  if LOG="$log" PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
-    FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state"; then
-    fail "escalate_flush reported success while the composer still held the typed digest"
-  fi
-  [ -f "$full" ] || fail "a deferred retry removed the full-text file the typed digest names"
-  escalate_add "$state" "needs-decision: pick D"
-  if LOG="$log" PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
-    FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state"; then
-    fail "escalate_flush reported success while the composer still held the typed digest"
-  fi
-  [ "$(ls -A "$state/.subsuper-digests")" = "$(basename "$full")" ] \
-    || fail "a deferral before any send must leave no new full-text file: $(ls -A "$state/.subsuper-digests")"
-  pass "a bounded digest's full-text file survives a failure after typing, and a deferral writes none"
+  full=${digest#*read it from }; full=${full%% (pre-read*}
+  [ -n "$full" ] && [ -f "$full" ] || fail "a typed pointer digest names a digest file that was removed: $digest"
+  grep -Fqx -- "- $item" "$full" || fail "kept digest file does not hold the buffered event verbatim"
+  # The next flush resolves the owned digest still in the composer
+  # (recover_owned_input) by resubmitting it rather than typing anything new.
+  LOG="$log" PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state" \
+    || fail "the owned pointer digest left in the composer was not recovered: $(cat "$log")"
+  [ -f "$full" ] || fail "recovery removed the digest file the typed pointer names"
+  [ "$(delivered_digest "$sent" | grep -c 'Supervisor escalate')" -eq 1 ] \
+    || fail "recovery typed the digest again instead of resubmitting it"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "the recovered digest's events stayed buffered"
+  pass "a pointer digest's file survives a failure after typing, and the owned digest is resubmitted, not retyped"
 }
 
 test_below_max_defer_does_nothing() {
@@ -3185,6 +3253,8 @@ test_housekeeping_herdr_idle_busy_record_clears_stale
 test_housekeeping_herdr_resumed_stale_cleared
 test_housekeeping_orca_persistent_stale_resolves_terminal
 test_escalate_batches_into_one_digest
+test_escalate_long_digest_types_a_pointer
+test_escalate_pointer_line_is_bounded
 test_escalate_batch_age_uses_first_append
 test_heartbeat_scan_dedup
 test_handle_wake_routes_self_and_escalate
@@ -3240,7 +3310,6 @@ test_max_defer_flushes_empty_idle_pane
 test_max_defer_pending_composer_alarms_without_typing
 test_normal_flush_clears_stale_wedge_marker
 test_oversized_digest_is_bounded_and_kept_durable
-test_digest_budget_counts_omitted_events
 test_inject_send_failure_logs_stage_stderr_and_bytes
 test_inject_enter_failure_logs_confirmation_stage
 test_bounded_digest_full_text_kept_after_typing

@@ -40,6 +40,7 @@ Codex's interactive TUI has no tracked session-open, compaction, or re-emit chan
 | Codex interactive TUI | Uncovered | [Codex interactive TUI](#codex-interactive-tui) |
 | Pi / pi-signed | Run | [Pi and pi-signed](#pi-and-pi-signed) |
 | OpenCode | Nudge | [OpenCode](#opencode) |
+| Agy | Nudge | [Agy](#agy) |
 | Grok | Nudge | [Grok](#grok) |
 | Cursor | Run | [Cursor](#cursor) |
 | omp | Run | [omp](#omp) |
@@ -315,6 +316,14 @@ That early exit is also why OpenCode cannot use the run tier.
 The OpenCode nudge runs only on `session.created`.
 The watcher-arm and turn-end plugins run later, on `session.idle`.
 The guard lets the watcher coordinator act first, so the plugins do not race for one lifecycle event.
+
+### Agy
+
+Agy is a nudge-tier harness.
+`.agents/hooks.json` invokes `bin/fm-agy-hook.sh` on `PreInvocation`.
+Only `invocationNum=0` can inject the shared startup nudge, and only until this session owns the home lock.
+Agy has no native SessionStart event.
+Verified interactive first-invocation delivery does not establish a compaction or instruction-refresh channel.
 
 ### Grok
 

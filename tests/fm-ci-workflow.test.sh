@@ -74,7 +74,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
 FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate'
-NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
+NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash publish-identity'
 HEAVY_TIER_JOBS='tests-herdr'
 
 # Print the one timeout every listed job shares; fail on any disagreement.
@@ -237,6 +237,10 @@ lint = jobs.fetch("lint").fetch("strategy")
 raise "lint failures must not cancel another partition" unless lint.fetch("fail-fast") == false
 matrix = lint.fetch("matrix")
 raise "unexpected lint dimensions" unless matrix.keys == ["partition"]
+lint_step = jobs.fetch("lint").fetch("steps").find { |step| step["run"].to_s.include?("--partition") }
+raise "CI lint must run one ShellCheck worker per runner to bound memory" \
+  unless lint_step && (lint_step.fetch("env", {})["FM_LINT_JOBS"].to_s == "1" ||
+    lint_step["run"].to_s.split.each_cons(2).include?(["--jobs", "1"]))
 parts = matrix.fetch("partition")
 roots = parts.flat_map do |p|
   output, result = Open3.capture2(File.join(root, "bin/fm-lint.sh"), "--partition", "#{p}of#{parts.length}", "--list-files")

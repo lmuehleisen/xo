@@ -78,13 +78,14 @@ unit_enter_records_the_posture_in_one_step_without_a_daemon() {
   else
     fail "enter: record, read-back, or daemon state wrong (rc=$rc): $out"
   fi
-  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter --words 'merge it' --grant fix-windows 2>&1)
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter --grant fix-windows 2>&1)
   rc=$?
-  if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -F -- '--grant was retired' >/dev/null \
+  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -F 'merge grants given with this refresh were not applied' >/dev/null \
+    && [ -z "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" grants)" ] \
     && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" words)" = 'merge the windows fix when green' ]; then
-    pass "enter: the retired --grant flag is refused by name and leaves the standing record alone"
+    pass "enter: a --grant on a refresh is not applied and leaves the standing record alone"
   else
-    fail "enter: --grant was not refused by name (rc=$rc): $out"
+    fail "enter: a refresh --grant changed the record or was not reported (rc=$rc): $out"
   fi
   printf 'schema\tfm-afk-return.v1\nphase\tblocked\n' > "$st/state/.afk-return-catchup"
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter --words 'merge task a PR when green' >/dev/null 2>&1; then
@@ -1392,6 +1393,38 @@ unit_tmux_planned_record_and_collision() {
   rm -rf "$st"
 }
 
+# The detached daemon has no harness ancestor of its own, so the launcher must hand
+# it the captain's harness or its primary-pane busy guard matches nothing.
+unit_tmux_launch_hands_over_primary_harness() {
+  local st harness got
+  for harness in claude unknown; do
+    st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-tmux-harness.XXXXXX")
+    mkdir -p "$st/state"
+    # shellcheck disable=SC2016 # The variables expand in the generated entry script.
+    printf '#!/bin/sh\nprintf "%%s" "${FM_DAEMON_PRIMARY_HARNESS-<unset>}" > "$FM_HOME/daemon-harness"\n' > "$st/entry"
+    chmod +x "$st/entry"
+    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_AFK_LAUNCH_ENTRY="$st/entry" FM_TEST_HARNESS="$harness" bash -c '
+      . "$1"
+      fm_afk_launch_primary_harness() { printf "%s" "$FM_TEST_HARNESS"; }
+      fm_afk_launch_commit_terminal() { :; }
+      tmux() {
+        [ "$1" = new-session ] || return 0
+        env -u FM_DAEMON_PRIMARY_HARNESS bash -c "$5"
+      }
+      fm_afk_launch_create_tmux %7 tmux
+    ' _ "$LAUNCH" >/dev/null 2>&1
+    got=$(cat "$st/daemon-harness" 2>/dev/null || printf '<not run>')
+    case "$harness:$got" in
+      claude:claude) pass "tmux launch: daemon receives the captain's detected harness" ;;
+      # bin/fm-afk-launch.sh names the harness even when it is unknown; a detached
+      # daemon terminal has no harness ancestor to detect one from anyway.
+      unknown:unknown) pass "tmux launch: an unknown harness reaches the daemon as unknown" ;;
+      *) fail "tmux launch: harness $harness reached the daemon as $got" ;;
+    esac
+    rm -rf "$st"
+  done
+}
+
 unit_stop_validates_before_signal() {
   local st sleeper_pid
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-stop-validate.XXXXXX")
@@ -1724,6 +1757,7 @@ unit_record_publication_atomic
 unit_malformed_record_fails_closed
 unit_stop_malformed_record_fails_closed
 unit_tmux_planned_record_and_collision
+unit_tmux_launch_hands_over_primary_harness
 unit_stop_validates_before_signal
 unit_lock_requires_complete_metadata
 unit_stop_surfaces_afk_removal_failure

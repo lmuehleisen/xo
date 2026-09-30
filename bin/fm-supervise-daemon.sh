@@ -10,14 +10,14 @@
 # signal/stale/heartbeat wakes cost zero firstmate context; only done/
 # needs-decision/blocked/failed/persistent-wedge/check-output events and a
 # declared-wait recheck reach the LLM, and even then as one pre-read digest per
-# batch window. That digest is byte-bounded (see escalate_flush); when it cuts
-# or omits anything it names a state/.subsuper-digests/ file holding every
-# buffered event verbatim.
+# batch window. A digest too long to type safely is written to a
+# state/.subsuper-digests/ file holding every buffered event verbatim, and only a
+# short pointer line naming it is typed (see escalate_flush).
 #
 # PRESENCE-GATING (the /afk contract). The daemon is the away-mode engine: it
 # injects ONLY when the durable away-mode flag state/.afk is present. Invoking
-# the /afk skill sets that flag and starts this daemon; any real (unmarked)
-# user message clears it and firstmate resumes full responsiveness.
+# the /afk skill sets that flag and starts this daemon; any real user message
+# clears it and firstmate resumes full responsiveness.
 # When afk is off, normal fm-watch.sh always-on triage is the active mechanism.
 # Any buffered daemon escalations that remain while afk is off survive in
 # state/.subsuper-escalations and are flushed on the next "while you were out"
@@ -27,17 +27,19 @@
 # current daemon injection as the typed away-supervisor kind after the stable
 # FM_OPERATIONAL_PREFIX. A human cannot type its leading U+2063 from a normal
 # keyboard at the start of a message, and Herdr transports it as text.
+# Claude Code 2.1.277 and later remove it on submit, so the owner also parses
+# the same header without it (bin/fm-operational-input.sh).
 # A primary harness that strips invisible characters from submitted prompts
 # (fm_operational_harness_needs_record, Claude Code) instead receives the
 # owner's record-backed doorbell: the envelope is written to this home's
 # state/operational-inbox and only a plain doorbell line naming it is typed.
-# Firstmate's contract: a message that starts with the current prefix, a
-# legacy bare-marker daemon escalation, or a doorbell whose record this home
-# holds (a verbatim pasted copy of a live doorbell included) is internal (stay
-# afk); any other message means the captain is back
-# (exit afk, flush catch-up, resume per-wake responsiveness). The prefix and busy-guard solve the same problem - the
-# daemon and the human share one input channel - so they live together under
-# /afk.
+# Firstmate's contract: a message that starts with the current prefix or its
+# exact mark-less current header, a legacy bare-marker daemon escalation, or a
+# doorbell whose record this home holds (a verbatim pasted copy of a live
+# doorbell included) is internal (stay afk); any other message means the
+# captain is back (exit afk, flush catch-up, resume per-wake responsiveness).
+# The prefix and busy-guard solve the same problem - the daemon and the human
+# share one input channel - so they live together under /afk.
 #
 # Reliability model (see the /afk skill):
 #   - Nothing is lost in away mode: while state/.afk exists, the watcher reverts
@@ -151,13 +153,32 @@
 #                                   not misread as pending input.
 #          FM_INJECT_CONFIRM_SLEEP  seconds between daemon submit checks
 #                                   (default 0.5)
+#          FM_INJECT_SHOW_POLLS / FM_INJECT_QUIET_GAP / FM_INJECT_PROOF_POLLS
+#                                   tmux delivery proof: reads of the typed
+#                                   digest before Enter (default 10), seconds
+#                                   between them (default 0.3, above Claude
+#                                   Code's paste window), and turn-start reads
+#                                   after Enter (default 20)
+#          FM_INJECT_INLINE_MAX     longest typed digest envelope in characters;
+#                                   a longer digest is written under
+#                                   state/.subsuper-digests/ and only a short
+#                                   pointer line naming that file is typed
+#                                   (default 480); a pointer that cannot fit
+#                                   is not typed and the buffer is kept
 #          FM_LOG_MAX_BYTES / FM_LOG_KEEP_LINES / FM_CRASH_*  log + crash guards
 #          FM_STATE_OVERRIDE        alternate state dir (testing)
-#          Logs each wake to state/.supervise-daemon.log (size-capped). Single
+#          Logs each wake and each delivered digest to state/.supervise-daemon.log
+#          (size-capped). Single
 #          instance via portable lock on state/.supervise-daemon.lock. Trapped
-#          SIGTERM/SIGINT shut down within ~1s, flush escalations, release the
+#          SIGTERM/SIGINT shut down within ~1s, flush escalations, clear the
+#          daemon's own unsent digest from the primary's composer, release the
 #          lock. A crashing fm-watch.sh is logged and restarted, never killing
 #          the daemon; a tight crash-restart spin is detected and backed off.
+#        fm-supervise-daemon.sh clear-owned-input
+#          One-shot: clear the digest the daemon typed but could not prove
+#          delivered from the primary's composer (clear_owned_input_at_exit).
+#          bin/fm-afk-return.sh runs it at return. Exits 1, naming the target,
+#          when daemon text may still be there.
 set -u
 
 FM_DAEMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -224,8 +245,6 @@ WEDGE_ALARM_LAST_EPOCH=0
 WEDGE_ALARM_NOTIFIER_PID=
 # Why the latest delivery attempt did not land; the wedge alarm reports it.
 INJECT_LAST_FAILURE=
-# 1 once the latest delivery attempt reached the submit primitive.
-INJECT_SUBMIT_ATTEMPTED=0
 # The captain-relevant verb set and the status classifiers (last_status_line,
 # status_is_captain_relevant, window_to_task, and the status-span reader) now
 # live in bin/fm-classify-lib.sh, shared with the always-on watcher.
@@ -235,6 +254,26 @@ INJECT_SUBMIT_ATTEMPTED=0
 INJECT_FAIL_SLEEP_DEFAULT=30
 INJECT_CONFIRM_RETRIES_DEFAULT=3
 INJECT_CONFIRM_SLEEP_DEFAULT=0.5
+# The positive-proof tmux submit (fm_tmux_proven_submit): up to
+# INJECT_SHOW_POLLS reads INJECT_QUIET_GAP seconds apart for the typed digest to
+# show unchanged in the composer before Enter, then up to INJECT_PROOF_POLLS
+# reads INJECT_CONFIRM_SLEEP seconds apart for a proven turn start.
+INJECT_SHOW_POLLS_DEFAULT=10
+INJECT_QUIET_GAP_DEFAULT=0.3
+INJECT_PROOF_POLLS_DEFAULT=20
+# Longest typed envelope, in characters, before escalate_flush types a pointer to
+# a digest file instead. It sits below the length at which Claude Code folds a
+# typed burst (docs/verification/runtime-backends.md "Claude Code operational
+# input"; tests/fm-afk-claude-long-digest-live-e2e.test.sh re-measures it).
+# Digest files older than DIGEST_RETAIN_DAYS are pruned at the next long flush.
+INJECT_INLINE_MAX_DEFAULT=480
+DIGEST_RETAIN_DAYS=7
+# A failed submit's owned-digest record and its pane captures (see
+# recover_owned_input). The newest SUBMIT_FAILURES_KEEP captures are kept, none
+# older than DIGEST_RETAIN_DAYS.
+INJECT_OWNED_NAME=.subsuper-inject-owned
+SUBMIT_FAILURES_DIR_NAME=.subsuper-submit-failures
+SUBMIT_FAILURES_KEEP=50
 CRASH_THRESHOLD_DEFAULT=10
 CRASH_WINDOW_DEFAULT=60
 CRASH_BACKOFF_DEFAULT=60
@@ -243,9 +282,10 @@ LOG_MAX_BYTES_DEFAULT=1048576
 LOG_KEEP_LINES_DEFAULT=2000
 
 # --- presence-gating --------------------------------------------------------
-# bin/fm-operational-input.sh owns the U+2063 FIRSTMATE_OP bytes and typed
-# away-supervisor construction. The away-exit predicate intentionally retains
-# its landed leading-U+2063 compatibility behavior.
+# bin/fm-operational-input.sh owns the U+2063 FIRSTMATE_OP bytes, typed
+# away-supervisor construction, and the parse of the current header with or
+# without its mark, which the away-exit predicate delegates to it. The predicate
+# also retains its landed leading-U+2063 compatibility behavior.
 AFK_FLAG_NAME=".afk"
 
 # Resolve the effective state dir. FM_STATE_OVERRIDE wins (testing); otherwise
@@ -292,13 +332,13 @@ afk_exit() {  # <state>
 # should_exit_afk: encodes firstmate's afk-exit contract as a testable function.
 #   away posture inactive   -> 1 (nothing to exit; the posture is the record
 #                              bin/fm-afk-contract.sh owns, or the legacy flag)
-#   message has marker, or is a doorbell for a record in this home
+#   operational input, or a doorbell for a record in this home
 #                           -> 1 (internal escalation; stay afk)
 #   message is /afk command -> 1 (re-entering/extending afk; stay afk)
 #   anything else           -> 0 (captain is back; exit afk)
-# Bias toward exit: only the marker, a doorbell this home's record backs, and an
-# explicit /afk invocation keep afk alive. A false exit is self-correcting (the
-# captain re-runs /afk).
+# Bias toward exit: only operational input, a doorbell this home's record backs,
+# and an explicit /afk invocation keep afk alive. A false exit is
+# self-correcting (the captain re-runs /afk).
 should_exit_afk() {  # <state> <message-text>
   local state=$1 msg=$2
   afk_active "$state" || fm_afk_contract_present "$state" || return 1
@@ -310,19 +350,22 @@ should_exit_afk() {  # <state> <message-text>
 }
 
 # message_is_injection: 0 if the given message text starts with the sentinel
-# marker, or is a record-backed doorbell whose record sits in <state>'s own
-# operational inbox (a daemon escalation), 1 otherwise (a real user message). Firstmate's
-# afk-exit contract uses this: a marker or backed doorbell stays afk; other
-# messages return the captain. Bias ambiguous cases toward exit (a false exit
-# is self-correcting).
+# marker, is a current generic operational envelope as its owner parses it (which
+# includes the mark-less header Claude Code delivers after removing U+2063), or
+# is a record-backed doorbell whose record sits in <state>'s own operational
+# inbox (a daemon escalation), 1 otherwise (a real user message). Firstmate's
+# afk-exit contract uses this: operational input or a backed doorbell stays afk;
+# other messages return the captain. Bias ambiguous cases toward exit (a false
+# exit is self-correcting).
 message_is_injection() {  # <message-text> [state]
   # The record resolver writes its validated kind through this output variable.
   # shellcheck disable=SC2034
-  local msg=$1 state=${2:-$(_state_root)} record_kind
+  local msg=$1 state=${2:-$(_state_root)} kind record_kind
   [ -n "$msg" ] || return 1
   case "$msg" in
     "$FM_INJECT_MARK"*) return 0 ;;
   esac
+  fm_operational_generic_kind "$msg" kind && return 0
   fm_operational_doorbell_kind "$msg" "$state" record_kind
 }
 
@@ -475,7 +518,11 @@ classify_stale() {  # <window> <state> [<span-record> <span-status>]
 }
 
 classify_check() {  # <full reason>  — check scripts print only when firstmate should wake
-  printf 'escalate|%s' "$1"
+  case "$1" in
+    # The Stop hook's own pre-timeout close (FM_WATCH_DEADLINE in bin/fm-watch-arm.sh).
+    'check: autoarm-deadline'*) printf 'self|Stop hook watcher cycle closed before its timeout' ;;
+    *) printf 'escalate|%s' "$1" ;;
+  esac
 }
 
 classify_heartbeat() {
@@ -778,70 +825,19 @@ _utf8_prefix() {  # <text> <max-bytes> <out-var>
   printf -v "$3" '%s' "$s"
 }
 
-# The injected digest is bounded so it always fits one transport argument:
-# tmux refuses an oversized `send-keys -l` command, and Linux refuses to exec
-# any single argument above 131,071 bytes (MAX_ARG_STRLEN), which is how the
-# herdr, zellij, orca, and cmux adapters pass text. Each item is cut to
-# ESCALATE_ITEM_BYTES at a UTF-8 boundary with an omitted-bytes marker, the
-# joined items stop at ESCALATE_DIGEST_BYTES with a "+K more event(s)" tail,
-# and a bounded digest names a full-text file under ESCALATE_FULL_DIR that
-# keeps every buffered item verbatim.
-ESCALATE_DIGEST_BYTES=8192
-ESCALATE_ITEM_BYTES=2048
-ESCALATE_ITEM_MIN_BYTES=128
-ESCALATE_FULL_DIR=.subsuper-digests
-
-# escalate_digest_body: join <buf>'s items with " | " inside the byte budget.
-# Sets ESCALATE_BODY, ESCALATE_EVENTS (every buffered item), and
-# ESCALATE_BOUNDED (1 when any item was cut or omitted).
-escalate_digest_body() {  # <buf>
-  local LC_ALL=C buf=$1 item='' sep cut remaining=$ESCALATE_DIGEST_BYTES room cap shown=0 total=0
-  ESCALATE_BODY=
-  ESCALATE_BOUNDED=0
-  while IFS= read -r item || [ -n "$item" ]; do
-    total=$((total + 1))
-    sep=
-    [ "$shown" -eq 0 ] || sep=' | '
-    room=$((remaining - ${#sep}))
-    [ "$room" -ge "$ESCALATE_ITEM_MIN_BYTES" ] || { ESCALATE_BOUNDED=1; continue; }
-    cap=$ESCALATE_ITEM_BYTES
-    [ "$room" -ge "$cap" ] || cap=$room
-    if [ "${#item}" -gt "$cap" ]; then
-      _utf8_prefix "$item" "$cap" cut
-      item="$cut [+$(( ${#item} - ${#cut} )) bytes]"
-      ESCALATE_BOUNDED=1
-    fi
-    ESCALATE_BODY+="$sep$item"
-    remaining=$((remaining - ${#sep} - ${#item}))
-    shown=$((shown + 1))
-  done < "$buf"
-  ESCALATE_EVENTS=$total
-  [ "$shown" -ge "$total" ] || ESCALATE_BODY+=" | +$((total - shown)) more event(s)"
-}
-
-# escalate_full_text_save: copy <buf> verbatim into a new full-text file and
-# print its path.
-escalate_full_text_save() {  # <state> <buf>
-  local state=$1 buf=$2 dir file
-  dir="$state/$ESCALATE_FULL_DIR"
-  mkdir -p "$dir" 2>/dev/null || return 1
-  file=$(mktemp "$dir/digest-$(date '+%Y%m%dT%H%M%S').XXXXXX" 2>/dev/null) || return 1
-  if ! cp "$buf" "$file" 2>/dev/null; then
-    rm -f "$file"
-    return 1
-  fi
-  printf '%s' "$file"
-}
-
-# Flush the escalation buffer as ONE batched, single-line, bounded digest to
-# the supervisor pane. Returns 0 on successful inject (or empty buffer),
-# non-zero on inject failure (buffer preserved for retry / catch-up). A bounded
-# digest's full-text file is kept once the submit ran, because the digest naming
-# it may have been typed; ESCALATE_KEPT_FULL remembers it so a retry of the same
-# buffer reuses it instead of writing another copy.
-ESCALATE_KEPT_FULL=
+# Flush the escalation buffer as ONE batched, single-line digest to the
+# supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
+# inject failure (buffer preserved for retry / catch-up).
+#
+# A digest whose typed envelope would exceed FM_INJECT_INLINE_MAX is written to
+# a durable file under state/.subsuper-digests/ and only a short pointer line is
+# typed. The primary's composer folds a long literal burst: Claude Code wraps it
+# in <pasted_content> or submits only its tail, so the operational header no
+# longer starts the message and the escalation reads as the captain returning.
+# A line well under that threshold arrives intact, idle or mid-turn, and fits
+# every transport's single-argument limit.
 escalate_flush() {  # <state>
-  local state=$1 buf msg full='' fresh=0
+  local state=$1 buf n msg dir file max encoded rc=0 sum
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || return 0
   if [ ! -f "$buf" ] || [ ! -r "$buf" ]; then
@@ -849,34 +845,69 @@ escalate_flush() {  # <state>
     log "inject skipped: $INJECT_LAST_FAILURE"
     return 1
   fi
-  escalate_digest_body "$buf"
-  msg=$ESCALATE_BODY
-  if [ "$ESCALATE_BOUNDED" -eq 1 ]; then
-    if [ -n "$ESCALATE_KEPT_FULL" ] && cmp -s "$ESCALATE_KEPT_FULL" "$buf"; then
-      full=$ESCALATE_KEPT_FULL
-    elif full=$(escalate_full_text_save "$state" "$buf"); then
-      fresh=1
-    else
-      INJECT_LAST_FAILURE="digest full text could not be saved under $state/$ESCALATE_FULL_DIR"
+  # A digest an earlier failed submit left in the composer is resolved first:
+  # nothing new is typed while it may still be there.
+  recover_owned_input "$state" || rc=$?
+  case "$rc" in
+    0) ;;
+    3)
+      unknown_wake_acknowledge_flushed "$state" <(head -n "$OWNED_LINES" "$buf") \
+        || log "unknown-wake acknowledgement write failed; a delivered unknown wake may escalate again"
+      _buffer_drop_head "$state" "$OWNED_LINES" "$OWNED_EPOCH"
+      [ -s "$buf" ] || return 0
+      ;;
+    *) return 1 ;;
+  esac
+  n=$(wc -l < "$buf" 2>/dev/null || echo 0)
+  n=$((n + 0))
+  sum=$(cksum < "$buf" | cut -d' ' -f1)
+  # Join buffered items with the literal " | " separator into one digest line.
+  msg=$(awk 'NR>1{printf " | "} {printf "%s",$0} END{print ""}' "$buf" 2>/dev/null)
+  # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
+  # safety net, but keeping the source single-line makes the intent explicit).
+  msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
+  max=${FM_INJECT_INLINE_MAX:-$INJECT_INLINE_MAX_DEFAULT}
+  case "$max" in ''|*[!0-9]*) max=$INJECT_INLINE_MAX_DEFAULT ;; esac
+  fm_operational_input_encode away-supervisor "$(_collapse_newlines "$msg")" encoded || return 1
+  if [ "${#encoded}" -gt "$max" ]; then
+    # Content-addressed, so a deferred flush retried with the same buffer
+    # rewrites the same file instead of leaving a duplicate behind.
+    dir="$state/.subsuper-digests"
+    if ! mkdir -p "$dir"; then
+      INJECT_LAST_FAILURE="digest full text could not be saved under $dir"
       log "inject skipped: $INJECT_LAST_FAILURE; buffer preserved"
       return 1
     fi
-    msg="$msg (digest bounded; full text of every event: $full)"
+    find "$dir" -type f -name '*.txt' -mtime +"$DIGEST_RETAIN_DAYS" -exec rm -f {} + 2>/dev/null || true
+    file="$dir/$(cat "${buf}.since" 2>/dev/null || _now)-$(cksum < "$buf" | cut -d' ' -f1).txt"
+    if ! {
+      printf 'Supervisor escalate (%s event(s)), buffered since %s:\n' "$n" "$(cat "${buf}.since" 2>/dev/null || _now)"
+      sed 's/^/- /' "$buf"
+      printf '(pre-read; re-arm not needed — watcher daemon-managed)\n'
+    } > "$file"; then
+      INJECT_LAST_FAILURE="digest full text could not be saved under $dir"
+      log "inject skipped: $INJECT_LAST_FAILURE; buffer preserved"
+      return 1
+    fi
+    msg=$(printf 'Supervisor escalate (%s event(s)): the digest is %s characters, too long to type safely, so read it from %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "${#msg}" "$file")
+    # The pointer is bounded too: a low max or a long FM_HOME path falls back to
+    # the bare locator, and a pointer that still does not fit is never typed.
+    fm_operational_input_encode away-supervisor "$msg" encoded || return 1
+    if [ "${#encoded}" -gt "$max" ]; then
+      msg=$(printf 'Supervisor escalate (%s event(s)): read it from %s' "$n" "$file")
+      fm_operational_input_encode away-supervisor "$msg" encoded || return 1
+      if [ "${#encoded}" -gt "$max" ]; then
+        INJECT_LAST_FAILURE="pointer line of ${#encoded} characters exceeds FM_INJECT_INLINE_MAX=$max"
+        log "escalate: $INJECT_LAST_FAILURE; not typed, buffer kept"
+        return 1
+      fi
+    fi
   fi
-  # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
-  # safety net, but keeping the source single-line makes the intent explicit).
-  msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$ESCALATE_EVENTS" "$msg")
-  if inject_msg "$msg" "$state"; then
+  if inject_msg "$msg" "$state" "$n" "$sum"; then
     unknown_wake_acknowledge_flushed "$state" "$buf" \
       || log "unknown-wake acknowledgement write failed; a delivered unknown wake may escalate again"
     : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"
-    ESCALATE_KEPT_FULL=
     return 0
-  fi
-  if [ "$INJECT_SUBMIT_ATTEMPTED" = 1 ]; then
-    [ -z "$full" ] || ESCALATE_KEPT_FULL=$full
-  elif [ "$fresh" = 1 ]; then
-    rm -f "$full"
   fi
   return 1
 }
@@ -1389,6 +1420,302 @@ window_for_task() {  # <task-key> [state]
   return 1
 }
 
+# --- owned-input recovery ---------------------------------------------------
+# A failed submit, whether its verdict was unknown or it only looked delivered,
+# can leave the digest the daemon typed sitting in the primary's composer, and
+# every later flush then defers on a composer that is not empty, so away mode
+# stalls indefinitely (tests/fm-afk-owned-digest-recovery.test.sh owns the
+# regression). So on tmux inject_msg records the exact digest in
+# state/.subsuper-inject-owned BEFORE typing it, bound to the head of the
+# escalation buffer that digest carried, and removes the record only once
+# delivery is proven; every failed submit also saves a pane capture under
+# state/.subsuper-submit-failures/. Every later
+# flush first runs recover_owned_input, which acts only on an idle pane whose
+# composer fm_tmux_composer_owned_input proves holds exactly that digest:
+#   - while the buffer still begins with the digest's events, Enter is retried
+#     through the shared owner (fm_tmux_owned_submit_enter); a confirmed submit
+#     drops those events, and an exhausted one clears the owned digest so the
+#     next flush types a fresh one;
+#   - once the buffer no longer begins with them (a return or a new away window
+#     reset it), the stale digest is cleared, never submitted.
+# Text the daemon cannot prove it owns - a draft, added text, an unknown or
+# unreadable composer - is never submitted or cleared: the flush keeps
+# deferring, one capture records that state, and the wedge alarm stays the
+# backstop. A composer that is empty again drops the record, and the digest's
+# events stay buffered for a fresh digest, unless the operational record its
+# doorbell named was opened meanwhile, which proves a late delivery. Herdr needs
+# no record: its submit already withholds Enter from an unproven Claude payload
+# and clears it. The same record lets clear_owned_input_at_exit remove the
+# daemon's own unsent text when away mode ends.
+
+# record_submit_failure: save a plain capture of the supervisor pane with what
+# failed, prune old captures, and print the capture's path.
+record_submit_failure() {  # <state> <backend> <target> <what>
+  local state=$1 backend=$2 target=$3 what=$4 dir file old
+  dir="$state/$SUBMIT_FAILURES_DIR_NAME"
+  mkdir -p "$dir" || return 1
+  file="$dir/$(date '+%Y%m%dT%H%M%S')-$$-$RANDOM.txt"
+  (
+    umask 077
+    {
+      printf 'when: %s\nwhat: %s\nbackend: %s\ntarget: %s\ncomposer: %s\n\n' \
+        "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$what" "$backend" "$target" \
+        "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)"
+      fm_backend_capture "$backend" "$target" 60 2>/dev/null
+    } > "$file"
+  ) || return 1
+  find "$dir" -type f -name '*.txt' -mtime +"$DIGEST_RETAIN_DAYS" -exec rm -f {} + 2>/dev/null || true
+  while IFS= read -r old; do
+    [ -n "$old" ] && rm -f -- "${dir:?}/${old:?}"
+  done < <(find "$dir" -type f -name '*.txt' -exec basename {} \; 2>/dev/null \
+    | sort -r | tail -n +$((SUBMIT_FAILURES_KEEP + 1)))
+  printf '%s' "$file"
+}
+
+# The owned-digest record: the typed bytes, the buffered events they carry, the
+# operational record a doorbell names (empty for a typed envelope), and whether
+# a turn was seen starting after its Enter (turn=1) while the composer could
+# not yet confirm the text gone.
+_owned_record_write() {  # <state> <target> <backend> <typed-text> <buffered-lines> <buffered-cksum> [op-record] [turn]
+  local rec="$1/$INJECT_OWNED_NAME" rc=1
+  if (
+    umask 077
+    printf 'epoch=%s\ntarget=%s\nbackend=%s\nlines=%s\nsum=%s\nrecord=%s\nturn=%s\ntext=%s\n' \
+      "$(_now)" "$2" "$3" "$5" "$6" "${7:-}" "${8:-}" "$4" > "$rec.tmp"
+  ); then
+    mv -f "$rec.tmp" "$rec" && rc=0
+  fi
+  rm -f "$rec.noted" "$rec.tmp"
+  return "$rc"
+}
+
+# _owned_record_read: load the record into OWNED_* globals; 1 when unusable.
+_owned_record_read() {  # <record>
+  local line
+  OWNED_EPOCH='' OWNED_TARGET='' OWNED_BACKEND='' OWNED_LINES='' OWNED_SUM='' OWNED_TEXT='' OWNED_OPREC=''
+  OWNED_TURN=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      epoch=*) OWNED_EPOCH=${line#epoch=} ;;
+      record=*) OWNED_OPREC=${line#record=} ;;
+      turn=*) OWNED_TURN=${line#turn=} ;;
+      target=*) OWNED_TARGET=${line#target=} ;;
+      backend=*) OWNED_BACKEND=${line#backend=} ;;
+      lines=*) OWNED_LINES=${line#lines=} ;;
+      sum=*) OWNED_SUM=${line#sum=} ;;
+      text=*) OWNED_TEXT=${line#text=} ;;
+    esac
+  done < "$1" || return 1
+  case "$OWNED_LINES" in ''|*[!0-9]*) OWNED_LINES=0 ;; esac
+  case "$OWNED_EPOCH" in ''|*[!0-9]*) OWNED_EPOCH=$(_now) ;; esac
+  [ -n "$OWNED_TEXT" ] && [ -n "$OWNED_TARGET" ] && [ -n "$OWNED_BACKEND" ]
+}
+
+# _buffer_head_matches: 0 when the buffer still begins with the <lines> events
+# whose cksum was <sum> when the owned digest was typed.
+_buffer_head_matches() {  # <state> <lines> <sum>
+  local buf="$1/.subsuper-escalations"
+  [ "$2" -gt 0 ] && [ -n "$3" ] || return 1
+  [ "$(wc -l < "$buf" 2>/dev/null || echo 0)" -ge "$2" ] || return 1
+  [ "$(head -n "$2" "$buf" | cksum | cut -d' ' -f1)" = "$3" ]
+}
+
+# _buffer_drop_head: remove the <lines> delivered events. Later events keep
+# waiting, aged from when the delivered digest was typed.
+_buffer_drop_head() {  # <state> <lines> <typed-epoch>
+  local state=$1 buf="$1/.subsuper-escalations"
+  tail -n +$(($2 + 1)) "$buf" > "$buf.tmp" 2>/dev/null && mv -f "$buf.tmp" "$buf"
+  if [ -s "$buf" ]; then
+    printf '%s\n' "$3" > "${buf}.since"
+  else
+    : > "$buf"
+    rm -f "${buf}.since" "$state/.subsuper-inject-wedged"
+  fi
+}
+
+# _owned_note_once: log and capture a composer the daemon may not touch, once
+# per record, so a long run of deferrals does not fill the capture directory.
+_owned_note_once() {  # <state> <target> <why>
+  local rec="$1/$INJECT_OWNED_NAME" capture
+  [ -e "$rec.noted" ] && return 0
+  : > "$rec.noted"
+  capture=$(record_submit_failure "$1" tmux "$2" "owned digest not recoverable: $3") || capture='(pane capture failed)'
+  log "inject recovery waiting: $3; pane capture: $capture"
+}
+
+# _inject_pane_busy: the busy read that proves a turn started. It reads the
+# visible viewport only, so a footer left in scrollback cannot count, with the
+# primary harness's own signature, or the generic one when the harness is
+# unknown. inject_msg defers while it reads busy, so a busy read after Enter
+# is a transition from idle.
+_inject_pane_busy() {  # <target>
+  local harness screen
+  harness=$(fm_daemon_primary_harness)
+  [ "$harness" != unknown ] || harness=
+  screen=$(fm_backend_visible_capture tmux "$1" 2>/dev/null) || return 1
+  printf '%s' "$screen" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match "$harness"
+}
+
+# _inject_turn_started: the turn-started half of a delivery proof. The
+# operational record the doorbell named was opened, or the pane went busy from
+# an idle baseline. Prints the evidence word.
+_inject_turn_started() {  # <target> <baseline-idle 0|1> [op-record]
+  if [ -n "${3:-}" ] && fm_operational_record_opened "$3"; then
+    printf 'record-opened'
+    return 0
+  fi
+  if [ "$2" != 1 ] || ! _inject_pane_busy "$1"; then
+    return 1
+  fi
+  printf 'busy'
+}
+
+# The owned digest was delivered: a readable composer no longer holds it, and
+# a turn provably started.
+_owned_submit_landed() {  # <target> <baseline-idle 0|1> <op-record>
+  local rc=0
+  fm_tmux_composer_owned_input "$1" "$OWNED_TEXT" || rc=$?
+  [ "$rc" = 1 ] && _inject_turn_started "$1" "$2" "$3" >/dev/null
+}
+
+# _owned_clear_presses: Ctrl+U presses that remove the digest a wrapped row at
+# a time, bounded by the rows it can occupy.
+_owned_clear_presses() {  # <target> <text>
+  local width
+  width=$(tmux display-message -p -t "$1" '#{pane_width}' 2>/dev/null) || width=
+  case "$width" in ''|*[!0-9]*) width=80 ;; esac
+  [ "$width" -gt 8 ] || width=8
+  printf '%s' $(( ${#2} / (width - 4) + 2 ))
+}
+
+# recover_owned_input: resolve an owned digest before a flush types anything.
+# Returns 0 to proceed with a normal flush, 1 to defer, and 3 when the owned
+# digest was submitted, so its OWNED_LINES events are delivered.
+recover_owned_input() {  # <state>
+  local state=$1 rec target backend rc presses err capture
+  rec="$state/$INJECT_OWNED_NAME"
+  [ -e "$rec" ] || return 0
+  afk_active "$state" || { log "inject deferred: afk inactive"; return 1; }
+  if ! _owned_record_read "$rec"; then
+    log "inject recovery: the owned-digest record is unreadable; dropped it without touching the composer"
+    rm -f "$rec" "$rec.noted"
+    return 0
+  fi
+  target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
+  backend="${FM_SUPERVISOR_BACKEND:-tmux}"
+  if [ "$backend" != tmux ] || [ "$OWNED_BACKEND" != "$backend" ] || [ "$OWNED_TARGET" != "$target" ]; then
+    log "inject recovery: the owned digest was typed into $OWNED_BACKEND:$OWNED_TARGET, not $backend:$target; dropped the record without touching either"
+    rm -f "$rec" "$rec.noted"
+    return 0
+  fi
+  fm_backend_target_exists tmux "$target" || return 1
+  if pane_is_busy "$target" tmux || _inject_pane_busy "$target"; then
+    log "inject deferred: supervisor pane busy (agent mid-turn)"
+    return 1
+  fi
+  rc=0
+  fm_tmux_composer_owned_input "$target" "$OWNED_TEXT" || rc=$?
+  case "$rc" in
+    0) ;;
+    1)
+      if [ "$(fm_tmux_composer_state "$target")" = empty ]; then
+        if _buffer_head_matches "$state" "$OWNED_LINES" "$OWNED_SUM"; then
+          if [ -n "$OWNED_OPREC" ] && fm_operational_record_opened "$OWNED_OPREC"; then
+            log "inject delivered late: the primary opened the owned digest's record ($OWNED_LINES event(s))"
+            rm -f "$rec" "$rec.noted"
+            return 3
+          fi
+          if [ "$OWNED_TURN" = 1 ]; then
+            log "inject delivered late: a turn started after its Enter and the composer is now empty ($OWNED_LINES event(s))"
+            rm -f "$rec" "$rec.noted"
+            return 3
+          fi
+        fi
+        log "inject recovery: the owned digest is no longer in the composer; its events stay buffered for a fresh digest"
+        rm -f "$rec" "$rec.noted"
+        return 0
+      fi
+      _owned_note_once "$state" "$target" "the composer holds text the daemon cannot prove it typed, so it is left untouched"
+      return 1
+      ;;
+    *)
+      _owned_note_once "$state" "$target" "the composer is unreadable or not identified, so the owned digest is left untouched"
+      return 1
+      ;;
+  esac
+  presses=$(_owned_clear_presses "$target" "$OWNED_TEXT")
+  if ! _buffer_head_matches "$state" "$OWNED_LINES" "$OWNED_SUM"; then
+    if fm_tmux_clear_owned_input "$target" "$OWNED_TEXT" fm_tmux_composer_owned_input "$presses"; then
+      log "inject recovery: cleared a stale owned digest whose events are no longer buffered"
+      rm -f "$rec" "$rec.noted"
+      return 0
+    fi
+    capture=$(record_submit_failure "$state" tmux "$target" "stale owned digest cleanup unconfirmed") || capture='(pane capture failed)'
+    log "inject recovery: could not confirm clearing a stale owned digest; pane capture: $capture"
+    return 1
+  fi
+  # The busy guard above read idle, so a busy read after Enter is a turn start.
+  rc=0
+  err=$(fm_tmux_owned_submit_enter "$target" "$OWNED_TEXT" fm_tmux_composer_owned_input "$presses" \
+    'away-mode digest' _owned_submit_landed "$target" 1 "$OWNED_OPREC" 2>&1 >/dev/null) || rc=$?
+  case "$rc" in
+    0)
+      log "inject recovered: submitted the owned digest left in the composer ($OWNED_LINES event(s))"
+      rm -f "$rec" "$rec.noted"
+      return 3
+      ;;
+    1)
+      rm -f "$rec" "$rec.noted"
+      capture=$(record_submit_failure "$state" tmux "$target" "owned digest resubmit exhausted; cleared") || capture='(pane capture failed)'
+      log "inject recovery gave up: ${err#error: }; its events stay buffered for a fresh digest; pane capture: $capture"
+      ;;
+    *)
+      capture=$(record_submit_failure "$state" tmux "$target" "owned digest resubmit unconfirmed") || capture='(pane capture failed)'
+      log "inject recovery failed: ${err#error: }; pane capture: $capture"
+      ;;
+  esac
+  return 1
+}
+
+# clear_owned_input_at_exit: when away mode ends, remove the digest the daemon
+# typed but never proved delivered, so a stray Enter cannot submit a stale
+# escalation after away mode has ended
+# (tests/fm-afk-inject-delivery-proof.test.sh owns the regression). Only the
+# exact owned text is cleared, never a draft or text added to it; an empty
+# composer or a gone pane just drops the record. Returns 1 when daemon text may
+# remain, with the record kept for the next away window's recovery.
+clear_owned_input_at_exit() {  # <state>
+  local state=$1 rec rc=0 presses
+  rec="$state/$INJECT_OWNED_NAME"
+  [ -e "$rec" ] || return 0
+  if ! _owned_record_read "$rec" || [ "$OWNED_BACKEND" != tmux ] \
+    || ! fm_backend_target_exists tmux "$OWNED_TARGET"; then
+    rm -f "$rec" "$rec.noted"
+    return 0
+  fi
+  fm_tmux_composer_owned_input "$OWNED_TARGET" "$OWNED_TEXT" || rc=$?
+  case "$rc" in
+    0)
+      presses=$(_owned_clear_presses "$OWNED_TARGET" "$OWNED_TEXT")
+      if fm_tmux_clear_owned_input "$OWNED_TARGET" "$OWNED_TEXT" fm_tmux_composer_owned_input "$presses"; then
+        log "away mode ended: cleared the daemon's unsent digest from the composer"
+        rm -f "$rec" "$rec.noted"
+        return 0
+      fi
+      log "away mode ended: could not confirm clearing the daemon's unsent digest from the composer"
+      ;;
+    1)
+      if [ "$(fm_tmux_composer_state "$OWNED_TARGET")" = empty ]; then
+        rm -f "$rec" "$rec.noted"
+        return 0
+      fi
+      log "away mode ended: the composer holds text the daemon cannot prove it typed, so it is left untouched"
+      ;;
+    *) log "away mode ended: the composer is unreadable, so the daemon's unsent digest may still be there" ;;
+  esac
+  return 1
+}
+
 # --- injection --------------------------------------------------------------
 # inject_msg: send one escalation digest to the supervisor pane.
 # Returns 0 on successful inject (or empty buffer), non-zero if the pane is
@@ -1400,23 +1727,28 @@ window_for_task() {  # <task-key> [state]
 #   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
 #     Enter leaves our text in the composer, and retyping would concatenate two
 #     sentinel-prefixed digests into one corrupted turn.
-#   - SUBMIT ACK = the backend submit primitive reports `empty` after Enter.
-#     For tmux that means a cleared composer; for herdr's normal idle-baseline
-#     path it means native agent-state observed a real turn start.
-#     Pending means Enter was swallowed; unknown is treated as undelivered by
-#     this strict daemon path.
+#   - SUBMIT ACK needs positive proof. For tmux, fm_tmux_proven_submit must
+#     see the digest shown unchanged in the composer before Enter, then see it
+#     gone together with a turn start: the pane went busy from an idle
+#     baseline, or the primary opened the operational record its doorbell
+#     named. A composer that merely reads empty is not proof: a stale frame
+#     reads the same. For herdr's normal idle-baseline path the ack means
+#     native agent-state observed a real turn start. Every other outcome is
+#     undelivered, saves a pane capture, and on tmux keeps the owned-digest
+#     record (written before typing) that recover_owned_input resolves before
+#     the next flush types anything. A delivery is logged with its evidence.
 #   - COMPOSER GUARD before typing: if the cursor line already has real content
 #     after dim/faint ghost text and borders are ignored (a human's half-typed
 #     line, or a previous injection's unsent text), defer entirely - injecting
 #     would merge with the human's text.
-inject_msg() {  # <message> [state]
-  local msg=$1 state target backend retries sleep_s verdict composer encoded bytes errf err='' body
+inject_msg() {  # <message> [state] [buffered-lines buffered-cksum]
+  local msg=$1 state target backend retries sleep_s verdict composer encoded bytes errf err='' body capture
+  local events oprec
   state="${2:-$(_state_root)}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
   # watcher triage. Escalations buffer and survive for the next catch-up flush.
   INJECT_LAST_FAILURE=
-  INJECT_SUBMIT_ATTEMPTED=0
   afk_active "$state" || { INJECT_LAST_FAILURE="deferred: afk inactive"; log "inject $INJECT_LAST_FAILURE"; return 1; }
   # (2) Single-line digest: collapse any embedded newlines so submission via
   # send-keys + Enter is unambiguous regardless of how the TUI composer treats
@@ -1439,6 +1771,13 @@ inject_msg() {  # <message> [state]
   # (3) Busy-guard: never inject into an in-use supervisor pane.
   if pane_is_busy "$target" "$backend"; then
     INJECT_LAST_FAILURE="deferred: supervisor pane busy (agent mid-turn)"
+    log "inject $INJECT_LAST_FAILURE"
+    return 1
+  fi
+  #    On tmux a turn already showing on screen would also make the delivery
+  #    proof's busy read vacuous, so a digest typed now could never be proven.
+  if [ "$backend" = tmux ] && _inject_pane_busy "$target"; then
+    INJECT_LAST_FAILURE="deferred: supervisor pane shows a turn in progress"
     log "inject $INJECT_LAST_FAILURE"
     return 1
   fi
@@ -1469,37 +1808,71 @@ inject_msg() {  # <message> [state]
     fi
   fi
   # (4) Type the digest ONCE, then submit with Enter (retry Enter only, never
-  # retype) via the shared submit primitive. Success = the backend confirms
-  # submit. An unconfirmed/unknown pane does NOT count as delivered, so the
-  # buffer is preserved (strict) rather than cleared.
-  # Dispatches through fm_backend_send_text_submit (bin/fm-backend.sh): for
-  # backend=tmux this calls fm_backend_tmux_send_text_submit, a verbatim
-  # re-export of fm_tmux_submit_core - byte-identical to calling it directly.
+  # retype). An unconfirmed or unknown submit does NOT count as delivered, so
+  # the buffer is preserved (strict) rather than cleared.
+  # On tmux the owned-digest record is written before a key is sent and removed
+  # only on proven delivery (fm_tmux_proven_submit: the digest shown unchanged
+  # before Enter, then gone with a proven turn start), so recover_owned_input
+  # can always resolve text this daemon left behind. Herdr dispatches through
+  # fm_backend_send_text_submit (bin/fm-backend.sh), whose normal idle-baseline
+  # path already confirms a real turn start through native agent state.
   # The transport's stderr is kept so a failure names its cause. send-failed
   # means the text was never confirmed typed, or (herdr) it was typed but no
-  # Enter could be sent, so no confirmation retry ran; every other non-empty
-  # verdict is an Enter-confirmation failure.
+  # Enter could be sent, so no confirmation retry ran.
   retries=${FM_INJECT_CONFIRM_RETRIES:-$INJECT_CONFIRM_RETRIES_DEFAULT}
   sleep_s=${FM_INJECT_CONFIRM_SLEEP:-$INJECT_CONFIRM_SLEEP_DEFAULT}
   bytes=$(LC_ALL=C; printf '%s' "${#msg}")
+  events=${3:-0}
   errf=$(mktemp "$state/.subsuper-inject-err.XXXXXX" 2>/dev/null) || errf=
-  INJECT_SUBMIT_ATTEMPTED=1
-  verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s" 2>"${errf:-/dev/null}")
+  if [ "$backend" = tmux ]; then
+    fm_operational_doorbell_path "$msg" oprec || oprec=
+    if ! _owned_record_write "$state" "$target" "$backend" "$msg" "$events" "${4:-}" "$oprec"; then
+      [ -z "$errf" ] || rm -f "$errf"
+      INJECT_LAST_FAILURE="could not record the owned digest under $state before typing it"
+      log "inject failed: $INJECT_LAST_FAILURE"
+      return 1
+    fi
+    verdict=$(fm_tmux_proven_submit "$target" "$msg" \
+      "${FM_INJECT_SHOW_POLLS:-$INJECT_SHOW_POLLS_DEFAULT}" "${FM_INJECT_QUIET_GAP:-$INJECT_QUIET_GAP_DEFAULT}" \
+      "$retries" "${FM_INJECT_PROOF_POLLS:-$INJECT_PROOF_POLLS_DEFAULT}" "$sleep_s" \
+      _inject_turn_started "$target" 1 "$oprec" 2>"${errf:-/dev/null}")
+  else
+    verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s" 2>"${errf:-/dev/null}")
+    [ "$verdict" != empty ] || verdict="delivered backend=$backend confirmed a turn start"
+  fi
   if [ -n "$errf" ]; then
     err=$(cat "$errf" 2>/dev/null)
     rm -f "$errf"
   fi
-  if [ "$verdict" = empty ]; then
-    return 0  # Backend confirmed the submit.
-  fi
+  case "$verdict" in
+    delivered*)
+      [ "$backend" != tmux ] || rm -f "$state/$INJECT_OWNED_NAME" "$state/$INJECT_OWNED_NAME.noted"
+      log "inject delivered ($events event(s), $bytes bytes, ${verdict#delivered })"
+      return 0
+      ;;
+    turn-started*)
+      # Half the proof: the next flush counts it once the composer reads empty.
+      _owned_record_write "$state" "$target" "$backend" "$msg" "$events" "${4:-}" "$oprec" 1 \
+        || log "inject: could not record the turn seen after the owned digest's Enter"
+      ;;
+  esac
   err=$(_collapse_newlines "$err")
   _utf8_prefix "$err" 512 err
-  if [ "$verdict" = send-failed ]; then
-    INJECT_LAST_FAILURE="initial send or Enter delivery (verdict=send-failed, bytes=$bytes; text may be in composer on backends that typed before Enter failed): ${err:-no transport error output}"
-  else
-    INJECT_LAST_FAILURE="Enter confirmation: submit unconfirmed after $retries retries (verdict=${verdict:-none}, bytes=$bytes, text may be in composer)${err:+: $err}"
-  fi
-  log "inject failed at $INJECT_LAST_FAILURE"
+  case "$verdict" in
+    send-failed)
+      # A refused tmux literal send typed nothing, so there is nothing to own.
+      [ "$backend" != tmux ] || rm -f "$state/$INJECT_OWNED_NAME"
+      INJECT_LAST_FAILURE="initial send or Enter delivery (verdict=send-failed, bytes=$bytes; text may be in composer on backends that typed before Enter failed): ${err:-no transport error output}"
+      ;;
+    unshown)
+      INJECT_LAST_FAILURE="typing: the digest never showed unchanged in the composer, so no Enter was sent (verdict=unshown, bytes=$bytes, text may be in composer)${err:+: $err}"
+      ;;
+    *)
+      INJECT_LAST_FAILURE="Enter confirmation: delivery unproven after $retries Enter attempt(s) (verdict=${verdict:-none}, bytes=$bytes, text may be in composer)${err:+: $err}"
+      ;;
+  esac
+  capture=$(record_submit_failure "$state" "$backend" "$target" "submit unconfirmed (verdict=$verdict)") || capture='(pane capture failed)'
+  log "inject failed at $INJECT_LAST_FAILURE; pane capture: $capture"
   return 1
 }
 
@@ -1863,7 +2236,9 @@ fm_super_main() {
   cleanup() {
     trap - TERM INT
     wedge_alarm_stop_active_notifier
-    escalate_flush "$STATE" 2>/dev/null || true
+    # Bounded so a delivery proof cannot outlast fm-afk-launch.sh stop's wait.
+    FM_INJECT_PROOF_POLLS=${FM_INJECT_PROOF_POLLS:-6} escalate_flush "$STATE" 2>/dev/null || true
+    clear_owned_input_at_exit "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then
       kill "$WATCHER_PID" 2>/dev/null || true
       wait "$WATCHER_PID" 2>/dev/null || true
@@ -1974,6 +2349,12 @@ fm_super_main() {
 
 # Run only when executed, not when sourced (tests source the classifiers).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  if [ "${1:-}" = clear-owned-input ]; then
+    LOG="$(_state_root)/.supervise-daemon.log"
+    clear_owned_input_at_exit "$(_state_root)" && exit 0
+    echo "fm-supervise-daemon: an unsent away-mode digest may still be in the input box of $OWNED_TARGET; check it before pressing Enter there" >&2
+    exit 1
+  fi
   fm_super_main "$@"
 else
   # Library mode: these functions were SOURCED (only tests do this - production

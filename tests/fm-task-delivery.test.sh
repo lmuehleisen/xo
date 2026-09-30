@@ -135,12 +135,12 @@ test_spawn_refuses_a_brief_mode_mismatch() {
   IFS='|' read -r home proj fakebin <<EOF
 $rec
 EOF
-  write_brief "$home" delivery-mismatch-b1 no-mistakes
+  write_brief "$home" delivery-mismatch-b1 local-only
   out=$(run_spawn "$home" "$fakebin" delivery-mismatch-b1 "$proj" claude --mode direct-PR --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "a brief/spawn mode mismatch should exit non-zero"
   assert_contains "$out" "delivery mismatch for delivery-mismatch-b1" "mismatch refusal did not name the task"
-  assert_contains "$out" "the brief says mode=no-mistakes but this spawn passed --mode direct-PR" \
+  assert_contains "$out" "the brief says mode=local-only but this spawn passed --mode direct-PR" \
     "mismatch refusal did not show both sides of the disagreement"
   assert_absent "$home/state/delivery-mismatch-b1.meta" "mismatched spawn wrote task metadata"
 
@@ -159,7 +159,7 @@ EOF
 
 # The registry is the captain's standing posture, so dropping below its rigor is
 # allowed but never silent, while matching or exceeding it stays quiet. An
-# unregistered project resolves to the same no-mistakes standing default
+# unregistered project resolves to the same direct-PR standing default
 # (AGENTS.md section 7), so a downgrade there is announced too. A conditional
 # policy is excluded because both of its legs are legitimate classifications.
 test_spawn_notices_a_rigor_downgrade_against_the_registry() {
@@ -184,12 +184,13 @@ EOF
           "$label: printed a deviation notice that is not a downgrade" ;;
     esac
   done <<'ROWS'
-no-mistakes project shipped direct-PR|- proj [no-mistakes] - fixture (added 2026-01-01)|direct-PR|notice|no-mistakes
+no-mistakes project shipped direct-PR|- proj [no-mistakes] - fixture (added 2026-01-01)|direct-PR|quiet|no-mistakes
 no-mistakes project shipped local-only|- proj [no-mistakes] - fixture (added 2026-01-01)|local-only|notice|no-mistakes
 no-mistakes project shipped no-mistakes|- proj [no-mistakes] - fixture (added 2026-01-01)|no-mistakes|quiet|no-mistakes
 local-only project shipped no-mistakes|- proj [local-only] - fixture (added 2026-01-01)|no-mistakes|quiet|local-only
 conditional policy shipped direct-PR|- proj [no-mistakes-prod-only] - fixture (added 2026-01-01)|direct-PR|quiet|no-mistakes-prod-only
-unregistered project resolves to the no-mistakes standing default|- other [no-mistakes] - fixture (added 2026-01-01)|direct-PR|notice|no-mistakes
+unregistered project resolves to the direct-PR standing default|- other [no-mistakes] - fixture (added 2026-01-01)|direct-PR|quiet|direct-PR
+unregistered project shipped local-only is a downgrade|- other [no-mistakes] - fixture (added 2026-01-01)|local-only|notice|direct-PR
 ROWS
   pass "fm-spawn: a rigor downgrade against the registered posture is announced, never blocked"
 }
@@ -308,7 +309,7 @@ test_promote_refuses_a_symlinked_task_record() {
 # prints against a capturing fm-send.sh, and asserts on the message the worker would
 # actually receive - for every supported mode.
 test_promotion_delivers_the_real_definition_of_done() {
-  local home meta out sendroot payload mode id brief_dod delivered_dod
+  local home meta out sendroot payload mode effective id brief_dod delivered_dod
   home="$TMP_ROOT/promote-dod/home"
   sendroot="$TMP_ROOT/promote-dod/sendroot"
   mkdir -p "$home/state" "$sendroot/bin"
@@ -339,8 +340,13 @@ STUB
       || fail "$mode: promotion's delivery command did not run"
     assert_present "$payload" "$mode: promotion delivered no message to the worker"
 
-    grep -qx "Delivery contract: mode=$mode" "$payload" \
+    # Without config/no-mistakes the no-mistakes token records its effective mode.
+    effective=$mode
+    [ "$mode" != no-mistakes ] || effective=direct-PR
+    grep -qx "Delivery contract: mode=$effective" "$payload" \
       || fail "$mode: promoted worker did not receive the machine-readable delivery contract"
+    grep -qx "mode=$mode" "$meta" || fail "$mode: promotion did not record the task's mode token"
+    grep -qx "effective_mode=$effective" "$meta" || fail "$mode: promotion did not record the effective mode"
     assert_grep "# Definition of done" "$payload" \
       "$mode: promoted worker did not receive a Definition of done"
     assert_grep "pwd -P" "$payload" \
@@ -371,17 +377,12 @@ STUB
   done
 
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-no-mistakes"
-  assert_grep "ask-user findings are never yours to answer: escalate to firstmate" "$payload" \
-    "promoted no-mistakes worker did not receive the ask-user escalation rule"
-  assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$payload" \
-    "promoted no-mistakes worker did not receive the ask-user-only snapshot contract"
-  # shellcheck disable=SC2016  # single quotes are deliberate: the placeholders must stay literal
-  assert_grep 'needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file='"$home/data/promote-dod-no-mistakes/nm-<run>-findings.txt" "$payload" \
-    "promoted no-mistakes worker did not receive the structured escalation event"
-  assert_grep "NEVER pass \`--yes\` (or \`-y\`)" "$payload" \
-    "promoted no-mistakes worker did not receive the --yes prohibition"
-  assert_grep "It is banned fleet-wide" "$payload" \
-    "promoted no-mistakes worker did not receive the fleet-wide ban wording"
+  assert_grep "Do NOT run /no-mistakes" "$payload" \
+    "promoted no-mistakes worker still received the pipeline contract"
+  assert_grep "open a PR with \`gh\`" "$payload" \
+    "promoted no-mistakes worker was not told to open a PR with gh"
+  assert_no_grep "no-mistakes axi respond" "$payload" \
+    "promoted no-mistakes worker received the pipeline gate contract"
 
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-direct-pr"
   assert_grep "supersede the scout delivery rules and report-based Definition of done" "$payload" \
@@ -535,12 +536,12 @@ test_project_mode_maps_the_conditional_policy() {
 - typoproj [no-mistakez] - fixture (added 2026-01-01)
 EOF
   out=$(FM_HOME="$home" "$PROJECT_MODE" prodproj 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] || fail "conditional policy did not map to its most rigorous leg (got '$out')"
+  [ "$out" = "direct-PR off" ] || fail "conditional policy did not map to direct-PR (got '$out')"
   err=$(FM_HOME="$home" "$PROJECT_MODE" prodproj 2>&1 >/dev/null)
   [ -z "$err" ] || fail "a registered conditional policy still warned as unknown: $err"
 
   out=$(FM_HOME="$home" "$PROJECT_MODE" yoloproj 2>/dev/null)
-  [ "$out" = "no-mistakes on" ] || fail "conditional policy dropped its +yolo posture (got '$out')"
+  [ "$out" = "direct-PR on" ] || fail "conditional policy dropped its +yolo posture (got '$out')"
 
   out=$(FM_HOME="$home" "$PROJECT_MODE" --raw prodproj 2>/dev/null)
   [ "$out" = "no-mistakes-prod-only off" ] || fail "--raw did not expose the registered annotation (got '$out')"
@@ -548,18 +549,255 @@ EOF
   out=$(FM_HOME="$home" "$PROJECT_MODE" --raw flatproj 2>/dev/null)
   [ "$out" = "direct-PR off" ] || fail "--raw altered a flat registered mode (got '$out')"
 
+  mkdir -p "$home/config"
+  : > "$home/config/no-mistakes"
+  printf '%s\n' '- nmproj [no-mistakes] - fixture (added 2026-01-01)' >> "$home/data/projects.md"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" nmproj 2>/dev/null)
+  [ "$out" = "direct-PR off" ] || fail "config/no-mistakes moved a registered no-mistakes token onto the pipeline (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" prodproj 2>/dev/null)
+  [ "$out" = "direct-PR off" ] || fail "config/no-mistakes changed the conditional policy mapping (got '$out')"
+
   out=$(FM_HOME="$home" "$PROJECT_MODE" typoproj 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] || fail "a typo'd mode no longer falls back to the most rigorous default"
+  [ "$out" = "direct-PR off" ] || fail "a typo'd mode no longer falls back to direct-PR"
   err=$(FM_HOME="$home" "$PROJECT_MODE" typoproj 2>&1 >/dev/null)
   assert_contains "$err" "unknown mode" "a typo'd registry mode stopped warning"
   pass "fm-project-mode: the conditional policy is accepted, mapped for mechanical callers, and readable raw"
+}
+
+# A PATH with no no-mistakes executable, so "the CLI is missing" holds even on a
+# machine that has the real CLI installed.
+path_without_no_mistakes() {
+  local dir out='' IFS=:
+  for dir in $PATH; do
+    [ -x "$dir/no-mistakes" ] || out="${out:+$out:}$dir"
+  done
+  printf '%s\n' "$out"
+}
+
+# config/no-mistakes opts an explicitly resolved no-mistakes ship into the real
+# pipeline. The spawn then refuses without the CLI instead of shipping direct-PR,
+# carries the captain-intent overlay, and requires the brief's pipeline contract to
+# match; removing the flag returns every launch of that brief to direct-PR.
+test_no_mistakes_pipeline_opt_in_spawn() {
+  local rec home proj fakebin stubbin out status nocli id
+  rec=$(make_home pipeline-spawn)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  stubbin="$TMP_ROOT/pipeline-spawn/stub"
+  mkdir -p "$stubbin"
+  printf '#!/bin/sh\nexit 0\n' > "$stubbin/no-mistakes"
+  chmod +x "$stubbin/no-mistakes"
+  nocli=$(path_without_no_mistakes)
+  : > "$home/config/no-mistakes"
+  for id in pipeline-e1 pipeline-e2 pipeline-e3; do
+    PATH="$stubbin:$PATH" FM_HOME="$home" "$BRIEF" "$id" proj --mode no-mistakes >/dev/null 2>&1 \
+      || fail "$id: pipeline brief should scaffold"
+    fill_brief_subsections "$home/data/$id/brief.md" "Ship through the pipeline." "Keep it small."
+  done
+
+  out=$(PATH="$nocli" run_spawn "$home" "$fakebin" pipeline-e1 "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a pipeline spawn without the CLI should exit non-zero"
+  assert_contains "$out" "no no-mistakes binary is on PATH" "missing-CLI refusal did not name the missing CLI"
+  assert_contains "$out" "never falls back to direct-PR" "missing-CLI refusal did not rule out the fallback"
+  assert_absent "$home/state/pipeline-e1.meta" "refused pipeline spawn wrote task metadata"
+  assert_absent "$home/data/pipeline-e1/launch-brief.md" "refused pipeline spawn rendered a launch brief"
+
+  out=$(run_spawn "$home" "$stubbin:$fakebin" pipeline-e1 "$proj" claude --mode no-mistakes --yolo off)
+  assert_not_contains "$out" "delivery mismatch" "an agreeing pipeline brief was reported as a mismatch"
+  assert_not_contains "$out" "no no-mistakes binary" "an installed CLI was reported missing"
+  assert_grep "# Current no-mistakes intent contract" "$home/data/pipeline-e1/launch-brief.md" \
+    "pipeline launch did not carry the --intent overlay"
+  assert_grep "Ship through the pipeline." "$home/data/pipeline-e1/launch-brief.md" \
+    "pipeline launch did not carry the extracted captain intent"
+  assert_no_grep "# Current delivery instructions" "$home/data/pipeline-e1/launch-brief.md" \
+    "pipeline launch was superseded by direct-PR delivery"
+
+  out=$(run_spawn "$home" "$stubbin:$fakebin" pipeline-e2 "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a pipeline brief launched as direct-PR should exit non-zero"
+  assert_contains "$out" "the brief carries the no-mistakes pipeline contract but this spawn passed --mode direct-PR" \
+    "pipeline brief launched as direct-PR was not refused as a mismatch"
+
+  write_brief "$home" pipeline-e4 no-mistakes
+  out=$(run_spawn "$home" "$stubbin:$fakebin" pipeline-e4 "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a pipeline spawn of a direct-PR-remapped brief should exit non-zero"
+  assert_contains "$out" "without the pipeline contract" \
+    "a no-mistakes brief scaffolded without the opt-in launched the pipeline"
+
+  rm "$home/config/no-mistakes"
+  out=$(run_spawn "$home" "$stubbin:$fakebin" pipeline-e3 "$proj" claude --mode no-mistakes --yolo off)
+  assert_not_contains "$out" "delivery mismatch" "flag-absent launch of a pipeline brief was refused"
+  assert_grep "# Current delivery instructions" "$home/data/pipeline-e3/launch-brief.md" \
+    "flag-absent launch of a pipeline brief did not supersede it with direct-PR delivery"
+  assert_no_grep "# Current no-mistakes intent contract" "$home/data/pipeline-e3/launch-brief.md" \
+    "flag-absent launch still carried the pipeline --intent overlay"
+  pass "fm-spawn: config/no-mistakes runs only an agreeing, installed pipeline ship and never falls back"
+}
+
+# Without config/no-mistakes a no-mistakes ship is scaffolded and promoted on its
+# effective direct-PR contract, so the brief's contract line agrees with spawn's
+# mismatch check, launches without a second superseding contract, and the task
+# record keeps the no-mistakes token beside the effective mode the gate reads.
+test_no_mistakes_token_launches_on_its_effective_mode() {
+  local case_dir home proj wt fakebin id out status brief meta
+  # shellcheck source=tests/fixtures.sh
+  . "$ROOT/tests/fixtures.sh"
+  case_dir="$TMP_ROOT/effective-mode"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  fakebin=$(fm_test_make_spawn_fakebin "$case_dir/fake" claude)
+  fm_test_spawn_home "$home" claude
+  fm_git_worktree "$proj" "$wt" wt-effective-mode
+  id="effective-mode-e1"
+  FM_HOME="$home" "$BRIEF" "$id" project --mode no-mistakes >/dev/null 2>&1 \
+    || fail "a no-mistakes brief without the opt-in should scaffold"
+  fill_brief_subsections "$home/data/$id/brief.md" "Ship the remapped change." "Keep it small."
+  brief="$home/data/$id/brief.md"
+  grep -qx 'Delivery contract: mode=direct-PR' "$brief" || fail "the remapped brief did not record its effective contract"
+  assert_grep 'Do NOT run /no-mistakes' "$brief" "the remapped brief did not carry direct-PR delivery"
+  assert_no_grep 'invoke the no-mistakes skill' "$brief" "the remapped brief instructed the worker to run the pipeline"
+  assert_grep 'recorded mode is no-mistakes' "$brief" "the remapped brief did not say why no pipeline runs"
+
+  out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "a remapped no-mistakes spawn should launch: $out"
+  assert_not_contains "$out" "delivery mismatch" "the effective contract line disagreed with spawn's mismatch check"
+  assert_no_grep '# Current delivery instructions' "$home/data/$id/launch-brief.md" \
+    "a brief already on its effective contract was superseded a second time"
+  meta="$home/state/$id.meta"
+  grep -qx 'mode=no-mistakes' "$meta" || fail "the task record lost the recorded no-mistakes token"
+  grep -qx 'effective_mode=direct-PR' "$meta" || fail "the task record did not record the effective mode"
+  pass "fm-spawn: a no-mistakes token launches on its effective direct-PR contract and records both modes"
+}
+
+# The pipeline contract is rendered before any harness is chosen, so it must name
+# the no-mistakes skill without a harness-specific prefix: Codex rejects the
+# slash form and documents `$no-mistakes`, while Claude-style harnesses use the
+# slash form. Every verified harness's pipeline launch brief must carry that
+# neutral wording and neither prefixed form.
+test_no_mistakes_pipeline_contract_is_harness_neutral() {
+  local rec home proj fakebin fakehome harness id out brief checked=0
+  rec=$(make_home pipeline-harness)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  fakehome="$TMP_ROOT/pipeline-harness/userhome"
+  mkdir -p "$fakehome/.kimi-code" "$fakehome/xdgconfig/muse"
+  printf 'default_model = "test"\n' > "$fakehome/.kimi-code/config.toml"
+  printf '{"schema_version":1}\n' > "$fakehome/xdgconfig/muse/auth.json"
+  for harness in no-mistakes claude codex opencode pi pi-signed grok kimi cursor-agent omp agy muse gemini rovo; do
+    printf '#!/bin/sh\nexit 0\n' > "$fakebin/$harness"
+    chmod +x "$fakebin/$harness"
+  done
+  : > "$home/config/no-mistakes"
+  for harness in claude codex opencode pi pi-signed grok kimi cursor omp agy muse gemini rovo; do
+    id="pipeline-harness-$harness"
+    PATH="$fakebin:$PATH" FM_HOME="$home" "$BRIEF" "$id" proj --mode no-mistakes >/dev/null 2>&1 \
+      || fail "$harness: pipeline brief should scaffold"
+    fill_brief_subsections "$home/data/$id/brief.md" "Ship through the pipeline." "Keep it small."
+    out=$(HOME="$fakehome" XDG_CONFIG_HOME="$fakehome/xdgconfig" XDG_DATA_HOME="$fakehome/xdgdata" \
+      run_spawn "$home" "$fakebin" "$id" "$proj" "$harness" --mode no-mistakes --yolo off)
+    brief="$home/data/$id/launch-brief.md"
+    if [ "$harness" = kimi ] && [ ! -f "$brief" ] && printf '%s' "$out" | grep -q 'turn-end hook could not be installed'; then
+      echo "skip: kimi pipeline launch needs python3 with tomllib for its turn-end hook"
+      continue
+    fi
+    assert_present "$brief" "$harness: pipeline spawn did not render a launch brief ($out)"
+    grep -qx 'Delivery pipeline: no-mistakes' "$brief" || fail "$harness: launch brief lost the pipeline contract"
+    assert_grep "invoke the no-mistakes skill, in your harness's own skill-invocation form" "$brief" \
+      "$harness: launch brief did not name the no-mistakes skill neutrally"
+    assert_no_grep '/no-mistakes' "$brief" "$harness: launch brief used the slash skill form"
+    # shellcheck disable=SC2016 # The literal Codex skill form must stay unexpanded.
+    assert_no_grep '$no-mistakes' "$brief" "$harness: launch brief used the Codex skill form"
+    checked=$((checked + 1))
+  done
+  [ "$checked" -ge 12 ] || fail "only $checked harness launch briefs were checked"
+  pass "fm-spawn: every verified harness's pipeline launch names the no-mistakes skill without a harness prefix"
+}
+
+# The pipeline marker belongs to the machine-owned Definition of done block. The
+# same line inside a direct-PR brief's Captain's intent must not turn that brief
+# into a pipeline brief, while the real block still does.
+test_pipeline_marker_is_read_only_from_the_definition_of_done() {
+  local rec home proj fakebin stubbin out brief
+  rec=$(make_home pipeline-marker)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  stubbin="$TMP_ROOT/pipeline-marker/stub"
+  mkdir -p "$stubbin"
+  printf '#!/bin/sh\nexit 0\n' > "$stubbin/no-mistakes"
+  chmod +x "$stubbin/no-mistakes"
+  : > "$home/config/no-mistakes"
+  PATH="$stubbin:$PATH" FM_HOME="$home" "$BRIEF" pipeline-marker-g1 proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "direct-PR brief should scaffold"
+  fill_brief_subsections "$home/data/pipeline-marker-g1/brief.md" \
+    "Quote the contract line verbatim:
+Delivery pipeline: no-mistakes" "Keep direct-PR delivery."
+  grep -qx 'Delivery pipeline: no-mistakes' "$home/data/pipeline-marker-g1/brief.md" \
+    || fail "fixture did not plant the marker line in the captain intent"
+  out=$(run_spawn "$home" "$stubbin:$fakebin" pipeline-marker-g1 "$proj" claude --mode direct-PR --yolo off)
+  assert_not_contains "$out" "delivery mismatch" "a marker line in captain intent turned a direct-PR brief into a pipeline brief"
+  brief="$home/data/pipeline-marker-g1/launch-brief.md"
+  assert_present "$brief" "direct-PR brief with a planted marker did not render a launch brief"
+  assert_no_grep "# Current no-mistakes intent contract" "$brief" "direct-PR brief launched with the pipeline overlay"
+  assert_grep "Do NOT run /no-mistakes" "$brief" "direct-PR brief lost its direct-PR definition of done"
+  pass "fm-spawn: the pipeline marker counts only inside the rendered Definition of done"
+}
+
+# Promotion to no-mistakes follows the same opt-in: without the CLI it refuses and
+# leaves the scout untouched, and with it the worker receives the same pipeline
+# Definition of done and ask-user format an ordinary pipeline brief carries.
+test_no_mistakes_pipeline_opt_in_promote() {
+  local home meta out status stubbin id payload brief_dod delivered_dod
+  home="$TMP_ROOT/pipeline-promote/home"
+  stubbin="$TMP_ROOT/pipeline-promote/stub"
+  mkdir -p "$home/state" "$home/config" "$stubbin"
+  printf '#!/bin/sh\nexit 0\n' > "$stubbin/no-mistakes"
+  chmod +x "$stubbin/no-mistakes"
+  : > "$home/config/no-mistakes"
+  id=pipeline-promote-f1
+  meta="$home/state/$id.meta"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+  FM_HOME="$home" "$BRIEF" "$id" fixture-project --scout >/dev/null 2>&1 || fail "scout brief should scaffold"
+  fill_brief_subsections "$home/data/$id/brief.md" "Ship the pipeline change." "Investigate first."
+
+  out=$(PATH="$(path_without_no_mistakes)" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a pipeline promotion without the CLI should exit non-zero"
+  assert_contains "$out" "no no-mistakes binary is on PATH" "promotion refusal did not name the missing CLI"
+  assert_grep 'kind=scout' "$meta" "refused pipeline promotion changed the task record"
+  assert_absent "$home/data/$id/ship-instructions.md" "refused pipeline promotion wrote ship instructions"
+
+  PATH="$stubbin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    "$PROMOTE" "$id" --mode no-mistakes --yolo off >/dev/null 2>&1 || fail "a pipeline promotion with the CLI should succeed"
+  payload="$home/data/$id/ship-instructions.md"
+  grep -qx 'Delivery pipeline: no-mistakes' "$payload" || fail "promoted worker did not receive the pipeline contract"
+  assert_grep "$home/data/$id/nm-<run>-findings.txt" "$payload" "promoted worker did not receive the ask-user format"
+  assert_no_grep "Do NOT run /no-mistakes" "$payload" "promoted pipeline worker was told not to run the pipeline"
+
+  rm "$home/data/$id/brief.md"
+  PATH="$stubbin:$PATH" FM_HOME="$home" "$BRIEF" "$id" fixture-project --mode no-mistakes >/dev/null 2>&1 \
+    || fail "ordinary pipeline brief should scaffold"
+  brief_dod="$TMP_ROOT/pipeline-promote/brief-dod"
+  delivered_dod="$TMP_ROOT/pipeline-promote/delivered-dod"
+  awk '/^# Definition of done$/ { emit=1 } emit' "$home/data/$id/brief.md" > "$brief_dod"
+  awk '/^# Definition of done$/ { emit=1 } emit' "$payload" > "$delivered_dod"
+  cmp -s "$brief_dod" "$delivered_dod" \
+    || fail "pipeline promotion and pipeline brief delivered different Definitions of done"
+  pass "fm-promote: config/no-mistakes delivers the pipeline contract and refuses without the CLI"
 }
 
 # Spawn and promotion refuse leftover Task-subsection placeholders through the
 # public brief/spawn/promote path. Filling both subsections lets the spawn
 # delivery checks proceed (the fake tmux still fails later).
 test_spawn_and_promote_require_filled_task_subsections() {
-  local rec home proj fakebin out status id brief meta intent_body spec_body authorized
+  local rec home proj fakebin out status id brief meta intent_body spec_body mode
   rec=$(make_home subsections)
   IFS='|' read -r home proj fakebin <<EOF
 $rec
@@ -613,91 +851,29 @@ EOF
   assert_not_contains "$out" "still contains {TASK} or {FIRSTMATE_SPEC}" \
     "fenced example headings made a filled legacy Task look unfilled"
 
-  id=delivery-legacy-no-mistakes
-  mkdir -p "$home/data/$id"
-  cat > "$home/data/$id/brief.md" <<'EOF'
-# Task
-[captain] Fix the legacy dispatch boundary.
-Do not copy this Firstmate-authored constraint into intent.
-
-# Definition of done
-Delivery contract: mode=no-mistakes
-Pass the entire Task as --intent.
-EOF
-  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off)
-  assert_not_contains "$out" "has no provenance-marked captain words" \
-    "legacy no-mistakes spawn rejected explicitly marked captain words"
-  assert_present "$home/data/$id/launch-brief.md" \
-    "marked legacy spawn did not render a current launch contract"
-  assert_grep "supersedes every earlier brief instruction about constructing \`--intent\`" \
-    "$home/data/$id/launch-brief.md" \
-    "marked legacy spawn did not override its stale intent instruction"
-  assert_grep "plus any later words the captain actually supplied" \
-    "$home/data/$id/launch-brief.md" \
-    "marked legacy launch contract excluded later captain clarifications"
-  authorized=$(awk '$0 == "## Captain intent authorized for --intent" { emit=1; next } emit && /^$/ { exit } emit { print }' "$home/data/$id/launch-brief.md")
-  assert_contains "$authorized" "Fix the legacy dispatch boundary." \
-    "marked legacy launch contract omitted captain words"
-  assert_not_contains "$authorized" "Firstmate-authored constraint" \
-    "marked legacy launch contract included mixed Task specification"
-
-  id=delivery-migrated-stale-no-mistakes
-  mkdir -p "$home/data/$id"
-  cat > "$home/data/$id/brief.md" <<'EOF'
-# Task
-## Captain's intent
-Fix the migrated dispatch boundary.
-
-## Firstmate spec
-Preserve the existing compatibility path.
-
-# Definition of done
-Delivery contract: mode=no-mistakes
-Pass the entire Task and every Firstmate requirement as --intent.
-EOF
-  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off)
-  assert_present "$home/data/$id/launch-brief.md" \
-    "migrated subsection brief did not receive the current launch contract"
-  authorized=$(awk '$0 == "## Captain intent authorized for --intent" { emit=1; next } emit && /^$/ { exit } emit { print }' "$home/data/$id/launch-brief.md")
-  assert_contains "$authorized" "Fix the migrated dispatch boundary." \
-    "migrated launch contract omitted Captain's intent"
-  assert_not_contains "$authorized" "Preserve the existing compatibility path." \
-    "migrated launch contract included Firstmate spec in intent"
-  assert_grep "supersedes every earlier brief instruction about constructing \`--intent\`" \
-    "$home/data/$id/launch-brief.md" \
-    "migrated launch contract did not supersede its stale mixed-Task DoD"
-  assert_grep "plus any later words the captain actually supplied" \
-    "$home/data/$id/launch-brief.md" \
-    "migrated launch contract excluded later captain clarifications"
-  assert_grep "The Definition of done's rule that \`--intent\` must be self-sufficient still governs" \
-    "$home/data/$id/launch-brief.md" \
-    "migrated launch contract's overlay dropped the self-sufficiency pointer"
-
-  id=delivery-legacy-unmarked-no-mistakes
-  mkdir -p "$home/data/$id"
-  cat > "$home/data/$id/brief.md" <<'EOF'
+  # Both legacy spellings must launch on the direct-PR contract.
+  for mode in no-mistakes direct-PR; do
+    id="delivery-legacy-alias-$mode"
+    mkdir -p "$home/data/$id"
+    cat > "$home/data/$id/brief.md" <<'EOF'
 # Task
 Fix the legacy dispatch boundary.
-Do not copy this Firstmate-authored constraint into intent.
+Preserve this specification without pipeline intent provenance.
 
 # Definition of done
 Delivery contract: mode=no-mistakes
-
-# Notes
-## Captain's intent
-Unrelated notes must not become task intent.
-## Firstmate spec
-Unrelated notes must not satisfy task validation.
+Pass the entire Task as --intent and run /no-mistakes.
 EOF
-  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off)
-  status=$?
-  [ "$status" -ne 0 ] || fail "unmarked legacy no-mistakes spawn should require provenance"
-  assert_contains "$out" "has no provenance-marked captain words" \
-    "unmarked legacy no-mistakes spawn did not explain the missing intent provenance"
-  assert_contains "$out" "[captain]" "missing-provenance refusal did not name the replacement marker"
-  assert_not_contains "$out" "Captain:" "missing-provenance refusal still prescribes operator address"
-  assert_absent "$home/data/$id/launch-brief.md" "unmarked legacy no-mistakes spawn serialized unauthorized intent"
-  assert_absent "$home/state/$id.meta" "unmarked legacy no-mistakes spawn wrote task metadata"
+    out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode "$mode" --yolo off)
+    assert_not_contains "$out" 'delivery mismatch' 'equivalent legacy mode was refused'
+    assert_not_contains "$out" 'has no provenance-marked' 'legacy mode still required pipeline provenance'
+    assert_present "$home/data/$id/launch-brief.md" 'legacy mode did not receive an updated contract'
+    assert_grep 'Fix the legacy dispatch boundary.' "$home/data/$id/launch-brief.md" 'task text was lost'
+    assert_grep 'supersede earlier no-mistakes pipeline' "$home/data/$id/launch-brief.md" 'stale pipeline instructions were not superseded'
+    assert_grep 'Delivery contract: mode=direct-PR' "$home/data/$id/launch-brief.md" 'effective delivery was not direct-PR'
+    assert_grep 'Do NOT run /no-mistakes' "$home/data/$id/launch-brief.md" 'legacy launch re-enabled pipeline'
+    assert_no_grep 'Current delivery instructions' "$home/data/$id/brief.md" 'original brief was modified'
+  done
 
   id=delivery-unfilled-scout
   FM_HOME="$home" "$BRIEF" "$id" proj --scout >/dev/null 2>&1 \
@@ -885,6 +1061,10 @@ test_authorized_intent_keeps_words_without_composed_address() {
   IFS='|' read -r home proj fakebin <<EOF
 $rec
 EOF
+  # This fork serializes --intent only for a pipeline-opted home.
+  : > "$home/config/no-mistakes"
+  printf '#!/bin/sh\nexit 0\n' > "$fakebin/no-mistakes"
+  chmod +x "$fakebin/no-mistakes"
   id='intent-plain'
   words=$(printf '%s\n' 'Keep the original request intact.' '' "Preserve its provenance, punctuation, and \`literal code\`.")
   FM_HOME="$home" "$BRIEF" "$id" proj --mode no-mistakes >/dev/null 2>&1 \
@@ -929,7 +1109,7 @@ EOF
   printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$home/state/$id.meta"
   write_brief "$home" "$id"
   printf '# Task\n## Captain'"'"'s intent\nCaptain: investigate the refusal.\n\n## Firstmate spec\nReproduce it first.\n' > "$home/data/$id/brief.md"
-  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1)
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "promotion of addressed intent should be refused"
   assert_contains "$out" "operator-address line: Captain: investigate the refusal." \
@@ -1021,15 +1201,15 @@ test_project_mode_binds_the_forge_orthogonally() {
     out=$(FM_HOME="$home" "$PROJECT_MODE" --forge fp 2>/dev/null)
     [ "$out" = "$forge" ] || fail "$label: expected --forge '$forge', got '$out'"
   done <<'ROWS'
-no annotation at all|- fp - fixture (added 2026-01-01)|no-mistakes off|none
+no annotation at all|- fp - fixture (added 2026-01-01)|direct-PR off|none
 mode only|- fp [direct-PR] - fixture (added 2026-01-01)|direct-PR off|none
-forge beside a mode|- fp [no-mistakes forge=gerrit] - fixture (added 2026-01-01)|no-mistakes off|gerrit
-forge as the only token leaves the default mode|- fp [forge=gerrit] - fixture (added 2026-01-01)|no-mistakes off|gerrit
+forge beside a mode|- fp [no-mistakes forge=gerrit] - fixture (added 2026-01-01)|direct-PR off|gerrit
+forge as the only token leaves the default mode|- fp [forge=gerrit] - fixture (added 2026-01-01)|direct-PR off|gerrit
 forge before yolo on a direct-PR project|- fp [direct-PR forge=gerrit +yolo] - fixture (added 2026-01-01)|direct-PR off|gerrit
-forge under the conditional policy|- fp [no-mistakes-prod-only forge=gerrit] - fixture (added 2026-01-01)|no-mistakes off|gerrit
+forge under the conditional policy|- fp [no-mistakes-prod-only forge=gerrit] - fixture (added 2026-01-01)|direct-PR off|gerrit
 a project with no forge keeps yolo|- fp [direct-PR +yolo] - fixture (added 2026-01-01)|direct-PR on|none
 a keyed token that is not the forge is ignored|- fp [direct-PR owner=me] - fixture (added 2026-01-01)|direct-PR off|none
-an unregistered project|- other [direct-PR] - fixture (added 2026-01-01)|no-mistakes off|none
+an unregistered project|- other [direct-PR] - fixture (added 2026-01-01)|direct-PR off|none
 ROWS
 
   printf '%s\n' '- fp [no-mistakes-prod-only forge=gerrit] - fixture (added 2026-01-01)' > "$home/data/projects.md"
@@ -1090,7 +1270,7 @@ ROWS
     printf '%s\n' "$registry" > "$home/data/projects.md"
     out=$(FM_HOME="$home" "$PROJECT_MODE" fp 2>/dev/null) \
       || fail "$label: a token the parser never read became a refusal"
-    [ "$out" = "no-mistakes off" ] || fail "$label: expected the old tolerant 'no-mistakes off', got '$out'"
+    [ "$out" = "direct-PR off" ] || fail "$label: expected the old tolerant 'direct-PR off', got '$out'"
     out=$(FM_HOME="$home" "$PROJECT_MODE" --forge fp 2>/dev/null) \
       || fail "$label: --forge refused a token the parser never read"
     [ "$out" = none ] || fail "$label: an ignored token bound a forge ('$out')"
@@ -1127,10 +1307,10 @@ ROWS
     assert_contains "$err" "\"$token\"" "$label: the warning did not name the token"
     assert_contains "$err" 'forge=gerrit' "$label: the warning did not name the forge=gerrit spelling"
   done <<'ROWS'
-a dropped character in the key|- fp [no-mistakes forg=gerrit] - fixture (added 2026-01-01)|forg=gerrit|no-mistakes off
+a dropped character in the key|- fp [no-mistakes forg=gerrit] - fixture (added 2026-01-01)|forg=gerrit|direct-PR off
 a swapped pair in the key|- fp [direct-PR froge=gerrit +yolo] - fixture (added 2026-01-01)|froge=gerrit|direct-PR on
-a transposed key|- fp [no-mistakes frge=gerrit] - fixture (added 2026-01-01)|frge=gerrit|no-mistakes off
-a capitalized key|- fp [no-mistakes Forge=gerrit] - fixture (added 2026-01-01)|Forge=gerrit|no-mistakes off
+a transposed key|- fp [no-mistakes frge=gerrit] - fixture (added 2026-01-01)|frge=gerrit|direct-PR off
+a capitalized key|- fp [no-mistakes Forge=gerrit] - fixture (added 2026-01-01)|Forge=gerrit|direct-PR off
 ROWS
   pass "fm-project-mode: only a malformed forge binding refuses; every other token keeps its old tolerance"
 }
@@ -1146,7 +1326,7 @@ test_forge_gerrit_refuses_yolo() {
   mkdir -p "$home/data"
   printf '%s\n' '- fp [no-mistakes +yolo forge=gerrit] - fixture (added 2026-01-01)' > "$home/data/projects.md"
   out=$(FM_HOME="$home" "$PROJECT_MODE" fp 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] \
+  [ "$out" = "direct-PR off" ] \
     || fail "a registered +yolo survived the gerrit forge (got '$out')"
   err=$(FM_HOME="$home" "$PROJECT_MODE" fp 2>&1 >/dev/null)
   assert_contains "$err" "refused" "the dropped yolo posture was a silent no-op"
@@ -1187,7 +1367,9 @@ EOF
 test_forge_gerrit_changes_what_no_mistakes_means() {
   local home brief plain
   home="$TMP_ROOT/forge-dod/home"
-  mkdir -p "$home/data" "$home/state"
+  mkdir -p "$home/data" "$home/state" "$home/config"
+  # This fork renders the pipeline contract only for an opted-in home.
+  : > "$home/config/no-mistakes"
   FM_HOME="$home" "$BRIEF" forge-dod-g1 review-server-project --mode no-mistakes --forge gerrit >/dev/null \
     || fail "a gerrit no-mistakes brief should scaffold"
   brief="$home/data/forge-dod-g1/brief.md"
@@ -1462,8 +1644,13 @@ test_promotion_carries_the_forge_binding() {
   local home sendroot meta out payload id
   home="$TMP_ROOT/forge-promote/home"
   sendroot="$TMP_ROOT/forge-promote/sendroot"
-  mkdir -p "$home/state" "$home/data" "$home/projects/proj" "$sendroot/bin"
+  mkdir -p "$home/state" "$home/data" "$home/projects/proj" "$sendroot/bin" "$home/config" "$TMP_ROOT/forge-promote/stubbin"
   printf '%s\n' '- proj [no-mistakes forge=gerrit] - fixture (added 2026-01-01)' > "$home/data/projects.md"
+  # This fork promotes onto the pipeline contract only in an opted-in home with
+  # a no-mistakes binary on PATH.
+  : > "$home/config/no-mistakes"
+  printf '#!/bin/sh\nexit 0\n' > "$TMP_ROOT/forge-promote/stubbin/no-mistakes"
+  chmod +x "$TMP_ROOT/forge-promote/stubbin/no-mistakes"
   cat > "$sendroot/bin/fm-send.sh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s' "$2" > "$FM_TEST_CAPTURE"
@@ -1478,7 +1665,7 @@ STUB
   fill_brief_subsections "$home/data/$id/brief.md" \
     "Fix what the investigation found on the Gerrit project." "Carry over only the fix."
 
-  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1) \
+  out=$(PATH="$TMP_ROOT/forge-promote/stubbin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1) \
     || fail "promotion should take the registered forge with no flag to remember"
   payload="$TMP_ROOT/forge-promote/payload"
   ( cd "$sendroot" \
@@ -1576,7 +1763,7 @@ test_project_mode_resolves_branch_prefix() {
 
 EOF
   out=$(FM_HOME="$home" "$PROJECT_MODE" plainproj 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] || fail "an unrelated branch=<prefix> query must not change the default mode/yolo output (got '$out')"
+  [ "$out" = "direct-PR off" ] || fail "an unrelated branch=<prefix> query must not change the default mode/yolo output (got '$out')"
 
   out=$(FM_HOME="$home" "$PROJECT_MODE" --branch-prefix plainproj 2>/dev/null)
   [ "$out" = "fm/" ] || fail "a project with no branch= annotation must resolve to the legacy fm/ prefix (got '$out')"
@@ -1598,7 +1785,7 @@ EOF
   [ "$out" = "" ] || fail "an empty branch= override must resolve to an empty prefix, not fm/ (got '$out')"
 
   out=$(FM_HOME="$home" "$PROJECT_MODE" typomodeproj 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] || fail "a typo'd mode's registered branch leaked into the mode/yolo output (got '$out')"
+  [ "$out" = "direct-PR off" ] || fail "a typo'd mode's registered branch leaked into the mode/yolo output (got '$out')"
   err=$(FM_HOME="$home" "$PROJECT_MODE" typomodeproj 2>&1 >/dev/null)
   assert_contains "$err" "unknown mode" "a typo'd mode with a branch override stopped warning"
   out=$(FM_HOME="$home" "$PROJECT_MODE" --branch-prefix typomodeproj 2>/dev/null)
@@ -1625,6 +1812,11 @@ test_promotion_branch_command_is_shell_safe
 test_local_merge_uses_the_recorded_ship_branch
 test_project_mode_matches_whole_multiword_names
 test_project_mode_maps_the_conditional_policy
+test_no_mistakes_pipeline_opt_in_spawn
+test_no_mistakes_token_launches_on_its_effective_mode
+test_no_mistakes_pipeline_opt_in_promote
+test_no_mistakes_pipeline_contract_is_harness_neutral
+test_pipeline_marker_is_read_only_from_the_definition_of_done
 test_project_mode_binds_the_forge_orthogonally
 test_project_mode_refuses_only_a_malformed_forge_binding
 test_forge_gerrit_refuses_yolo

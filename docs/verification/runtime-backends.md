@@ -5,6 +5,7 @@ Audience: maintainer verification.
 This record contains reusable version-scoped evidence for active runtime guarantees.
 The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
+This fork's own evidence - its reviewed launches, remote-less dispatch, task leases, tmux shell submission, Claude Code operational input, composer refresh, stranded-doorbell recovery, merge-grant gate, and its agy and Devin adapters - lives in [runtime-backends-fork.md](runtime-backends-fork.md).
 
 ## Harness detection precedence
 
@@ -591,7 +592,7 @@ Gemini, launched `GEMINI_CLI_TRUST_WORKSPACE=true gemini -y` with no `GEMINI_API
 
 The real pane renders this inside a bordered box, omitted here for readability; that border is exactly what proves the point below.
 
-That capture demonstrated why each signature function matches the FULL captured tail rather than the Grok/Rovo/AGY busy-footer convention of the last 12 non-blank lines: a bordered dialog box renders many short lines of pure border and padding (`│  ...  │`) that are NOT whitespace-only, so the 12-line reduction pushed this exact heading text out of the window and silently defeated the match on the first attempt.
+That capture demonstrated why each signature function matches the FULL captured tail rather than the Grok/Rovo busy-footer convention of the last 12 non-blank lines: a bordered dialog box renders many short lines of pure border and padding (`│  ...  │`) that are NOT whitespace-only, so the 12-line reduction pushed this exact heading text out of the window and silently defeated the match on the first attempt.
 None of these three runs ever answered its dialog (Escape only, never Enter), so no credential store was written to and no model tokens were spent.
 
 ## Worker account pin sign-in check

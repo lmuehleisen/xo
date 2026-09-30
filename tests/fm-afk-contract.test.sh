@@ -5,7 +5,8 @@
 # return only), the one-step same-turn entry with no wait for a go, the
 # retired two-step entry refusing by name, the refresh and replace rules,
 # the archive at return, the version 2 record with version 1 still readable,
-# the retired clause and merge-grant apparatus refusing by name, and the read
+# the retired clause apparatus refusing by name, this fork's merge-grant list
+# (given only with --grant, never read from the words), and the read
 # subcommands every consumer uses instead of parsing the file.
 set -u
 
@@ -82,7 +83,7 @@ test_readback_renders_words_verbatim_with_the_record_scalars() {
   assert_not_contains "$out" 'Say go' 'the read-back must never ask for a go'
   assert_not_contains "$out" 'not yet confirmed' 'the read-back must never describe a pending entry'
   assert_not_contains "$out" 'clause' 'the read-back must carry no clause apparatus'
-  assert_not_contains "$out" 'task ids' 'the read-back must carry no merge-grant list'
+  assert_contains "$out" 'merge when green (task ids, besides yolo tasks): (none)' 'the read-back must show that no merge was granted'
   # The verbatim words survive the record byte for byte, trailing newline included.
   [ "$(contract "$home" words; printf x)" = "$(cat "$words"; printf x)" ] || fail "the record did not keep the words verbatim"
   pass "the read-back renders the words verbatim beside the expected return, spend cap, and reach line"
@@ -143,7 +144,8 @@ test_enter_writes_a_v2_record_in_one_step_and_announces_hold_for_return() {
   [ "$(contract "$home" field confirmed_epoch)" = "$(contract "$home" field entered_epoch)" ] \
     || fail "a fresh entry stamped two different times"
   [ "$(contract "$home" words)" = 'merge it when green' ] || fail "words did not round-trip"
-  [ -z "$(contract "$home" field merge_grants)" ] || fail "a version 2 record carries a merge_grants field"
+  [ "$(contract "$home" field merge_grants)" = - ] || fail "a version 2 record without grants must carry merge_grants: -"
+  [ -z "$(contract "$home" grants)" ] || fail "a record entered without --grant granted a merge"
   [ -z "$(contract "$home" field clauses)" ] || fail "a version 2 record carries a clauses section"
   contract "$home" validate || fail "the record does not validate"
   out=$(contract "$home" readback) || fail "readback of the record failed"
@@ -204,8 +206,10 @@ test_same_turn_entry_pre_authorizes_nothing_on_the_never_set() {
   out=$(contract "$home" enter --words "$words" 2>&1) || fail "never-set entry failed: $out"
   [ "$(contract "$home" words)" = "$words" ] || fail "the never-set words were not recorded verbatim"
   keys=$(sed -n 's/^\([a-z_]*\):.*/\1/p' "$home/state/.afk-contract" | tr '\n' ' ')
-  [ "$keys" = 'version entered entered_epoch expected_return reach_channels reach_announced spend_max_concurrent_workers confirmed confirmed_epoch words ' ] \
+  # merge_grants is this fork's one authority list, and words never fill it.
+  [ "$keys" = 'version entered entered_epoch expected_return reach_channels reach_announced spend_max_concurrent_workers confirmed confirmed_epoch merge_grants words ' ] \
     || fail "the record carries fields beyond its fixed schema: $keys"
+  [ -z "$(contract "$home" grants)" ] || fail "words claiming a red merge produced a merge grant"
   assert_contains "$out" 'Destructive, irreversible, and security-sensitive actions are never pre-authorizable, whatever the words say.' \
     'the same-turn announcement must restate the never-set'
   pass "a same-turn entry records never-set words verbatim, adds no authority field, and restates the never-set"
@@ -425,13 +429,13 @@ test_inputs_are_validated() {
   pass "malformed inputs and foreign record versions are refused rather than guessed"
 }
 
-# The clause fields and the merge-grant list are retired with the words model.
-# A stale caller that still passes them is told so by name, and no record is
-# written from a refused command line.
-test_retired_clause_and_grant_inputs_are_usage_errors_by_name() {
+# The clause fields are retired with the words model. A stale caller that still
+# passes them is told so by name, and no record is written from a refused
+# command line.
+test_retired_clause_inputs_are_usage_errors_by_name() {
   local home flag out rc
   home=$(make_home retired-inputs)
-  for flag in --action --object --when --stop --grant; do
+  for flag in --action --object --when --stop; do
     set +e
     out=$(contract "$home" enter --words 'merge it when green' "$flag" merge 2>&1)
     rc=$?
@@ -447,7 +451,7 @@ test_retired_clause_and_grant_inputs_are_usage_errors_by_name() {
   set -e
   [ "$rc" -eq 2 ] || fail "--grant= should be a usage error (rc=$rc): $out"
   contract "$home" enter --words 'merge it when green' >/dev/null 2>&1 || fail "a words-only entry failed"
-  for cmd in clauses flags refused grants; do
+  for cmd in clauses flags refused; do
     set +e
     out=$(contract "$home" "$cmd" 2>&1)
     rc=$?
@@ -455,12 +459,50 @@ test_retired_clause_and_grant_inputs_are_usage_errors_by_name() {
     [ "$rc" -eq 2 ] || fail "$cmd should be a usage error (rc=$rc): $out"
     assert_contains "$out" "'$cmd' was retired" "$cmd refusal did not name the retirement"
   done
-  pass "retired clause fields, --grant, and the clause and grant subcommands are refused by name"
+  pass "retired clause fields and the clause subcommands are refused by name"
+}
+
+# This fork keeps the merge rule the words model retired upstream: while the
+# record exists a merge proceeds only for a yolo=on task or one the captain
+# granted at entry. The grant list comes only from repeatable --grant, never
+# from the words; a refresh does not apply it and new words replace it.
+test_merge_grants_come_only_from_the_grant_flag() {
+  local home out rc bad
+  home=$(make_home merge-grants)
+  out=$(contract "$home" enter --words 'merge task-z when green' --grant task-a --grant task-b 2>&1) \
+    || fail "an entry with grants failed: $out"
+  [ "$(contract "$home" grants)" = "$(printf 'task-a\ntask-b')" ] \
+    || fail "grants did not round-trip in order: $(contract "$home" grants)"
+  assert_contains "$out" 'merge when green (task ids, besides yolo tasks): task-a, task-b' 'the read-back did not list the grants'
+  assert_contains "$out" 'Merges proceed only for tasks whose yolo posture is on or that you granted at entry' 'the announcement did not state the merge rule'
+  ! contract "$home" grants | grep -qx task-z || fail "a task named only in the words was granted"
+  out=$(contract "$home" enter --grant task-c 2>&1) || fail "a refresh with a grant failed: $out"
+  assert_contains "$out" 'merge grants given with this refresh were not applied' 'the refresh did not say its grant was ignored'
+  [ "$(contract "$home" grants)" = "$(printf 'task-a\ntask-b')" ] || fail "a refresh changed the grants"
+  contract "$home" enter --words 'hold everything for my return' >/dev/null 2>&1 || fail "a replacement failed"
+  [ -z "$(contract "$home" grants)" ] || fail "new words without --grant kept the earlier grants"
+  for bad in '.hidden' 'a b' 'x/y'; do
+    set +e
+    out=$(contract "$home" enter --words 'w' --grant "$bad" 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 2 ] || fail "--grant '$bad' should be a usage error (rc=$rc): $out"
+  done
+  set +e
+  out=$(contract "$home" enter --words 'w' --grant task-a --grant task-a 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "a repeated --grant should be a usage error (rc=$rc): $out"
+  assert_contains "$out" 'more than once' 'the repeated grant refusal did not say why'
+  printf 'merge_grants: -\n' >> "$home/state/.afk-contract"
+  ! contract "$home" validate 2>/dev/null || fail "a record with two merge_grants fields validated"
+  pass "merge grants come only from --grant, are listed in the read-back, survive a refresh, and are replaced with the words"
 }
 
 # A live away window may still hold a version 1 record when this version lands.
 # It validates, every read subcommand reads it, the read-back shows the words
-# (and nothing of the ignored clause and grant sections), and it archives.
+# and its merge grants (this fork still honours them) but nothing of the
+# ignored clause and refused sections, and it archives.
 test_version_1_record_still_validates_reads_and_archives() {
   local home out path
   home=$(make_home v1-live)
@@ -477,7 +519,8 @@ test_version_1_record_still_validates_reads_and_archives() {
   assert_contains "$out" 'expected return: 2026-09-20T09:00:00Z' 'v1 read-back expected return'
   assert_contains "$out" '    merge the windows fix when green' 'v1 read-back words'
   assert_not_contains "$out" 'task x1 PR' 'the ignored v1 clauses leaked into the read-back'
-  assert_not_contains "$out" 'task-x1' 'the ignored v1 merge grants leaked into the read-back'
+  assert_contains "$out" 'merge when green (task ids, besides yolo tasks): task-x1' 'the v1 merge grants did not reach the read-back'
+  [ "$(contract "$home" grants)" = task-x1 ] || fail "the v1 merge grants were not read"
   assert_not_contains "$out" 'refused' 'the ignored v1 refused section leaked into the read-back'
   out=$(contract "$home" enter 2>&1) || fail "refresh of a version 1 record failed: $out"
   assert_contains "$out" 'already recorded at 2026-09-20T01:00:00Z' 'refresh did not keep the v1 record'
@@ -485,7 +528,7 @@ test_version_1_record_still_validates_reads_and_archives() {
   path=$(contract "$home" archive) || fail "archive of a version 1 record failed"
   [ "$path" = "$home/state/afk-contracts/1789600000.afk-contract" ] || fail "v1 archive path is wrong: $path"
   [ "$(contract "$home" words --path "$path")" = 'merge the windows fix when green' ] || fail "the archived v1 record lost its words"
-  pass "a version 1 record validates, reads its words and scalars with the clause and grant sections ignored, refreshes untouched, and archives"
+  pass "a version 1 record validates, reads its words, scalars, and merge grants with the clause sections ignored, refreshes untouched, and archives"
 }
 
 test_version_1_record_is_replaced_by_a_version_2_record() {
@@ -636,7 +679,8 @@ test_validation_rejects_damaged_words_blocks
 test_a_damaged_words_line_never_truncates_the_mandate
 test_archive_moves_the_record_aside_and_is_idempotent
 test_inputs_are_validated
-test_retired_clause_and_grant_inputs_are_usage_errors_by_name
+test_retired_clause_inputs_are_usage_errors_by_name
+test_merge_grants_come_only_from_the_grant_flag
 test_version_1_record_still_validates_reads_and_archives
 test_version_1_record_is_replaced_by_a_version_2_record
 test_record_changes_refuse_while_a_reader_holds_the_lock

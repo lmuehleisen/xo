@@ -978,6 +978,8 @@ for bad in \
   '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":[{"harness":"claude","model":"opus"},{"harness":"claude","model":"opus"}]}|default must not contain duplicate harness, model, and effort profiles' \
   '{"rules":[{"when":"x","use":{"harness":"spaceship"}}]}|each use profile must name a verified harness' \
   '{"rules":[{"when":"x","use":{"harness":"grok","effort":"max"}}]}|each use profile effort must be supported by its harness and model' \
+  '{"rules":[{"when":"x","use":{"harness":"devin","provider":"devin","effort":"high"}}]}|each use profile effort must be supported by its harness and model' \
+  '{"rules":[{"when":"x","use":{"harness":"gemini","provider":"google","effort":"high"}}]}|each use profile effort must be supported by its harness and model' \
   '{"rules":[{"when":"x","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5"}}]}|use profiles whose harness lacks one authoritative provider family require provider: opencode' \
   '{"rules":[{"when":"x","use":{"harness":"rovo"}}]}|use profiles whose harness lacks one authoritative provider family require provider: rovo' \
   '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"pi","model":"anthropic/claude-sonnet-5"}}|default profiles whose harness lacks one authoritative provider family require provider: pi'; do
@@ -987,6 +989,12 @@ for bad in \
   assert_contains "$err" "malformed rules file: $RULES - ${bad#*|}" "malformed rules are named: ${bad#*|}"
 done
 assert_absent "$LOG/argv" "configuration errors never reach the network"
+# agy accepts the same effort levels here as bootstrap's schema check does.
+for effort in xhigh max; do
+  printf '{"rules":[{"when":"x","use":{"harness":"agy","effort":"%s"}}]}\n' "$effort" > "$RULES"
+  TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+  assert_not_contains "$err" 'malformed rules file' "agy effort $effort is well formed"
+done
 cp "$BASE_RULES" "$RULES"
 for removed in --json --rules --quota; do
   TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" "$removed"

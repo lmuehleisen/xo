@@ -94,7 +94,7 @@ request_reconciles() {  # <home> <source-id> <task-id>...
   run_captain "$home" bind "$source_id" >/dev/null || return 1
   for id in "$@"; do printf '%s\n' "$id"; done \
     | run_captain "$home" reconcile-requests --source-id "$source_id" \
-        --source "captured board result" >/dev/null
+        --source "captured review result" >/dev/null
 }
 
 configure_merged_github() {  # <home>
@@ -1852,16 +1852,16 @@ test_reconcile_closes_with_evidence_or_keeps_the_call_open() {
   out=$(run_captain "$home" reconcile close sample-moot-call --evidence-file "$home/evidence.txt" 2>&1)
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || fail "reconcile closed a call without a pending board request"
-  assert_contains "$out" "no pending board-created reconcile request" \
-    "the ungated close refusal did not name the missing board request: $out"
+  [ "$rc" -ne 0 ] || fail "reconcile closed a call without a pending captured-source request"
+  assert_contains "$out" "no pending captured-source reconcile request" \
+    "the ungated close refusal did not name the missing captured-source request: $out"
   set +e
   out=$(run_captain "$home" reconcile note sample-active-call --note-file "$home/note.txt" 2>&1)
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || fail "reconcile annotated a call without a pending board request"
-  assert_contains "$out" "no pending board-created reconcile request" \
-    "the ungated note refusal did not name the missing board request: $out"
+  [ "$rc" -ne 0 ] || fail "reconcile annotated a call without a pending captured-source request"
+  assert_contains "$out" "no pending captured-source reconcile request" \
+    "the ungated note refusal did not name the missing captured-source request: $out"
 
   request_reconciles "$home" board-src sample-moot-call sample-active-call sample-mode-call \
     || fail "could not file the reconcile requests"
@@ -1920,12 +1920,12 @@ test_reconcile_closes_with_evidence_or_keeps_the_call_open() {
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "a retired reconcile request appended a duplicate note"
-  assert_contains "$out" "no pending board-created reconcile request" \
+  assert_contains "$out" "no pending captured-source reconcile request" \
     "the duplicate-note refusal did not name the retired request: $out"
 
   printf 'sample-active-call\n' \
     | FM_CAPTAIN_HOLD_NOW=2026-09-07T06:00:00Z run_captain "$home" reconcile-requests \
-        --source-id board-src --source "captured board result sequence 2" >/dev/null \
+        --source-id board-src --source "captured review result sequence 2" >/dev/null \
     || fail "could not create the second reconcile request"
   FM_CAPTAIN_HOLD_NOW=2026-09-07T06:01:00Z run_captain "$home" reconcile note sample-active-call \
     --note-file "$home/note.txt" >/dev/null \

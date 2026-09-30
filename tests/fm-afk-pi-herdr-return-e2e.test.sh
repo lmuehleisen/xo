@@ -53,7 +53,7 @@ cleanup() {
   if ! "$LAB_HELPER" teardown "$SESSION"; then
     rc=1
   fi
-  rm -rf "$TMP_ROOT"
+  fm_test_rm_tmproot "${TMP_ROOT:-}"
   exit "$rc"
 }
 trap cleanup EXIT

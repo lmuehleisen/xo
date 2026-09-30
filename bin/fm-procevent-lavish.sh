@@ -99,6 +99,9 @@
 #
 # `read` is the presentation command summarized above; keyed intake remains
 # the separate `answers` contract described here.
+# The versioned `fm-bearings-answer.v1` parser remains only as compatibility for
+# separately supplied captured review artifacts. The static `/bearings lavish`
+# page emits no answers, binds no source, and never enters this adapter.
 #
 # It wraps ONLY the currently published interface, verified against 0.1.45:
 #   Usage: lavish-axi poll <html-file> [--agent-reply "..."]

@@ -12,6 +12,8 @@
 # `herdr server stop`. Every lifecycle op goes through bin/fm-herdr-lab.sh, which
 # refuses the default session and verifies the fleet-state tripwire.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -34,7 +36,7 @@ SESSION="fm-lab-eventwait-smoke-$$"
 export HERDR_SESSION="$SESSION"
 SCRATCH=
 cleanup_all() {
-  [ -n "$SCRATCH" ] && rm -rf "$SCRATCH"
+  fm_test_rm_tmproot "${SCRATCH:-}"
   herdr_safe_stop_and_delete "$SESSION"
 }
 trap cleanup_all EXIT

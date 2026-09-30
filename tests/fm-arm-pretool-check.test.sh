@@ -409,6 +409,97 @@ test_failopen_missing_node() {
   pass "fail-open: missing classifier runtime"
 }
 
+# --- publish policy fails closed ------------------------------------------------
+#
+# A command the publish policy must see is denied when that policy cannot run,
+# while the watcher policy keeps failing open.
+
+PUBLISH_CMD='gh pr create --repo acme/widgets --title t --body b'
+
+assert_publish_unavailable() { # <label> <rc> <stderr>
+  [ "$2" -eq 2 ] || fail "$1: a gh publish command must be denied (exit 2) when the publish policy cannot run, got exit $2"
+  printf '%s' "$3" | jq -e '.hookSpecificOutput.permissionDecision == "deny" and (.systemMessage | test("publish-engine-unavailable"))' >/dev/null 2>&1 \
+    || fail "$1: the deny must name publish-engine-unavailable: $3"
+}
+
+# publish_fakebin <dir> [<node body>]: a PATH holding only the transport's
+# tools, plus a node running <node body> when one is given.
+publish_fakebin() {
+  local fakebin="$1/fakebin" tool
+  mkdir -p "$fakebin"
+  for tool in bash cat dirname sed tr grep; do
+    ln -sf "$(command -v "$tool")" "$fakebin/$tool"
+  done
+  if [ -n "${2:-}" ]; then
+    printf '#!/bin/sh\n%s\n' "$2" >"$fakebin/node"
+    chmod +x "$fakebin/node"
+  fi
+  printf '%s\n' "$fakebin"
+}
+
+test_publish_failclosed_broken_node() {
+  local dir fakebin err rc label body
+  for label in missing exit-7 garbage; do
+    case "$label" in
+      missing) body='' ;;
+      exit-7) body='exit 7' ;;
+      garbage) body='echo maybe' ;;
+    esac
+    dir=$(fm_test_tmproot fm-arm-pretool-publish-node)
+    fakebin=$(publish_fakebin "$dir" "$body")
+    err=$(PATH="$fakebin" "$CHECK" --publish-only --claude --command "$PUBLISH_CMD" 2>&1 >/dev/null)
+    rc=$?
+    assert_publish_unavailable "node $label" "$rc" "$err"
+    PATH="$fakebin" "$CHECK" --claude --command 'ls -la' >/dev/null 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] || fail "node $label: a command with no gh or git publish word must still pass, got exit $rc"
+    PATH="$fakebin" "$CHECK" --claude --command 'bin/fm-watch-arm.sh &' >/dev/null 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] || fail "node $label: the watcher policy must keep failing open, got exit $rc"
+  done
+  pass "publish fail-closed: a missing, failing, or garbled policy runtime denies a gh publish command"
+}
+
+test_publish_failclosed_cursor_rendering() {
+  local dir fakebin out rc
+  dir=$(fm_test_tmproot fm-arm-pretool-publish-cursor)
+  fakebin=$(publish_fakebin "$dir" 'exit 7')
+  out=$(PATH="$fakebin" "$CHECK" --cursor --command "$PUBLISH_CMD" 2>/dev/null)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "--cursor renders a deny as an object with exit 0, got exit $rc"
+  printf '%s' "$out" | jq -e '.permission == "deny" and (.user_message | test("publish-engine-unavailable"))' >/dev/null 2>&1 \
+    || fail "--cursor must render the publish-engine-unavailable deny object: $out"
+  pass "publish fail-closed: Cursor receives its own deny object"
+}
+
+test_publish_failclosed_missing_policy_file() {
+  local dir err rc
+  dir=$(fm_test_tmproot fm-arm-pretool-publish-file)
+  mkdir -p "$dir/bin"
+  cp "$CHECK" "$ROOT/bin/fm-hook-host-lib.sh" "$ROOT/bin/fm-arm-command-policy.mjs" "$dir/bin/"
+  err=$("$dir/bin/fm-arm-pretool-check.sh" --publish-only --claude --command "$PUBLISH_CMD" 2>&1 >/dev/null)
+  rc=$?
+  assert_publish_unavailable "missing policy file" "$rc" "$err"
+  pass "publish fail-closed: a missing publish policy file denies a gh publish command"
+}
+
+test_publish_failclosed_unreadable_stdin() {
+  local dir fakebin err rc payload
+  payload=$(jq -cn --arg command "$PUBLISH_CMD" '{tool_name:"Bash",tool_input:{command:$command}}')
+  dir=$(fm_test_tmproot fm-arm-pretool-publish-jq)
+  fakebin=$(publish_fakebin "$dir")
+  err=$(printf '%s' "$payload" | PATH="$fakebin" "$CHECK" --claude 2>&1 >/dev/null)
+  rc=$?
+  assert_publish_unavailable "missing jq" "$rc" "$err"
+  err=$(printf 'not json: %s' "$PUBLISH_CMD" | "$CHECK" --claude 2>&1 >/dev/null)
+  rc=$?
+  assert_publish_unavailable "unparseable payload" "$rc" "$err"
+  printf '%s' '{"tool_input":{"command":"ls -la"}}' | PATH="$fakebin" "$CHECK" --claude >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "missing jq: a payload with no gh or git publish word must still pass, got exit $rc"
+  pass "publish fail-closed: stdin the transport cannot read is checked against the publish prefilter"
+}
+
 # --- --claude output shaping ---------------------------------------------------
 
 test_claude_mode_stdout_empty_on_deny() {
@@ -477,6 +568,10 @@ test_failopen_empty_stdin
 test_failopen_garbage_stdin
 test_failopen_missing_jq
 test_failopen_missing_node
+test_publish_failclosed_broken_node
+test_publish_failclosed_cursor_rendering
+test_publish_failclosed_missing_policy_file
+test_publish_failclosed_unreadable_stdin
 test_claude_mode_stdout_empty_on_deny
 test_default_mode_stdout_has_grok_json_on_deny
 test_allow_is_silent_both_modes

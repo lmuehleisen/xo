@@ -129,9 +129,11 @@ const LEGACY_CALM_OPERATIONAL_PREFIX = "\u2063Supervisor escalate (";
 
 // Single owner of "may Calm presentation hide this exact input?", shared by the
 // transcript-row and queued-row adapters so the two can never disagree about a message.
-// Text without the U+2063 marker answers here without spawning the classifier.
+// Text that neither carries the U+2063 marker nor begins with the mark-less current
+// header (bin/fm-operational-input.sh accepts both) answers here without spawning the
+// classifier.
 export function isFirstmateOperationalPresentationText(text: string): boolean {
-  if (!text.includes("\u2063")) return false;
+  if (!text.includes("\u2063") && !text.startsWith("FIRSTMATE_OP: ")) return false;
   return (
     classifyFirstmateCurrentOperationalText(text) !== undefined ||
     text.startsWith(LEGACY_CALM_OPERATIONAL_PREFIX)

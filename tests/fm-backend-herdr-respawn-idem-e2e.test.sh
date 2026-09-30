@@ -33,6 +33,8 @@
 # test's own isolated $SESSION explicitly via --session; the live `default`
 # session is never touched.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -55,7 +57,7 @@ export HERDR_SESSION="$SESSION"
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-respawn-idem.XXXXXX")
 cleanup_all() {
   herdr_safe_stop_and_delete "$SESSION"
-  rm -rf "$SCRATCH"
+  fm_test_rm_tmproot "${SCRATCH:-}"
 }
 trap cleanup_all EXIT
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"

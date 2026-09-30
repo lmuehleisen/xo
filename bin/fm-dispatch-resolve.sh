@@ -143,6 +143,7 @@ VERIFIED_HARNESSES=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(le
 
 # The fields this tool consumes must be well formed; bootstrap owns the wider
 # schema diagnostic, but an intake never selects around a malformed file.
+# effort_ok must accept exactly what bootstrap's crew_dispatch_validate accepts.
 rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" '
   def verified($h): $verified_harnesses | index($h);
   def provider_id($p): ($p | type) == "string" and ($p | test($provider_re));
@@ -152,10 +153,11 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
     elif $e == "ultra" then (($h == "pi" or $h == "pi-signed") and (($m | type) == "string") and ($m | startswith("codex-native/")) and ($m | length) > 13)
     elif $h == "claude" then (["low","medium","high","xhigh","max"] | index($e)) != null
     elif $h == "codex" then ((["low","medium","high","xhigh"] | index($e)) != null or ($e == "max" and $m == "gpt-5.6-luna"))
-    elif $h == "grok" or $h == "agy" then (["low","medium","high"] | index($e)) != null
+    elif $h == "grok" then (["low","medium","high"] | index($e)) != null
+    elif $h == "agy" then (["low","medium","high","xhigh","max"] | index($e)) != null
     elif $h == "pi" or $h == "pi-signed" or $h == "omp" or $h == "muse" then (["low","medium","high","xhigh","max"] | index($e)) != null
     elif $h == "rovo" then (["low","medium","high","max"] | index($e)) != null
-    elif $h == "opencode" or $h == "kimi" or $h == "cursor" then false
+    elif $h == "opencode" or $h == "kimi" or $h == "cursor" or $h == "gemini" or $h == "devin" then false
     else true end;
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def floor_bad($f; $need_provider):

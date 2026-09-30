@@ -15,6 +15,8 @@
 # production because HERDR_SESSION-based targeting (env var OR inline prefix)
 # is not reliably honored once another herdr server is already running.
 set -u
+# shellcheck source=tests/tmproot-guard.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -36,7 +38,7 @@ SESSION="fm-lab-backend-smoke-$$"
 export HERDR_SESSION="$SESSION"
 SM_SCRATCH=
 cleanup_all() {
-  [ -n "$SM_SCRATCH" ] && rm -rf "$SM_SCRATCH"
+  fm_test_rm_tmproot "${SM_SCRATCH:-}"
   herdr_safe_stop_and_delete "$SESSION"
 }
 trap cleanup_all EXIT
