@@ -88,10 +88,17 @@ rc_validate_steps() {
 
 # ---------------------------------------------------------------- remote side
 
-rc_remote_ensure_tool() {  # <tool> <required-version> <installer> <version-command...>
+rc_remote_shellcheck_version() {
+  shellcheck --version 2>/dev/null | awk '/^version:/ {print $2; exit}'
+}
+
+rc_remote_actionlint_version() {
+  actionlint -version 2>/dev/null | awk 'NR == 1 {print; exit}'
+}
+
+rc_remote_ensure_tool() {  # <tool> <required-version> <installer>
   local tool=$1 required=$2 installer=$3 have
-  shift 3
-  have=$("$@" 2>/dev/null) || have=
+  have=$("rc_remote_${tool}_version") || have=
   [ "$have" = "$required" ] && return 0
   [ -x "$installer" ] || return 0
   printf '== fm-remote-check: installing %s %s into ~/.local/bin\n' "$tool" "$required"
@@ -106,12 +113,10 @@ rc_remote_tools() {
     flock 9
   fi
   if [ -x bin/fm-lint.sh ] && required=$(bin/fm-lint.sh --required-version 2>/dev/null); then
-    rc_remote_ensure_tool shellcheck "$required" bin/fm-install-shellcheck.sh \
-      sh -c 'shellcheck --version | awk '\''/^version:/ {print $2; exit}'\'''
+    rc_remote_ensure_tool shellcheck "$required" bin/fm-install-shellcheck.sh
   fi
   if [ -x bin/fm-lint-workflows.sh ] && required=$(bin/fm-lint-workflows.sh --required-version 2>/dev/null); then
-    rc_remote_ensure_tool actionlint "$required" bin/fm-install-actionlint.sh \
-      sh -c 'actionlint -version | awk '\''NR==1 {print; exit}'\'''
+    rc_remote_ensure_tool actionlint "$required" bin/fm-install-actionlint.sh
   fi
   if command -v flock >/dev/null 2>&1; then
     exec 9>&-

@@ -135,7 +135,7 @@ SH
     "$repo/bin/fm-remote-check.sh" lint >/dev/null 2>&1)
   mkdir -p "$TMP_ROOT/stream"
   tar -xf "$TMP_ROOT/stream.tar" -C "$TMP_ROOT/stream" || fail "the stream is not a tar archive"
-  assert_equals "argv meta runner.sh src.bundle" "$(cd "$TMP_ROOT/stream" && ls | tr '\n' ' ' | sed 's/ $//')" \
+  assert_equals "argv meta runner.sh src.bundle" "$(find "$TMP_ROOT/stream" -mindepth 1 -exec basename {} \; | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')" \
     "the stream holds only the runner, its arguments, the commit id and the bundle"
   clone="$TMP_ROOT/stream-clone"
   git init -q "$clone"
