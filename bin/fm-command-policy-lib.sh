@@ -1500,7 +1500,7 @@ preallow_refuse() {  # <what> <fix>
 # every long option those could abbreviate counts. A plain branch switch, or
 # -b <name> [<start>], cannot.
 checkout_discards() {  # <first-arg-index> <args>...
-  local base=$1 i=0 w create=0 words=0 lone='' lone_literal=1
+  local base=$1 i=0 w create=0 nwords=0 lone='' lone_literal=1
   shift
   for w in "$@"; do
     if [ "$create" = 1 ]; then create=2; i=$((i + 1)); continue; fi
@@ -1511,18 +1511,18 @@ checkout_discards() {  # <first-arg-index> <args>...
       --*|-) ;;
       -*) case "$w" in *f*|*p*) return 0 ;; esac ;;
       *)
-        words=$((words + 1)) lone=$w
+        nwords=$((nwords + 1)) lone=$w
         [ "${EV[base + i]-1}" = 0 ] || lone_literal=0
         ;;
     esac
     i=$((i + 1))
   done
   if [ "$create" = 2 ]; then
-    [ "$words" -le 1 ] || return 0
+    [ "$nwords" -le 1 ] || return 0
     return 1
   fi
-  [ "$words" -le 1 ] || return 0
-  [ "$words" = 1 ] || return 1
+  [ "$nwords" -le 1 ] || return 0
+  [ "$nwords" = 1 ] || return 1
   [ "$lone_literal" = 1 ] || return 0
   case "$lone" in .|./*|*/.|..|../*) return 0 ;; esac
   case "$lone" in
@@ -2155,8 +2155,12 @@ analyze_git() {
       # Only -b <name> [<start>] is read-and-build; a value that looks like an
       # option (-f, --, --force) could discard work, so it is not.
       case "${args[0]-}" in
-        -b) [ "${#args[@]}" -ge 2 ] && [ "${#args[@]}" -le 3 ] && [ "${args[1]#-}" = "${args[1]}" ] \
-              && { [ "${#args[@]}" -lt 3 ] || [ "${args[2]#-}" = "${args[2]}" ]; } || no_approve "git checkout form" ;;
+        -b)
+          if ! { [ "${#args[@]}" -ge 2 ] && [ "${#args[@]}" -le 3 ] && [ "${args[1]#-}" = "${args[1]}" ] \
+            && { [ "${#args[@]}" -lt 3 ] || [ "${args[2]#-}" = "${args[2]}" ]; }; }; then
+            no_approve "git checkout form"
+          fi
+          ;;
         *) no_approve "git checkout may discard changes" ;;
       esac
       checkout_discards "$first" ${args[@]+"${args[@]}"} \
@@ -2165,8 +2169,12 @@ analyze_git() {
       ;;
     switch)
       case "${args[0]-}" in
-        -c|--create) [ "${#args[@]}" -ge 2 ] && [ "${#args[@]}" -le 3 ] && [ "${args[1]#-}" = "${args[1]}" ] \
-              && { [ "${#args[@]}" -lt 3 ] || [ "${args[2]#-}" = "${args[2]}" ]; } || no_approve "git switch form" ;;
+        -c|--create)
+          if ! { [ "${#args[@]}" -ge 2 ] && [ "${#args[@]}" -le 3 ] && [ "${args[1]#-}" = "${args[1]}" ] \
+            && { [ "${#args[@]}" -lt 3 ] || [ "${args[2]#-}" = "${args[2]}" ]; }; }; then
+            no_approve "git switch form"
+          fi
+          ;;
         *) no_approve "git switch" ;;
       esac
       # --f abbreviates --force or --force-create, --di --discard-changes.
