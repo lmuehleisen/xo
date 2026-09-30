@@ -19,7 +19,9 @@ export SSH_LOG
 cat > "$FAKEBIN/ssh" <<'SH'
 #!/usr/bin/env bash
 # Stub ssh: skip options, log the host, then run the command under the fake
-# remote HOME. Host "unreachable" fails like a real connection error.
+# remote HOME as a child whose parent is this stub, the way sshd parents a
+# session, and record the stub's pid so a case can drop the "connection".
+# Host "unreachable" fails like a real connection error.
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) shift 2 ;;
@@ -31,7 +33,9 @@ host=$1
 shift
 printf '%s\n' "$host" >> "$SSH_LOG"
 [ "$host" != unreachable ] || exit 255
-HOME=$FAKE_REMOTE_HOME exec sh -c "$*"
+printf '%s\n' "$$" > "$FAKE_REMOTE_HOME/ssh.pid"
+HOME=$FAKE_REMOTE_HOME sh -c "$*" 0<&0 &
+wait "$!"
 SH
 chmod +x "$FAKEBIN/ssh"
 
@@ -49,6 +53,10 @@ printf 'LINT args=[%s] branch=%s base=%s\n' "$*" "$(git rev-parse --abbrev-ref H
   "$(git rev-parse --verify -q origin/main || echo none)"
 find . -path ./.git -prune -o -type f -print | sort | sed 's/^/LINT file /'
 printf 'LINT shellcheck=%s\n' "$(command -v shellcheck || echo none)"
+if [ -f lint-sleep ]; then
+  printf '%s\n' "$$" > "$HOME/lint.pid"
+  sleep 60
+fi
 exit "$(cat lint-exit)"
 SH
   cat > "$repo/bin/fm-test-run.sh" <<'SH'
@@ -207,6 +215,38 @@ test_remote_cleans_up_and_installs_tools_once() {
   pass "the remote installs pinned tools on first use and removes its run directory"
 }
 
+test_dropped_connection_stops_the_step() {
+  local repo home lint_pid i
+  repo=$(new_fixture dropped)
+  home="$repo.remote-home"
+  : > "$repo/lint-sleep"
+  git -C "$repo" add lint-sleep
+  git -C "$repo" commit -qm 'slow lint'
+  (cd "$TMP_ROOT" && PATH="$FAKEBIN:$PATH" FAKE_REMOTE_HOME="$home" FM_HOME="$repo" \
+    "$repo/bin/fm-remote-check.sh" lint >/dev/null 2>&1) &
+  for i in $(seq 1 100); do
+    [ -s "$home/lint.pid" ] && break
+    sleep 0.1
+  done
+  lint_pid=$(cat "$home/lint.pid" 2>/dev/null) || fail "the slow lint never started"
+  [ -n "$(find "$home/fm-remote-check" -mindepth 1 -maxdepth 1 -type d)" ] \
+    || fail "the run directory is missing while the step runs"
+  kill -KILL "$(cat "$home/ssh.pid")"
+  for i in $(seq 1 100); do
+    kill -0 "$lint_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  ! kill -0 "$lint_pid" 2>/dev/null || fail "the step outlived the dropped connection"
+  for i in $(seq 1 50); do
+    [ -n "$(find "$home/fm-remote-check" -mindepth 1 -maxdepth 1 -type d)" ] || break
+    sleep 0.1
+  done
+  assert_equals "" "$(find "$home/fm-remote-check" -mindepth 1 -maxdepth 1 -type d)" \
+    "the run directory is removed after a dropped connection"
+  wait
+  pass "a dropped connection stops the running step and removes the run directory"
+}
+
 test_usage_errors() {
   local repo
   repo=$(new_fixture usage)
@@ -225,4 +265,5 @@ test_only_committed_tree_is_sent
 test_refuses_when_unconfigured
 test_exit_status_propagates
 test_remote_cleans_up_and_installs_tools_once
+test_dropped_connection_stops_the_step
 test_usage_errors

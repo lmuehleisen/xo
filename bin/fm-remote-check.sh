@@ -37,8 +37,11 @@
 # prepends ~/.local/bin to PATH, and installs the tree's pinned ShellCheck
 # and actionlint there with bin/fm-install-shellcheck.sh and
 # bin/fm-install-actionlint.sh when the installed version differs from the
-# pin. The remote needs bash, git, tar, curl and xz; there is no daemon or
-# queue, so concurrent runs simply share the host.
+# pin. FM_LINT_JOBS, when set locally, is the only environment passed to the
+# remote. Each step runs in its own process group, and a dropped connection
+# (the runner losing its ssh parent) or a signal stops the step and removes
+# the directory. The remote needs bash, git, tar, curl, xz and ps; there is no
+# daemon or queue, so concurrent runs simply share the host.
 set -u
 
 REMOTE_BASE_NAME=fm-remote-check
@@ -123,8 +126,32 @@ rc_remote_tools() {
   fi
 }
 
+# Stops the running step's process group, then exits with <code>; the EXIT
+# trap removes the run directory.
+rc_remote_stop() {  # <code>
+  [ -z "${RC_STEP_PID:-}" ] || kill -TERM -- "-$RC_STEP_PID" 2>/dev/null
+  exit "$1"
+}
+
+# A dropped connection reparents the runner away from the ssh session, and a
+# step that buffers its output would never meet a broken pipe, so poll the
+# parent and stop the runner when it changes.
+rc_remote_watchdog() {  # <runner-pid> <parent-pid> <step-pid>
+  local ppid
+  while kill -0 "$3" 2>/dev/null; do
+    sleep 2
+    ppid=$(ps -o ppid= -p "$1" 2>/dev/null) || ppid=
+    ppid=${ppid//[[:space:]]/}
+    if [ "$ppid" != "$2" ]; then
+      kill -TERM "$1" 2>/dev/null
+      return 0
+    fi
+  done
+}
+
 rc_remote_main() {  # <run-dir>
-  local dir=$1 base="$HOME/$REMOTE_BASE_NAME" sha branch step start rc first_rc=0 arg
+  local dir=$1 base="$HOME/$REMOTE_BASE_NAME" sha branch lint_jobs step start rc first_rc=0 arg
+  local parent=$PPID watchdog
   local -a argv step_args
   case "$dir" in
     "$base"/?*) ;;
@@ -132,13 +159,18 @@ rc_remote_main() {  # <run-dir>
   esac
   RC_REMOTE_DIR=$dir
   trap 'cd / && rm -rf "$RC_REMOTE_DIR"' EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'rc_remote_stop 129' HUP
+  trap 'rc_remote_stop 130' INT
+  trap 'rc_remote_stop 143' TERM
   find "$base" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
 
   sha=$(sed -n 's/^sha=//p' "$dir/meta")
   branch=$(sed -n 's/^branch=//p' "$dir/meta")
+  lint_jobs=$(sed -n 's/^lint_jobs=//p' "$dir/meta")
+  case "$lint_jobs" in
+    ''|*[!0-9]*) ;;
+    *) export FM_LINT_JOBS="$lint_jobs" ;;
+  esac
   argv=()
   while IFS= read -r -d '' arg; do argv+=("$arg"); done < "$dir/argv"
 
@@ -176,11 +208,21 @@ rc_remote_main() {  # <run-dir>
     fi
     printf '== fm-remote-check: %s %s\n' "$step" "${step_args[*]-}"
     start=$SECONDS
+    # Job control gives each step its own process group to stop as a whole.
+    set -m
     case "$step" in
-      lint) bin/fm-lint.sh ${step_args[@]+"${step_args[@]}"} </dev/null ;;
-      test) bin/fm-test-run.sh ${step_args[@]+"${step_args[@]}"} </dev/null ;;
+      lint) bin/fm-lint.sh ${step_args[@]+"${step_args[@]}"} </dev/null & ;;
+      test) bin/fm-test-run.sh ${step_args[@]+"${step_args[@]}"} </dev/null & ;;
     esac
+    RC_STEP_PID=$!
+    set +m
+    rc_remote_watchdog "$$" "$parent" "$RC_STEP_PID" </dev/null >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$RC_STEP_PID"
     rc=$?
+    RC_STEP_PID=
+    kill "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
     printf '== fm-remote-check: %s exit %s (%ss)\n' "$step" "$rc" "$((SECONDS - start))"
     [ "$first_rc" -ne 0 ] || first_rc=$rc
     step=
@@ -246,7 +288,11 @@ trap 'rm -rf "$STAGE"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 cat "${BASH_SOURCE[0]}" > "$STAGE/runner.sh"
-printf 'sha=%s\nbranch=%s\n' "$SHA" "$BRANCH" > "$STAGE/meta"
+LINT_JOBS=${FM_LINT_JOBS:-}
+case "$LINT_JOBS" in
+  *[!0-9]*) rc_die "$EXIT_USAGE" "FM_LINT_JOBS must be a positive integer" ;;
+esac
+printf 'sha=%s\nbranch=%s\nlint_jobs=%s\n' "$SHA" "$BRANCH" "$LINT_JOBS" > "$STAGE/meta"
 printf '%s\0' "$@" > "$STAGE/argv"
 git bundle create -q "$STAGE/src.bundle" HEAD ${BASE_REF:+"$BASE_REF"} \
   || rc_die 1 "git bundle of HEAD failed"
