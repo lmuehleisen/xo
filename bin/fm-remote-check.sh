@@ -7,13 +7,20 @@
 #   fm-remote-check.sh test <fm-test-run.sh args...> [--then <step>...]
 #   fm-remote-check.sh --help
 #
-# Examples:
+# Examples (the first three are the fast path):
 #   fm-remote-check.sh lint
+#   fm-remote-check.sh lint --then test --changed
+#   fm-remote-check.sh test --proven-isolated --jobs 8
 #   fm-remote-check.sh lint --partition 1of2 --then lint --partition 2of2
-#   fm-remote-check.sh lint --then test --changed --jobs 8
 #
 # Each step runs the checked tree's own bin/fm-lint.sh or bin/fm-test-run.sh
 # with the given arguments, in order; every step runs even after one fails.
+# A bare `lint` is fm-lint.sh's changed-file mode: only the files changed
+# against origin/main, which takes seconds. Full --partition runs are
+# available but single-threaded per root, and CI is usually faster for them.
+# A test step's plain script list or --changed already gets fm-test-run.sh's
+# automatic concurrency; pass --jobs (up to its cap of 8) only for selections
+# that are all proven concurrent, since an explicit --jobs refuses the rest.
 # Output streams back live, and a final local line names the host, commit,
 # exit status, and wall time. The exit status is the first failing step's,
 # or 0. Exit 75 means no remote run happened (no config/remote-runner, an
