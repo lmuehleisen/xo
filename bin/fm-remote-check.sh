@@ -7,17 +7,19 @@
 #   fm-remote-check.sh test <fm-test-run.sh args...> [--then <step>...]
 #   fm-remote-check.sh --help
 #
-# Examples (the first three are the fast path):
+# Examples:
 #   fm-remote-check.sh lint
 #   fm-remote-check.sh lint --then test --changed
 #   fm-remote-check.sh test --proven-isolated --jobs 8
-#   fm-remote-check.sh lint --partition 1of2 --then lint --partition 2of2
+#   fm-remote-check.sh lint --partition 1of2 &
+#   fm-remote-check.sh lint --partition 2of2
 #
 # Each step runs the checked tree's own bin/fm-lint.sh or bin/fm-test-run.sh
 # with the given arguments, in order; every step runs even after one fails.
-# A bare `lint` is fm-lint.sh's changed-file mode: only the files changed
-# against origin/main, which takes seconds. Full --partition runs are
-# available but single-threaded per root, and CI is usually faster for them.
+# A bare `lint` is fm-lint.sh's changed-file mode, the fast default: only the
+# files changed against origin/main, which takes seconds. The full canonical
+# lint is CI's two --partition runs; on a fast host, running them as two
+# concurrent invocations can finish well before CI does.
 # A test step's plain script list or --changed already gets fm-test-run.sh's
 # automatic concurrency; pass --jobs (up to its cap of 8) only for selections
 # that are all proven concurrent, since an explicit --jobs refuses the rest.
@@ -48,8 +50,7 @@
 # own process group, and a dropped connection (the runner losing its ssh
 # parent) or a signal stops the step and removes the directory. The remote
 # needs bash, git, tar, curl, xz and ps; there is no daemon or queue, so
-# concurrent runs simply share the host, and running the two lint partitions
-# as two concurrent invocations roughly halves full-lint wall time.
+# concurrent runs simply share the host.
 set -u
 
 REMOTE_BASE_NAME=fm-remote-check
