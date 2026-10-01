@@ -72,6 +72,12 @@ fm_backend_tmux_submit_shell_enter() { # <target> <text> <postcondition> [args..
   fm_tmux_shell_submit_enter "$@"
 }
 
+# Bounded wait for an agent-free pane's shell to read input; see
+# fm_tmux_shell_ready_wait in bin/fm-tmux-lib.sh for the readiness contract.
+fm_backend_tmux_shell_ready_wait() { # <target> <timeout-seconds> [poll-seconds]
+  fm_tmux_shell_ready_wait "$@"
+}
+
 # fm_backend_tmux_container_ensure: reuse the current tmux session when
 # firstmate itself runs inside tmux, else ensure a dedicated detached
 # "firstmate" session exists. Mirrors fm-spawn.sh's container-ensure block;

@@ -495,6 +495,7 @@ interrupt_kimi_readiness() {  # <case-dir>
 case "\$*" in
   *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
   *"#{cursor_y}"*) printf '1\\n'; exit 0 ;;
+  *"#{pane_width}"*) printf '200\\n'; exit 0 ;;
 esac
 case "\${1:-}" in
   display-message) printf 'firstmate\\n'; exit 0 ;;

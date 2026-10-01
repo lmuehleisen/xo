@@ -304,20 +304,29 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
 
 # Shell commands cannot use an agent-composer verdict. The caller supplies an
 # execution postcondition (leased cwd or agent liveness), never a key-send test.
-# Retry keys require the exact owned line at a shell cursor. Joined wrapped rows
-# include history so long launch lines remain inspectable. A transcript match
-# above the cursor or another foreground program never authorizes a retry.
+# Retry keys require the exact owned line at a shell cursor. The capture reaches
+# back into history only as far as the text plus a prompt row can wrap, so a long
+# launch line stays inspectable while the read stays small: a full-history read
+# of a busy pane makes the expansions below quadratic on bash 3.2, which spins at
+# full CPU and defers signal handling until it finishes. A transcript match above
+# the cursor or another foreground program never authorizes a retry.
 # Returns 0 for owned pending input, 1 for another line, 2 for unreadable input.
 fm_tmux_shell_line_pending() { # <target> <text>
-  local target=$1 text=$2 command cursor screen cursor_line line
+  local target=$1 text=$2 command cursor width rows screen cursor_line line
   command=$(tmux display-message -p -t "$target" '#{pane_current_command}') || return 2
-  case "$command" in bash|zsh|sh|dash|ksh|fish|-bash|-zsh|-sh) ;; *) return 2 ;; esac
+  fm_tmux_is_shell_command "$command" || return 2
   cursor=$(tmux display-message -p -t "$target" '#{cursor_y}') || return 2
   case "$cursor" in ''|*[!0-9]*) return 2 ;; esac
+  width=$(tmux display-message -p -t "$target" '#{pane_width}') || return 2
+  case "$width" in ''|0|*[!0-9]*) return 2 ;; esac
+  # ${#text} counts characters, not cells: a double-width character fills two,
+  # so size the window for the worst case rather than undercount and start the
+  # capture inside the command.
+  rows=$(( (2 * ${#text} + width - 1) / width + 2 ))
   # Preserve terminal row endings across command substitution. Remove only
   # capture-pane's final terminator, so a blank cursor row stays distinguishable
   # from the submitted command echoed immediately above it.
-  screen=$(tmux capture-pane -p -J -t "$target" -S - -E "$cursor" && printf '.') || return 2
+  screen=$(tmux capture-pane -p -J -t "$target" -S "$((cursor - rows))" -E "$cursor" && printf '.') || return 2
   screen=${screen%.}
   screen=${screen%$'\n'}
   cursor_line=${screen##*$'\n'}
@@ -327,6 +336,66 @@ fm_tmux_shell_line_pending() { # <target> <text>
   # Require the full command as the suffix ending at the cursor row either way.
   line=${screen//$'\n'/}
   [ -n "$text" ] && [[ "$line" == *"$text" ]]
+}
+
+fm_tmux_is_shell_command() { # <pane_current_command>
+  case "$1" in bash|zsh|sh|dash|ksh|fish|-bash|-zsh|-sh) return 0 ;; esac
+  return 1
+}
+
+# <target> <timeout-seconds> [poll-seconds]
+# Wait, bounded, until an agent-free pane holds a shell ready to read a typed
+# line, so a relaunch never types into a pane whose shell has not started its
+# line editor yet. Ready means the pane's foreground command is a shell, its
+# cursor row shows non-blank prompt text, AND either its tty is out of
+# canonical mode (a line editor such as ZLE or readline is reading keys - a
+# kernel fact that a shell still sourcing its rc files does not show; the
+# visible prompt keeps an rc-file raw read from counting) or that row has held
+# the same text for two polls (a shell without a line editor). A stale alternate
+# screen left by an agent killed before it could restore the terminal is left by
+# writing the restore sequence to the pane's tty: that is terminal output, never
+# shell input, so no keys reach the shell. The prompt the shell drew on that
+# frame leaves with it, so after leaving one, a shell already past its rc files
+# is ready on noncanonical mode alone. Returns 0 when ready; otherwise prints one
+# error naming what the pane last showed and returns 1, having sent no input.
+fm_tmux_shell_ready_wait() {
+  local target=$1 timeout=$2 poll=${3:-0.5} elapsed=0 command alt tty attrs
+  local cursor row prev_row='' seen='unreadable pane' left_frame=0
+  while :; do
+    command=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || command=
+    if fm_tmux_is_shell_command "$command"; then
+      tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || tty=
+      alt=$(tmux display-message -p -t "$target" '#{alternate_on}' 2>/dev/null) || alt=
+      seen="shell $command"
+      if [ "$alt" = 1 ]; then
+        seen="shell $command under a stale full-screen frame"
+        case "$tty" in /dev/*) printf '\033[?1049l' 2>/dev/null >"$tty" && left_frame=1 ;; esac
+      else
+        cursor=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || cursor=
+        row=
+        case "$cursor" in
+          ''|*[!0-9]*) ;;
+          *) row=$(tmux capture-pane -p -t "$target" -S "$cursor" -E "$cursor" 2>/dev/null) || row= ;;
+        esac
+        [[ "$row" == *[![:space:]]* ]] && [ "$row" = "$prev_row" ] && return 0
+        if { [ "$left_frame" = 1 ] || [[ "$row" == *[![:space:]]* ]]; } &&
+          [[ "$tty" == /dev/* ]] && attrs=$(LC_ALL=C stty -a 2>/dev/null <"$tty") &&
+          [[ " ${attrs//$'\n'/ } " == *" -icanon "* ]]; then
+          return 0
+        fi
+        prev_row=$row
+        seen="shell $command without a prompt"
+      fi
+    else
+      prev_row=
+      [ -z "$command" ] || seen="foreground $command"
+    fi
+    awk -v e="$elapsed" -v t="$timeout" 'BEGIN{exit !(e < t)}' || break
+    sleep "$poll"
+    elapsed=$(awk -v e="$elapsed" -v p="$poll" 'BEGIN{printf "%.3f", e + p}')
+  done
+  echo "error: $target did not show a usable shell within ${timeout}s (last seen: $seen); no input was sent" >&2
+  return 1
 }
 
 # The agent-composer counterpart of fm_tmux_shell_line_pending, with the same

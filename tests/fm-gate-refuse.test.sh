@@ -349,7 +349,7 @@ case "${1:-}" in
     printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
     exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; *pane_width*) printf '200\n'; exit 0 ;; esac; done
     printf '%%1\n'; exit 0 ;;
   capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   list-windows) printf 'fm-lane-ok\n'; exit 0 ;;
