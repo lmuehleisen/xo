@@ -346,18 +346,21 @@ fm_tmux_is_shell_command() { # <pane_current_command>
 # <target> <timeout-seconds> [poll-seconds]
 # Wait, bounded, until an agent-free pane holds a shell ready to read a typed
 # line, so a relaunch never types into a pane whose shell has not started its
-# line editor yet. Ready means the pane's foreground command is a shell AND
-# either its tty is out of canonical mode (a line editor such as ZLE or readline
-# is reading keys - a kernel fact that a shell still sourcing its rc files does
-# not show) or the cursor row has held the same non-blank prompt text for two
-# polls (a shell without a line editor). A stale alternate screen left by an
-# agent killed before it could restore the terminal is left by writing the
-# restore sequence to the pane's tty: that is terminal output, never shell
-# input, so no keys reach the shell. Returns 0 when ready; otherwise prints one
+# line editor yet. Ready means the pane's foreground command is a shell, its
+# cursor row shows non-blank prompt text, AND either its tty is out of
+# canonical mode (a line editor such as ZLE or readline is reading keys - a
+# kernel fact that a shell still sourcing its rc files does not show; the
+# visible prompt keeps an rc-file raw read from counting) or that row has held
+# the same text for two polls (a shell without a line editor). A stale alternate
+# screen left by an agent killed before it could restore the terminal is left by
+# writing the restore sequence to the pane's tty: that is terminal output, never
+# shell input, so no keys reach the shell. The prompt the shell drew on that
+# frame leaves with it, so after leaving one, a shell already past its rc files
+# is ready on noncanonical mode alone. Returns 0 when ready; otherwise prints one
 # error naming what the pane last showed and returns 1, having sent no input.
 fm_tmux_shell_ready_wait() {
   local target=$1 timeout=$2 poll=${3:-0.5} elapsed=0 command alt tty attrs
-  local cursor row prev_row='' seen='unreadable pane'
+  local cursor row prev_row='' seen='unreadable pane' left_frame=0
   while :; do
     command=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || command=
     if fm_tmux_is_shell_command "$command"; then
@@ -366,10 +369,7 @@ fm_tmux_shell_ready_wait() {
       seen="shell $command"
       if [ "$alt" = 1 ]; then
         seen="shell $command under a stale full-screen frame"
-        case "$tty" in /dev/*) printf '\033[?1049l' 2>/dev/null >"$tty" || true ;; esac
-      elif [[ "$tty" == /dev/* ]] && attrs=$(LC_ALL=C stty -a 2>/dev/null <"$tty") &&
-        [[ " ${attrs//$'\n'/ } " == *" -icanon "* ]]; then
-        return 0
+        case "$tty" in /dev/*) printf '\033[?1049l' 2>/dev/null >"$tty" && left_frame=1 ;; esac
       else
         cursor=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || cursor=
         row=
@@ -377,7 +377,10 @@ fm_tmux_shell_ready_wait() {
           ''|*[!0-9]*) ;;
           *) row=$(tmux capture-pane -p -t "$target" -S "$cursor" -E "$cursor" 2>/dev/null) || row= ;;
         esac
-        if [[ "$row" == *[![:space:]]* ]] && [ "$row" = "$prev_row" ]; then
+        [[ "$row" == *[![:space:]]* ]] && [ "$row" = "$prev_row" ] && return 0
+        if { [ "$left_frame" = 1 ] || [[ "$row" == *[![:space:]]* ]]; } &&
+          [[ "$tty" == /dev/* ]] && attrs=$(LC_ALL=C stty -a 2>/dev/null <"$tty") &&
+          [[ " ${attrs//$'\n'/ } " == *" -icanon "* ]]; then
           return 0
         fi
         prev_row=$row
