@@ -158,6 +158,33 @@ SH
   printf '%s\n' "$fb"
 }
 
+# make_herdr_server_hold_fakebin: a server stub that stays alive like a real
+# server, recording its pid so the test can stop it.
+make_herdr_server_hold_fakebin() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  status)
+    if [ -e "$FM_HERDR_SERVER_MARKER" ]; then
+      printf '{"server":{"running":true}}\n'
+    else
+      printf '{"server":{"running":false}}\n'
+    fi
+    ;;
+  server)
+    printf '%s\n' "$$" > "$FM_HERDR_SERVER_PID"
+    : > "$FM_HERDR_SERVER_MARKER"
+    exec sleep 30
+    ;;
+esac
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
 # real container behavior the workspace-leak fix (and the default-tab-prune
 # safety fix) depend on, so a full spawn->teardown cycle can be replayed
@@ -1208,6 +1235,39 @@ test_server_ensure_scrubs_home_and_harness_identity() {
   assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost explicit Herdr session routing"
   assert_contains "$output" "args=server --session fmtest" "server_ensure lost the trailing Herdr session flag"
   pass "fm_backend_herdr_server_ensure: scrubs home and harness identity without disturbing unrelated environment or session routing"
+}
+
+# A caller that silences server_ensure while its own stdout is a pipe (the
+# remote doctor's --fix under ssh) must get EOF once ensure returns. A shell
+# left waiting on the server would hold the caller's saved stdout and stderr
+# for the server's whole lifetime.
+test_server_ensure_releases_caller_output() {
+  local dir fb reader i server_pid
+  dir="$TMP_ROOT/server-hold"; mkdir -p "$dir"
+  fb=$(make_herdr_server_hold_fakebin "$dir")
+  (
+    PATH="$fb:$PATH" FM_HERDR_SERVER_MARKER="$dir/running" FM_HERDR_SERVER_PID="$dir/pid" \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest >/dev/null 2>&1; echo ensured' "$ROOT" \
+      | cat > "$dir/out"
+  ) &
+  reader=$!
+  for i in $(seq 1 50); do
+    kill -0 "$reader" 2>/dev/null || break
+    sleep 0.2
+  done
+  server_pid=$(cat "$dir/pid" 2>/dev/null || true)
+  if kill -0 "$reader" 2>/dev/null; then
+    [ -z "$server_pid" ] || kill "$server_pid" 2>/dev/null
+    wait "$reader" 2>/dev/null
+    fail "server_ensure kept the caller's output open while the herdr server ran"
+  fi
+  wait "$reader" 2>/dev/null
+  if [ -z "$server_pid" ] || ! kill -0 "$server_pid" 2>/dev/null; then
+    fail "server_ensure did not leave the herdr server running"
+  fi
+  kill "$server_pid" 2>/dev/null
+  [ "$(cat "$dir/out")" = ensured ] || fail "server_ensure caller output was not delivered"
+  pass "fm_backend_herdr_server_ensure: releases the caller's output while the started server keeps running"
 }
 
 test_container_ensure_reuses_existing_workspace() {
@@ -5788,6 +5848,7 @@ test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
+test_server_ensure_releases_caller_output
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label
