@@ -76,6 +76,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-gemini-lib.sh
 . "$SCRIPT_DIR/fm-gemini-lib.sh"
+# shellcheck source=bin/fm-claude-lib.sh
+. "$SCRIPT_DIR/fm-claude-lib.sh"
 
 # Print the harness named by a verified environment marker, or nothing when no
 # marker is present. Markers only report what the environment CLAIMS; detect_own
@@ -201,6 +203,14 @@ harness_process_verdict() {  # <pid>
   fi
   if fm_gemini_path_is_gemini "$comm"; then
     echo "comm gemini"
+    return
+  fi
+  # The Claude desktop app's session executable is version-named inside its own
+  # install tree, so no name rule below can see it (bin/fm-claude-lib.sh). Its
+  # comm is that full path on macOS; on Linux comm is only the version, and the
+  # path survives in argv[0].
+  if fm_claude_desktop_path_is_claude "$comm" || fm_claude_desktop_path_is_claude "$argv0"; then
+    echo "comm claude"
     return
   fi
   case "$(basename -- "$comm")" in

@@ -108,6 +108,47 @@ A single-process harness has no descendant that adds a distinct verdict, which i
 The portable regression pins every half without any harness installed: `tests/fm-harness-precedence.test.sh` asserts that this two-process topology decides at comm strength, that the descent probe reaches a strength the top-of-session probe cannot, that a sibling branch answering a foreign harness contributes no verdict, that a foreign args-only verdict at the deepest vantage leaves the comm-strength identity intact, and that equal-depth ties choose the comm-strength leaf regardless of process ordering.
 The run did not reach `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, or `muse`, which were not installed, and stopped at the same pre-existing liveness failure for `cursor` 3.18.9, whose resolved binary on that machine is the editor rather than `cursor-agent`; those adapters are unverified by this run.
 
+### Claude desktop app and Remote Control sessions
+
+Claude Code reaches a session through three process shapes, and both identity owners - the session-lock walk in `bin/fm-session-lock-lib.sh` and `bin/fm-harness.sh` - must name each one claude.
+Observed on 2026-09-30 on macOS 26 (Darwin 25.6.0) with Claude Code 2.1.286 in the terminal and desktop-app session executables 2.1.280 to 2.1.284, read with `ps` only:
+
+| Case | Process chain above the tool shell | Identified by |
+|---|---|---|
+| Terminal session | `claude` (the native `versions/<version>` binary, argv[0] `claude`) <- login shell | name `claude`, already before this change |
+| Desktop app (Code tab) | `~/.claude/remote/ccd-cli/<version> --output-format stream-json --input-format stream-json ...` <- `~/.claude/remote/srv/<hash>/server --serve` <- launchd | `bin/fm-claude-lib.sh` desktop path shape, new |
+| `claude remote-control` server | `~/.local/share/claude/versions/<version> --print --sdk-url ... --session-id cse_...` per spawned session <- `claude remote-control` <- shell | the versions path and the name `claude`, already before this change |
+
+The desktop session's path has only a `.claude` component and its basename is a version, so before this change both owners rejected it: on the parent commit `fm_harness_process_matches` returned no match for a live desktop session and `bin/fm-harness.sh ancestry <pid>` printed nothing, which is why session start could not locate its harness and stayed read-only.
+With the change, the same live sessions report a claude match and `comm claude`, and every running `srv/<hash>/server` still reports no harness identity.
+The server is excluded on purpose: one server hosts every desktop session of its install, so letting the walk extend into it would hand a lock anchored there to every sibling session.
+A `claude remote-control` server is claude-named and therefore does join the contiguous run of each session it spawns; the lock anchor stays per session only when the session's tool shells carry a trusted `CLAUDE_PID`, which `fm_session_lock_anchor_pid` prefers over the outermost pid.
+
+The live guard launches the newest installed desktop session executable bare in stream-json input mode from an empty directory, never sends it a message, and checks both owners against it and against every running shared server:
+
+```sh
+bin/fm-test-run.sh tests/fm-claude-desktop-identity-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+# desktop-app session executable: <home>/.claude/remote/ccd-cli/2.1.284 (2.1.284)
+ok - a launched 2.1.284 desktop-app session is identified as claude by the lock walk and harness detection
+ok - 2 running shared desktop server process(es) carry no harness identity
+```
+
+The portable regressions pin the shape without any harness: `tests/fm-session-lock-ancestry.test.sh` covers macOS and Linux reporting through a fake `ps`, a sibling desktop session holding the lock, non-session paths under `.claude`, and a real orphaned session-under-server tree that claims its home, while `tests/fm-harness-precedence.test.sh` puts a markerless `codex` above a real desktop-shaped process so every claude verdict comes from the session itself.
+Both fail against the parent commit.
+
+Not verified live, because each needs a session driven from another device or the desktop app itself:
+
+- The environment of a desktop-app tool shell, including whether it carries `CLAUDECODE`, `CLAUDE_PID`, and `CLAUDE_CODE_SESSION_ID`; identity no longer depends on the marker, but the per-session lock anchor depends on `CLAUDE_PID`.
+- A terminal session with `/rc` turned on, which is expected to keep the terminal chain because Remote Control runs inside the existing process.
+- A session spawned or resumed from claude.ai or the mobile app through `claude remote-control`, including one stopped and later resumed that way: the spawned process above was observed, but not the tool-shell environment inside it.
+
+To verify any of these, start or resume a firstmate primary in that mode and run, from inside the session, `bin/fm-harness.sh`, `bin/fm-harness.sh ancestry`, `bin/fm-lock.sh status`, and `env | grep -E '^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_SESSION_ID)='`, then record the result here.
+
 ## tmux
 
 Foreground-process behavior was verified on 2026-07-07 with tmux 3.6a on macOS.
