@@ -98,7 +98,7 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
 Its Lavish mode is the home's `config/lavish` unless the request chose one, and `bin/fm-bearings-board.sh` owns what each mode does:
 
 - `off`, the default: a static local HTML file the captain opens in a browser; every answer stays in chat.
-- `view`: the same read-only board, opened in Lavish so the captain can view and annotate it, including from another computer over ssh (`docs/lavish.md`).
+- `view`: the same read-only board, opened in Lavish so the captain can view and annotate it, including from another computer over ssh (`docs/lavish.md`); its source is armed unbound, so annotations arrive as ordinary review feedback.
 - `answers`: `view`, plus answer controls on decision cards only; merge, credential, and dispatch requests stay in chat.
 
 The script also owns the stable board path, payload validation, stale-card cleanup, template injection, session checks, and the bind-before-arm order, so the per-invocation work is composing the payload and running `build`, with `--lavish <mode>` only when the request chose one.
@@ -130,7 +130,7 @@ Captain answers in chat take the ordinary decision and merge path in every mode.
 
 ### Handling a board wake
 
-Only an answers-mode board produces one.
+A view board's wake carries only annotations or messages: read it under `process-event-sources` and act on it with judgment, because an unbound source never closes a task.
 A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake; identify it by comparing the wake's source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, then load `process-event-sources` and follow its contract for the result read, the classification, and the handled acknowledgement.
 Decision answers need no routing from you: the runner feeds the board's binding into `bin/fm-captain-hold.sh`'s one keyed-answer intake, which closes or releases each answered captain-held task at answer time.
 Reconcile any `skipped:` key yourself with a direct `answer`, and when the captain's answer is "later", record a deferral with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` instead of a closure.

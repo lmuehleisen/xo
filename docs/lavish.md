@@ -10,7 +10,7 @@ This page covers turning it on, the install rules, and viewing Lavish pages from
 | Mode | `/bearings lavish` board | Scout review loops |
 | --- | --- | --- |
 | `off` (default) | A static local HTML file; answers in chat | Not offered |
-| `view` | The same read-only board, opened in Lavish | Offered for visual deliverables |
+| `view` | The same read-only board, opened in Lavish; annotations reach Firstmate as review feedback | Offered for visual deliverables |
 | `answers` | Decision cards take answers in the page as well as in chat | Offered for visual deliverables |
 
 In `answers` mode only decision cards are answerable on the board.

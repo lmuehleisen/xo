@@ -22,7 +22,9 @@
 #                     the captain opens the HTML file and answers in chat.
 #            view     The same read-only board, opened in Lavish so it can be
 #                     viewed and annotated through a browser, including over
-#                     an ssh port forward (docs/lavish.md).
+#                     an ssh port forward (docs/lavish.md). Its source is armed
+#                     unbound, so annotations reach firstmate as ordinary
+#                     review feedback and never feed the keyed-answer intake.
 #            answers  view, plus answer controls on every decision card and the
 #                     standard reconcile choice. The source is bound to the
 #                     keyed-answer intake (bin/fm-captain-hold.sh bind) BEFORE
@@ -36,19 +38,22 @@
 #            A wanted mode whose pinned lavish-axi is unavailable resolves to
 #            off and says why. A mode below answers first unbinds an earlier
 #            answers build's source, refusing the build when it cannot, so a
-#            still-open answers page can no longer change a held task; it then
-#            retires that listener, warning when it cannot.
-#            Output starts with `board: <path>`, then:
+#            still-open answers page can no longer change a held task; an off
+#            build then retires the board's listener, warning when it cannot.
+#            Output, in order (the first two only below answers, before the
+#            new board is published):
+#              unbound: <source-id>         (an earlier answer binding removed)
+#              retired: <source-id>         (off: the board listener stopped)
+#              board: <path>
 #              lavish: off (<reason>)       (a wanted mode fell back to off)
-#              retired: <source-id>         (an earlier answer source stopped)
 #              session: live | reopened     (view and answers)
 #              served: <path>
 #              url: <session URL>           (view and answers)
 #              open: <path or session URL>
 #              bound: <source-id>           (answers)
-#              armed: <source-id>           (answers, first registration)
-#              already-armed: <source-id>   (answers, registration present)
-#              still-listening: <source-id> (answers, an earlier listener holds it)
+#              armed: <source-id>           (view and answers, first registration)
+#              already-armed: <source-id>   (view and answers, registration present)
+#              still-listening: <source-id> (view and answers, an earlier listener holds it)
 #              answers: open                (answers, controls now published)
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
@@ -264,32 +269,35 @@ source_owner() {  # <source-id>
     | awk -v id="$1" 'NR > 1 && $1 == id { print $3; exit }'
 }
 
-# A build below answers stops an earlier answers build's source before the
-# new page is published. Unbinding is what stops a still-open answers page from
-# changing a held task, so a failed unbind refuses the build and leaves the
-# earlier board in place. Retiring the now-unbound listener is best effort: a
-# capture it still takes feeds nothing and only wakes firstmate. The source id
-# is derived from the board file's real path, so a deleted board is recreated
+# Before a build below answers publishes, an earlier answers build's binding is
+# removed. Unbinding is what stops a still-open answers page from changing a
+# held task, so a failed unbind refuses the build and leaves the earlier board
+# in place. An off build then retires the board's listener, best effort: an
+# unbound listener's captures feed nothing and only wake firstmate. The source
+# id is derived from the board file's real path, so a deleted board is recreated
 # empty for the derivation; the build publishes over it at once, and a refused
 # unbind removes it again.
-retire_board_answers() {  # <board>
-  local board=$1 sid placeholder=0
+disarm_board_below_answers() {  # <board> <mode>
+  local board=$1 mode=$2 sid placeholder=0
   if [ ! -e "$board" ] && [ ! -L "$board" ]; then
-    (umask 077; : > "$board") || fail "cannot recreate the missing board to find its answer source"
+    (umask 077; : > "$board") || fail "cannot recreate the missing board to find its source"
     placeholder=1
   fi
   sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board" 2>/dev/null) \
     || fail "cannot derive the board source id to check for an earlier answer source"
-  "$SCRIPT_DIR/fm-captain-hold.sh" binding "$sid" >/dev/null 2>&1 || return 0
-  if ! "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$sid" >/dev/null 2>&1; then
-    [ "$placeholder" = 0 ] || rm -f -- "$board"
-    fail "cannot unbind the earlier answer source $sid; refusing to drop below answers while it can still change held tasks"
+  if "$SCRIPT_DIR/fm-captain-hold.sh" binding "$sid" >/dev/null 2>&1; then
+    if ! "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$sid" >/dev/null 2>&1; then
+      [ "$placeholder" = 0 ] || rm -f -- "$board"
+      fail "cannot unbind the earlier answer source $sid; refusing to drop below answers while it can still change held tasks"
+    fi
+    printf 'unbound: %s\n' "$sid"
   fi
-  if [ -n "$(source_owner "$sid")" ] \
-    && ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
-    printf 'fm-bearings-board: warning: unbound %s, but its listener could not be retired; its captures feed nothing\n' "$sid" >&2
+  [ "$mode" = off ] && [ -n "$(source_owner "$sid")" ] || return 0
+  if FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
+    printf 'retired: %s\n' "$sid"
+  else
+    printf 'fm-bearings-board: warning: could not retire the board listener %s; it is unbound, so its captures feed nothing\n' "$sid" >&2
   fi
-  printf 'retired: %s\n' "$sid"
 }
 
 # Stage one page from the template and a compact payload, verified to carry a
@@ -321,18 +329,23 @@ publish_page() {  # <staged-page> <board>
   mv -f -- "$1" "$2" || { rm -f -- "$1"; fail "cannot publish the board"; }
 }
 
-# Bind before arm, then make sure this generation is listening.
-arm_board_answers() {  # <board>
-  local board=$1 sid out rc=0
+# Arm the board so whatever the captain sends from the page reaches firstmate,
+# binding it to the keyed-answer intake first only in answers mode, then make
+# sure this generation is listening. A view board stays unbound, so its
+# annotations arrive as ordinary review feedback and can never close a task.
+arm_board_source() {  # <board> <bind: 0|1>
+  local board=$1 bind=$2 sid out rc=0
   sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board") \
     || fail "cannot derive the board source id"
   if [ "$BOARD_SESSION_REOPENED" = 1 ] && [ -n "$(source_owner "$sid")" ]; then
     FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null \
       || fail "cannot retire the pre-reopen board source $sid"
   fi
-  "$SCRIPT_DIR/fm-captain-hold.sh" bind "$sid" >/dev/null \
-    || fail "cannot bind the board source to the keyed-answer intake"
-  printf 'bound: %s\n' "$sid"
+  if [ "$bind" = 1 ]; then
+    "$SCRIPT_DIR/fm-captain-hold.sh" bind "$sid" >/dev/null \
+      || fail "cannot bind the board source to the keyed-answer intake"
+    printf 'bound: %s\n' "$sid"
+  fi
   if [ -z "$(source_owner "$sid")" ]; then
     out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent-lavish.sh" arm "$board") \
       || fail "cannot arm the board as a process-event source"
@@ -455,7 +468,7 @@ command_build() {
 
   board=$(board_path)
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
-  [ "$FM_LAVISH_MODE" = answers ] || retire_board_answers "$board"
+  [ "$FM_LAVISH_MODE" = answers ] || disarm_board_below_answers "$board" "$FM_LAVISH_MODE"
   page=$(stage_page "$board" "$json")
   if [ "$FM_LAVISH_MODE" = answers ]; then
     # Until the source is bound and listening, serve the same board without
@@ -485,8 +498,10 @@ command_build() {
   printf 'served: %s\n' "$board"
   printf 'url: %s\n' "$BOARD_URL"
   printf 'open: %s\n' "$BOARD_URL"
-  if [ "$FM_LAVISH_MODE" = answers ]; then
-    arm_board_answers "$board"
+  if [ "$FM_LAVISH_MODE" = view ]; then
+    arm_board_source "$board" 0
+  else
+    arm_board_source "$board" 1
     publish_page "$page" "$board"
     trap - EXIT
     printf 'answers: open\n'

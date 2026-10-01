@@ -934,7 +934,7 @@ The optional local, gitignored `config/lavish` turns on Lavish for this home and
 It holds one word:
 
 - `off`, the default when the file is absent: `/bearings lavish` builds a static local HTML board, scouts get no Lavish review loop, and every answer stays in chat.
-- `view`: `/bearings lavish` opens its read-only board in Lavish, and scout briefs offer the crew-hosted review loop below for visual deliverables.
+- `view`: `/bearings lavish` opens its read-only board in Lavish with its source armed but unbound, so annotations reach firstmate as ordinary review feedback, and scout briefs offer the crew-hosted review loop below for visual deliverables.
 - `answers`: `view`, plus answer controls on the board's decision cards, bound to the keyed-answer intake in `bin/fm-captain-hold.sh` before the board is armed; merge, credential, and dispatch requests stay in chat.
 
 A per-request choice wins over the file in both directions for one artifact: `bin/fm-bearings-board.sh build --lavish <mode>` for one board, and `bin/fm-brief.sh --scout --lavish <mode>` for one scout.

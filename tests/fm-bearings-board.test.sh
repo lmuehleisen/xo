@@ -544,7 +544,7 @@ test_build_refuses_a_nondecision_reconcile_value() {
 }
 
 test_view_mode_opens_the_read_only_board_in_lavish() {
-  local home data board out
+  local home data board out sid
   home=$(make_lavish_home view view)
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
@@ -555,15 +555,17 @@ test_view_mode_opens_the_read_only_board_in_lavish() {
   assert_contains "$out" "url: http://127.0.0.1:4387/session/0123456789abcdef" "view mode did not print the session URL: $out"
   assert_contains "$out" "open: http://127.0.0.1:4387/session/0123456789abcdef" "view mode did not open the session URL: $out"
   assert_not_contains "$out" "next_step" "build echoed lavish-axi's agent instructions: $out"
+  sid=$(board_source_id "$home")
   assert_not_contains "$out" "bound: " "view mode bound an answer source: $out"
-  assert_not_contains "$out" "armed: " "view mode armed an answer source: $out"
+  assert_contains "$out" "armed: $sid" "view mode did not arm the board so its feedback reaches firstmate: $out"
+  ! run_hold "$home" binding "$sid" >/dev/null 2>&1 || fail "view mode bound the board to the answer intake"
   extract_payload "$board" | jq -e 'has("interactive") | not' >/dev/null \
     || fail "a view-mode board was made interactive"
   extract_payload "$board" | jq -e '[.captains_call[].options[].value] | index("reconcile") == null' >/dev/null \
     || fail "a view-mode board carries the answers-only reconcile choice"
   [ "$(cat "$home/lavish-state/env")" = "TELEMETRY=0 NO_OPEN=1 HOST=127.0.0.1" ] \
     || fail "lavish-axi did not run under the pinned environment: $(cat "$home/lavish-state/env")"
-  pass "view mode opens the read-only board in Lavish under the pinned environment"
+  pass "view mode opens the read-only board in Lavish, armed but unbound, under the pinned environment"
 }
 
 test_per_request_override_wins_over_the_home_toggle() {
@@ -721,16 +723,21 @@ test_dropping_below_answers_retires_the_answer_source() {
   source_registered "$home" "$sid" || fail "the answers build did not register its source"
 
   out=$(run_board "$home" build "$data" --lavish view) || fail "the view rebuild failed: $out"
-  assert_contains "$out" "retired: $sid" "declining answers did not retire the source: $out"
+  assert_contains "$out" "unbound: $sid" "declining answers did not unbind the source: $out"
   ! run_hold "$home" binding "$sid" >/dev/null 2>&1 || fail "declining answers left the binding"
-  ! source_registered "$home" "$sid" || fail "declining answers left the source registered"
+  source_registered "$home" "$sid" || fail "a view board lost the listener that carries its feedback"
   out=$(run_board "$home" build "$data" --lavish view) || fail "a second view rebuild failed: $out"
-  assert_not_contains "$out" "retired: " "a view rebuild with nothing bound reported a retirement: $out"
+  assert_not_contains "$out" "unbound: " "a view rebuild with nothing bound reported an unbind: $out"
+
+  out=$(run_board "$home" build "$data" --lavish off) || fail "the off rebuild failed: $out"
+  assert_contains "$out" "retired: $sid" "an off build did not retire the board listener: $out"
+  ! source_registered "$home" "$sid" || fail "an off build left the board listener registered"
 
   # A deleted board still has its answer source found and retired.
   run_board "$home" build "$data" >/dev/null || fail "the answers build before deletion failed"
   rm -f "$home/.lavish/bearings-board.html"
   out=$(run_board "$home" build "$data" --lavish off) || fail "an off rebuild of a deleted board failed: $out"
+  assert_contains "$out" "unbound: $sid" "a deleted board's answer source was not unbound: $out"
   assert_contains "$out" "retired: $sid" "a deleted board's answer source was not retired: $out"
   ! run_hold "$home" binding "$sid" >/dev/null 2>&1 || fail "a deleted board kept its answer binding"
   ! source_registered "$home" "$sid" || fail "a deleted board kept its answer source registered"
@@ -739,7 +746,7 @@ test_dropping_below_answers_retires_the_answer_source() {
   # earlier board, because that binding is what lets an open page change tasks.
   # A read-only directory cannot stop root, so root skips only this case.
   if [ "$(id -u)" = 0 ]; then
-    pass "a build below answers retires and unbinds an earlier answer source"
+    pass "a build below answers unbinds an earlier answer source, and off retires its listener"
     return 0
   fi
   run_board "$home" build "$data" >/dev/null || fail "the second answers build failed"
@@ -754,7 +761,7 @@ test_dropping_below_answers_retires_the_answer_source() {
   [ "$(run_hold "$home" binding "$sid")" = "(any)" ] || fail "the refused downgrade lost the binding"
   extract_payload "$home/.lavish/bearings-board.html" | jq -e '.interactive == true' >/dev/null \
     || fail "the refused downgrade replaced the earlier board"
-  pass "a build below answers retires and unbinds an earlier answer source"
+  pass "a build below answers unbinds an earlier answer source, and off retires its listener"
 }
 
 test_path_is_stable_and_home_scoped

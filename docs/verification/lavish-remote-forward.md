@@ -49,7 +49,7 @@ In a scratch home with `config/lavish` set to `answers` and one captain-held tas
 A headless Chromium session (Playwright) opened the session URL through the forward, chose an option on the decision card, typed a note, queued the answer, and used Send to Agent.
 The queued prompt carried the `fm-bearings-answer.v1` context, and the merge card rendered with no answer form and no dispatch picker.
 The captured result classified as `feedback`, `bin/fm-procevent-lavish.sh answers` printed `<task-id>	amber	Sample widget color -> amber - warmer fits the brand`, and the held task was closed with `Answer: amber` and the captured result named as its source.
-A following build with `--lavish view` printed `retired: lavish-<id>`, and afterwards no source was registered and no binding remained.
+In a second scratch home on a free loopback port, a following build with `--lavish view` printed `unbound: lavish-<id>` and `already-armed: lavish-<id>`, after which the source stayed `live` with no binding; a build with `--lavish off` then printed `retired: lavish-<id>`, and `bin/fm-procevent.sh list` printed `no sources registered`.
 
 ## Refresh
 

@@ -136,6 +136,7 @@ fm_lavish_unavailable_reason() {
 # effective mode), and FM_LAVISH_REASON (why the effective mode is off when
 # something else was wanted or the toggle is malformed, or empty).
 # Returns 2 on a malformed request.
+# shellcheck disable=SC2034 # The FM_LAVISH_* results are read by the callers.
 fm_lavish_resolve() {
   local config=$1 request=${2-} reason
   FM_LAVISH_REASON=
