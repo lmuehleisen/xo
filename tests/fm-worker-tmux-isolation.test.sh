@@ -59,7 +59,13 @@ cleanup_worker_tmux() {
 trap cleanup_worker_tmux EXIT
 
 start_fleet() {
+  local pid
+  # kill-server returns before the server exits, and a new session on the same
+  # socket can reach the exiting server, so wait for it to go first.
+  pid=$(ltmux -S "$FLEET_SOCK" display-message -p '#{pid}' 2>/dev/null) || pid=
   ltmux -S "$FLEET_SOCK" kill-server >/dev/null 2>&1 || true
+  [ -z "$pid" ] || pid_gone "$pid" || return 1
+  rm -f "$FLEET_SOCK"
   ltmux -S "$FLEET_SOCK" new-session -d -s firstmate -n captain "$REAL_SLEEP 600" || return 1
   ltmux -S "$FLEET_SOCK" new-window -d -t firstmate -n fm-worker "$REAL_SLEEP 600" || return 1
   FLEET_TMUX=$(ltmux -S "$FLEET_SOCK" display-message -p -t firstmate:fm-worker '#{socket_path},#{pid},0')
