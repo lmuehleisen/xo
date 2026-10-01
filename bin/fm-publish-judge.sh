@@ -51,7 +51,9 @@
 #   codex  `codex exec` on gpt-6.1-sol, low reasoning, read-only sandbox,
 #          ephemeral, no user config or rules, run from an empty directory;
 #   pi     `pi -p` on xai/grok-4.7, low thinking, no tools, no extensions,
-#          skills, or context files, no session.
+#          skills, or context files, no session, and the user's own agent
+#          directory (~/.pi/agent), never an inherited PI_CODING_AGENT_DIR or
+#          PI_CODING_AGENT_SESSION_DIR.
 # Each reads the prompt on stdin, so no argument carries the material.
 # Each judge executable is the absolute path in the private config file named
 # after its tier (<config>/codex, <config>/pi), else the first of that tier's
@@ -363,8 +365,12 @@ tier_run() {
     ;;
   pi)
     # Pi takes piped stdin as the whole first prompt when no message is given.
+    # A worker pinned by config/pi-account exports PI_CODING_AGENT_DIR, which
+    # its git hooks inherit; the judge signs in from the user's own agent
+    # directory instead.
     # shellcheck disable=SC2016 # expanded by the bounded child shell
-    (cd "$dir" && fm_run_timed "$seconds" bash -c 'prompt=$1; shift; exec "$@" <"$prompt"' _ "$prompt" \
+    (cd "$dir" && fm_run_timed "$seconds" env -u PI_CODING_AGENT_DIR -u PI_CODING_AGENT_SESSION_DIR \
+      bash -c 'prompt=$1; shift; exec "$@" <"$prompt"' _ "$prompt" \
       "$bin" -p --no-session --no-tools --no-extensions \
       --no-skills --no-prompt-templates --no-themes --no-context-files --offline \
       --model "$model" --thinking "${FM_PUBLISH_JUDGE_PI_THINKING:-low}" \

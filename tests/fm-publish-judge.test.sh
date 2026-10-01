@@ -425,7 +425,21 @@ test_pi_prompt_beyond_one_argument_reaches_the_judge() {
   pass "the pi judge receives a prompt beyond one argument's limit intact on stdin"
 }
 
+test_pi_judge_ignores_an_inherited_agent_dir() {
+  reset_judges
+  local envlog="$TMP_ROOT/judge-env" out
+  rm -f "$envlog"
+  out=$(FM_TEST_JUDGE_ENV="$envlog" PI_CODING_AGENT_DIR="$TMP_ROOT/pinned-worker-root" \
+    PI_CODING_AGENT_SESSION_DIR="$TMP_ROOT/pinned-worker-sessions" FM_PUBLISH_JUDGE_TIERS=pi \
+    "$JUDGE" text --dest acme/widgets --config "$CFG" "body:$TMP_ROOT/body-clean.md" 2>&1) \
+    || fail "the pi judge should answer under a pinned worker's environment: $out"
+  assert_equals 'pi agent-dir=<unset> session-dir=<unset>' "$(cat "$envlog")" \
+    "the pi judge never runs with a worker's pinned agent or session directory"
+  pass "the pi judge runs without an inherited PI_CODING_AGENT_DIR or PI_CODING_AGENT_SESSION_DIR"
+}
+
 test_pi_prompt_beyond_one_argument_reaches_the_judge
+test_pi_judge_ignores_an_inherited_agent_dir
 test_clean_text_is_allowed
 test_operator_narrative_is_refused
 test_judge_unavailable_is_refused
