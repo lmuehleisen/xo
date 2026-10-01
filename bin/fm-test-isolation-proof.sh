@@ -125,6 +125,7 @@ exclusion_reason() {
       printf '%s\n' 'watcher/wake/lock family; intentional process locks and daemon races'
       ;;
     fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|fm-afk-inject-herdr-e2e.test.sh|\
+    fm-afk-inject-titled-composer.test.sh|fm-afk-inject-titled-composer-herdr-e2e.test.sh|\
     fm-afk-launch.test.sh)
       printf '%s\n' 'AFK lifecycle / inject path; exclusive daemon and pane control'
       ;;

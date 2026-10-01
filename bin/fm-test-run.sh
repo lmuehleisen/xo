@@ -319,7 +319,8 @@ family_for_basename() {
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
-    fm-afk-inject-herdr-e2e.test.sh|fm-afk-launch.test.sh|fm-backend-autodetect-smoke.test.sh|\
+    fm-afk-inject-herdr-e2e.test.sh|fm-afk-inject-titled-composer-herdr-e2e.test.sh|\
+    fm-afk-launch.test.sh|fm-backend-autodetect-smoke.test.sh|\
     fm-backend-herdr-eventwait-smoke.test.sh|fm-backend-herdr-presentation-e2e.test.sh|\
     fm-backend-herdr-launcher-workspace-e2e.test.sh|\
     fm-backend-herdr-prune-safety-e2e.test.sh|fm-backend-herdr-respawn-idem-e2e.test.sh|\
@@ -406,7 +407,8 @@ family_for_basename() {
       printf '%s\n' pr-forge
       ;;
     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-owned-digest-recovery.test.sh|\
-    fm-afk-inject-delivery-proof.test.sh|fm-afk-return.test.sh|fm-afk-sentinel.test.sh|\
+    fm-afk-inject-delivery-proof.test.sh|fm-afk-inject-titled-composer.test.sh|\
+    fm-afk-return.test.sh|fm-afk-sentinel.test.sh|\
     fm-supervision-host.test.sh|fm-host-mirror.test.sh)
       printf '%s\n' afk
       ;;

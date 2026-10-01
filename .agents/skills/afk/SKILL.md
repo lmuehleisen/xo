@@ -161,7 +161,7 @@ A bordered-empty or ghost-only composer is recognized as empty where that backen
 `fm-send.sh` uses the shared backend submit primitive, not this proof, only on its typed plane and exits non-zero when that plane's Enter is positively swallowed; ordinary local text steers use the durable inbox and do not treat doorbell submission as delivery proof.
 
 **Unconfirmed submit recovery.** Every failed submit saves a pane capture under `state/.subsuper-submit-failures/`.
-On tmux the daemon records the digest before typing it and drops that record only on proven delivery; before its next flush types anything it retries Enter on an idle pane, or clears that digest, only while the composer provably holds exactly that digest, and any other composer text is never touched.
+On tmux and herdr the daemon records the digest before typing it and drops that record only on proven delivery; before its next flush types anything it retries Enter on an idle pane, or clears that digest, only while the composer provably holds exactly that digest, and any other composer text is never touched.
 When away mode ends, the daemon and `bin/fm-afk-return.sh` clear its own unsent digest the same way, so a stale escalation cannot be submitted later.
 `recover_owned_input` and `clear_owned_input_at_exit` in `bin/fm-supervise-daemon.sh` own that contract.
 

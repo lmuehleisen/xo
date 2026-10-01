@@ -3363,7 +3363,8 @@ fm_backend_herdr_proof_lines() {  # <text>
 # viewport is the one bound that always contains the composer.
 # Styled capture is preferred. An empty or failed styled read falls through to
 # the plain capture so a missing ANSI format does not look like an empty draft.
-fm_backend_herdr_composer_content() {  # <target>
+# [row-separator] joins the composer rows as fm_composer_extract_selected_content does.
+fm_backend_herdr_composer_content() {  # <target> [row-separator]
   local target=$1 cap caps
   if cap=$(fm_backend_herdr_visible_capture_ansi "$target" 2>/dev/null) && [ -n "$cap" ]; then
     caps=$(printf 'styled=1\ncursor=0\nidentity=0')
@@ -3372,7 +3373,28 @@ fm_backend_herdr_composer_content() {  # <target>
   else
     return 1
   fi
-  fm_composer_extract_selected_content "$caps" "$cap"
+  fm_composer_extract_selected_content "$caps" "$cap" "${2:-}"
+}
+
+# fm_backend_herdr_composer_owned_input: herdr's counterpart of
+# fm_tmux_composer_owned_input, with the same return codes and the same
+# ownership proof, so the away daemon can resolve text it typed and could not
+# prove submitted. Owned (0) means the shared verdict proves an agent composer
+# holding input and its rows show exactly <text> (fm_composer_holds_owned_text);
+# `residue` also accepts what a partial Ctrl+U cleanup leaves of it. An empty
+# composer holds nothing of ours (1), and so does one holding other text; an
+# unknown or unextractable one is unreadable (2), because a key sent to an
+# unidentified pane could answer a dialog. Herdr has no cursor, so both reads
+# are the cursorless selection.
+fm_backend_herdr_composer_owned_input() {  # <target> <text> [residue]
+  local target=$1 text=$2 mode=${3:-} content
+  case "$(fm_backend_herdr_composer_state "$target")" in
+    empty) return 1 ;;
+    pending|pending-unproven) ;;
+    *) return 2 ;;
+  esac
+  content=$(fm_backend_herdr_composer_content "$target" $'\x1f') || return 2
+  fm_composer_holds_owned_text "$text" "$content" "$mode"
 }
 
 # fm_backend_herdr_composer_payload_shown: 0 when <after>, read from a

@@ -23,6 +23,9 @@ This is deliberate because the alarm fires only after a genuine max-defer wedge 
 
 Each channel is best-effort.
 A missing binary or non-zero exit logs a warning and continues to the next channel without crashing the daemon loop.
+A failed `command:` channel logs its exit status and its last stderr line, with URL query strings cut and the configured command still redacted, so a misconfigured channel says why it failed.
+Every failed channel is also named on the first line of `state/.subsuper-inject-wedged`, which the return brief shows.
+When every configured channel fails and the platform's OS channel was not among them, the alarm falls back to that OS channel, so a broken command channel alone never leaves it silent.
 Every invocation is process-group bounded by `FM_WEDGE_ALARM_TIMEOUT_SECS`, which defaults to 10 seconds, including `command:`, `osascript`, `herdr`, and the test seam.
 On timeout or daemon shutdown, the notifier process group is terminated and the next configured channel may run.
 AppleScript receives the summary as an argv item rather than interpolated source, so summary text cannot alter the script.

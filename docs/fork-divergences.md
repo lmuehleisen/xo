@@ -250,10 +250,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### away-inject-delivery-proof
 
-- Intent: count an away digest delivered only on positive proof, own it before typing it, clear it when away mode ends, and repeat a delivery wedge as the return output's last line, because a digest that only looked submitted can stall away mode indefinitely; upstream issue https://github.com/kunchenguid/firstmate/issues/6034.
+- Intent: count an away digest delivered only on positive proof, own it before typing it on tmux and herdr, read a named Claude session's composer, clear it when away mode ends, and repeat a delivery wedge as the return output's last line, because a digest that only looked submitted can stall away mode indefinitely; upstream issue https://github.com/kunchenguid/firstmate/issues/6034.
 - Class: carried.
-- Seam: `fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`; the tmux submit, owned-record, and exit-cleanup hunks in `bin/fm-supervise-daemon.sh`; the opened marker in `bin/fm-operational-input.sh`; the owned-text cleanup and wedge tail in `bin/fm-afk-return.sh`; the afk skill's return and submit-model text; the family registration in `bin/fm-test-run.sh`; and the turn footer in `tests/wake-helpers.sh`'s fake tmux (shared).
-- Guard: fork-only `tests/fm-afk-inject-delivery-proof.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; `tests/fm-afk-inject-e2e.test.sh`; `tests/fm-afk-return.test.sh`.
+- Seam: `fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`; the titled-rule reader and the shared owned-input submit and clear loops in `bin/fm-composer-lib.sh`; `fm_backend_herdr_composer_owned_input` in `bin/backends/herdr.sh`; the tmux and herdr submit, owned-record, and exit-cleanup hunks in `bin/fm-supervise-daemon.sh`; the opened marker in `bin/fm-operational-input.sh`; the owned-text cleanup and wedge tail in `bin/fm-afk-return.sh`; the afk skill's return and submit-model text; the family registration in `bin/fm-test-run.sh`; and the turn footer in `tests/wake-helpers.sh`'s fake tmux (shared).
+- Guard: fork-only `tests/fm-afk-inject-delivery-proof.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; `tests/fm-afk-inject-titled-composer.test.sh`; `tests/fm-afk-inject-e2e.test.sh`; `tests/fm-afk-return.test.sh`; the named-session checks in `tests/fm-composer-matrix-live-e2e.test.sh`.
 - Upstream: counts a composer that reads empty after Enter as delivered and has no owned-text recovery; drop once upstream fixes issue 6034 equivalently.
 
 ### markless-op-header
