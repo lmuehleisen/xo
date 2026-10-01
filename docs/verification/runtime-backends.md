@@ -110,14 +110,13 @@ The run did not reach `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, or `muse`, 
 
 ### Claude desktop app and Remote Control sessions
 
-Claude Code reaches a session through four process shapes, and both identity owners - the session-lock walk in `bin/fm-session-lock-lib.sh` and `bin/fm-harness.sh` - must name each one claude.
+Claude Code reaches a session through three process shapes, and both identity owners - the session-lock walk in `bin/fm-session-lock-lib.sh` and `bin/fm-harness.sh` - must name each one claude.
 Observed on 2026-09-30 on macOS 26 (Darwin 25.6.0) with Claude Code 2.1.286 in the terminal and desktop-app session executables 2.1.280 to 2.1.284, read with `ps` only:
 
 | Case | Process chain above the tool shell | Identified by |
 |---|---|---|
 | Terminal session | `claude` (the native `versions/<version>` binary, argv[0] `claude`) <- login shell | name `claude`, already before this change |
 | Desktop app (Code tab) | `~/.claude/remote/ccd-cli/<version> --output-format stream-json --input-format stream-json ...` <- `~/.claude/remote/srv/<hash>/server --serve` <- launchd | `bin/fm-claude-lib.sh` desktop path shape, new |
-| Desktop app over its SSH remote | the same session and `--serve` server on the remote host, plus a `server --bridge` under the SSH session | the same desktop path shape |
 | `claude remote-control` server | `~/.local/share/claude/versions/<version> --print --sdk-url ... --session-id cse_...` per spawned session <- `claude remote-control` <- shell | the versions path and the name `claude`, already before this change |
 
 The desktop session's path has only a `.claude` component and its basename is a version, so before this change both owners rejected it: on the parent commit `fm_harness_process_matches` returned no match for a live desktop session and `bin/fm-harness.sh ancestry <pid>` printed nothing, which is why session start could not locate its harness and stayed read-only.
