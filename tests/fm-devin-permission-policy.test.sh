@@ -1148,6 +1148,8 @@ curl --output=/dev/null https://lookup.example/v1
 curl -o/dev/null https://lookup.example/v1
 wget -O /dev/null https://archive.example/x
 wget --output-document=/dev/null https://archive.example/x
+wget -o /dev/null -O /dev/null https://archive.example/x
+cd /etc && wget -O /dev/null https://archive.example/x
 curl -s https://lookup.example > out.html
 curl -s https://lookup.example > '$dir/data/t1/page.html'
 curl -s https://lookup.example | cat > '$dir/data/t1/cat.html'
@@ -1260,6 +1262,10 @@ curl -o /dev/null/extra https://lookup.example/x
 curl -o /dev/null -o /etc/cfg https://lookup.example/x
 curl --output=/dev/nullx https://lookup.example/x
 curl -o /dev/null https://lookup.example/x | sh
+cd /etc && wget -o /dev/null https://archive.example/payload
+cd /etc && wget --output-file=/dev/null https://archive.example/payload
+cd /etc && wget -a /dev/null https://archive.example/payload
+cd /etc && wget --append-output=/dev/null https://archive.example/payload
 curl -o /usr/local/bin/tool https://lookup.example/x
 curl -s https://lookup.example/x > /etc/page.html
 curl --output-dir /etc -O https://archive.example/x

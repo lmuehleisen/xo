@@ -638,6 +638,7 @@ PIPE_FROM_FETCH=0
 SEG_BASE=''
 SEG_EMITS_FETCH=0
 FETCH_OPT_KIND=switch
+FETCH_OPT_NAME=
 
 # 0 when <abs> may receive fetched bytes: inside the task write roots and not
 # under bin/, .git/, .devin/, .claude/, or an agent or git configuration path.
@@ -876,6 +877,16 @@ fetch_opt_is_switch() {  # <base> <word>
   return 1
 }
 
+# 0 when FETCH_OPT_NAME is the option that writes the fetched document.
+# wget's -o/--output-file and -a/--append-output are logs, not the document.
+fetch_document_output() {
+  case "$base" in
+    curl) case "$FETCH_OPT_NAME" in -o|--output) return 0 ;; esac ;;
+    wget) case "$FETCH_OPT_NAME" in -O|--output-document) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
 # Applies FETCH_OPT_KIND to the option's value. `v` is empty when the option
 # was last in its word; `vev` marks a value this policy cannot read (an
 # expansion or glob - a bare ~/ is the one readable exception). Consumes the
@@ -933,13 +944,16 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
           *) never_approve "$base output file is an expansion this policy cannot read"; return 1 ;;
         esac
       fi
-      fetch_out_seen=1
-      # A literal /dev/null discards the body. It is not a file write, matching
-      # an output redirect to /dev/null; anything else, including a lookalike
-      # path, is still a destination.
+      # A literal /dev/null discards that option's bytes. It is not a file
+      # write, matching an output redirect to /dev/null. Only a document
+      # option (-o/--output, wget -O/--output-document) counts as output
+      # seen: wget -o/-a and --output-file are logs, and marking them seen
+      # would hide the download wget still writes into the output directory.
       if [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
+        if fetch_document_output; then fetch_out_seen=1; fi
         return 0
       fi
+      fetch_out_seen=1
       [ "$v" = - ] || {
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=$vev
@@ -2452,12 +2466,14 @@ approve_plain() {  # <base>
           case "$w" in
             --) opts_done=1; continue ;;
             --*=*)
-              fetch_long_kind "$base" "${w%%=*}"
+              FETCH_OPT_NAME=${w%%=*}
+              fetch_long_kind "$base" "$FETCH_OPT_NAME"
               if [ "$FETCH_OPT_KIND" = unknown ]; then
-                never_approve "$base option ${w%%=*} is unknown to this policy"; return 0
+                never_approve "$base option $FETCH_OPT_NAME is unknown to this policy"; return 0
               fi
               fetch_opt_value "$FETCH_OPT_KIND" "${w#*=}" 0 || return 0 ;;
             --*)
+              FETCH_OPT_NAME=$w
               fetch_long_kind "$base" "$w"
               case "$FETCH_OPT_KIND" in
                 switch) ;;
@@ -2477,6 +2493,7 @@ approve_plain() {  # <base>
               # of the cluster, or the next word when it is last
               local ci=1 clen=${#w}
               while [ "$ci" -lt "$clen" ]; do
+                FETCH_OPT_NAME=-${w:ci:1}
                 fetch_short_kind "$base" "${w:ci:1}"
                 case "$FETCH_OPT_KIND" in
                   switch) ci=$((ci + 1)) ;;
