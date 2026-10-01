@@ -67,7 +67,8 @@ A Bearings board below the `answers` Lavish mode does not feed this intake, and 
 ## Evidence-backed reconciliation is not a board control
 
 A captain call can stop being a question without the captain ever answering it because the subject lands, the premise turns out to be false, or the choice becomes a matter of fact rather than the captain's to make.
-Reconciliation is an operator verification path, not an answer and not a third choice on the board.
+Reconciliation is an operator verification path, not an answer.
+On an `answers` board the Reconcile choice only files the durable re-check request below; it never performs the reconciliation, which stays the operator's.
 It resolves in exactly one of two ways after the latest state has actually been checked: close the call with the evidence that made it moot, or leave it open with a note recording that it is genuinely still active.
 Both outcomes require a pre-existing durable request and the operator input that supports the claim:
 
