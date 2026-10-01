@@ -50,7 +50,7 @@ If Lavish is wanted but not installed, Firstmate builds the static board instead
 
 The Lavish server has no login of its own: anyone who can reach its port can read files the account can read and send feedback that looks like yours.
 So it listens only on the Firstmate machine's loopback address, and you reach it through the ssh connection you already use.
-Do not point `config/lavish-axi-host` at a LAN, VPN, or public address, and do not put the port behind a public tunnel.
+Keep `config/lavish-axi-host` absent or loopback for this path: any other address exposes the server to everything on that network ([`docs/configuration.md`](configuration.md#lavish-server-address-configlavish-axi-host)), and never put the port behind a public tunnel.
 
 ### One-time setup on your laptop
 
