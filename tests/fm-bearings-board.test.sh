@@ -37,7 +37,8 @@ make_home() {  # <name>
 # environment each open ran with. Markers under lavish-state drive it:
 # `user-ended` makes the next plain open refuse, and `refuse-reopen` makes even
 # --reopen leave it ended. `poll` is a real blocking listener released by
-# `poll-trigger`.
+# `poll-trigger`. `off-pin-once-open` makes --version report an off-pin version
+# once a session exists, so the pin check at arm refuses after the page served.
 make_lavish_home() {  # <name> [config/lavish mode]
   local home="$TMP_ROOT/$1" fakebin
   fm_test_track_procevent_home "$home" "$home/procevent-claims"
@@ -56,7 +57,14 @@ emit() {  # <canonical-file> <status>
   printf 'next_step: "Now you must run lavish-axi poll"\n'
 }
 case "${1-}" in
-  --version) printf '%s\n' "${LAVISH_FAKE_VERSION:-0.1.80}"; exit 0 ;;
+  --version)
+    if [ -e "$state/off-pin-once-open" ] && [ -e "$state/state.json" ]; then
+      printf '0.1.81\n'
+    else
+      printf '%s\n' "${LAVISH_FAKE_VERSION:-0.1.80}"
+    fi
+    exit 0
+    ;;
   poll)
     limit=${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}
     while [ ! -e "$state/poll-trigger" ]; do
@@ -642,6 +650,7 @@ test_answers_mode_binds_then_arms() {
     [.captains_call[] | select(.type != "decision") | .options[].value] | index("reconcile") == null' >/dev/null \
     || fail "a non-decision card received the reconcile choice"
 
+  assert_contains "$out" "answers: open" "the answer controls were not reported published: $out"
   out=$(run_board "$home" build "$data") || fail "an answers-mode rebuild failed: $out"
   assert_contains "$out" "already-armed: $sid" "a rebuild re-armed an already registered source: $out"
   pass "answers mode makes decision cards answerable, binds, then arms once"
@@ -661,6 +670,29 @@ test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended() {
     || fail "build bound the board while its session was ended"
   ! source_registered "$home" "$sid" || fail "build armed the board while its session was ended"
   pass "answers mode never binds or arms a board whose session stays ended"
+}
+
+test_answers_mode_keeps_controls_hidden_until_listening() {
+  local home data board out
+  home=$(make_lavish_home no-listener answers)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  : > "$home/lavish-state/off-pin-once-open"
+  if out=$(run_board "$home" build "$data" 2>&1); then
+    fail "an answers build succeeded without a listener: $out"
+  fi
+  assert_contains "$out" "cannot arm the board" "the build did not fail at arming: $out"
+  assert_not_contains "$out" "answers: open" "answer controls were reported published without a listener: $out"
+  assert_present "$board" "the read-only page was not served while answers were pending"
+  extract_payload "$board" | jq -e 'has("interactive") | not' >/dev/null \
+    || fail "the board exposed answer controls before its listener was confirmed"
+  extract_payload "$board" | jq -e '[.captains_call[].options[].value] | index("reconcile") == null' >/dev/null \
+    || fail "the read-only page carried the reconcile choice"
+  grep -qF '</script><b>' "$board" \
+    && fail "the read-only page embedded a live closing script tag"
+  [ -z "$(find "$home/.lavish" -name '.board.*')" ] || fail "a failed answers build left a staged page behind"
+  pass "answers mode serves the board read-only until its source is bound and listening"
 }
 
 test_answers_mode_reopens_a_session_the_captain_ended() {
@@ -690,6 +722,26 @@ test_dropping_below_answers_retires_the_answer_source() {
   ! source_registered "$home" "$sid" || fail "declining answers left the source registered"
   out=$(run_board "$home" build "$data" --lavish view) || fail "a second view rebuild failed: $out"
   assert_not_contains "$out" "retired: " "a view rebuild with nothing bound reported a retirement: $out"
+
+  # A binding that cannot be removed refuses the downgrade and keeps the
+  # earlier board, because that binding is what lets an open page change tasks.
+  # A read-only directory cannot stop root, so root skips only this case.
+  if [ "$(id -u)" = 0 ]; then
+    pass "a build below answers retires and unbinds an earlier answer source"
+    return 0
+  fi
+  run_board "$home" build "$data" >/dev/null || fail "the second answers build failed"
+  [ "$(run_hold "$home" binding "$sid")" = "(any)" ] || fail "the second answers build did not bind"
+  chmod a-w "$home/state/decision-bindings"
+  if out=$(run_board "$home" build "$data" --lavish off 2>&1); then
+    chmod u+w "$home/state/decision-bindings"
+    fail "a downgrade succeeded while its binding could not be removed: $out"
+  fi
+  chmod u+w "$home/state/decision-bindings"
+  assert_contains "$out" "refusing to drop below answers" "the refused downgrade was not explained: $out"
+  [ "$(run_hold "$home" binding "$sid")" = "(any)" ] || fail "the refused downgrade lost the binding"
+  extract_payload "$home/.lavish/bearings-board.html" | jq -e '.interactive == true' >/dev/null \
+    || fail "the refused downgrade replaced the earlier board"
   pass "a build below answers retires and unbinds an earlier answer source"
 }
 
@@ -711,5 +763,6 @@ test_unavailable_lavish_falls_back_to_the_static_board
 test_malformed_toggle_refuses_before_touching_the_board
 test_answers_mode_binds_then_arms
 test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended
+test_answers_mode_keeps_controls_hidden_until_listening
 test_answers_mode_reopens_a_session_the_captain_ended
 test_dropping_below_answers_retires_the_answer_source

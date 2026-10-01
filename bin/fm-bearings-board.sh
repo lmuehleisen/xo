@@ -26,15 +26,18 @@
 #            answers  view, plus answer controls on every decision card and the
 #                     standard reconcile choice. The source is bound to the
 #                     keyed-answer intake (bin/fm-captain-hold.sh bind) BEFORE
-#                     it is armed (bin/fm-procevent-lavish.sh arm), so the
-#                     board can never produce an answer that has nowhere to
-#                     go. Merge and credential cards and Charted Next stay
-#                     display-only; those answers stay in chat.
+#                     it is armed (bin/fm-procevent-lavish.sh arm), and the
+#                     board is served without its answer controls until both
+#                     succeed, so it can never take an answer that has nowhere
+#                     to go; a failure leaves that read-only page. Merge and
+#                     credential cards and Charted Next stay display-only;
+#                     those answers stay in chat.
 #
 #            A wanted mode whose pinned lavish-axi is unavailable resolves to
-#            off and says why. A mode below answers retires an earlier answers
-#            build's bound source and unbinds it, so dropping the toggle or
-#            declining answers for one board also stops collecting them.
+#            off and says why. A mode below answers first unbinds an earlier
+#            answers build's source, refusing the build when it cannot, so a
+#            still-open answers page can no longer change a held task; it then
+#            retires that listener, warning when it cannot.
 #            Output starts with `board: <path>`, then:
 #              lavish: off (<reason>)       (a wanted mode fell back to off)
 #              retired: <source-id>         (an earlier answer source stopped)
@@ -46,6 +49,7 @@
 #              armed: <source-id>           (answers, first registration)
 #              already-armed: <source-id>   (answers, registration present)
 #              still-listening: <source-id> (answers, an earlier listener holds it)
+#              answers: open                (answers, controls now published)
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
@@ -260,21 +264,52 @@ source_owner() {  # <source-id>
     | awk -v id="$1" 'NR > 1 && $1 == id { print $3; exit }'
 }
 
-# A build below answers stops an earlier answers build's source: retire it
-# and remove its binding. A refusal (an unacknowledged capture still open, for
-# example) is reported and leaves both in place for the ordinary wake path.
+# A build below answers stops an earlier answers build's source before the
+# new page is published. Unbinding is what stops a still-open answers page from
+# changing a held task, so a failed unbind refuses the build and leaves the
+# earlier board in place. Retiring the now-unbound listener is best effort: a
+# capture it still takes feeds nothing and only wakes firstmate.
 retire_board_answers() {  # <board>
   local board=$1 sid
+  [ -f "$board" ] || return 0
   sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board" 2>/dev/null) || return 0
   "$SCRIPT_DIR/fm-captain-hold.sh" binding "$sid" >/dev/null 2>&1 || return 0
+  "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$sid" >/dev/null 2>&1 \
+    || fail "cannot unbind the earlier answer source $sid; refusing to drop below answers while it can still change held tasks"
   if [ -n "$(source_owner "$sid")" ] \
     && ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
-    printf 'fm-bearings-board: warning: could not retire the earlier answer source %s; it stays bound until its open capture is handled\n' "$sid" >&2
-    return 0
+    printf 'fm-bearings-board: warning: unbound %s, but its listener could not be retired; its captures feed nothing\n' "$sid" >&2
   fi
-  "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$sid" >/dev/null 2>&1 \
-    || { printf 'fm-bearings-board: warning: could not unbind %s\n' "$sid" >&2; return 0; }
   printf 'retired: %s\n' "$sid"
+}
+
+# Stage one page from the template and a compact payload, verified to carry a
+# readable payload, and print its staged path. publish_page makes it the board.
+stage_page() {  # <board> <compact-json>
+  local board=$1 json=$2 tmp extracted
+  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot inject the board data"
+  fi
+  if grep -qxF "$PLACEHOLDER" "$tmp"; then
+    rm -f -- "$tmp"
+    fail "the board data slot survived injection"
+  fi
+  # Round-trip the injected payload back out of the built page, so a board that
+  # would fail to parse in the browser fails here instead.
+  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" \
+    | sed '1d;$d')
+  if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
+    rm -f -- "$tmp"
+    fail "the built board does not carry a readable $BOARD_SCHEMA payload"
+  fi
+  chmod 0600 "$tmp" || { rm -f -- "$tmp"; fail "cannot stage the board"; }
+  printf '%s\n' "$tmp"
+}
+
+publish_page() {  # <staged-page> <board>
+  mv -f -- "$1" "$2" || { rm -f -- "$1"; fail "cannot publish the board"; }
 }
 
 # Bind before arm, then make sure this generation is listening.
@@ -377,7 +412,7 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
 }
 
 command_build() {
-  local data='' request='' request_set=0 board json tmp extracted effective
+  local data='' request='' request_set=0 board json static_json page static_page='' effective
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --lavish) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; request=$2; request_set=1; shift 2 ;;
@@ -411,40 +446,42 @@ command_build() {
 
   board=$(board_path)
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
-  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
-  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
-    rm -f -- "$tmp"
-    fail "cannot inject the board data"
+  [ "$FM_LAVISH_MODE" = answers ] || retire_board_answers "$board"
+  page=$(stage_page "$board" "$json")
+  if [ "$FM_LAVISH_MODE" = answers ]; then
+    # Until the source is bound and listening, serve the same board without
+    # its answer controls, so no answer can be queued with nothing consuming it.
+    static_json=$(jq -c 'del(.interactive)
+      | .captains_call |= map(.options |= map(select(.value != "reconcile")))' <<< "$json") \
+      || { rm -f -- "$page"; fail "cannot stage the read-only board"; }
+    static_json=${static_json//</\\u003c}
+    static_page=$(stage_page "$board" "$static_json") || { rm -f -- "$page"; exit 1; }
   fi
-  if grep -qxF "$PLACEHOLDER" "$tmp"; then
-    rm -f -- "$tmp"
-    fail "the board data slot survived injection"
-  fi
-  # Round-trip the injected payload back out of the built page, so a board that
-  # would fail to parse in the browser fails here instead.
-  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" \
-    | sed '1d;$d')
-  if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
-    rm -f -- "$tmp"
-    fail "the built board does not carry a readable $BOARD_SCHEMA payload"
-  fi
-  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$board"; }; then
-    rm -f -- "$tmp"
-    fail "cannot publish the board"
+  if [ -n "$static_page" ]; then
+    publish_page "$static_page" "$board"
+  else
+    publish_page "$page" "$board"
   fi
   printf 'board: %s\n' "$board"
   [ -z "$FM_LAVISH_REASON" ] || printf 'lavish: off (%s)\n' "$FM_LAVISH_REASON"
-  [ "$FM_LAVISH_MODE" = answers ] || retire_board_answers "$board"
   if [ "$FM_LAVISH_MODE" = off ]; then
     printf 'served: %s\n' "$board"
     printf 'open: %s\n' "$board"
     return 0
   fi
+  if [ -n "$static_page" ]; then
+    trap 'rm -f -- "$page"' EXIT
+  fi
   establish_board_session "$board"
   printf 'served: %s\n' "$board"
   printf 'url: %s\n' "$BOARD_URL"
   printf 'open: %s\n' "$BOARD_URL"
-  [ "$FM_LAVISH_MODE" != answers ] || arm_board_answers "$board"
+  if [ "$FM_LAVISH_MODE" = answers ]; then
+    arm_board_answers "$board"
+    publish_page "$page" "$board"
+    trap - EXIT
+    printf 'answers: open\n'
+  fi
 }
 
 case "${1-}" in
