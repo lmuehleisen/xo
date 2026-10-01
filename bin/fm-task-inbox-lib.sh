@@ -532,9 +532,11 @@ fm_task_inbox_due_action() {  # <state-dir> <task-id>
   local dir oldest base now grace max ladder rec_base count last
   dir=$(fm_task_inbox_dir "$1" "$2")
   if ! oldest=$(fm_task_inbox_oldest_unhandled "$1" "$2"); then
-    rm -f "$dir/.ring-state" "$dir/.escalated" "$dir/.stranded" 2>/dev/null || true
+    rm -f "$dir/.ring-state" "$dir/.escalated" 2>/dev/null || true
     # The one retry ring exists only while config/wait-no-turns is present.
     # Absent, a mark is left untouched and the inbox stays quiet, as before.
+    # An owed retry keeps .stranded, so a fire-and-forget doorbell its first
+    # ring left typed is submitted with Enter alone rather than skipped.
     if [ -e "${FM_CONFIG_OVERRIDE:-${FM_HOME:-}/config}/wait-no-turns" ]; then
       base=$(cat "$dir/.retry-ring" 2>/dev/null || true)
       if ! fm_task_inbox_seq_of "$base" >/dev/null || [ ! -f "$dir/$base" ]; then
@@ -542,8 +544,12 @@ fm_task_inbox_due_action() {  # <state-dir> <task-id>
       elif [ "$(fm_path_age "$dir/.retry-ring")" -ge "$(fm_task_inbox_grace_secs)" ]; then
         printf 'retry %s' "$dir/$base"
         return 0
+      else
+        printf 'quiet'
+        return 0
       fi
     fi
+    rm -f "$dir/.stranded" 2>/dev/null || true
     printf 'quiet'
     return 0
   fi

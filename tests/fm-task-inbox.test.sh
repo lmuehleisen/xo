@@ -508,11 +508,17 @@ test_fire_and_forget_retry_is_owed_once() {
   fire=$(inbox_lib "$state" fm_task_inbox_write "$state" t1 "one-shot steer" fire-and-forget)
   age_path "$fire"
   inbox_lib "$state" fm_task_inbox_mark_retry "$state" t1 "$fire"
+  # A first ring that left the doorbell typed keeps its marker until the retry
+  # is spent, so the retry presses Enter alone instead of skipping a composer
+  # that holds our own doorbell.
+  : > "$state/t1.inbox/.stranded"
   action=$(FM_TASK_INBOX_GRACE_SECS=3600 inbox_lib "$state" fm_task_inbox_due_action "$state" t1)
   [ "$action" = quiet ] || fail "a retry inside grace should be quiet, got: $action"
+  [ -e "$state/t1.inbox/.stranded" ] || fail "an owed retry lost its stranded-doorbell marker inside grace"
   age_path "$state/t1.inbox/.retry-ring"
   action=$(FM_TASK_INBOX_GRACE_SECS=60 inbox_lib "$state" fm_task_inbox_due_action "$state" t1)
   [ "$action" = "retry $fire" ] || fail "an aged retry mark should be due its ring, got: $action"
+  [ -e "$state/t1.inbox/.stranded" ] || fail "a due retry lost its stranded-doorbell marker"
   # An ordinary record's ladder rings the same inbox, so the retry waits behind it.
   tracked=$(inbox_lib "$state" fm_task_inbox_write "$state" t1 "tracked steer")
   age_path "$tracked"
@@ -526,6 +532,7 @@ test_fire_and_forget_retry_is_owed_once() {
   action=$(FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=0 \
     inbox_lib "$state" fm_task_inbox_due_action "$state" t1)
   [ "$action" = quiet ] || fail "a spent retry rang or escalated again: $action"
+  [ ! -e "$state/t1.inbox/.stranded" ] || fail "a spent retry left its stranded-doorbell marker behind"
   # An acknowledged record drops its mark.
   inbox_lib "$state" fm_task_inbox_mark_retry "$state" t1 "$fire"
   age_path "$state/t1.inbox/.retry-ring"

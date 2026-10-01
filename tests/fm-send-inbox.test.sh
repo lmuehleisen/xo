@@ -309,6 +309,22 @@ test_fire_and_forget_unlanded_ring_owes_one_retry() {
   [ "$(cat "$dir/home/state/domain.inbox/.retry-ring" 2>/dev/null)" = 001.msg ] \
     || fail "a ring that landed must not owe a retry for its own record"
 
+  # A doorbell typed but not submitted is owed the same one retry.
+  dir=$(setup_case faf-retry-stranded)
+  mkdir -p "$dir/home/config"
+  : > "$dir/home/config/wait-no-turns"
+  err="$dir/send.err"
+  rm -f "$dir/home/state/t1.meta"
+  fm_write_secondmate_meta "$dir/home/state/domain.meta" "$dir/home" "sess:fm-t1" alpha claude
+  run_send "$dir" "$err" FM_FAKE_TMUX_COMPOSER=swallow -- \
+    fm-domain --fire-and-forget 0123456789abcdef "reconcile your books"; rc=$?
+  expect_code 0 "$rc" "a stranded fire-and-forget ring is still a sent steer"
+  [ "$(cat "$dir/home/state/domain.inbox/.retry-ring" 2>/dev/null)" = 001.msg ] \
+    || fail "a stranded fire-and-forget ring did not owe its one retry"
+  [ -e "$dir/home/state/domain.inbox/.stranded" ] || fail "the stranded doorbell was not remembered for its retry"
+  assert_contains "$(cat "$err")" "the watcher will ring it once more" \
+    "the stranded notice should promise exactly one retry"
+
   dir=$(setup_case ordinary-no-retry)
   err="$dir/send.err"
   run_send "$dir" "$err" FM_FAKE_TMUX_COMPOSER=pending -- t1 "ordinary steer"
