@@ -666,7 +666,7 @@ The generated Pi worker extension (`state/<id>.pi-ext.ts`, written by `bin/fm-sp
 Each command touches a marker first: a `gh pr create` with no `--repo` and a `git push --no-verify` leave no marker and return a tool error naming `gh-no-repo` and `git-no-verify`, while an ordinary command leaves its marker.
 The same guard run against the extension from before the handler existed fails on the first case, because Pi ran the `gh` command.
 
-Verified 2026-10-01 on pi 0.87.1 on macOS; pi-signed was not installed.
+Verified 2026-10-01 on pi 0.87.1 on macOS and pi 0.99.2 on Linux; pi-signed was installed on neither.
 
 ```sh
 bash tests/fm-pi-worker-publish-policy-live-e2e.test.sh
@@ -675,6 +675,11 @@ bash tests/fm-pi-worker-publish-policy-live-e2e.test.sh
 ```
 skip-runner: pi-signed is not installed, so its worker extension was not exercised
 ok - pi 0.87.1: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
+```
+
+```
+skip-runner: pi-signed is not installed, so its worker extension was not exercised
+ok - pi 0.99.2: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
 ```
 
 The guard spends no tokens, so it runs by default wherever Pi is installed; rerun it after every Pi upgrade.
