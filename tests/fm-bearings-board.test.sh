@@ -44,6 +44,17 @@ make_lavish_home() {  # <name> [config/lavish mode]
   fm_test_track_procevent_home "$home" "$home/procevent-claims"
   mkdir -p "$home/state" "$home/data" "$home/lavish-state" "$home/config"
   [ -z "${2-}" ] || printf '%s\n' "$2" > "$home/config/lavish"
+  # The sample decision card's call is held open in this home's own backlog.
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] sample-instruction-layer-refinement-review-decision-perishable-first-admission-choice - Perishable-first admission (repo: sample) (kind: captain) (hold: Adopt it?) (hold-kind: captain)
+  Captain hold set: 2026-08-19T00:00:00Z
+
+## Done
+EOF
   fakebin=$(fm_fakebin "$home")
   cat > "$fakebin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
@@ -131,6 +142,13 @@ board_source_id() {  # <home>
   PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     "$ROOT/bin/fm-procevent-lavish.sh" source-id "$home/.lavish/bearings-board.html"
+}
+
+# Whether this host can read the held call at all; without a compatible
+# tasks-axi the build keeps every card display-only, the safe direction.
+held_call_readable() {  # <home>
+  run_hold "$1" open sample-instruction-layer-refinement-review-decision-perishable-first-admission-choice \
+    --distinguish-absent >/dev/null 2>&1
 }
 
 source_registered() {  # <home> <source-id>
@@ -650,9 +668,15 @@ test_answers_mode_binds_then_arms() {
   source_registered "$home" "$sid" || fail "the board source is not registered after build"
   extract_payload "$board" | jq -e '.interactive == true' >/dev/null \
     || fail "an answers-mode board is not interactive"
-  extract_payload "$board" | jq -e '
-    [.captains_call[] | select(.type == "decision") | .options[-1].value] | all(. == "reconcile")' >/dev/null \
-    || fail "a decision card lacks the reconcile choice"
+  if held_call_readable "$home"; then
+    extract_payload "$board" | jq -e '
+      [.captains_call[] | select(.type == "decision") | .answerable == true and .options[-1].value == "reconcile"] | all' >/dev/null \
+      || fail "a decision card held in this home is not answerable with the reconcile choice"
+  else
+    extract_payload "$board" | jq -e '
+      [.captains_call[] | select(.type == "decision") | (has("answerable") | not) and ([.options[].value] | index("reconcile") == null)] | all' >/dev/null \
+      || fail "a decision card whose call cannot be read was made answerable"
+  fi
   extract_payload "$board" | jq -e '
     [.captains_call[] | select(.type != "decision") | .options[].value] | index("reconcile") == null' >/dev/null \
     || fail "a non-decision card received the reconcile choice"
@@ -677,6 +701,24 @@ test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended() {
     || fail "build bound the board while its session was ended"
   ! source_registered "$home" "$sid" || fail "build armed the board while its session was ended"
   pass "answers mode never binds or arms a board whose session stays ended"
+}
+
+test_answers_mode_keeps_other_homes_calls_display_only() {
+  local home data board out
+  home=$(make_lavish_home remote-call answers)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  jq '.captains_call += [{
+        "key":"remote-mate-call","type":"decision","repo":"sample",
+        "title":"Secondmate decision","options":[{"value":"yes","label":"Yes"}]
+      }]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data") || fail "the answers build failed: $out"
+  extract_payload "$board" | jq -e '
+    [.captains_call[] | select(.key == "remote-mate-call")]
+    | length == 1 and (.[0] | (has("answerable") | not) and ([.options[].value] | index("reconcile") == null))' >/dev/null \
+    || fail "a call this home does not hold was made answerable"
+  pass "answers mode keeps a call another home holds display-only"
 }
 
 test_answers_mode_keeps_controls_hidden_until_listening() {
@@ -728,8 +770,15 @@ test_build_refuses_a_symlinked_board_path() {
   if out=$(run_board "$home" build "$data" --lavish off 2>&1); then
     fail "a build replaced a symlinked board path: $out"
   fi
-  assert_contains "$out" "the board path is a symlink" "the symlink refusal was not named: $out"
+  assert_contains "$out" "is a symlink" "the symlink refusal was not named: $out"
   [ -L "$home/.lavish/bearings-board.html" ] || fail "the refused build touched the symlinked board path"
+  rm -f "$home/.lavish/bearings-board.html"
+  mv "$home/.lavish" "$home/real-lavish"
+  ln -s "$home/real-lavish" "$home/.lavish"
+  if out=$(run_board "$home" build "$data" --lavish off 2>&1); then
+    fail "a build used a symlinked .lavish directory: $out"
+  fi
+  assert_contains "$out" "is a symlink" "the directory symlink refusal was not named: $out"
   pass "a build refuses a board path replaced by a symlink"
 }
 
@@ -814,6 +863,7 @@ test_unavailable_lavish_falls_back_to_the_static_board
 test_malformed_toggle_counts_as_off_and_a_malformed_request_refuses
 test_answers_mode_binds_then_arms
 test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended
+test_answers_mode_keeps_other_homes_calls_display_only
 test_answers_mode_keeps_controls_hidden_until_listening
 test_view_mode_ends_the_session_when_it_cannot_listen
 test_build_refuses_a_symlinked_board_path

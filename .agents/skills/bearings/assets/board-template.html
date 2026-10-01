@@ -578,7 +578,7 @@ __FM_BEARINGS_BOARD_DATA__
       pad.appendChild(ctx);
     }
 
-    if (interactive && item.type === "decision") {
+    if (interactive && item.type === "decision" && item.answerable === true) {
       pad.appendChild(answerForm(item, card));
     } else {
       var opts = el("div", "bb-opts");

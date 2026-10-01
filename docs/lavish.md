@@ -13,7 +13,7 @@ This page covers turning it on, the install rules, and viewing Lavish pages from
 | `view` | The same read-only board, opened in Lavish; annotations reach Firstmate as review feedback | Offered for visual deliverables |
 | `answers` | Decision cards take answers in the page as well as in chat | Offered for visual deliverables |
 
-In `answers` mode only decision cards are answerable on the board.
+In `answers` mode only decision cards for calls this home holds are answerable on the board; a second mate's calls stay in chat.
 Merge, credential, and dispatch requests stay in chat, and every board answer goes through the same keyed-answer intake as a chat answer.
 
 ## Install

@@ -935,7 +935,7 @@ It holds one word:
 
 - `off`, the default when the file is absent: `/bearings lavish` builds a static local HTML board, scouts get no Lavish review loop, and every answer stays in chat.
 - `view`: `/bearings lavish` opens its read-only board in Lavish with its source armed but unbound, so annotations reach firstmate as ordinary review feedback, and scout briefs offer the crew-hosted review loop below for visual deliverables.
-- `answers`: `view`, plus answer controls on the board's decision cards, bound to the keyed-answer intake in `bin/fm-captain-hold.sh` before the board is armed; merge, credential, and dispatch requests stay in chat.
+- `answers`: `view`, plus answer controls on the board's decision cards for calls this home's backlog holds open, bound to the keyed-answer intake in `bin/fm-captain-hold.sh` before the board is armed; a secondmate's calls, and merge, credential, and dispatch requests, stay in chat.
 
 A per-request choice wins over the file in both directions for one artifact: `bin/fm-bearings-board.sh build --lavish <mode>` for one board, and `bin/fm-brief.sh --scout --lavish <mode>` for one scout.
 Any other value in the file counts as `off`, and the board and session start say why; any other per-request value is refused.

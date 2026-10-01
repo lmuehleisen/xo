@@ -99,7 +99,7 @@ Its Lavish mode is the home's `config/lavish` unless the request chose one, and 
 
 - `off`, the default: a static local HTML file the captain opens in a browser; every answer stays in chat.
 - `view`: the same read-only board, opened in Lavish so the captain can view and annotate it, including from another computer over ssh (`docs/lavish.md`); its source is armed unbound, so annotations arrive as ordinary review feedback.
-- `answers`: `view`, plus answer controls on decision cards only; merge, credential, and dispatch requests stay in chat.
+- `answers`: `view`, plus answer controls on the decision cards whose call this home's own backlog holds open; a secondmate's call, and merge, credential, and dispatch requests, stay in chat.
 
 The script also owns the stable board path, payload validation, stale-card cleanup, template injection, session checks, and the bind-before-arm order, so the per-invocation work is composing the payload and running `build`, with `--lavish <mode>` only when the request chose one.
 

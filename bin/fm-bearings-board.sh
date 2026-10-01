@@ -25,8 +25,11 @@
 #                     an ssh port forward (docs/lavish.md). Its source is armed
 #                     unbound, so annotations reach firstmate as ordinary
 #                     review feedback and never feed the keyed-answer intake.
-#            answers  view, plus answer controls on every decision card and the
-#                     standard reconcile choice. The source is bound to the
+#            answers  view, plus answer controls and the standard reconcile
+#                     choice on every decision card whose call this home's own
+#                     backlog holds open (bin/fm-captain-hold.sh open); a
+#                     secondmate's call, or one whose state cannot be read,
+#                     stays display-only and is answered in chat. The source is bound to the
 #                     keyed-answer intake (bin/fm-captain-hold.sh bind) BEFORE
 #                     it is armed (bin/fm-procevent-lavish.sh arm), and the
 #                     board is served without its answer controls until both
@@ -405,13 +408,14 @@ decision_card_is_stale() {  # <task-id> <landed-0-or-1>
 }
 
 # Drop every stale decision card while preserving every surviving input field.
-# The build alone decides `interactive`: set true only in answers mode and
-# removed otherwise, so an off board embeds the input payload unchanged. Answers
-# mode is also the only mode that gives every surviving decision card the standard
-# reconcile choice. The validator reserves that value, so no composer can
-# author it; docs/captain-hold-lifecycle.md owns what it means.
+# The build alone decides `interactive` and each card's `answerable`: set true
+# only in answers mode, for decision cards whose call this home holds open, and
+# removed otherwise, so an off board embeds the input payload unchanged. Only
+# those answerable cards get the standard reconcile choice. The validator
+# reserves that value, so no composer can author it;
+# docs/captain-hold-lifecycle.md owns what it means.
 effective_payload() {  # <data.json> <dest.json> <lavish-mode>
-  local data=$1 dest=$2 mode=$3 landed_keys key reason drop='' tmp landed=0
+  local data=$1 dest=$2 mode=$3 landed_keys key reason drop='' tmp landed=0 here='' here_json
   landed_keys=$(jq -c '
     def version_parts: split(".") | map(tonumber);
     . as $payload
@@ -434,23 +438,35 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
     if jq -e --arg key "$key" 'index($key) != null' <<< "$landed_keys" >/dev/null; then
       landed=1
     fi
-    reason=$(decision_card_is_stale "$key" "$landed") || continue
-    printf 'dropped-landed-card: %s (%s)\n' "$key" "$reason" >&2
-    drop=$drop$key$'\n'
+    if reason=$(decision_card_is_stale "$key" "$landed"); then
+      printf 'dropped-landed-card: %s (%s)\n' "$key" "$reason" >&2
+      drop=$drop$key$'\n'
+      continue
+    fi
+    # Only a call this home's own backlog holds open can take a board answer:
+    # the binding feeds this home's intake, so a secondmate's call, or one whose
+    # state cannot be read, stays display-only and is answered in chat.
+    if [ "$mode" = answers ] \
+      && "$SCRIPT_DIR/fm-captain-hold.sh" open "$key" --distinguish-absent >/dev/null 2>&1; then
+      here=$here$key$'\n'
+    fi
   done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$data")
   tmp=$(printf '%s' "$drop" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
-  jq --argjson dropped "$tmp" --arg mode "$mode" '
+  here_json=$(printf '%s' "$here" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
+  jq --argjson dropped "$tmp" --argjson here "$here_json" --arg mode "$mode" '
     (if $mode == "answers" then .interactive = true else del(.interactive) end)
     | .captains_call = [
       .captains_call[]
       | . as $card
       | select($card.type != "decision" or (($dropped | index($card.key)) == null))
-      | if $mode == "answers" and .type == "decision"
-        then .options += [{
-          value: "reconcile",
-          label: "Reconcile",
-          hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
-        }]
+      | del(.answerable)
+      | if $mode == "answers" and .type == "decision" and (($here | index($card.key)) != null)
+        then .answerable = true
+          | .options += [{
+            value: "reconcile",
+            label: "Reconcile",
+            hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
+          }]
         else . end
     ]' "$data" > "$dest" || return 1
 }
@@ -492,14 +508,15 @@ command_build() {
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
   # The board's source id is its real path, so a board replaced by a symlink
   # would name some other source; refuse it rather than lose track of a listener.
-  [ ! -L "$board" ] || fail "the board path is a symlink, which is never built: $board"
+  [ ! -L "$board" ] && [ ! -L "${board%/*}" ] \
+    || fail "the board path or its .lavish directory is a symlink, which is never built: $board"
   [ "$FM_LAVISH_MODE" = answers ] || disarm_board_below_answers "$board" "$FM_LAVISH_MODE"
   page=$(stage_page "$board" "$json")
   if [ "$FM_LAVISH_MODE" = answers ]; then
     # Until the source is bound and listening, serve the same board without
     # its answer controls, so no answer can be queued with nothing consuming it.
     static_json=$(jq -c 'del(.interactive)
-      | .captains_call |= map(.options |= map(select(.value != "reconcile")))' <<< "$json") \
+      | .captains_call |= map(del(.answerable) | .options |= map(select(.value != "reconcile")))' <<< "$json") \
       || { rm -f -- "$page"; fail "cannot stage the read-only board"; }
     static_json=${static_json//</\\u003c}
     static_page=$(stage_page "$board" "$static_json") || { rm -f -- "$page"; exit 1; }
