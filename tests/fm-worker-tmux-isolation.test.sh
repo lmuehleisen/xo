@@ -286,34 +286,29 @@ test_teardown_retires_the_private_directory() {
   pass "teardown refuses while a private tmux server is unreachable, then stops the servers, removes the directory, and leaves the fleet running"
 }
 
-# A recorded private directory derived from another home path, as after the home
-# moved, is not touched, but while it survives teardown keeps the record, which
-# may be the only pointer to a live server in it.
-test_teardown_keeps_the_record_for_a_moved_private_directory() {
-  local id=moved-t1 dir out status
+# Teardown follows the directory the record names rather than recomputing it,
+# so a task whose home path changed since spawn, such as after the home moved,
+# still has its private servers stopped and its directory removed.
+test_teardown_retires_a_recorded_directory_from_a_moved_home() {
+  local id=moved-t1 dir pid out status
   make_teardown_case moved "$id"
   mkdir -p "$TD_CASE/old-home"
   dir=$(private_tmux_dir "$TD_CASE/old-home" "$id")
   PRIVATE_DIRS+=("$dir")
   (umask 077 && mkdir "$dir") || fail "could not create the moved private tmux directory $dir"
   write_teardown_meta "$id" "$dir"
+  ltmux -S "$dir/own" new-session -d -s own "$REAL_SLEEP 600" || fail "could not start the moved worker's -S server"
+  pid=$(ltmux -S "$dir/own" display-message -p '#{pid}')
   start_fleet || fail "could not start the stand-in fleet"
 
   out=$(run_teardown "$id")
   status=$?
-  [ "$status" -ne 0 ] || fail "teardown must refuse while a moved private tmux directory survives"
-  assert_contains "$out" "recorded worker tmux directory $dir is not where this home now places" \
-    "teardown did not name the moved private tmux directory"
-  [ -f "$TD_HOME/state/$id.meta" ] || fail "teardown must keep the record while a moved private tmux directory survives"
-  [ -d "$dir" ] || fail "teardown must leave a moved private tmux directory untouched"
-
-  rm -rf "$dir"
-  out=$(run_teardown "$id")
-  status=$?
-  expect_code 0 "$status" "teardown should succeed once the moved directory is gone: $out"
+  expect_code 0 "$status" "teardown should retire a recorded private directory from a moved home: $out"
+  pid_gone "$pid" || fail "teardown must stop the server in the recorded private directory"
+  [ ! -e "$dir" ] || fail "teardown must remove the recorded private directory"
   [ ! -e "$TD_HOME/state/$id.meta" ] || fail "a completed teardown must remove the task record"
   assert_equals "captain fm-worker " "$(fleet_windows)" "teardown must leave the stand-in fleet running"
-  pass "teardown keeps the record while a moved private tmux directory survives and leaves that directory untouched"
+  pass "teardown retires the private directory its record names even after the home moved"
 }
 
 # A worker can leave sockets in its private directory that name another server:
@@ -392,6 +387,6 @@ test_ship_worker_cannot_reach_the_fleet
 test_control_inherited_tmux_reaches_the_fleet
 test_spawn_refuses_a_directory_it_cannot_own
 test_teardown_retires_the_private_directory
-test_teardown_keeps_the_record_for_a_moved_private_directory
+test_teardown_retires_a_recorded_directory_from_a_moved_home
 test_retire_ignores_planted_foreign_sockets
 test_retire_keeps_the_directory_when_a_server_cannot_be_stopped

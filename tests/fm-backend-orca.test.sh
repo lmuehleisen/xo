@@ -748,15 +748,15 @@ test_spawn_orca_recovery_record_keeps_the_private_tmux_directory() {
   touch "$state/.last-watcher-beat"
   tmux_dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$home" && pwd -P)" "$id" |
     { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
-  (umask 077 && mkdir "$tmux_dir") || fail "could not create the private tmux directory"
-  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$tmux_dir/s" ||
-    { rm -rf "$tmux_dir"; fail "could not create a socket in the private tmux directory"; }
   real_mv=$(command -v mv)
+  # The failing publication also plants, in the private directory the spawn
+  # just created, a socket that cannot be inspected.
   cat > "$fakes/mv" <<SH
 #!/usr/bin/env bash
 for arg in "\$@"; do
   if [ "\$arg" = "$state/$id.meta" ] && [ ! -e "$fakes/failed" ]; then
     : > "$fakes/failed"
+    python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$tmux_dir/s"
     exit 1
   fi
 done

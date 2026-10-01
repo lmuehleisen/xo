@@ -1316,9 +1316,9 @@ spawn_fresh_commit_rollback() {
     "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
     # With the record gone, the worker's private tmux servers and directory go
-    # too, unless a launched worker's endpoint was left open: removing the
+    # too, unless a launched worker's endpoint is not proven gone: removing the
     # directory under it would send its bare tmux back to the default server.
-    if [ -n "${WORKER_TMUX_DIR:-}" ] && [ "$SPAWN_LAUNCH_SENT" = 1 ] && [ "$SPAWN_ENDPOINT_CLOSED" != 1 ]; then
+    if [ -n "${WORKER_TMUX_DIR:-}" ] && [ "$SPAWN_LAUNCH_SENT" = 1 ] && ! spawn_endpoint_proven_absent; then
       [ ! -e "$WORKER_TMUX_DIR" ] ||
         echo "warning: task $ID's worker may still be running, so its private tmux directory $WORKER_TMUX_DIR is kept; once its endpoint is closed, stop any tmux server in it by its exact -S socket and remove the directory" >&2
     elif ! fm_private_tmux_retire "${WORKER_TMUX_DIR:-}" && [ -e "${WORKER_TMUX_DIR:-}" ]; then
@@ -4823,25 +4823,26 @@ if ! (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
 fi
 mkdir -p "$TASK_TMP/gotmp"
 # A ship or scout worker's private tmux directory (docs/tmux-backend.md): short
-# because socket paths are capped, private for the same reason as TASK_TMP.
+# because socket paths are capped, private for the same reason as TASK_TMP. A
+# relaunch keeps the directory its record names, so a task keeps one directory
+# for its lifetime even if the home's path changes.
 WORKER_TMUX_DIR=
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
-  WORKER_TMUX_DIR=$(printf '%s\n%s' "$(cd "$FM_HOME" && pwd -P)" "$ID" |
-    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)
-  case "$WORKER_TMUX_DIR" in
-    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-    *) echo "error: could not derive a private tmux directory for $ID (needs shasum or sha256sum)" >&2; exit 1 ;;
-  esac
-  WORKER_TMUX_DIR="/tmp/fmwt-$WORKER_TMUX_DIR"
-  # A relaunch must not drop a recorded directory it would no longer derive,
-  # such as after the home moved: it may be the only pointer to a live server.
   if [ "$RELAUNCH" -eq 1 ]; then
-    recorded_tmux_dir=$(fm_meta_get "${RELAUNCH_META:-}" worker_tmux_dir)
-    if [ -n "$recorded_tmux_dir" ] && [ "$recorded_tmux_dir" != "$WORKER_TMUX_DIR" ] &&
-      { [ -e "$recorded_tmux_dir" ] || [ -L "$recorded_tmux_dir" ]; }; then
-      echo "error: task $ID's record names private tmux directory $recorded_tmux_dir, not $WORKER_TMUX_DIR where this home now places it; refusing a relaunch that would drop it - stop any tmux server in it by its exact -S socket and remove the directory, then retry" >&2
-      exit 1
-    fi
+    WORKER_TMUX_DIR=$(fm_meta_get "${RELAUNCH_META:-}" worker_tmux_dir)
+    case "$WORKER_TMUX_DIR" in
+      /tmp/fmwt-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) WORKER_TMUX_DIR= ;;
+    esac
+  fi
+  if [ -z "$WORKER_TMUX_DIR" ]; then
+    WORKER_TMUX_DIR=$(printf '%s\n%s' "$(cd "$FM_HOME" && pwd -P)" "$ID" |
+      { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)
+    case "$WORKER_TMUX_DIR" in
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) echo "error: could not derive a private tmux directory for $ID (needs shasum or sha256sum)" >&2; exit 1 ;;
+    esac
+    WORKER_TMUX_DIR="/tmp/fmwt-$WORKER_TMUX_DIR"
   fi
   if ! (umask 077 && mkdir "$WORKER_TMUX_DIR") 2>/dev/null; then
     if [ -L "$WORKER_TMUX_DIR" ] || [ ! -d "$WORKER_TMUX_DIR" ] || [ ! -O "$WORKER_TMUX_DIR" ] ||

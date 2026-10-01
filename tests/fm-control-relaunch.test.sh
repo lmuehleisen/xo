@@ -566,9 +566,9 @@ private_tmux_dir() {
     { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
 }
 
-# A relaunch keeps the ship's private tmux directory in its record, and refuses
-# rather than drop a recorded one it would no longer derive, such as after the
-# home moved, since that may be the only pointer to a live server.
+# A relaunch keeps the private tmux directory the ship's record names, even one
+# the home would no longer derive after its path changed, so the task keeps one
+# directory for its lifetime.
 test_relaunch_keeps_the_private_tmux_directory() {
   local dir out rc derived moved
   dir=$(new_case tmux-dir rl40)
@@ -588,13 +588,12 @@ test_relaunch_keeps_the_private_tmux_directory() {
   sed -i.bak "s|^worker_tmux_dir=.*|worker_tmux_dir=$moved|" "$dir/home/state/rl40.meta"
   printf 'claude' > "$dir/fake/command"
   out=$(run_control "$dir" rl40 relaunch --note "continuing the task"); rc=$?
-  [ "$rc" -ne 0 ] || fail "a relaunch must refuse to drop a recorded private tmux directory it no longer derives"
-  assert_contains "$out" "record names private tmux directory $moved" \
-    "the refused relaunch did not name the recorded private tmux directory"
+  expect_code 0 "$rc" "a relaunch should keep a recorded private tmux directory"$'\n'"$out"
   [ "$(meta_field "$dir" rl40 worker_tmux_dir)" = "$moved" ] \
-    || fail "the refused relaunch must keep the record that names the moved directory"
-  [ -d "$moved" ] || fail "the refused relaunch must leave the moved directory untouched"
-  pass "fm-control relaunch: keeps the private tmux directory and refuses to drop a moved one"
+    || fail "the relaunch must keep the private tmux directory its record names"
+  assert_grep "TMUX_TMPDIR='$moved'" "$dir/fake/literal" \
+    "the replacement agent must start on the recorded private tmux directory"
+  pass "fm-control relaunch: keeps the private tmux directory its record names"
 }
 
 test_relaunch_serializes_concurrent_durable_metadata_publication() {

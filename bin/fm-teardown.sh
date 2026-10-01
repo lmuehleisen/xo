@@ -3287,31 +3287,23 @@ endpoint_close_refusal() {  # <subject> <backend> <target> <honors-force>
   return 1
 }
 
-# retire_worker_tmux_dir <home> <id> <dir>: stop a ship or scout worker's private
-# tmux servers and remove their directory through fm_private_tmux_retire
-# (docs/tmux-backend.md). Only the task's own expected directory is touched, and
-# only while it is still private to this user. Returns 1 while that directory
-# survives, so the caller keeps the record that names it. A surviving
-# spawn-shaped directory that is not the expected one, such as after the home
-# moved, is left untouched but also keeps the record, since it may be the only
-# pointer to a live server.
+# retire_worker_tmux_dir <id> <dir>: stop a ship or scout worker's private tmux
+# servers and remove the directory its record names, through
+# fm_private_tmux_retire (docs/tmux-backend.md). Only a directory of the shape
+# spawn creates is touched, and only while it is still private to this user.
+# Returns 1 while that directory survives, so the caller keeps the record that
+# names it.
 retire_worker_tmux_dir() {
-  local home=$1 id=$2 dir=$3
+  local id=$1 dir=$2
   [ -n "$dir" ] || return 0
-  if [ "$dir" != "/tmp/fmwt-$(printf '%s\n%s' "$(cd "$home" && pwd -P)" "$id" |
-    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)" ]; then
-    if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
+  case "$dir" in
+    /tmp/fmwt-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *)
+      { [ ! -e "$dir" ] && [ ! -L "$dir" ]; } ||
+        echo "warning: recorded worker tmux directory $dir is not a private directory spawn creates; leaving it and any server in it untouched" >&2
       return 0
-    fi
-    case "$dir" in
-      /tmp/fmwt-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
-        echo "error: recorded worker tmux directory $dir is not where this home now places task $id's private directory, so teardown leaves it untouched; retaining the task record - stop any tmux server in it by its exact -S socket and remove the directory, then rerun teardown" >&2
-        return 1
-        ;;
-    esac
-    echo "warning: recorded worker tmux directory $dir is not task $id's private directory; leaving it and any server in it untouched" >&2
-    return 0
-  fi
+      ;;
+  esac
   if ! fm_private_tmux_retire "$dir" && { [ -e "$dir" ] || [ -L "$dir" ]; }; then
     echo "error: task $id's private tmux directory $dir could not be retired: it is no longer private to this user, or a tmux server in it could not be inspected or stopped; retaining the task record - stop that server by its exact -S socket and remove the directory, then rerun teardown" >&2
     return 1
@@ -3363,7 +3355,7 @@ cleanup_firstmate_home_children() {
           || { endpoint_close_refusal "child $child_id" "$child_backend" "$child_t" 0; return 1; }
       fi
     fi
-    retire_worker_tmux_dir "$home" "$child_id" "$(meta_value "$child_meta" worker_tmux_dir)" || return 1
+    retire_worker_tmux_dir "$child_id" "$(meta_value "$child_meta" worker_tmux_dir)" || return 1
     if [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
@@ -3860,7 +3852,7 @@ if [ "$TEARDOWN_RECORD_ONLY" = 1 ]; then
   [ -z "$WORKER_TMUX_DIR" ] || { [ ! -e "$WORKER_TMUX_DIR" ] && [ ! -L "$WORKER_TMUX_DIR" ]; } ||
     echo "warning: record-only retirement leaves task $ID's private tmux directory $WORKER_TMUX_DIR and any server in it untouched; stop such a server by its exact -S socket and remove the directory once nothing uses it" >&2
 else
-  retire_worker_tmux_dir "$FM_HOME" "$ID" "$WORKER_TMUX_DIR" || exit 1
+  retire_worker_tmux_dir "$ID" "$WORKER_TMUX_DIR" || exit 1
 fi
 # Retire only this Firstmate home's launch namespace. Its never-reused per-spawn
 # files leave the equal task-id namespace of every other home untouched.

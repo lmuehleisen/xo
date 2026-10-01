@@ -1336,6 +1336,18 @@ test_dispatch_leaves_no_record_when_the_transition_fails() {
   case_dir=$(make_home dispatch-transition-fails "$id")
   add_item "$case_dir" "$id"
   break_verb "$case_dir" start
+  # Once the launch line is typed, the task window reads present, as a launched
+  # worker's endpoint does.
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\$*" in *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
+case "\${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  send-keys) for a in "\$@"; do case "\$a" in ". '"*) : > "$case_dir/launched" ;; esac; done ;;
+  list-windows) [ ! -e "$case_dir/launched" ] || printf 'fm-%s\n' "$id" ;;
+esac
+exit 0
+SH
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn reported success though the backlog transition failed"
