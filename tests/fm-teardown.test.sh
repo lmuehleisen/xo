@@ -2498,7 +2498,7 @@ configure_secondmate_with_tmux_children() {  # <case-dir>
 }
 
 test_forced_secondmate_teardown_holds_descendant_lifecycle_locks() {
-  local case_dir home lock ready release holder_pid rc waited=0 child
+  local case_dir home lock ready release holder_pid rc waited=0 child tmux_dir
   case_dir=$(make_case descendant-locks)
   write_meta "$case_dir" local-only secondmate
   configure_secondmate_with_tmux_children "$case_dir"
@@ -2561,8 +2561,14 @@ SH
 
   : > "$release"
   wait "$holder_pid" 2>/dev/null || true
+  # A child ship's private tmux directory is retired with its record.
+  tmux_dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$home" && pwd -P)" child-a |
+    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+  (umask 077 && mkdir "$tmux_dir") || fail "descendant-locks: could not create child-a's private tmux directory"
+  printf 'worker_tmux_dir=%s\n' "$tmux_dir" >> "$home/state/child-a.meta"
   rc=0
   run_teardown "$case_dir" --force > "$case_dir/retry.stdout" 2> "$case_dir/retry.stderr" || rc=$?
+  [ ! -e "$tmux_dir" ] || { rm -rf "$tmux_dir"; fail "descendant-locks: forced teardown left child-a's private tmux directory"; }
   expect_code 0 "$rc" "descendant-locks: uncontended retry should complete"
   [ ! -e "$case_dir/state/task-x1.meta" ] && [ ! -d "$home" ] \
     || fail "descendant-locks: uncontended retry retained retired task state"

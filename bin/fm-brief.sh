@@ -566,6 +566,17 @@ EOF
 HERDR_SECTION=${HERDR_SECTION%$'\n'}
 fi
 
+# Ship and scout workers start on a private per-task tmux server
+# (docs/tmux-backend.md "Worker isolation from the fleet server"); a lab primary
+# keeps the socket directory the Herdr isolation section gives it.
+# shellcheck disable=SC2016  # literal brief text: $TMUX_TMPDIR must reach the worker unexpanded.
+WORKER_TMUX_RULE='   Your tmux commands reach a private per-task tmux server; never point tmux at a server you did not create (with -S, or by setting TMUX), and never kill tmux by process name or pid.
+   Any tmux server you start with -S must use a socket under $TMUX_TMPDIR, such as -S "$TMUX_TMPDIR/lab", so cleanup can stop it.'
+if [ "$HERDR_LAB" -eq 1 ]; then
+  WORKER_TMUX_RULE="$WORKER_TMUX_RULE
+   The one exception is the lab tmux server the Herdr isolation section places in its own socket directory, which that section's cleanup trap stops."
+fi
+
 IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 # Task
 ## Captain's intent
@@ -637,6 +648,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+$WORKER_TMUX_RULE
 3. Use gh for GitHub operations. For browser work, use the harness browser tools or Playwright.
 ${LOCAL_SKILLS_NOTE}4. Report status by appending one line:
    \`$STATUS_APPEND\`
@@ -714,6 +726,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 # Rules
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
+$WORKER_TMUX_RULE
 3. Use gh for GitHub operations. For browser work, use the harness browser tools or Playwright.
 ${LOCAL_SKILLS_NOTE}   Never write sensitive information into a public repository, where it stays permanently: nothing public may tell a stranger about the captain's private life or work.
    Commit messages, PR and issue text, and review replies follow the public-text policy that \`$FM_ROOT/bin/fm-publish-gate.sh policy\` prints (short neutral PR text, short review replies, and no sensitive evidence), and git takes its commit identity from the launch or git config only: never pass identity to git (\`-c user.*\`, \`-c author.*\`, \`-c committer.*\`, \`--author\`, or \`GIT_AUTHOR_*\`/\`GIT_COMMITTER_*\`) and never copy an author from \`git log\`.
