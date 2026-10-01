@@ -19,7 +19,11 @@
 #     non-tmux backend performs and the one a vendor's own footer rows can
 #     break: a harness that renders a statusLine or mode hint below its
 #     composer must never make an idle composer read `pending`, because that
-#     verdict is what skips a steer's doorbell fleet-wide.
+#     verdict is what skips a steer's doorbell fleet-wide;
+#   - a NAMED Claude Code session, whose composer top rule carries the name
+#     (truncated with `…` and no leading rule when long): idle reads `empty`
+#     with and without a cursor, and typed text is proven owned before it is
+#     cleared, the read the away daemon's delivery proof and recovery depend on.
 #
 # Run default mode with FM_COMPOSER_MATRIX_LIVE=1. No prompt is submitted, so no
 # model tokens are spent. An absent harness is reported and skipped; a run that
@@ -215,6 +219,61 @@ for h in claude codex opencode pi grok kimi muse; do
     note "harness absent, not verified here: $h"
   fi
 done
+
+# --- 1b. A named Claude Code session ----------------------------------------
+# Claude Code draws a named session's name into its composer's top rule, and a
+# reader that missed that shape wedged the away daemon: it typed a doorbell it
+# could not read back or recover. The probe is typed and cleared, never
+# submitted.
+check_claude_named() {  # <label> <session-name>
+  local label=$1 name=$2 win="hx-named-$1" version verdict='' i=0 pane caps probe rc
+  version=$(harness_version claude)
+  probe="fm composer probe never submitted $label"
+  tmux -L "$SOCKET" new-window -d -t "$SESSION:" -n "$win" -c "$ROOT" -- claude -n "$name" \
+    || fail "claude ($version): could not launch a named session"
+  while [ "$i" -lt "${FM_COMPOSER_MATRIX_LIVE_POLLS:-45}" ]; do
+    verdict=$(fm_tmux_composer_state "$SESSION:$win")
+    [ "$verdict" = empty ] && break
+    i=$((i + 1))
+    sleep 1
+  done
+  pane=$(fm_tmux_composer_capture "$SESSION:$win" 2>/dev/null) || pane=
+  caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=0')
+  if [ "$verdict" != empty ] || [ "$(fm_composer_classify_screen "$caps" "$pane")" != empty ]; then
+    printf '# claude %s-name pane tail:\n' "$label" >&2
+    tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win" 2>/dev/null \
+      | grep '[^[:space:]]' | tail -6 | sed 's/^/#   /' >&2
+    FAILED=1
+    printf 'not ok - claude (%s): an idle %s-named composer did not read empty with and without a cursor (cursor verdict: %s)\n' \
+      "$version" "$label" "${verdict:-unreadable}" >&2
+    tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+    return 0
+  fi
+  tmux -L "$SOCKET" send-keys -t "$SESSION:$win" -l "$probe"
+  rc=2
+  i=0
+  while [ "$i" -lt 20 ] && [ "$rc" != 0 ]; do
+    sleep 0.5
+    rc=0
+    fm_tmux_composer_owned_input "$SESSION:$win" "$probe" || rc=$?
+    i=$((i + 1))
+  done
+  if [ "$rc" = 0 ] && fm_tmux_clear_owned_input "$SESSION:$win" "$probe" fm_tmux_composer_owned_input 4; then
+    CHECKED=$((CHECKED + 1))
+    pass "claude ($version): a $label-named composer reads empty idle and proves, then clears, typed text"
+  else
+    FAILED=1
+    printf 'not ok - claude (%s): typed text in a %s-named composer was not proven owned and cleared (owned read rc %s)\n' \
+      "$version" "$label" "$rc" >&2
+  fi
+  tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+}
+if command -v claude >/dev/null 2>&1; then
+  check_claude_named short fm-cmx-named
+  check_claude_named long "fm-cmx-$(printf 'long-session-name-%.0s' $(seq 1 14))"
+else
+  note "harness absent, not verified here: claude (named-session composer)"
+fi
 
 # --- 2. The strict blank-row posture, live ----------------------------------
 # A plain shell pane parked on a blank line between two rules (the audit's

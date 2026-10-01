@@ -280,6 +280,11 @@ test_denylist_never_reaches_the_judge() {
   assert_not_contains "$(cat "$FM_TEST_JUDGE_PROMPTS")" "$PRIVATE_TERM" "the prompt never carries the denylist"
   assert_not_contains "$(cat "$FM_TEST_JUDGE_PROMPTS")" "$PIN_EMAIL" "the prompt never carries the identity file"
   assert_contains "$(cat "$FM_TEST_JUDGE_PROMPTS")" "Operator-direction narrative" "the prompt carries the policy categories"
+  local tool
+  for tool in herdr tmux orca zellij cmux treehouse gh Playwright tasks-axi quota-axi gh-axi lavish-axi chrome-devtools-axi no-mistakes \
+    'Claude Code' Anthropic Codex OpenAI OpenCode Pi Grok xAI Kimi Moonshot Cursor Gemini Google Muse Rovo Atlassian omp agy Antigravity Devin Cognition; do
+    assert_contains "$(cat "$FM_TEST_JUDGE_PROMPTS")" "$tool" "the prompt names $tool as an allowed public tool"
+  done
   pass "the judge runs only after the literal checks pass and never receives the private config"
 }
 

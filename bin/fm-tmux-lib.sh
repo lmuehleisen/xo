@@ -440,58 +440,25 @@ fm_tmux_proven_submit() {
   fi
 }
 
+# The tmux key sender for the shared owned-input loops in bin/fm-composer-lib.sh.
+_fm_tmux_owned_key() { # <target> <key>
+  tmux send-keys -t "$1" "$2" 2>/dev/null
+}
+
 # <target> <text> <owned-fn> <clear-presses>
-# Clear input the caller has just proven it owns with at most <clear-presses>
-# Ctrl+U presses, stopping as soon as <owned-fn> finds nothing of it left.
-# Returns 0 when the cleanup is confirmed and 1 when it is not.
+# fm_composer_clear_owned_input on tmux; that owner holds the contract.
 fm_tmux_clear_owned_input() {
-  local target=$1 text=$2 owned=$3 presses=$4 press=0 pending_status=0
-  while [ "$pending_status" = 0 ] && [ "$press" -lt "$presses" ]; do
-    tmux send-keys -t "$target" C-u 2>/dev/null || true
-    press=$((press + 1))
-    sleep 0.3
-    pending_status=0
-    "$owned" "$target" "$text" residue || pending_status=$?
-  done
-  [ "$pending_status" = 1 ]
+  fm_composer_clear_owned_input _fm_tmux_owned_key "$@"
 }
 
 # <target> <already-typed-text> <owned-fn> <clear-presses> <label>
 #   <postcondition-function> [postcondition-args...]
-# The one recovery owner for input a sender typed and must submit or remove.
+# fm_composer_owned_submit_enter on tmux, the one recovery owner for input a
+# sender typed and must submit or remove; that owner holds the contract.
 # <owned-fn> <target> <text> [residue] answers ownership with
 # fm_tmux_shell_line_pending's return codes.
-# At most three Enter attempts over 20 half-second polls. The first Enter is
-# unconditional, so a caller resuming earlier input proves ownership first;
-# subsequent keys require exact ownership. A failed send can still have
-# executed, so always inspect the postcondition. On exhaustion, clear only
-# proven owned input (fm_tmux_clear_owned_input) and report whether cleanup
-# could be confirmed. Returns 0 when the postcondition held, 1 when owned input
-# was cleared, 2 when owned cleanup could not be confirmed, and 3 when
-# ownership was unproven so no cleanup keys were sent.
-# Callers must stop on failure, never append more input to uncertain input.
 fm_tmux_owned_submit_enter() {
-  local target=$1 text=$2 owned=$3 presses=$4 label=$5 verify=$6 poll attempt=1
-  shift 6
-  tmux send-keys -t "$target" Enter 2>/dev/null || true
-  for ((poll=0; poll<20; poll++)); do
-    sleep 0.5
-    "$verify" "$@" && return 0
-    if [ "$attempt" -lt 3 ] && "$owned" "$target" "$text"; then
-      tmux send-keys -t "$target" Enter 2>/dev/null || true
-      attempt=$((attempt + 1))
-    fi
-  done
-  if ! "$owned" "$target" "$text"; then
-    echo "error: $label execution unconfirmed in $target; input ownership is unproven, so no cleanup keys were sent" >&2
-    return 3
-  fi
-  if fm_tmux_clear_owned_input "$target" "$text" "$owned" "$presses"; then
-    echo "error: $label did not run in $target after $attempt Enter attempts; cleared owned input" >&2
-    return 1
-  fi
-  echo "error: $label did not run in $target after $attempt Enter attempts; owned input cleanup could not be confirmed" >&2
-  return 2
+  fm_composer_owned_submit_enter _fm_tmux_owned_key "$@"
 }
 
 # <target> <already-typed-text> <postcondition-function> [postcondition-args...]

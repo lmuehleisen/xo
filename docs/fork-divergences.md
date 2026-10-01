@@ -26,7 +26,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: GitHub operations use plain `gh`; README "No required `gh-axi`".
 - Class: intended.
-- Seam: `bin/fm-pr-merge.sh`, `bin/fm-bootstrap.sh`, and the `gh-axi` wording in `bin/fm-brief.sh`, `bin/fm-dod-lib.sh`, `bin/fm-project-mode.sh`, `bin/fm-teardown.sh`, and the bearings, bootstrap-diagnostics, project-management, and secondmate-provisioning skills (shared); upstream's optional, inert `gh-axi` fallback in `fm_pr_github_read_record` is deliberately kept.
+- Seam: `bin/fm-pr-merge.sh`, `bin/fm-bootstrap.sh`, and the `gh-axi` wording in `bin/fm-brief.sh`, `bin/fm-dod-lib.sh`, `bin/fm-project-mode.sh`, `bin/fm-teardown.sh`, the timing-artifact download in `docs/fm-test-portable-shards.md`, and the bearings, bootstrap-diagnostics, project-management, and secondmate-provisioning skills (shared); upstream's optional, inert `gh-axi` fallback in `fm_pr_github_read_record` is deliberately kept.
 - Guard: `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required`.
 - Upstream: requires `gh-axi`.
 
@@ -42,17 +42,17 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: decisions and reports use chat, and `/bearings lavish` is a read-only snapshot; README "No required `lavish-axi`".
 - Class: intended.
-- Seam: `bin/fm-bearings-board.sh`, `.agents/skills/bearings/assets/board-template.html`, the scout-brief Lavish line in `bin/fm-brief.sh`, `bin/fm-bootstrap.sh`, `bin/fm-config-inherit-lib.sh`, `bin/fm-procevent-lavish.sh`, `bin/fm-test-run.sh`, and the Lavish wording in the bearings, bootstrap-diagnostics, captain-hold-lifecycle, and process-event-sources skills (shared); upstream's `tests/fm-bearings-board-lavish-live-e2e.test.sh` is deleted.
+- Seam: `bin/fm-bearings-board.sh`, `.agents/skills/bearings/assets/board-template.html`, the scout-brief Lavish line in `bin/fm-brief.sh`, `bin/fm-bootstrap.sh` (which reports nothing about Lavish and keeps only the `lavish-reply-compatible` probe that `bin/fm-procevent-lavish.sh` calls), `bin/fm-config-inherit-lib.sh`, `bin/fm-procevent-lavish.sh`, `bin/fm-test-run.sh`, and the Lavish wording in the bearings, bootstrap-diagnostics, captain-hold-lifecycle, and process-event-sources skills (shared); upstream's `tests/fm-bearings-board-lavish-live-e2e.test.sh` is deleted.
 - Guard: `tests/fm-bearings-board.test.sh` `test_build_does_not_invoke_lavish`; `tests/fm-brief.test.sh` `test_scout_and_secondmate_scaffold`; `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required`.
-- Upstream: requires `lavish-axi` and drives an interactive board.
+- Upstream: requires `lavish-axi`, reports its version floors at bootstrap, gates scout Lavish hosting on them, and drives an interactive board.
 
 ### no-mistakes-optional
 
 - Intent: no required pipeline; `no-mistakes` delivery tokens ship as `direct-PR` unless `config/no-mistakes` opts in; README "No required `no-mistakes`".
 - Class: intended.
-- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh`, `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` is deleted.
-- Guard: `tests/fm-brief.test.sh` `test_no_mistakes_*`; `tests/fm-task-delivery.test.sh` `test_no_mistakes_*`; `tests/fm-bootstrap.test.sh` `test_no_mistakes_opt_in_reports_unavailable_cli`.
-- Upstream: requires the no-mistakes pipeline for every ship.
+- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh` (including the `config/wait-no-turns` waiting section, which names no-mistakes wait commands only in a pipeline ship brief), `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` is deleted.
+- Guard: `tests/fm-brief.test.sh` `test_no_mistakes_*` and `test_workers_wait_without_spending_turns`; `tests/fm-task-delivery.test.sh` `test_no_mistakes_*`; `tests/fm-bootstrap.test.sh` `test_no_mistakes_opt_in_reports_unavailable_cli`.
+- Upstream: requires the no-mistakes pipeline for every ship and enforces its minimum version at bootstrap.
 
 ### reviewed-worker-permissions
 
@@ -190,7 +190,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried, open convergence question; not decided.
 - Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers.
 - Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's).
-- Upstream: has its own slot-owner claims, with further work in open PRs; which design is better is unresolved.
+- Upstream: has its own slot-owner claims, with further work in open PRs; which design is better is unresolved; upstream #6213 lets a stale record retire records-only when its slot's claim names another task, which the fork does not take because it reads those claims, so a lease held by another holder still refuses here.
 
 ### claude-trust-escape
 
@@ -250,10 +250,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### away-inject-delivery-proof
 
-- Intent: count an away digest delivered only on positive proof, own it before typing it, clear it when away mode ends, and repeat a delivery wedge as the return output's last line, because a digest that only looked submitted can stall away mode indefinitely; upstream issue https://github.com/kunchenguid/firstmate/issues/6034.
+- Intent: count an away digest delivered only on positive proof, own it before typing it on tmux and herdr, read a named Claude session's composer, clear it when away mode ends, and repeat a delivery wedge as the return output's last line, because a digest that only looked submitted can stall away mode indefinitely; upstream issue https://github.com/kunchenguid/firstmate/issues/6034.
 - Class: carried.
-- Seam: `fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`; the tmux submit, owned-record, and exit-cleanup hunks in `bin/fm-supervise-daemon.sh`; the opened marker in `bin/fm-operational-input.sh`; the owned-text cleanup and wedge tail in `bin/fm-afk-return.sh`; the afk skill's return and submit-model text; the family registration in `bin/fm-test-run.sh`; and the turn footer in `tests/wake-helpers.sh`'s fake tmux (shared).
-- Guard: fork-only `tests/fm-afk-inject-delivery-proof.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; `tests/fm-afk-inject-e2e.test.sh`; `tests/fm-afk-return.test.sh`.
+- Seam: `fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`; the titled-rule reader and the shared owned-input submit and clear loops in `bin/fm-composer-lib.sh`; `fm_backend_herdr_composer_owned_input` in `bin/backends/herdr.sh`; the tmux and herdr submit, owned-record, and exit-cleanup hunks in `bin/fm-supervise-daemon.sh`; the opened marker in `bin/fm-operational-input.sh`; the owned-text cleanup and wedge tail in `bin/fm-afk-return.sh`; the afk skill's return and submit-model text; the family registration in `bin/fm-test-run.sh`; and the turn footer in `tests/wake-helpers.sh`'s fake tmux (shared).
+- Guard: fork-only `tests/fm-afk-inject-delivery-proof.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; `tests/fm-afk-inject-titled-composer.test.sh`; `tests/fm-afk-inject-e2e.test.sh`; `tests/fm-afk-return.test.sh`; the named-session checks in `tests/fm-composer-matrix-live-e2e.test.sh`.
 - Upstream: counts a composer that reads empty after Enter as delivered and has no owned-text recovery; drop once upstream fixes issue 6034 equivalently.
 
 ### markless-op-header
@@ -270,7 +270,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: fork-only `bin/fm-afk-sentinel.sh`, plus its start and stop call sites in `bin/fm-afk-launch.sh`, its gap lines and marker cleanup in `bin/fm-afk-return.sh`, its row in `docs/scripts.md`, its trigger in `docs/wedge-alarm.md`, and its family entry in `bin/fm-test-run.sh` (shared).
 - Guard: fork-only `tests/fm-afk-sentinel.test.sh`; `tests/fm-afk-return.test.sh` `test_return_brief_reports_away_watchdog_findings`.
-- Upstream: has no watchdog outside the fleet's tmux server, and its opt-in supervision host shares that failure domain; drop once upstream reports a lost fleet server equivalently.
+- Upstream: has no watchdog outside the fleet's tmux server, and its supervision host, on by default for Claude primaries since upstream #6124, shares that failure domain; drop once upstream reports a lost fleet server equivalently.
 
 ### claude-desktop-identity
 

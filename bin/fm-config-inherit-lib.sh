@@ -31,6 +31,9 @@
 # bin/fm-publish-gate.sh at each use, so they are never inlined into a re-read
 # instruction. The machine-local gh path and the private-verdict cache stay
 # per home.
+# Primary config/supervision-host-off is the fleet's supervision-host opt-out,
+# so a primary that opts out opts every secondmate home out too, while each
+# home's config/supervision-host engine line stays its own.
 # It also pushes
 # the one primary-authoritative shared captain-preference file,
 # data/captain-shared.md, into each secondmate home's data/ as a read-only copy.
@@ -85,7 +88,7 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context launch-env-allowlist crew-permissions lavish-axi-host keep-ai-trailers publish-guard/identity publish-guard/allowlist publish-guard/denylist publish-guard/poison-commits publish-guard/upstream publish-guard/owners}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context launch-env-allowlist crew-permissions lavish-axi-host keep-ai-trailers supervision-host-off publish-guard/identity publish-guard/allowlist publish-guard/denylist publish-guard/poison-commits publish-guard/upstream publish-guard/owners}"
 
 # Inherited items a script reads at each use rather than an agent at intake.
 # They are never inlined into a config re-read instruction: there is nothing
