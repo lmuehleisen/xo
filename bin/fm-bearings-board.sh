@@ -39,7 +39,7 @@
 #            off and says why. A mode below answers first unbinds an earlier
 #            answers build's source, refusing the build when it cannot, so a
 #            still-open answers page can no longer change a held task; an off
-#            build then retires the board's listener, warning when it cannot.
+#            build then retires the board's listener, refusing when it cannot.
 #            Output, in order (the first two only below answers, before the
 #            new board is published):
 #              unbound: <source-id>         (an earlier answer binding removed)
@@ -272,8 +272,8 @@ source_owner() {  # <source-id>
 # Before a build below answers publishes, an earlier answers build's binding is
 # removed. Unbinding is what stops a still-open answers page from changing a
 # held task, so a failed unbind refuses the build and leaves the earlier board
-# in place. An off build then retires the board's listener, best effort: an
-# unbound listener's captures feed nothing and only wake firstmate. The source
+# in place. An off build then retires the board's listener and likewise refuses
+# when it cannot, so off really means nothing collects from the page. The source
 # id is derived from the board file's real path, so a deleted board is recreated
 # empty for the derivation; the build publishes over it at once, and a refused
 # unbind removes it again.
@@ -293,11 +293,11 @@ disarm_board_below_answers() {  # <board> <mode>
     printf 'unbound: %s\n' "$sid"
   fi
   [ "$mode" = off ] && [ -n "$(source_owner "$sid")" ] || return 0
-  if FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
-    printf 'retired: %s\n' "$sid"
-  else
-    printf 'fm-bearings-board: warning: could not retire the board listener %s; it is unbound, so its captures feed nothing\n' "$sid" >&2
+  if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
+    [ "$placeholder" = 0 ] || rm -f -- "$board"
+    fail "cannot retire the board listener $sid; refusing an off build while it can still collect feedback"
   fi
+  printf 'retired: %s\n' "$sid"
 }
 
 # Stage one page from the template and a compact payload, verified to carry a
