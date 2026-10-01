@@ -272,6 +272,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: fork-only `tests/fm-afk-sentinel.test.sh`; `tests/fm-afk-return.test.sh` `test_return_brief_reports_away_watchdog_findings`.
 - Upstream: has no watchdog outside the fleet's tmux server, and its opt-in supervision host shares that failure domain; drop once upstream reports a lost fleet server equivalently.
 
+### claude-desktop-identity
+
+- Intent: a firstmate primary started from the Claude desktop app identifies its own harness and can take the session lock.
+- Class: carried.
+- Seam: fork-only `bin/fm-claude-lib.sh` and `tests/fm-claude-desktop-identity-live-e2e.test.sh`, plus its call sites in `fm_harness_process_matches` in `bin/fm-session-lock-lib.sh` and `harness_process_verdict` in `bin/fm-harness.sh`, its sibling entries in `bin/fm-backend.sh`, its family and weight entries in `bin/fm-test-run.sh`, its evidence in `docs/verification/runtime-backends.md`, and the fixture copies in suites that source those scripts (shared).
+- Guard: `tests/fm-session-lock-ancestry.test.sh` desktop cases; `tests/fm-harness-precedence.test.sh` `test_desktop_app_session_resolves_claude`; the default-on live guard `tests/fm-claude-desktop-identity-live-e2e.test.sh`.
+- Upstream: does not recognize the desktop app's version-named session executable, so a desktop-app session starts read-only; drop once upstream identifies it equivalently.
+
 ## Incidental
 
 - `codex-animation-port`: the fork's port of upstream #4297 (`tests/fixtures/codex-animation/`), which upstream replaced with #4532; kept for now at a known cost.

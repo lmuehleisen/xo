@@ -811,12 +811,15 @@ test_supervision_branch_refuses_an_unknown_primary_pin() {
 # reports only the version as comm and carries the path in argv[0], so this one
 # fixture exercises whichever of the two the host provides.
 under_desktop_session() {  # <outer-bin> <session-bin> [VAR=VAL ...]
-  local outer=$1 session=$2
+  local outer=$1 session=$2 probe="$TMP_ROOT/desktop/probe.sh"
   shift 2
+  # shellcheck disable=SC2016 # the probe script expands these itself
+  [ -f "$probe" ] || printf '%s\n' \
+    'r=$("$FM_TEST_HARNESS" ancestry); printf "%s|" "$r"' \
+    'r=$("$FM_TEST_HARNESS"); printf "%s" "$r"' > "$probe"
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-    -u CURSOR_AGENT -u CURSOR_INVOKED_AS "$@" \
-    FM_TEST_SESSION_BIN="$session" FM_TEST_HARNESS="$HARNESS" \
-    "$outer" -c 'r=$("$FM_TEST_SESSION_BIN" -c '"'"'r=$("$FM_TEST_HARNESS" ancestry); printf "%s|" "$r"; r=$("$FM_TEST_HARNESS"); printf "%s" "$r"'"'"'); printf "%s" "$r"'
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS "$@" FM_TEST_HARNESS="$HARNESS" \
+    "$outer" -c "r=\$(\"$session\" \"$probe\"); printf '%s' \"\$r\""
 }
 
 test_desktop_app_session_resolves_claude() {
