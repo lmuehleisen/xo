@@ -103,6 +103,8 @@
 #
 # Only rows tagged `choice` are read. A freeform captain message is prose that may
 # contain anything, and must never be able to forge a decision key.
+# A card answer typed with no option chosen is not reported either: it may defer
+# or qualify the call, so firstmate reads it from the wake with judgment.
 #
 # `read` is the presentation command summarized above; keyed intake remains
 # the separate `answers` contract described here.
@@ -707,6 +709,9 @@ cmd_choice_rows() {
         next;
       }
       next if $choice->{selection} eq "reconcile";
+      # Only a card option resolves a call here. Words typed with no option
+      # chosen may defer or qualify the call, so they wait for judgment.
+      next unless $choice->{legacy} || length $choice->{selection};
       print length $choice->{mode}
         ? "$choice->{key}\t$choice->{answer}\t$choice->{label}\t$choice->{mode}\n"
         : "$choice->{key}\t$choice->{answer}\t$choice->{label}\n";

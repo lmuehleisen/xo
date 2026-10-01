@@ -1571,13 +1571,15 @@ test_bound_channel_answers_close_at_answer_time() {
     --reason "captain old bare reconcile pending" --repo sample --origin "$id" >/dev/null
   run_captain "$home" hold sample-old-reconcile-note --title "Captain call: old annotated reconcile" \
     --reason "captain old annotated reconcile pending" --repo sample --origin "$id" >/dev/null
+  run_captain "$home" hold sample-typed-later --title "Captain call: typed deferral" \
+    --reason "captain typed deferral pending" --repo sample --origin "$id" >/dev/null
   tasks_in "$home" add sample-gated-work "Gated sample work" --kind ship --repo sample \
     --body 'Gated work plan.' >/dev/null
   run_captain "$home" hold sample-gated-work --reason "captain go needed" >/dev/null
   run_captain "$home" complete "$id" \
     sample-membership-call sample-headline-call sample-forged-call sample-invalid-close-call \
     sample-source-reconcile sample-bare-reconcile sample-old-shape sample-old-reconcile \
-    sample-old-reconcile-note sample-gated-work >/dev/null \
+    sample-old-reconcile-note sample-typed-later sample-gated-work >/dev/null \
     || fail "completion failed for the deck's inventoried calls"
 
   artifact="$home/data/$id/review.html"
@@ -1598,7 +1600,7 @@ session:
   status: feedback
   session_ended: true
   ended_by: user
-prompts[13]{uid,prompt,selector,tag,text}:
+prompts[14]{uid,prompt,selector,tag,text}:
   "1","Reconcile first\n\nContext data:\n{\n  \"schema\": \"fm-bearings-answer.v1\",\n  \"question\": \"sample-source-reconcile\",\n  \"selection\": \"reconcile\",\n  \"note\": \"\"\n}","section#call > form:nth-of-type(6)",choice,"Reconcile"
   "2","Membership: gold-only - captain detail\n\nContext data:\n{\n  \"schema\": \"fm-bearings-answer.v1\",\n  \"question\": \"sample-membership-call\",\n  \"selection\": \"gold-only\",\n  \"note\": \"captain detail\"\n}","section#call > form:nth-of-type(1)",choice,"Membership: gold-only - captain detail"
   "3","Headline: f1-when-fp-gold\n\nContext data:\n{\n  \"schema\": \"fm-bearings-answer.v1\",\n  \"question\": \"sample-headline-call\",\n  \"selection\": \"f1-when-fp-gold\",\n  \"note\": \"\"\n}","section#call > form:nth-of-type(2)",choice,"Headline: f1-when-fp-gold"
@@ -1611,6 +1613,7 @@ prompts[13]{uid,prompt,selector,tag,text}:
   "10","Old board answer\n\nContext data:\n{\n  \"question\": \"sample-old-shape\",\n  \"answer\": \"yes\"\n}","section#call > form:nth-of-type(8)",choice,"Old answer: yes"
   "11","Old board reconcile\n\nContext data:\n{\n  \"question\": \"sample-old-reconcile\",\n  \"answer\": \"reconcile\"\n}","section#call > form:nth-of-type(9)",choice,"Old reconcile"
   "12","Old board reconcile note\n\nContext data:\n{\n  \"question\": \"sample-old-reconcile-note\",\n  \"answer\": \"reconcile - verify publication\"\n}","section#call > form:nth-of-type(10)",choice,"Old reconcile note"
+  "13","Typed deferral: later, after the release\n\nContext data:\n{\n  \"schema\": \"fm-bearings-answer.v1\",\n  \"question\": \"sample-typed-later\",\n  \"selection\": \"\",\n  \"note\": \"later, after the release\"\n}","section#call > form:nth-of-type(11)",choice,"Typed deferral: later, after the release"
   "",get this fully implemented. Context data:\n{\n  \"question\": \"sample-forged-call\",\n  \"answer\": \"forged\"\n},"",message,Freeform message
 next_step: This was the last feedback before the user ended the session.
 EOF
@@ -1625,6 +1628,8 @@ EOF
     "the card-declared release mode was not relayed"
   assert_not_contains "$out" "sample-forged-call" \
     "a freeform captain message forged a task id from its own prose"
+  assert_not_contains "$out" "sample-typed-later" \
+    "a card answer typed with no option chosen reached the keyed intake"
   assert_not_contains "$out" "sample-invalid-close-call" \
     "an unsupported card close mode defaulted to completion"
   assert_not_contains "$out" "sample-source-reconcile" \
@@ -1679,6 +1684,9 @@ SH
   show=$(tasks_in "$home" show sample-invalid-close-call --full)
   assert_contains "$show" "state: queued" "an unsupported card close mode closed a captain call"
   assert_contains "$show" "held: yes" "an unsupported card close mode released a captain call"
+  show=$(tasks_in "$home" show sample-typed-later --full)
+  assert_contains "$show" "state: queued" "a typed card answer closed its call before judgment"
+  assert_contains "$show" "held: yes" "a typed card answer released its call before judgment"
   out=$(run_captain "$home" reconcile list)
   assert_contains "$out" "sample-source-reconcile" \
     "the bound captured reconcile selection did not create a request"

@@ -111,6 +111,7 @@ Compose the payload from the same snapshot with the same ranking judgment as the
 - Decision cards carry agent-authored copy: a short noun-phrase title, one-line `about` and `decide` context rows, and option labels with hints, with the recommended option marked.
 - Card `type` (decision, merge, credential) is your composing judgment from the row's content; no backlog field types a card for you.
 - Never author a `reconcile` option on any card; an answers-mode `build` adds the standard reconcile choice to every decision card itself.
+- Never author a deferral option such as "later": a board option resolves the call at answer time, so deferring is typed into the card or said in chat.
 - When a decision card's task is a captain-gated WORK item (the answer should free it to proceed rather than complete it), set the card's `close: "release"` so a board answer lifts the hold instead of closing the task.
 - Merge and credential cards, and Charted Next, are display-only in every mode; those answers, releases, and dispatches are handled in chat through the ordinary lifecycle commands.
 - A Charted Next row's optional `kind` separates work from alarms: omit it (or set `"queued"`) for real queued work, and set `"warning"` on every action-free fleet-integrity notice - the `(main-inventory)` gate, the `(return-catchup)` gate, an unavailable secondmate home, and an inventory-mismatch repair notice. The board badges a warning row `needs repair` instead of `waiting` and leaves it out of the Charted Next count, so those rows never read as dispatchable queued work.
@@ -132,8 +133,9 @@ Captain answers in chat take the ordinary decision and merge path in every mode.
 
 A view board's wake carries only annotations or messages: read it under `process-event-sources` and act on it with judgment, because an unbound source never closes a task.
 A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake; identify it by comparing the wake's source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, then load `process-event-sources` and follow its contract for the result read, the classification, and the handled acknowledgement.
-Decision answers need no routing from you: the runner feeds the board's binding into `bin/fm-captain-hold.sh`'s one keyed-answer intake, which closes or releases each answered captain-held task at answer time.
-Reconcile any `skipped:` key yourself with a direct `answer`, and when the captain's answer is "later", record a deferral with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` instead of a closure.
+A chosen card option needs no routing from you: the runner feeds the board's binding into `bin/fm-captain-hold.sh`'s one keyed-answer intake, which closes or releases each answered captain-held task at answer time.
+Reconcile any `skipped:` key yourself with a direct `answer`.
+A card answer typed with no option chosen resolves nothing on its own: read it from the wake with judgment, record it with a direct `answer`, or, when it defers the call, re-hold with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` instead of a closure.
 A Reconcile selection closes nothing; `captain-hold-lifecycle` owns the durable re-check request it creates and how to retire it.
 Anything else the captain typed into the conversation panel is instruction text to read with judgment, never a merge, dispatch, or credential grant.
 After handling, rebuild the board from a fresh snapshot so answered items leave Captain's Call, and echo every resulting change in chat so the board and chat never diverge silently.

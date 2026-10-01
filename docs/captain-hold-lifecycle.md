@@ -103,7 +103,8 @@ Dropped cards are named on stderr as `dropped-landed-card:` lines so a rebuild s
 The landing procedure requires one immediate board rebuild to remove already-stale merged-PR and superseded-version cards without a committed migration or change-worktree state mutation.
 A subject whose state cannot be established is kept, because a wrongly shown card is safer than a wrongly hidden call.
 This hygiene creates no answer, merge, dispatch, or reconciliation operation and mutates no task.
-The board is a read-only projection unless its effective Lavish mode is `answers` ([`config/lavish`](configuration.md#optional-lavish-configlavish)); only then does `build` add the standard `reconcile` choice to each decision card and bind the board as a captured source before arming it, so decision answers and reconcile selections reach the intakes above while merge, credential, and dispatch requests stay in chat.
+The board is a read-only projection unless its effective Lavish mode is `answers` ([`config/lavish`](configuration.md#optional-lavish-configlavish)); only then does `build` add the standard `reconcile` choice to each decision card and bind the board as a captured source before arming it, so chosen decision options and reconcile selections reach the intakes above while merge, credential, and dispatch requests stay in chat.
+A card answer typed with no option chosen feeds neither intake, because it may defer or qualify the call; firstmate reads it from the wake and answers or re-holds it.
 The schema reserves the `reconcile` option value across all card types, so input data can never author that choice itself.
 Owner-aware landedness checks for remote-secondmate decision cards remain tracked separately and must query the authoritative secondmate home while honoring the remote and local consistency principle.
 
