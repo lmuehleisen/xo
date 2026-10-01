@@ -35,6 +35,15 @@ mkdir -p "$APP_BUNDLE_DIR"
 ln -s /bin/bash "$APP_BUNDLE_DIR/claude"
 APP_BUNDLE_CLAUDE="$APP_BUNDLE_DIR/claude"
 
+# The Claude desktop app's session executable and the shared server above it,
+# each inside the app's own install tree under .claude/remote.
+DESKTOP_DIR="$TMP_ROOT/desktop-home/.claude/remote"
+mkdir -p "$DESKTOP_DIR/ccd-cli" "$DESKTOP_DIR/srv/0a1b2c3d"
+ln -s /bin/bash "$DESKTOP_DIR/ccd-cli/2.1.284"
+ln -s /bin/bash "$DESKTOP_DIR/srv/0a1b2c3d/server"
+DESKTOP_CLAUDE="$DESKTOP_DIR/ccd-cli/2.1.284"
+DESKTOP_SERVER="$DESKTOP_DIR/srv/0a1b2c3d/server"
+
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/harness-bin")
 ln -s /bin/bash "$FAKEBIN/claude"
 NAMED_CLAUDE="$FAKEBIN/claude"
@@ -99,6 +108,64 @@ SH
       || fail "$shape: the session holding the lock did not recognize itself as the owner"
   done
   pass "session-lock: a version-named Claude Code session is identified from its install path and argv[0]"
+}
+
+# The Claude desktop app runs each session as .claude/remote/ccd-cli/<version>
+# under one shared .claude/remote/srv/<hash>/server. The session must be found
+# on both platforms' reporting, and the shared server must never join the run:
+# a lock anchored there would be owned by every sibling desktop session.
+test_desktop_app_session_is_identified_on_both_platforms() {
+  local dir fakebin shape got
+  dir="$TMP_ROOT/desktop-app"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+session=/Users/u/.claude/remote/ccd-cli/2.1.284
+server=/Users/u/.claude/remote/srv/0a1b2c3d/server
+case "$pid:$field:${FM_TEST_CLAUDE_SHAPE:-linux}" in
+  730:comm=:linux|735:comm=:linux) printf '%s\n' '2.1.284' ;;
+  730:comm=:macos|735:comm=:macos) printf '%s\n' "$session" ;;
+  730:args=:*|735:args=:*) printf '%s\n' "$session --output-format stream-json --input-format stream-json" ;;
+  730:ppid=:*|735:ppid=:*) printf '%s\n' 740 ;;
+  740:comm=:linux) printf '%s\n' server ;;
+  740:comm=:macos) printf '%s\n' "$server" ;;
+  740:args=:*) printf '%s\n' "$server --serve --socket /tmp/rpc.sock" ;;
+  740:ppid=:*) printf '%s\n' 1 ;;
+  *:comm=:*) printf '%s\n' zsh ;;
+  *:args=:*) printf '%s\n' '/bin/zsh -c bash /repo/bin/fm-lock.sh' ;;
+  *:ppid=:*) printf '%s\n' 730 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+
+  for shape in linux macos; do
+    got=$(FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_ancestry_pids') \
+      || fail "$shape: the desktop-app session was not found in the ancestry at all"
+    [ "$got" = 730 ] || fail "$shape: ancestry resolved '$(printf '%s' "$got" | tr '\n' ' ')', expected only the session pid 730"
+    printf '730\n' > "$dir/state/.lock"
+    FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
+      || fail "$shape: the desktop-app session holding the lock did not recognize itself as the owner"
+    if FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_pid_alive 740'; then
+      fail "$shape: the shared desktop server was treated as a harness process"
+    fi
+    printf '735\n' > "$dir/state/.lock"
+    if FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
+      fail "$shape: a sibling desktop session's lock was claimed through the shared server"
+    fi
+    FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" "fm_session_lock_foreign_owner_live '$dir/state'" \
+      || fail "$shape: a live sibling desktop session holding the lock was not seen as a live foreign owner"
+  done
+  pass "session-lock: a Claude desktop-app session is identified on both platforms without its shared server"
 }
 
 # A harness that is pid 1 of its own PID namespace - a container, or the
@@ -168,6 +235,14 @@ case "$pid:$field:${FM_TEST_PATH_SHAPE:-hookdir}" in
   810:args=:hookdir) printf '%s\n' '/home/u/.claude/hooks/notify.sh --quiet' ;;
   810:comm=:piprefix) printf '%s\n' '/opt/pipeline/bin/runner' ;;
   810:args=:piprefix) printf '%s\n' '/opt/pipeline/bin/runner --once' ;;
+  810:comm=:desktopserver) printf '%s\n' '/home/u/.claude/remote/srv/0a1b2c3d/server' ;;
+  810:args=:desktopserver) printf '%s\n' '/home/u/.claude/remote/srv/0a1b2c3d/server --serve' ;;
+  810:comm=:desktopscript) printf '%s\n' '/home/u/.claude/remote/ccd-cli/install.sh' ;;
+  810:args=:desktopscript) printf '%s\n' '/home/u/.claude/remote/ccd-cli/install.sh' ;;
+  810:comm=:desktopnested) printf '%s\n' '/home/u/.claude/remote/ccd-cli/2.1.284/bin/helper' ;;
+  810:args=:desktopnested) printf '%s\n' '/home/u/.claude/remote/ccd-cli/2.1.284/bin/helper' ;;
+  810:comm=:versionedhook) printf '%s\n' '/home/u/.claude/hooks/2.1.284' ;;
+  810:args=:versionedhook) printf '%s\n' '/home/u/.claude/hooks/2.1.284' ;;
   810:ppid=:*) printf '%s\n' 1 ;;
   *:comm=:*) printf '%s\n' bash ;;
   *:args=:*) printf '%s\n' 'bash /repo/bin/fm-watch-arm.sh' ;;
@@ -180,7 +255,7 @@ SH
   # Identity may be read from an executable path, but only from whole path
   # components: anything merely living under ~/.claude, and any component that
   # merely starts with a harness name, must stay outside the harness identity.
-  for shape in hookdir piprefix; do
+  for shape in hookdir piprefix desktopserver desktopscript desktopnested versionedhook; do
     if FM_TEST_PATH_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_ancestry_pid'; then
       fail "$shape: an ordinary script path was treated as a harness process"
     fi
@@ -446,9 +521,15 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-path-lib.sh" "$dir/bin/fm-path-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
+  cp "$ROOT/bin/fm-claude-lib.sh" "$dir/bin/fm-claude-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
   cp "$ROOT/bin/fm-lock.sh" "$dir/bin/fm-lock.sh"
+  cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$dir/bin/fm-supervision-engine-lib.sh"
   chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh"
+  # The fixture arm written here stands in for the watcher arm, so the home opts out
+  # of the supervision host a Claude home otherwise runs by default.
+  mkdir -p "$dir/config"
+  : > "$dir/config/supervision-host-off"
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 echo "$$" >> "$FM_HOME/state/arm-ran"
@@ -573,6 +654,25 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
   expect_code 2 "$(hook_rc "$dir")" "a version-named session under a daemon must claim its home and rewake"
   [ -e "$dir/state/arm-ran" ] || fail "supervision never armed for a version-named daemon-parented session"
   pass "session-lock e2e: a version-named session under a harness-named daemon keeps its own lock"
+}
+
+# The desktop app's real shape: a session executable under the shared server,
+# orphaned so the walk ends inside the fixture. Before the desktop identity the
+# session matched nothing, so the hook found no harness and never claimed.
+test_e2e_desktop_app_session_claims_the_home() {
+  local dir session_pid server_pid lock_after
+  dir="$TMP_ROOT/e2e-desktop-app"
+  make_primary_home "$dir"
+  run_fixture_tree "$dir" "$DESKTOP_CLAUDE" "$DESKTOP_SERVER"
+  session_pid=$(tr -d '[:space:]' < "$dir/state/session-pid")
+  server_pid=$(tr -d '[:space:]' < "$dir/state/daemon-pid")
+  [ -n "$session_pid" ] && [ "$session_pid" != "$server_pid" ] \
+    || fail "fixture did not produce a distinct server and session: session=$session_pid server=$server_pid"
+  lock_after=$(tr -d '[:space:]' < "$dir/state/.lock")
+  expect_code 2 "$(hook_rc "$dir")" "a desktop-app session must claim its home and rewake: $(cat "$dir/state/hook.out")"
+  [ -e "$dir/state/arm-ran" ] || fail "supervision never armed for a desktop-app session"
+  [ "$lock_after" = "$session_pid" ] || fail "the session lock moved off the desktop session: expected $session_pid, got $lock_after"
+  pass "session-lock e2e: a Claude desktop-app session claims the home and keeps the lock off its shared server"
 }
 
 # --- end-to-end layer: a background session whose helper chain is recycled ---
@@ -1368,6 +1468,7 @@ test_verified_reclaim_keeps_new_sidecar() {
 }
 
 test_version_named_session_is_identified_on_both_platforms
+test_desktop_app_session_is_identified_on_both_platforms
 test_harness_at_namespace_pid1_is_examined
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock
@@ -1377,6 +1478,7 @@ test_anchor_pid_is_the_model_loop_process_only_for_a_trusted_id
 test_e2e_version_named_session_claims_the_home
 test_e2e_daemon_parented_session_claims_the_home
 test_e2e_daemon_parented_version_named_session_keeps_its_lock
+test_e2e_desktop_app_session_claims_the_home
 test_e2e_background_session_keeps_its_lock_across_a_recycled_chain
 test_e2e_bg_pty_hosted_primary_keeps_supervision_across_a_recycle
 test_e2e_bg_pty_hosted_primary_stands_down_for_a_foreign_owner

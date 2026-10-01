@@ -81,6 +81,7 @@ A relaunch does take one session reference when the endpoint's own runtime recor
 4. **Stop the old agent** through the `exit` verb, with its postcondition.
 5. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which reuses the recorded worktree instead of creating one, adopts the recorded endpoint when it still exists, clears the previous harness's per-task wiring, and arms a fresh busy generation.
    When the recorded endpoint is proven gone rather than merely idle or unreachable - which only Herdr can establish - the launch owner creates one fresh endpoint in that same worktree and the republished record rebinds the task to it - see [Reclaiming a task whose endpoint is gone](#reclaiming-a-task-whose-endpoint-is-gone).
+   On tmux, an adopted pane must first show a shell ready to read input within a bounded wait, leaving any stale full-screen frame a killed agent left behind; a pane that never does refuses before anything is published or typed (`fm_tmux_shell_ready_wait` in [`bin/fm-tmux-lib.sh`](../bin/fm-tmux-lib.sh)).
 6. **Preserve runtime-bound status authority where supported.**
    The endpoint's runtime may bind pane status to one session identity; the launch owner preserves it only when that runtime records a reference the replacement adapter can consume, and otherwise launches the ordinary fresh session.
    This reference is a launch input, never authority to send, close, or act on the pane.
@@ -146,6 +147,7 @@ The worktree and the task's records are unaffected either way.
 - A launch failure **after** the agent is stopped restores the prior durable record, keeps the progress note so a later recovery still has it, marks the journal `failed:launching`, and reports plainly that no agent is running and where the work is preserved.
 - If the launch owner already published the new record but no running agent can be confirmed, the new record is kept: the task is recorded on the new harness with no agent confirmed, which is exactly what recovery reconciles.
   Rewriting it back to the old harness would be a second, worse inaccuracy.
+- A launch owner that reports failure after publishing the new record is still followed by the bounded agent-start wait, because its launch line may run late; an agent that comes up completes the transaction with a warning instead of leaving it failed beside a running agent.
 
 ## Fail-closed boundaries
 

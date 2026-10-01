@@ -25,13 +25,25 @@ live_lab_cleanup() {
   while read -r pid; do [ -n "$pid" ] && { pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true; }; done < "$TMP_ROOT/pids"
   while read -r dir; do
     [ -n "$dir" ] || continue
-    env -u TMUX TMUX_TMPDIR="$dir" tmux kill-server 2>/dev/null
+    dir_tmux "$dir" kill-server 2>/dev/null
     case "$dir" in /tmp/fml.*) rm -rf "$dir" ;; esac
   done < "$TMP_ROOT/tmux-dirs"
   rm -rf "/tmp/fm-labt$$-mate" "/tmp/fm-labt$$-worker" "/tmp/fm-labt$$-other" /tmp/fm-labt"$$"-*+*
   fm_test_cleanup
 }
 trap live_lab_cleanup EXIT
+
+# dir_tmux <socket-dir> <tmux args...>: address only the lab server in
+# <socket-dir>, through an explicit socket. TMUX_TMPDIR naming a missing
+# directory makes tmux fall back to the user's default server, so a missing,
+# foreign-owned, or symlinked directory is refused instead.
+dir_tmux() {
+  local dir=$1
+  shift
+  [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || return 1
+  [ -d "$dir/tmux-$(id -u)" ] || mkdir -m 700 "$dir/tmux-$(id -u)" || return 1
+  env -u TMUX tmux -S "$dir/tmux-$(id -u)/default" "$@"
+}
 
 command -v tmux >/dev/null 2>&1 || { echo "ok - skipped: tmux is not installed"; exit 0; }
 
@@ -70,6 +82,7 @@ make_lab() {
     echo "harness=$harness"
     echo "home=$home"
     echo "expect_host=yes"
+    echo "host_off=no"
     echo "mate=yes"
     echo "worker=yes"
     echo "nonce=$NONCE"
@@ -119,7 +132,7 @@ lab_tmux() {  # <root> <tmux args...>
   local dir
   dir=$(sed -n 's/^tmux_dir=//p' "$1/.fm-live-lab")
   shift
-  env -u TMUX TMUX_TMPDIR="$dir" tmux "$@"
+  dir_tmux "$dir" "$@"
 }
 
 start_sleeper() {
@@ -253,6 +266,31 @@ assert_contains "$CHECK_OUT" "fail mate: the mate holds no session lock yet" "ma
 lab_tmux "$C" display-message -p -t "firstmate:=fm-$MATE_ID" '#{pane_pid}' > "$C/mate/state/.lock"
 pass "mate fails when its window is gone or it never reached its charter"
 
+# Opt-out readiness must observe the mate's inherited material and its real
+# home gate, rather than just the primary's absent host.
+set_record "$C" host_off yes
+set_record "$C" expect_host no
+host_pid=$(awk -F '\t' '{print $2}' "$CH/state/.supervision-host")
+kill "$host_pid" 2>/dev/null
+wait "$host_pid" 2>/dev/null
+mkdir -p "$C/mate/config" "$C/mate/bin"
+cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$C/mate/bin/"
+run_check "$C"
+expect_code 1 "$CHECK_RC" "off readiness refuses a mate without its inherited flag"
+assert_contains "$CHECK_OUT" "fail mate: the inherited supervision-host-off flag is missing" "mate names the missing opt-out"
+: > "$C/mate/config/supervision-host-off"
+run_check "$C"
+expect_code 0 "$CHECK_RC" "off readiness accepts the mate's inherited flag and disabled gate: $CHECK_OUT"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$C/mate/bin/fm-supervision-engine-lib.sh"
+run_check "$C"
+expect_code 1 "$CHECK_RC" "off readiness refuses a mate whose gate reads on"
+assert_contains "$CHECK_OUT" "fail mate: the supervision-host gate did not read off" "mate names the enabled gate"
+cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$C/mate/bin/"
+set_record "$C" host_off no
+set_record "$C" expect_host yes
+printf 'host\t%s\tx\n' "$(start_sleeper)" > "$CH/state/.supervision-host"
+pass "mate off readiness requires inherited material and a disabled home gate"
+
 # The current-state reader, not an old event, establishes the gate wait.
 GATE="$CH/data/$WORKER_ID/gate"
 assert_contains "$(sed -n 's/^gate=//p' "$C/.fm-live-lab")" "$CH/data/$WORKER_ID/" "operator can find the gate in the worker's task directory"
@@ -306,6 +344,35 @@ expect_code 1 "$?" "down refuses a path without a lab record"
 assert_contains "$out" "carries no lab record" "the refusal names the missing record"
 assert_present "$NOT_LAB/keep" "a refused down removes nothing"
 pass "down refuses anything up did not build"
+
+# A lab whose socket directory is already gone must not reach any other tmux
+# server. tmux falls back to the user's default server when TMUX_TMPDIR names a
+# missing directory; this shim models that fallback with a private stand-in
+# server, so the real default server is never created, queried, or stopped.
+STANDIN_DIR=$(mktemp -d /tmp/fml.XXXXXX)
+printf '%s\n' "$STANDIN_DIR" >> "$TMP_ROOT/tmux-dirs"
+dir_tmux "$STANDIN_DIR" -f /dev/null new-session -d -s standin 'exec sleep 600' || fail "stand-in tmux server did not start"
+mkdir -p "$TMP_ROOT/fallback-tmux-bin"
+cat > "$TMP_ROOT/fallback-tmux-bin/tmux" <<SH
+#!/bin/sh
+[ "\${1:-}" = -S ] && exec "$(command -v tmux)" "\$@"
+exec "$(command -v tmux)" -S "$STANDIN_DIR/tmux-$(id -u)/default" "\$@"
+SH
+chmod +x "$TMP_ROOT/fallback-tmux-bin/tmux"
+PATH="$TMP_ROOT/fallback-tmux-bin:$PATH" tmux has-session -t standin 2>/dev/null \
+  || fail "the fallback shim does not reach the stand-in server, so this case would prove nothing"
+G=$(make_lab gone pi)
+G_TMUX=$(sed -n 's/^tmux_dir=//p' "$G/.fm-live-lab")
+lab_tmux "$G" kill-server || fail "could not stop the lab's own tmux server"
+rm -rf "$G_TMUX"
+PATH="$TMP_ROOT/fallback-tmux-bin:$PATH" "$LIVE_LAB" down "$G" >/dev/null 2>&1
+dir_tmux "$STANDIN_DIR" has-session -t standin 2>/dev/null || fail "down of a lab with a missing socket directory stopped another tmux server"
+if PATH="$TMP_ROOT/fallback-tmux-bin:$PATH" dir_tmux "$G_TMUX" kill-server 2>/dev/null; then
+  fail "a lab tmux call against a missing socket directory did not refuse"
+fi
+dir_tmux "$STANDIN_DIR" has-session -t standin 2>/dev/null || fail "test cleanup of a missing socket directory stopped another tmux server"
+dir_tmux "$STANDIN_DIR" kill-server
+pass "a lab with a missing socket directory never stops another tmux server"
 
 C_HASH=$(printf '%s' "$CH" | shasum -a 256 | awk '{print $1}')
 OTHER_ID="labt$$-other"

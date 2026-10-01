@@ -49,6 +49,7 @@ set -u
 case "$*" in
   *"#{pane_current_command}"*) printf 'bash\n'; exit 0 ;;
   *"#{cursor_y}"*) printf '1\n'; exit 0 ;;
+  *"#{pane_width}"*) printf '200\n'; exit 0 ;;
   *"#{pane_current_path}"*)
     if [ -n "${FM_FAKE_DROP_CD_ENTER:-}" ] && [ ! -f "$FM_FAKE_PANE_COUNTFILE.ran" ]; then
       printf '%s\n' "$FM_FAKE_PROJECT_PATH"

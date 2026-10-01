@@ -18,7 +18,7 @@ Keep the original installation and its private fleet state separate during the i
 5. Open a pull request against this fork with `gh pr create`, describing the change and validation results.
 6. Wait for review and the configured merge approval.
 
-Anything published to a public repository stays public permanently, so commit messages, pull request text, review replies, and issue text follow the public-text policy that `bin/fm-publish-gate.sh policy` prints: pull request text is short and neutral (what changed and how it was tested), review replies are short, browser, security, and operations changes land through the gated direct path without pull request discussion, and incident evidence stays in private reports.
+Anything published to a public repository stays public permanently, so commit messages, pull request text, review replies, and issue text follow the public-text policy that `bin/fm-publish-gate.sh policy` prints: pull request text is short and neutral (what changed and how it was tested), review replies are short, browser automation changes land through the gated direct path without pull request discussion, security and operations changes may ship as normal pull requests without private incident evidence in their text or content, and incident evidence stays in private reports.
 Commits take their identity from git config or the launch pin only, and pushes and `gh` publish commands pass through the publish gate (`docs/configuration.md` "Publish guard").
 
 For contributions to [upstream Firstmate](https://github.com/kunchenguid/firstmate), follow that repository's contribution instructions.

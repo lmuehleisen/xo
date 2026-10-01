@@ -127,6 +127,7 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
+        *pane_width*) printf '200\n'; exit 0 ;;
         *pane_current_command*)
           if [ -f "$D/launch-command-reads" ]; then
             n=$(cat "$D/launch-command-reads"); n=$((n + 1))
@@ -144,6 +145,10 @@ case "${1:-}" in
     done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
+    if [ -n "${FM_FAKE_NO_PROMPT:-}" ] && [ "$(cat "$D/command")" = zsh ]; then
+      printf '\n'
+      exit 0
+    fi
     if [ -s "$D/pending-launch" ]; then
       printf '$ %s\n' "$(cat "$D/pending-launch")"
       exit 0
@@ -419,6 +424,24 @@ test_relaunch_accepts_launcher_before_agent() {
   [ "$(cat "$dir/fake/launch-command-reads")" -ge 3 ] || fail "agent wait did not follow shell execution"
   [ "$(journal_field "$dir" launch3 phase)" = complete ] || fail "agent was not confirmed"
   pass "a changed foreground launcher confirms submission before control confirms the agent"
+}
+
+test_relaunch_refuses_a_pane_whose_shell_never_shows_a_prompt() {
+  local dir out rc before
+  dir=$(new_case no-prompt noprompt1)
+  add_ship_task "$dir" noprompt1 claude
+  before=$(cat "$dir/home/state/noprompt1.meta")
+  out=$(FM_FAKE_NO_PROMPT=1 FM_SPAWN_SHELL_READY_WAIT=1 FM_SPAWN_SHELL_READY_POLL=0.1 \
+    run_control "$dir" noprompt1 relaunch --note "wait for a usable shell"); rc=$?
+  expect_code 1 "$rc" "a pane with no usable shell should refuse"$'\n'"$out"
+  assert_contains "$out" "did not show a usable shell within 1s" "the bounded wait should name its limit"
+  grep -q -e 'encode launch-brief' -e 'Firstmate operational input waiting: read' "$dir/fake/literal" \
+    && fail "the launch line was typed into a pane with no usable shell"
+  [ "$(cat "$dir/home/state/noprompt1.meta")" = "$before" ] \
+    || fail "a refused launch must keep the prior durable record"
+  [ "$(journal_field "$dir" noprompt1 rollback)" = prior-record-kept ] \
+    || fail "the journal should record that the prior record was kept"
+  pass "relaunch refuses within a bounded wait, typing nothing, when the pane never shows a usable shell"
 }
 
 test_relaunch_clears_exhausted_submit() {
@@ -1423,7 +1446,9 @@ test_post_publication_launch_failure_keeps_the_new_record() {
   dir=$(new_case published rl24)
   add_ship_task "$dir" rl24 claude
   printf 'codex' > "$dir/fake/becomes"
-  out=$(FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START=1 \
+  # Every Enter is lost, so the launch line never runs after the record names
+  # the replacement.
+  out=$(FM_FAKE_DROP_LAUNCH_ENTER=all \
     run_control "$dir" rl24 relaunch --harness codex --note "keep the published record"); rc=$?
   expect_code 1 "$rc" "a post-publication launch failure should fail closed"$'\n'"$out"
   [ "$(meta_field "$dir" rl24 harness)" = codex ] \
@@ -1433,6 +1458,24 @@ test_post_publication_launch_failure_keeps_the_new_record() {
   [ "$(journal_field "$dir" rl24 rollback)" = none-new-record-kept ] \
     || fail "the journal should record that the published replacement record was kept"
   pass "fm-control relaunch: post-publication failure keeps the new durable record"
+}
+
+test_post_publication_launch_failure_with_a_started_agent_completes() {
+  local dir out rc
+  dir=$(new_case published-late rl31)
+  add_ship_task "$dir" rl31 claude
+  printf 'codex' > "$dir/fake/becomes"
+  # The launch owner reports failure after its launch line already started the
+  # replacement, as a slow shell running a line late does.
+  out=$(FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START=1 \
+    run_control "$dir" rl31 relaunch --harness codex --note "reconcile the late start"); rc=$?
+  expect_code 0 "$rc" "a replacement that came up should complete the relaunch"$'\n'"$out"
+  assert_contains "$out" "the agent came up on codex" "the late start should be reported"
+  [ "$(journal_field "$dir" rl31 phase)" = complete ] \
+    || fail "the journal should be complete, got '$(journal_field "$dir" rl31 phase)'"
+  [ "$(meta_field "$dir" rl31 harness)" = codex ] \
+    || fail "the published replacement record should stay on the replacement harness"
+  pass "fm-control relaunch: a launch reported failed whose agent came up completes the transaction"
 }
 
 test_stop_transport_failure_reconciles_a_dead_agent() {
@@ -2462,6 +2505,7 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 }
 
 test_relaunch_recovers_dropped_enter
+test_relaunch_refuses_a_pane_whose_shell_never_shows_a_prompt
 test_relaunch_clears_exhausted_submit
 test_relaunch_accepts_launcher_before_agent
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
@@ -2504,6 +2548,7 @@ test_checkpoint_refuses_uninspectable_head_and_status
 test_launch_failure_keeps_the_prior_record_and_reports_it
 test_prepublication_failure_keeps_concurrent_durable_metadata
 test_post_publication_launch_failure_keeps_the_new_record
+test_post_publication_launch_failure_with_a_started_agent_completes
 test_stop_transport_failure_reconciles_a_dead_agent
 test_complete_journal_failure_rolls_back_from_durable_phase
 test_prepublication_abort_retires_replacement_wiring_and_busy_state

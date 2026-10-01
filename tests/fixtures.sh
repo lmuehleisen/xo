@@ -215,7 +215,7 @@ case "${1:-}" in
     ;;
   display-message)
     for a in "$@"; do
-      case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac
+      case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; *pane_width*) printf '200\n'; exit 0 ;; esac
     done
     printf 'fakepane\n'
     exit 0

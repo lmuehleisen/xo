@@ -247,6 +247,105 @@ for submit_shell in /bin/bash /bin/zsh; do
 done
 unset -f tmux
 
+# --- an agent killed in a full-screen frame ----------------------------------
+
+# A killed full-screen agent never restores the terminal, so its idle shell sits
+# under the stale alternate screen with a long history behind it. Readiness must
+# leave that frame without typing into the shell, and the owned-line read must
+# stay bounded rather than scanning the whole history.
+run_bounded() {  # <seconds> <command...>
+  local limit=$1 pid i=0
+  shift
+  "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$i" -ge $((limit * 10)) ]; then
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  wait "$pid"
+}
+cat > "$SHIM_DIR/fake-agent" <<'SH'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 1500 ]; do printf 'agent history %d %0150d\n' "$i" 0; i=$((i + 1)); done
+printf '\033[?1049h\033[2J\033[H'
+i=0
+while [ "$i" -lt 20 ]; do printf 'FRAME %d\n' "$i"; i=$((i + 1)); done
+stty raw -echo
+exec sleep 300
+SH
+chmod +x "$SHIM_DIR/fake-agent"
+stale_target="$SESSION:stale"
+command tmux new-window -d -t "$SESSION:" -n stale "env PS1='stale-ready> ' /bin/bash --noprofile --norc -i"
+wait_for_capture_text "$stale_target" 'stale-ready>' || fail "stale shell did not become ready"
+command tmux send-keys -t "$stale_target" "$SHIM_DIR/fake-agent" Enter
+i=0
+until [ "$(command tmux display-message -p -t "$stale_target" '#{alternate_on}')" = 1 ] &&
+  [ "$(fm_backend_tmux_current_command "$stale_target")" = sleep ]; do
+  i=$((i + 1))
+  [ "$i" -lt 100 ] || fail "fake agent did not enter its full-screen frame"
+  sleep 0.1
+done
+stale_pid=$(fm_backend_tmux_foreground_pids "$stale_target" | head -n 1)
+[ -n "$stale_pid" ] || fail "fake agent pid not found"
+kill -9 "$stale_pid"
+i=0
+until fm_tmux_is_shell_command "$(fm_backend_tmux_current_command "$stale_target")"; do
+  i=$((i + 1))
+  [ "$i" -lt 100 ] || fail "shell did not regain the pane after the agent was killed"
+  sleep 0.1
+done
+[ "$(command tmux display-message -p -t "$stale_target" '#{alternate_on}')" = 1 ] \
+  || fail "the killed agent should leave its stale full-screen frame behind (fixture vacuous)"
+[ "$(command tmux display-message -p -t "$stale_target" '#{history_size}')" -ge 1000 ] \
+  || fail "the fixture should leave a long history behind the stale frame"
+run_bounded 20 fm_backend_tmux_shell_ready_wait "$stale_target" 10 0.2 \
+  || fail "a shell under a stale full-screen frame should become ready"
+[ "$(command tmux display-message -p -t "$stale_target" '#{alternate_on}')" = 0 ] \
+  || fail "readiness should leave the stale full-screen frame"
+stale_line="touch '$SHIM_DIR/stale-executed'"
+fm_backend_tmux_send_literal "$stale_target" "$stale_line"
+sleep 0.3
+rc=0
+run_bounded 10 fm_tmux_shell_line_pending "$stale_target" "$stale_line" || rc=$?
+[ "$rc" = 0 ] || fail "owned-line read over a long history should finish and find the line, got $rc"
+stale_executed() { [ -f "$SHIM_DIR/stale-executed" ]; }
+run_bounded 20 fm_tmux_shell_submit_enter "$stale_target" "$stale_line" stale_executed \
+  || fail "launch line under a cleared stale frame did not run"
+pass "real tmux: a killed agent's stale frame is left without input and the owned-line read stays bounded"
+
+# A shell still sourcing its startup files has no line editor yet, and a pane
+# whose foreground is not a shell never becomes ready.
+cat > "$SHIM_DIR/slow-rc" <<'SH'
+end=$((SECONDS + 3))
+while [ "$SECONDS" -lt "$end" ]; do :; done
+PS1='slow-ready> '
+SH
+command tmux new-window -d -t "$SESSION:" -n slow "/bin/bash --noprofile --rcfile '$SHIM_DIR/slow-rc' -i"
+slow_start=$SECONDS
+run_bounded 20 fm_backend_tmux_shell_ready_wait "$SESSION:slow" 15 0.2 \
+  || fail "a slow-starting shell should become ready within the bound"
+[ $((SECONDS - slow_start)) -ge 2 ] || fail "readiness was reported while the shell was still starting"
+pass "real tmux: readiness waits for a slow-starting shell's line editor"
+
+command tmux new-window -d -t "$SESSION:" -n busy "sleep 300"
+rc=0
+out=$(run_bounded 10 fm_backend_tmux_shell_ready_wait "$SESSION:busy" 1 0.2 2>&1) || rc=$?
+[ "$rc" = 1 ] || fail "a pane with no shell should refuse readiness, got $rc"
+case "$out" in
+  *"did not show a usable shell within 1s"*"no input was sent"*) ;;
+  *) fail "readiness refusal should name its bound: $out" ;;
+esac
+pass "real tmux: readiness refuses within its bound when the pane never shows a shell"
+command tmux kill-window -t "$stale_target"
+command tmux kill-window -t "$SESSION:slow"
+command tmux kill-window -t "$SESSION:busy"
+
 # --- kill and recovery-grade missing-window classification ------------------
 
 fm_backend_tmux_kill "$TARGET"
