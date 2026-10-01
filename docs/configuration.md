@@ -619,6 +619,15 @@ A pipeline brief records a `Delivery pipeline: no-mistakes` line; with the flag 
 The flag is not inherited by secondmate homes.
 `bin/fm-dod-lib.sh` owns the resolver and the pipeline contract text.
 
+## Remote check runner (config/remote-runner)
+
+The optional local, gitignored `config/remote-runner` file holds one ssh host alias, and `bin/fm-remote-check.sh` runs `bin/fm-lint.sh` and chosen `bin/fm-test-run.sh` suites there for the committed head of the current branch.
+It is the only place the host is named, so the alias, user, and key live in the ssh configuration of the machine running the home rather than in any tracked file.
+Only committed history is sent, never the home's `config/`, `data/`, `state/`, uncommitted edits, or untracked files, so the remote host holds no private material.
+With the file absent, invalid, or naming an unreachable host, the script prints a one-line fix and exits 75, and lint falls back to the pull request's CI jobs.
+The file is not inherited by secondmate homes, because an ssh alias resolves only through the configuration of the machine that runs the home, and a remote secondmate home may run elsewhere.
+The script's header owns the command line, the remote working directory, tool installation, and exit statuses.
+
 ## Parked-gate wait deferral (config/wedge-defer-parked-gate)
 
 The optional local, gitignored `config/wedge-defer-parked-gate` presence flag opts this home into a default-off second form of wait evidence in the watcher's wedge timer.
@@ -905,6 +914,7 @@ A remote secondmate is launched on its host from its own home's configuration, s
 
 The publish guard keeps private identities, names, and old history off public forges.
 It is one directory of private files that `bin/fm-publish-gate.sh` reads; that script's header owns the file formats, the destination classes, and every check.
+The gate always reads the owning home's directory, including from a worker's own copy of this repository, which never supplies its own; its header's PRIVATE CONFIG owns how that home is found.
 
 | File | Holds |
 | --- | --- |

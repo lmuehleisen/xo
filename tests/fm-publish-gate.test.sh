@@ -1144,6 +1144,63 @@ EOF"
   pass "the gh publish guard enforces explicit allowlisted destinations and scans every text form"
 }
 
+# A worker's worktree runs its own copy of bin/ from a linked git worktree
+# with no config of its own; the launch's per-task hooks name the home.
+test_worker_worktree_uses_the_home_config() {
+  local wt="$TMP_ROOT/worker-wt" repo="$TMP_ROOT/worker-repo" hooks="$TMP_ROOT/worker.hooks" out
+  local create='gh pr create --repo acme/widgets --title "Add retry" --body-file worker-body.md'
+  local sep="$TMP_ROOT/separate-checkout"
+  rm -rf "$wt" "$repo" "$hooks" "$sep" "$sep.git"
+  fm_git_init_commit "$repo" >/dev/null
+  git -C "$repo" worktree add -q --detach "$wt" || fail "linked worktree setup failed"
+  cp -R "$ROOT/bin" "$wt/bin"
+  "$STRIP" install "$hooks" "$repo" "$CFG" || fail "per-task install failed"
+  assert_equals "$CFG" "$(cat "$hooks/publish-guard-config")" "the per-task hooks record the home's publish-guard directory"
+  printf 'Adds a retry to the fetcher.\n' >"$TMP_ROOT/worker-body.md"
+  wt_policy() { # <hooks-dir or empty> <mode flags>... -- <command>; output in POLICY_OUT
+    local h=$1
+    shift
+    if [ -n "$h" ]; then
+      POLICY_OUT=$(cd "$TMP_ROOT" && env -u FM_HOME -u FM_CONFIG_OVERRIDE GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$h" "$wt/bin/fm-arm-pretool-check.sh" "$@" 2>&1 >/dev/null)
+    else
+      POLICY_OUT=$(cd "$TMP_ROOT" && env -u FM_HOME -u FM_CONFIG_OVERRIDE "$wt/bin/fm-arm-pretool-check.sh" "$@" 2>&1 >/dev/null)
+    fi
+  }
+  wt_policy "$hooks" --publish-only --claude --command "$create" ||
+    fail "a clean PR to an allowlisted public repo should pass from a worker worktree: $POLICY_OUT"
+  wt_policy "$hooks" --claude --command "$create" ||
+    fail "the worktree's full PreToolUse check should pass the same PR: $POLICY_OUT"
+  out=$(cd "$TMP_ROOT" && env -u FM_HOME -u FM_CONFIG_OVERRIDE FM_HOME="$TMP_ROOT" "$wt/bin/fm-publish-gate.sh" config-dir) ||
+    fail "FM_HOME should name the config"
+  assert_equals "$TMP_ROOT/config/publish-guard" "$out" "FM_HOME wins over the worktree"
+  # A worktree's own config is never read, however permissive.
+  mkdir -p "$wt/config/publish-guard"
+  cp "$CFG/identity" "$CFG/denylist" "$CFG/poison-commits" "$CFG/gh" "$wt/config/publish-guard/"
+  printf 'public example-org/tool\n' >"$wt/config/publish-guard/allowlist"
+  wt_policy "$hooks" --publish-only --claude --command 'gh pr create --repo example-org/tool --title t --body-file worker-body.md'
+  [ $? -eq 2 ] || fail "a destination only the worktree's config allows should be refused"
+  assert_contains "$POLICY_OUT" "$CFG/allowlist" "the refusal names the home's allowlist"
+  assert_not_contains "$POLICY_OUT" "$wt/config" "the refusal never points at the worktree's config"
+  wt_policy "" --publish-only --claude --command "$create"
+  [ $? -eq 2 ] || fail "with no home resolvable the guard should refuse"
+  # A separate-git-dir clone also has a .git file, but it is the owning checkout.
+  git init -q --separate-git-dir "$sep.git" "$sep" || fail "separate-git-dir setup failed"
+  cp -R "$ROOT/bin" "$sep/bin"
+  out=$(env -u FM_HOME -u FM_CONFIG_OVERRIDE "$sep/bin/fm-publish-gate.sh" config-dir) ||
+    fail "a separate-git-dir checkout should resolve its own config: $out"
+  assert_equals "$(cd "$sep" && pwd -P)/config/publish-guard" "$out" "a separate-git-dir checkout is its own home"
+  assert_contains "$POLICY_OUT" "no firstmate home owns this publish-guard config" "no-home refusal"
+  assert_contains "$POLICY_OUT" "fix: relaunch the task through bin/fm-spawn.sh" "no-home refusal names its fix"
+  out=$(env -u FM_HOME -u FM_CONFIG_OVERRIDE "$wt/bin/fm-publish-gate.sh" check-text --dest acme/widgets "body:$TMP_ROOT/worker-body.md" 2>&1) &&
+    fail "check-text with no home should refuse"
+  assert_contains "$out" "no firstmate home owns this publish-guard config" "check-text no-home refusal"
+  out=$(env -u FM_HOME -u FM_CONFIG_OVERRIDE "$wt/bin/fm-publish-judge.sh" text --dest acme/widgets "body:$TMP_ROOT/worker-body.md" 2>&1) &&
+    fail "the judge with no home should refuse"
+  assert_contains "$out" "no firstmate home owns this publish-guard config" "judge no-home refusal"
+  pass "a worker worktree's gh guard reads the owning home's config, ignores its own, and refuses without a home"
+}
+
 deny_expect() { # <code> <command> [label]
   policy "$2"
   [ $? -eq 2 ] || fail "${3:-$2}: should be refused ($POLICY_OUT)"
@@ -1542,6 +1599,7 @@ test_keep_ai_trailers_still_runs_the_gate
 test_pre_commit_checks_the_staged_change
 test_secondmate_home_inherits_publish_guard
 test_gh_guard
+test_worker_worktree_uses_the_home_config
 test_gh_guard_option_spellings
 test_gh_guard_file_reads_run_alone
 test_gh_guard_refuses_generated_text
