@@ -1482,9 +1482,11 @@ Sensitive evidence never goes into the PR. The code can.
 - PR titles and descriptions are short and neutral: what changed and how it
   was tested, nothing else. Review replies are short: "fixed in <sha>" or a
   brief reason.
-- Changes touching browser automation, security, or operations land through
-  the direct gated path (a local merge and a gated push of main only), with no
-  PR discussion.
+- Changes touching browser automation land through the direct gated path (a
+  local merge and a gated push of main only), with no PR discussion.
+- Security and operations changes may ship as normal PRs, but their title,
+  description, commits, review replies, and changed content still carry no
+  private incident evidence.
 Incident evidence stays in private reports; a public PR carries only a
 sanitized reproduction.
 The gh publish guard and CI refuse a title over 100 characters, a description
