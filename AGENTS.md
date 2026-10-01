@@ -227,7 +227,7 @@ A separate review or audit is allowed only when the captain explicitly requests 
 The path's worker, automated gates, and captain approval remain authoritative:
 
 - **direct-PR** has the worker push and open a PR with `gh`, then waits for the configured merge authority.
-  Public commit, PR, issue, and review text follows the public-text policy owned by `bin/fm-publish-gate.sh` (short neutral PR text, short review replies, no sensitive evidence, and browser, security, or operations changes through the gated direct path), which with the `gh` publish guard enforces it.
+  Public commit, PR, issue, and review text follows the public-text policy owned by `bin/fm-publish-gate.sh`, which with the `gh` publish guard enforces it.
 - **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
   Load `captain-hold-lifecycle` when that completed work must wait for the captain; it owns the durable wait and finished-worker parking procedure.
 - **no-mistakes** is accepted as a spawn/registry token and ships as described above.
