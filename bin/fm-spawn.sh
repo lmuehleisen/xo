@@ -5490,33 +5490,45 @@ sq_ompcfg=$(shell_quote "${OMP_WORKER_CFG:-$FM_ROOT/.omp/fm-worker-overlay.yml}"
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 sq_tasktmp=$(shell_quote "$TASK_TMP")
-MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-[ "$HARNESS" != devin ] || MODELFLAG=$(model_flag_for_harness devin "$(fm_devin_launch_model "$MODEL")")
-# A pinned Pi launch confines Pi's model lookup to the declared provider.
-[ -z "$WORKER_ACCOUNT_PROVIDER" ] || MODELFLAG="--provider $(shell_quote "$WORKER_ACCOUNT_PROVIDER") $MODELFLAG"
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
-LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
-LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
-# Relaunch session continuity. Computed here, where the adopted endpoint (T) is
-# known, and substituted only into the Pi-family template's `__PIRESUME__`
-# placeholder; an empty value leaves every other launch byte-identical.
-RESUME_ARGS=
-if [ "$RELAUNCH" -eq 1 ]; then
-  RESUME_ARGS=$(relaunch_resume_args "$HARNESS" "$BACKEND" "$T") || RESUME_ARGS=
+# Every template-token substitution that expands into adapter launch content -
+# flags, resume args, attribution JSON, adapter config overrides - exists only
+# for the launch templates. A raw launch command runs verbatim, so none of them
+# touch it: a literal __MODELFLAG__ or __CLAUDEATTRIBUTION__ in a raw command
+# is the operator's own text, never an empty expansion or a rewritten flag.
+if [ "$RAW_LAUNCH" -eq 0 ]; then
+  MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
+  [ "$HARNESS" != devin ] || MODELFLAG=$(model_flag_for_harness devin "$(fm_devin_launch_model "$MODEL")")
+  # A pinned Pi launch confines Pi's model lookup to the declared provider.
+  [ -z "$WORKER_ACCOUNT_PROVIDER" ] || MODELFLAG="--provider $(shell_quote "$WORKER_ACCOUNT_PROVIDER") $MODELFLAG"
+  EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
+  LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
+  LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+  # Relaunch session continuity. Computed here, where the adopted endpoint (T) is
+  # known, and substituted only into the Pi-family template's `__PIRESUME__`
+  # placeholder; an empty value leaves every other launch byte-identical.
+  RESUME_ARGS=
+  if [ "$RELAUNCH" -eq 1 ]; then
+    RESUME_ARGS=$(relaunch_resume_args "$HARNESS" "$BACKEND" "$T") || RESUME_ARGS=
+  fi
+  LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
+  if [ "$KEEP_AI_TRAILERS" = 1 ]; then
+    LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/}
+  else
+    LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
+  fi
+  if [ "$HARNESS" = rovo ]; then
+    ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
+      echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
+      exit 1
+    }
+    LAUNCH=${LAUNCH//__ROVOCONFIGOVERRIDE__/$ROVOCONFIGOVERRIDE}
+  fi
 fi
-LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
-if [ "$KEEP_AI_TRAILERS" = 1 ]; then
-  LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/}
-else
-  LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
-fi
-if [ "$HARNESS" = rovo ] && [ "$RAW_LAUNCH" -eq 0 ]; then
-  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
-    echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
-    exit 1
-  }
-  LAUNCH=${LAUNCH//__ROVOCONFIGOVERRIDE__/$ROVOCONFIGOVERRIDE}
-fi
+# The remaining substitutions expand only to task-owned paths (the brief, the
+# worktree, the turn-end marker, the wiring sidecars, the shared tmp root) that
+# exist regardless of adapter. They cannot refuse, and they are the one channel
+# a raw command has to reference those paths deliberately, so they still expand
+# inside a raw command.
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
@@ -5555,7 +5567,9 @@ agy)
 esac
 # A record-backed launch brief is published into the state dir of the pane
 # receiving it, which for a secondmate is its own home, not this primary's.
-case "$LAUNCH" in
+# Both substitution cases are template machinery: a raw command keeps any
+# literal tokens it carries.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__BRIEFDOORBELL__*)
   case "$KIND" in
     secondmate) brief_opstate="$PROJ_ABS/state" ;;
@@ -5568,7 +5582,7 @@ case "$LAUNCH" in
   LAUNCH=${LAUNCH//__BRIEFDOORBELL__/"$(shell_quote "$brief_doorbell")"}
   ;;
 esac
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__CLAUDEADDDIRS__*)
   CLAUDE_ADD_DIRS=$(claude_add_dirs_flag "$KIND" "$STATE" "$DATA" "$FM_ROOT" "$ID") || {
     echo "error: could not resolve the task-channel directories for $ID's claude --add-dir grant" >&2

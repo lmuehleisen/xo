@@ -564,23 +564,32 @@ SH
 
 # An adapter placeholder embedded in a raw command is the operator's own text:
 # the template substitutions must leave it untouched rather than resolving a
-# binary or a directory set the raw command never asked firstmate to fill in.
+# binary, expanding a flag, or dropping the token entirely when the expansion
+# is empty. Path tokens that name task-owned files still expand - they are the
+# one channel a raw command has to reference the brief or worktree.
 test_raw_launch_leaves_adapter_placeholders_untouched() {
-  local rec id out status launch
+  local rec id out status launch brief_path
   id=raw-placeholders-z18
   rec=$(make_spawn_case raw-placeholders claude "$id")
   read_case_record "$rec"
+  # __BRIEF__ expands to the launch-brief overlay the worker is shown, spelled
+  # exactly as the home overrides gave it (no physical-path resolution).
+  brief_path="$HOME_DIR/data/$id/launch-brief.md"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
-    "$id" "$PROJ_DIR" 'agy __AGYBIN__ --dirs __PERMISSIONDIRS__')
+    "$id" "$PROJ_DIR" 'agy __AGYBIN__ --dirs __PERMISSIONDIRS__ __MODELFLAG__ __EFFORTFLAG__ __CLAUDEATTRIBUTION__ __BRIEFDOORBELL__ __CLAUDEADDDIRS__ --brief __BRIEF__')
   status=$?
   expect_code 0 "$status" "raw launch carrying adapter placeholders should spawn: $out"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "agy __AGYBIN__ --dirs __PERMISSIONDIRS__" \
+  assert_contains "$launch" "agy __AGYBIN__ --dirs __PERMISSIONDIRS__ __MODELFLAG__ __EFFORTFLAG__ __CLAUDEATTRIBUTION__ __BRIEFDOORBELL__ __CLAUDEADDDIRS__" \
     "raw launch rewrote adapter placeholders the operator typed"
   assert_not_contains "$launch" "--add-dir" \
-    "raw launch substituted __PERMISSIONDIRS__ into a verbatim command"
-  pass "a raw launch leaves adapter placeholders untouched"
+    "raw launch substituted __PERMISSIONDIRS__ or __CLAUDEADDDIRS__ into a verbatim command"
+  assert_not_contains "$launch" "--model" \
+    "raw launch substituted __MODELFLAG__ into a verbatim command"
+  assert_contains "$launch" "--brief '$brief_path'" \
+    "raw launch left the task-path __BRIEF__ token unexpanded"
+  pass "a raw launch keeps adapter tokens literal but expands task-path tokens"
 }
 
 test_claude_threads_model_and_effort() {
