@@ -13,8 +13,8 @@
 # The home toggle is the optional local, gitignored config/lavish holding one of
 # those words (absent means off). A per-request override, passed by the caller
 # as an explicit mode for one artifact or brief, wins over the home toggle in
-# both directions. Anything else in config/lavish or in a request is malformed
-# and refused, never guessed.
+# both directions. Anything else in config/lavish counts as off, never a guessed
+# mode, with the reason reported; anything else in a request is refused.
 #
 # Availability is separate from the wanted mode: Lavish is available only when
 # lavish-axi is on PATH and reports exactly FM_LAVISH_AXI_PIN, because this home
@@ -131,10 +131,11 @@ fm_lavish_unavailable_reason() {
 }
 
 # fm_lavish_resolve <config-dir> [<requested-mode>]
-# Sets FM_LAVISH_WANTED (the request, else the home toggle),
-# FM_LAVISH_WANTED_FROM (request or home), FM_LAVISH_MODE (the effective mode),
-# and FM_LAVISH_REASON (why the effective mode is lower than wanted, or empty).
-# Returns 2 on a malformed request or home toggle.
+# Sets FM_LAVISH_WANTED (the request, else the home toggle, off when that is
+# malformed), FM_LAVISH_WANTED_FROM (request or home), FM_LAVISH_MODE (the
+# effective mode), and FM_LAVISH_REASON (why the effective mode is off when
+# something else was wanted or the toggle is malformed, or empty).
+# Returns 2 on a malformed request.
 fm_lavish_resolve() {
   local config=$1 request=${2-} reason
   FM_LAVISH_REASON=
@@ -146,8 +147,15 @@ fm_lavish_resolve() {
     FM_LAVISH_WANTED=$request
     FM_LAVISH_WANTED_FROM=request
   else
-    FM_LAVISH_WANTED=$(fm_lavish_home_mode "$config") || return 2
     FM_LAVISH_WANTED_FROM=home
+    if ! FM_LAVISH_WANTED=$(fm_lavish_home_mode "$config" 2>/dev/null); then
+      # A malformed home toggle counts as off, the safe direction, and says why
+      # rather than refusing every unrelated board and scout.
+      FM_LAVISH_WANTED=off
+      FM_LAVISH_MODE=off
+      FM_LAVISH_REASON=$(fm_lavish_home_mode "$config" 2>&1 >/dev/null)
+      return 0
+    fi
   fi
   FM_LAVISH_MODE=$FM_LAVISH_WANTED
   if [ "$FM_LAVISH_WANTED" != off ] && ! reason=$(fm_lavish_unavailable_reason "$config"); then

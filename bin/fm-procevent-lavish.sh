@@ -151,8 +151,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # Every lavish-axi call below runs with telemetry and auto-open pinned off. A
 # malformed config/lavish-axi-host is not fatal here: a poll routes by the
 # board's own saved session (apply_session_host), never the configured host.
-# arm and every listener start (poll) refuse a lavish-axi other than the pinned
-# version, so a source armed before an upgrade cannot restart on it.
+# arm, every listener start (poll), and every poll retry refuse a lavish-axi
+# other than the pinned version, so an upgrade can never reach a board.
 fm_lavish_pin_env "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" 2>/dev/null || true
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
@@ -403,6 +403,9 @@ cmd_poll() {
     iteration_started=$(poll_iteration_started) || die "cannot start the poll rate governor"
     [ -f "$artifact" ] && [ ! -L "$artifact" ] && [ -r "$artifact" ] \
       || die "artifact is no longer a readable file: $artifact"
+    # Every attempt, not only the first: a retry must never run a binary that
+    # was upgraded off the pin after this listener started.
+    lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
     apply_session_host "$artifact"
     # Posting a round's reply is BEST EFFORT and deliberately carries no delivery
     # machinery. The staged file is the only record that a reply is owed, so it is

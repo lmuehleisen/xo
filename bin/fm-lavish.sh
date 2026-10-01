@@ -23,7 +23,8 @@
 #                  This is the only way Firstmate and its workers start Lavish.
 # install-command  Print the one hook-free, version-pinned install command.
 #
-# Malformed config or a malformed request exits 2. bin/fm-lavish-lib.sh owns
+# `mode` exits 2 on a malformed config/lavish, which `resolve` reports as off
+# with its reason; a malformed request exits 2. bin/fm-lavish-lib.sh owns
 # the modes, the pin, the pinned environment, and the forbidden subcommands.
 set -u
 

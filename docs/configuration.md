@@ -938,7 +938,7 @@ It holds one word:
 - `answers`: `view`, plus answer controls on the board's decision cards, bound to the keyed-answer intake in `bin/fm-captain-hold.sh` before the board is armed; merge, credential, and dispatch requests stay in chat.
 
 A per-request choice wins over the file in both directions for one artifact: `bin/fm-bearings-board.sh build --lavish <mode>` for one board, and `bin/fm-brief.sh --scout --lavish <mode>` for one scout.
-Any other value refuses the board build and the scout scaffold, and session start reports it.
+Any other value in the file counts as `off`, and the board and session start say why; any other per-request value is refused.
 A wanted mode resolves to `off` unless `lavish-axi` reports exactly the pinned version; the board says why, and session start prints one line with the hook-free install command when the file asks for Lavish that is not available.
 `bin/fm-lavish-lib.sh` owns the modes, the pin, and the environment every Lavish call runs under, and [`docs/lavish.md`](lavish.md) covers installing it and viewing it from another computer.
 

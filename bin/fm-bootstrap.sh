@@ -66,8 +66,10 @@
 #          <reason>; install: <command>) - boards stay static local files and
 #          answers stay in chat until it is installed". A malformed toggle
 #          prints "BOOTSTRAP_INFO: Lavish off (<reason>)". Without the toggle,
-#          bootstrap stays silent about Lavish. The install command is the
-#          pinned, hook-free one bin/fm-lavish-lib.sh owns.
+#          bootstrap stays silent about Lavish. A malformed toggle counts as
+#          off everywhere, so that line describes how the home behaves. The
+#          install command is the pinned, hook-free one bin/fm-lavish-lib.sh
+#          owns.
 #          With the optional config/no-mistakes opt-in present and no
 #          no-mistakes binary on PATH, one non-blocking line is printed:
 #          "BOOTSTRAP_INFO: no-mistakes pipeline unavailable (config/no-mistakes

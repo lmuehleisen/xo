@@ -60,8 +60,10 @@ test_malformed_toggle_and_request_exit_2() {
   home=$(make_home malformed often)
   rc=0; run_lavish "$home" mode >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "a malformed config/lavish exited $rc, not 2"
-  rc=0; run_lavish "$home" resolve >/dev/null 2>&1 || rc=$?
-  [ "$rc" -eq 2 ] || fail "resolve over a malformed config/lavish exited $rc, not 2"
+  out=$(run_lavish "$home" resolve) || fail "resolve refused a malformed config/lavish instead of resolving off"
+  assert_contains "$out" "mode: off" "a malformed config/lavish did not resolve off: $out"
+  assert_contains "$out" "reason: config/lavish must be off, view, or answers (got often)" \
+    "a malformed config/lavish was not explained: $out"
   home=$(make_home spaced)
   printf 'a n s w e r s\n' > "$home/config/lavish"
   rc=0; run_lavish "$home" mode >/dev/null 2>&1 || rc=$?
@@ -77,7 +79,7 @@ test_malformed_toggle_and_request_exit_2() {
   printf 'answers\n' > "$home/config/lavish"
   rc=0; run_lavish "$home" resolve --lavish= >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "an empty request exited $rc, not 2"
-  pass "a malformed toggle or request exits 2 instead of guessing"
+  pass "a malformed toggle counts as off with its reason, and a malformed request exits 2"
 }
 
 test_request_overrides_the_home_toggle_both_ways() {
@@ -199,6 +201,41 @@ test_adapter_refuses_an_off_pin_binary() {
   pass "the process-event adapter refuses an off-pin lavish-axi at arm and at every listener start"
 }
 
+# A poll retry rechecks the pin, so a binary upgraded after the listener
+# started never runs.
+test_adapter_rechecks_the_pin_before_each_retry() {
+  local home out real
+  home=$(make_home retry-pin)
+  mkdir -p "$home/state" "$home/art" "$home/lavish-state"
+  printf '<html></html>\n' > "$home/art/board.html"
+  real=$(cd "$home/art" && pwd -P)/board.html
+  jq -n --arg file "$real" \
+    '{sessions:{"0123456789abcdef":{file:$file,url:"http://127.0.0.1:4387/session/0123456789abcdef"}}}' \
+    > "$home/lavish-state/state.json"
+  cat > "$home/fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+state=${LAVISH_AXI_STATE_DIR:?}
+if [ "${1-}" = --version ]; then
+  if [ -e "$state/upgraded" ]; then echo 0.1.81; else echo 0.1.80; fi
+  exit 0
+fi
+printf 'poll\n' >> "$state/polls"
+: > "$state/upgraded"
+printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n'
+SH
+  chmod +x "$home/fakebin/lavish-axi"
+  if out=$(PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    LAVISH_AXI_STATE_DIR="$home/lavish-state" FM_LAVISH_POLL_RETRY_DELAY=1 \
+    "$ROOT/bin/fm-procevent-lavish.sh" poll "$home/art/board.html" 2>&1); then
+    fail "a retry ran on a binary upgraded off the pin: $out"
+  fi
+  assert_contains "$out" "lavish-axi 0.1.81 is installed but this home is pinned to 0.1.80" \
+    "the retry did not refuse the upgraded binary: $out"
+  [ "$(wc -l < "$home/lavish-state/polls" | tr -d ' ')" = 1 ] \
+    || fail "the upgraded binary was polled: $(cat "$home/lavish-state/polls")"
+  pass "a poll retry rechecks the pin and never runs an upgraded binary"
+}
+
 test_install_command_is_pinned_and_hook_free() {
   local out
   out=$("$LAVISH" install-command)
@@ -215,4 +252,5 @@ test_run_refuses_hooks_updates_and_sharing
 test_run_pins_the_environment
 test_run_refuses_an_off_pin_binary
 test_adapter_refuses_an_off_pin_binary
+test_adapter_rechecks_the_pin_before_each_retry
 test_install_command_is_pinned_and_hook_free

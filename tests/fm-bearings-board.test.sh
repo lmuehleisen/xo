@@ -604,19 +604,23 @@ test_unavailable_lavish_falls_back_to_the_static_board() {
   pass "an unavailable or off-pin lavish-axi keeps the static board and says why"
 }
 
-test_malformed_toggle_refuses_before_touching_the_board() {
+test_malformed_toggle_counts_as_off_and_a_malformed_request_refuses() {
   local home data out
   home=$(make_lavish_home malformed sometimes)
   data="$home/payload.json"
   write_valid_payload "$data"
-  if out=$(run_board "$home" build "$data" 2>&1); then
-    fail "a malformed config/lavish built a board: $out"
-  fi
-  assert_contains "$out" "config/lavish must be off, view, or answers" "the malformed toggle was not named: $out"
-  assert_absent "$home/.lavish/bearings-board.html" "a malformed toggle still produced a board"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "a malformed config/lavish refused the board: $out"
+  assert_contains "$out" "lavish: off (config/lavish must be off, view, or answers (got sometimes))" \
+    "the malformed toggle was not reported as off: $out"
+  assert_contains "$out" "open: $home/.lavish/bearings-board.html" "a malformed toggle did not build the static board: $out"
+  assert_absent "$home/lavish-state/env" "a malformed toggle still invoked lavish-axi"
+  home=$(make_lavish_home malformed-request)
+  data="$home/payload.json"
+  write_valid_payload "$data"
   if out=$(run_board "$home" build "$data" --lavish maybe 2>&1); then
     fail "a malformed request built a board: $out"
   fi
+  assert_absent "$home/.lavish/bearings-board.html" "a malformed request still produced a board"
   home=$(make_lavish_home empty-request answers)
   data="$home/payload.json"
   write_valid_payload "$data"
@@ -625,7 +629,7 @@ test_malformed_toggle_refuses_before_touching_the_board() {
   fi
   assert_contains "$out" "got an empty value" "the empty request was not named: $out"
   assert_absent "$home/.lavish/bearings-board.html" "an empty request still produced a board"
-  pass "a malformed toggle or request refuses before the board is touched"
+  pass "a malformed toggle builds the static board and says why, and a malformed request refuses"
 }
 
 test_answers_mode_binds_then_arms() {
@@ -768,7 +772,7 @@ test_build_refuses_a_nondecision_reconcile_value
 test_view_mode_opens_the_read_only_board_in_lavish
 test_per_request_override_wins_over_the_home_toggle
 test_unavailable_lavish_falls_back_to_the_static_board
-test_malformed_toggle_refuses_before_touching_the_board
+test_malformed_toggle_counts_as_off_and_a_malformed_request_refuses
 test_answers_mode_binds_then_arms
 test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended
 test_answers_mode_keeps_controls_hidden_until_listening

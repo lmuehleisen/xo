@@ -62,7 +62,7 @@ A key that names no task, names a task that is not captain-held, or names a task
 
 The active captain-answer channel in this fork is chat.
 `bin/fm-send.sh --resolve-key` is the chat channel: its status-log close for a key the status log still owns is owned by that script's header, and a key the status log no longer owns is resolved to a still-open captain-held task - the key as a task id, then the legacy derived identity - and fed as one keyed line.
-The read-only Bearings board does not feed this intake, and any answer prompted by the board returns through chat.
+A Bearings board below the `answers` Lavish mode does not feed this intake, and any answer it prompts returns through chat; an `answers` board feeds it as the bound captured source described below.
 
 ## Evidence-backed reconciliation is not a board control
 
@@ -82,7 +82,7 @@ Both outcomes require a pre-existing durable request and the operator input that
 A successful normal answer also retires any pending request, because an answered call has no remaining re-check obligation.
 Every retirement is checked: if request removal fails after an answer, close, or note is already durable, the durable outcome stands but the command fails and leaves the pending request visible for retry.
 No path here closes a captain call without either the captain's words through `answer` or the evidence through `reconcile close`.
-The Bearings board creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation.
+A Bearings board below `answers` creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation; an `answers` board offers the reconcile choice on decision cards, and a selection files the same captured-source request above.
 
 ## Card hygiene: a landed subject is not a live call
 
