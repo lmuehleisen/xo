@@ -159,9 +159,11 @@ load_lab() {  # <root>: refuse anything up did not build, then load its record
   TREEHOUSE_DIR=$(rec_get "$ROOT" treehouse_dir)
 }
 
+# An explicit socket, never TMUX_TMPDIR: tmux silently falls back to the
+# user's default server when TMUX_TMPDIR names a missing directory.
 lab_tmux() {
-  [ -n "${TMUX_DIR:-}" ] || return 1
-  env -u TMUX TMUX_TMPDIR="$TMUX_DIR" tmux "$@"
+  [ -n "${TMUX_DIR:-}" ] && [ -d "$TMUX_DIR" ] && [ ! -L "$TMUX_DIR" ] && [ -O "$TMUX_DIR" ] || return 1
+  env -u TMUX tmux -S "$TMUX_DIR/tmux-$(id -u)/default" "$@"
 }
 
 # The empty-environment base every lab process starts from.

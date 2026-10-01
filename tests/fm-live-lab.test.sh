@@ -25,13 +25,25 @@ live_lab_cleanup() {
   while read -r pid; do [ -n "$pid" ] && { pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true; }; done < "$TMP_ROOT/pids"
   while read -r dir; do
     [ -n "$dir" ] || continue
-    env -u TMUX TMUX_TMPDIR="$dir" tmux kill-server 2>/dev/null
+    dir_tmux "$dir" kill-server 2>/dev/null
     case "$dir" in /tmp/fml.*) rm -rf "$dir" ;; esac
   done < "$TMP_ROOT/tmux-dirs"
   rm -rf "/tmp/fm-labt$$-mate" "/tmp/fm-labt$$-worker" "/tmp/fm-labt$$-other" /tmp/fm-labt"$$"-*+*
   fm_test_cleanup
 }
 trap live_lab_cleanup EXIT
+
+# dir_tmux <socket-dir> <tmux args...>: address only the lab server in
+# <socket-dir>, through an explicit socket. TMUX_TMPDIR naming a missing
+# directory makes tmux fall back to the user's default server, so a missing,
+# foreign-owned, or symlinked directory is refused instead.
+dir_tmux() {
+  local dir=$1
+  shift
+  [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || return 1
+  [ -d "$dir/tmux-$(id -u)" ] || mkdir -m 700 "$dir/tmux-$(id -u)" || return 1
+  env -u TMUX tmux -S "$dir/tmux-$(id -u)/default" "$@"
+}
 
 command -v tmux >/dev/null 2>&1 || { echo "ok - skipped: tmux is not installed"; exit 0; }
 
@@ -120,7 +132,7 @@ lab_tmux() {  # <root> <tmux args...>
   local dir
   dir=$(sed -n 's/^tmux_dir=//p' "$1/.fm-live-lab")
   shift
-  env -u TMUX TMUX_TMPDIR="$dir" tmux "$@"
+  dir_tmux "$dir" "$@"
 }
 
 start_sleeper() {
@@ -332,6 +344,35 @@ expect_code 1 "$?" "down refuses a path without a lab record"
 assert_contains "$out" "carries no lab record" "the refusal names the missing record"
 assert_present "$NOT_LAB/keep" "a refused down removes nothing"
 pass "down refuses anything up did not build"
+
+# A lab whose socket directory is already gone must not reach any other tmux
+# server. tmux falls back to the user's default server when TMUX_TMPDIR names a
+# missing directory; this shim models that fallback with a private stand-in
+# server, so the real default server is never created, queried, or stopped.
+STANDIN_DIR=$(mktemp -d /tmp/fml.XXXXXX)
+printf '%s\n' "$STANDIN_DIR" >> "$TMP_ROOT/tmux-dirs"
+dir_tmux "$STANDIN_DIR" -f /dev/null new-session -d -s standin 'exec sleep 600' || fail "stand-in tmux server did not start"
+mkdir -p "$TMP_ROOT/fallback-tmux-bin"
+cat > "$TMP_ROOT/fallback-tmux-bin/tmux" <<SH
+#!/bin/sh
+[ "\${1:-}" = -S ] && exec "$(command -v tmux)" "\$@"
+exec "$(command -v tmux)" -S "$STANDIN_DIR/tmux-$(id -u)/default" "\$@"
+SH
+chmod +x "$TMP_ROOT/fallback-tmux-bin/tmux"
+PATH="$TMP_ROOT/fallback-tmux-bin:$PATH" tmux has-session -t standin 2>/dev/null \
+  || fail "the fallback shim does not reach the stand-in server, so this case would prove nothing"
+G=$(make_lab gone pi)
+G_TMUX=$(sed -n 's/^tmux_dir=//p' "$G/.fm-live-lab")
+lab_tmux "$G" kill-server || fail "could not stop the lab's own tmux server"
+rm -rf "$G_TMUX"
+PATH="$TMP_ROOT/fallback-tmux-bin:$PATH" "$LIVE_LAB" down "$G" >/dev/null 2>&1
+dir_tmux "$STANDIN_DIR" has-session -t standin 2>/dev/null || fail "down of a lab with a missing socket directory stopped another tmux server"
+if PATH="$TMP_ROOT/fallback-tmux-bin:$PATH" dir_tmux "$G_TMUX" kill-server 2>/dev/null; then
+  fail "a lab tmux call against a missing socket directory did not refuse"
+fi
+dir_tmux "$STANDIN_DIR" has-session -t standin 2>/dev/null || fail "test cleanup of a missing socket directory stopped another tmux server"
+dir_tmux "$STANDIN_DIR" kill-server
+pass "a lab with a missing socket directory never stops another tmux server"
 
 C_HASH=$(printf '%s' "$CH" | shasum -a 256 | awk '{print $1}')
 OTHER_ID="labt$$-other"
