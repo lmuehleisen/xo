@@ -2518,7 +2518,14 @@ approve_plain() {  # <base>
                 FETCH_OPT_NAME=-${w:ci:1}
                 fetch_short_kind "$base" "${w:ci:1}"
                 case "$FETCH_OPT_KIND" in
-                  switch) ci=$((ci + 1)) ;;
+                  switch)
+                    # -: is curl's short spelling of --next.
+                    if [ "$FETCH_OPT_NAME" = '-:' ]; then
+                      stamp_fetch_outdir
+                      FETCH_OUTDIR=''
+                    fi
+                    ci=$((ci + 1))
+                    ;;
                   cwdout) fetch_cwd_out=1; ci=$((ci + 1)) ;;
                   unknown) never_approve "$base option -${w:ci:1} is unknown to this policy"; return 0 ;;
                   nfamily)
