@@ -99,11 +99,14 @@ screen() {  # <width> <title> <composer-text>
 }
 
 offline() {  # <shell snippet>
+  # shellcheck disable=SC2030 # the locale is scoped to this subshell on purpose
   ( LC_ALL=$UTF8; . "$ROOT/bin/fm-tmux-lib.sh"; eval "$1" )
 }
 
 # --- 1. offline: the incident's screen ---------------------------------------
+# shellcheck disable=SC2034 # read inside offline()'s eval
 CAPS_CURSOR=$(printf 'styled=1\ncursor=1\nidentity=0\nrows=0')
+# shellcheck disable=SC2034 # read inside offline()'s eval
 CAPS_NONE=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=0')
 LONG_NAME=$(printf 'a-very-long-session-name-%.0s' 1 2 3 4 5 6 7 8)
 SHORT_RULE_NAME=$(printf 'n%.0s' $(seq 1 145))
@@ -119,6 +122,7 @@ for title in firstmate 'Test traffic analytics filtering' "$LONG_NAME" "$SHORT_R
   [ "$v" = pending ] || fail "named composer ($title), cursorless: expected pending, got $v"
   offline 'rows=$(fm_composer_extract_selected_content "$CAPS_NONE" "$scr" $'"'"'\x1f'"'"') && fm_composer_holds_owned_text "$DOORBELL" "$rows"' \
     || fail "named composer ($title): its rows do not prove the owned doorbell"
+  # shellcheck disable=SC2034 # read inside offline()'s eval
   idle=$(screen 150 "$title" "")
   v=$(offline 'fm_composer_classify_screen "$CAPS_NONE" "$idle" ""')
   [ "$v" = empty ] || fail "idle named composer ($title), cursorless: expected empty, got $v"
@@ -152,6 +156,7 @@ PANE=$(tmux display-message -p -t titled '#{pane_id}') || fail "could not read t
 
 daemon() {  # <shell snippet>
   (
+    # shellcheck disable=SC2031 # each helper scopes its own locale to its subshell
     export FM_STATE_OVERRIDE="$PROOF_STATE" FM_HOME="$TMP" FM_SUPERVISOR_TARGET="$PANE" \
       FM_SUPERVISOR_BACKEND=tmux FM_INJECT_CONFIRM_SLEEP=0.25 FM_INJECT_CONFIRM_RETRIES=3 \
       FM_INJECT_PROOF_POLLS=8 LC_ALL="$UTF8" FM_DAEMON_PRIMARY_HARNESS=claude
@@ -171,12 +176,22 @@ wait_composer() {  # <state>
   done
   return 1
 }
+wait_idle() {
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    daemon '! pane_is_busy "$FM_SUPERVISOR_TARGET" tmux && ! _inject_pane_busy "$FM_SUPERVISOR_TARGET"' && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
 reset() {
   rm -f "$FX"/* "$PROOF_STATE"/.subsuper-* 2>/dev/null
   rm -rf "$PROOF_STATE/.subsuper-submit-failures" "$PROOF_STATE/operational-inbox"
   tmux send-keys -t "$PANE" C-u
   sleep 1.5
   wait_composer empty || fail "the named fixture composer did not start empty: $(composer)"
+  wait_idle || fail "the named fixture still reads busy"
   : > "$PROOF_STATE/.supervise-daemon.log"
   : > "$FX/submitted.log"
   : > "$FX/keys.log"

@@ -71,6 +71,7 @@ chmod +x "$TMP/hbin/herdr"
 
 hdaemon() {  # <shell snippet>
   (
+    # shellcheck disable=SC2030 # the shim PATH is scoped to this subshell on purpose
     export HERDR_SESSION="$HSESSION" FM_STATE_OVERRIDE="$HSTATE" FM_HOME="$TMP" FM_SUPERVISOR_TARGET="$HSESSION:${HPANE:-}" \
       FM_SUPERVISOR_BACKEND=herdr FM_INJECT_CONFIRM_SLEEP=1 FM_INJECT_CONFIRM_RETRIES=3 \
       LC_ALL="$UTF8" FM_DAEMON_PRIMARY_HARNESS=claude PATH="$TMP/hbin:$PATH"
@@ -102,10 +103,11 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 [ "$ready" -ge 10 ] || fail "the herdr fixture pane's shell never became ready"
-hdaemon "fm_backend_herdr_send_text_line \"\$FM_SUPERVISOR_TARGET\" \"env LC_ALL=$UTF8 PYTHONIOENCODING=utf-8 FIXTURE_COLS=60 FIXTURE_HERDR_BIN='$REAL_HERDR' FIXTURE_HERDR_SESSION='$HSESSION' python3 '$FIXTURE' '$HFX' '$HSTATE' '$ROOT' firstmate\"" \
+hdaemon "fm_backend_herdr_send_text_line \"\$FM_SUPERVISOR_TARGET\" \"env LC_ALL=$UTF8 PYTHONIOENCODING=utf-8 FIXTURE_COLS=40 FIXTURE_HERDR_BIN='$REAL_HERDR' FIXTURE_HERDR_SESSION='$HSESSION' python3 '$FIXTURE' '$HFX' '$HSTATE' '$ROOT' firstmate\"" \
   || fail "could not start the fixture in the herdr pane"
 
 hcomposer() { hdaemon 'fm_backend_composer_state herdr "$FM_SUPERVISOR_TARGET"'; }
+hscreen() { hdaemon 'fm_backend_herdr_visible_capture "$FM_SUPERVISOR_TARGET"' | grep -v '^[[:space:]]*$' | tail -12; }
 hwait() {  # <state>
   local i=0
   while [ "$i" -lt 60 ]; do
@@ -120,7 +122,8 @@ hreset() {
   rm -rf "$HSTATE/.subsuper-submit-failures" "$HSTATE/operational-inbox"
   hdaemon 'fm_backend_herdr_send_key "$FM_SUPERVISOR_TARGET" C-u'
   sleep 1.5
-  hwait empty || fail "the named herdr fixture composer did not read empty: $(hcomposer)"
+  hwait empty || fail "the named herdr fixture composer did not read empty: $(hcomposer); screen:
+$(hscreen)"
   : > "$HSTATE/.supervise-daemon.log"
   : > "$HFX/submitted.log"
 }
@@ -170,6 +173,7 @@ hdaemon 'fm_operational_record_write "$FM_STATE_OVERRIDE" away-supervisor "Super
   _owned_record_write "$FM_STATE_OVERRIDE" "$FM_SUPERVISOR_TARGET" herdr "$bell" 1 x
   fm_backend_herdr_send_literal "$FM_SUPERVISOR_TARGET" "$bell"'
 hwait pending || fail "the unsent doorbell did not reach the herdr composer"
+# shellcheck disable=SC2031 # the CLI gets the same shim PATH hdaemon scopes to its subshell
 FM_STATE_OVERRIDE="$HSTATE" LC_ALL="$UTF8" PATH="$TMP/hbin:$PATH" "$ROOT/bin/fm-supervise-daemon.sh" clear-owned-input \
   || fail "the exit cleanup did not clear the daemon's doorbell from a named herdr composer: $(hlog)"
 hwait empty || fail "the daemon's doorbell is still in the named herdr composer: $(hcomposer)"

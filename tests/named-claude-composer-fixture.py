@@ -14,7 +14,8 @@ Usage: named-claude-composer-fixture.py <dir> <state> <root> <title>
 import codecs, os, select, shutil, subprocess, sys, textwrap, time, tty
 
 DIR, STATE, ROOT, TITLE = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-# FIXTURE_COLS pins the drawn width where the pane cannot report its own.
+# FIXTURE_COLS caps the drawn width where a pane may report more columns than
+# it shows.
 COLS = int(os.environ.get("FIXTURE_COLS") or 0)
 # On herdr the fixture reports itself as a Claude agent, idle or working, so the
 # adapter's native agent state and its Claude payload proof both apply.
@@ -50,7 +51,9 @@ def rule(w, title=""):
 
 def redraw():
     global drawn
-    w = COLS or shutil.get_terminal_size((150, 20)).columns
+    w = shutil.get_terminal_size((150, 20)).columns
+    if COLS:
+        w = min(w, COLS)
     busy = time.time() < working_until
     report("working" if busy else "idle")
     frame = (busy, buf, w)
@@ -61,7 +64,10 @@ def redraw():
     prompt = ["❯ " + rows[0]] + ["  " + r for r in rows[1:]]
     footer = "  ⏵⏵ auto mode on (shift+tab to cycle)" + (" · esc to interrupt" if busy else "")
     out = ["✻ Working… (3s)" if busy else "✻ Crunched for 1m 50s", "", rule(w, TITLE)] + prompt + [rule(w), footer]
-    sys.stdout.write("\x1b[H\x1b[J" + "\r\n".join(out))
+    # Overwrite each row in place and clear only below the frame: a clear from
+    # the home position would push the old frame into tmux scrollback
+    # (scroll-on-clear), where a stale busy footer still reads as a turn.
+    sys.stdout.write("\x1b[H" + "\x1b[K\r\n".join(out) + "\x1b[K\x1b[J")
     # Park the cursor at the end of the typed text, as Claude Code does.
     last = len(prompt) - 1
     col = len(prompt[last]) + 1
