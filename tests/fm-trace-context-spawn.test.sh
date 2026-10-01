@@ -37,9 +37,12 @@ case "$*" in
   *"#{pane_current_command}"*)
     if [ -s "$FM_FAKE_LAUNCH_LOG.command" ]; then cat "$FM_FAKE_LAUNCH_LOG.command"; else printf 'zsh\n'; fi
     exit 0 ;;
+  # A relaunch waits for the adopted pane's shell to hold a steady prompt row.
+  *"#{cursor_y}"*) printf '0\n'; exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
+  capture-pane) printf '$ \n'; exit 0 ;;
   list-windows)
     [ -z "${FM_FAKE_DUPLICATE_WINDOW:-}" ] || printf '%s\n' "$FM_FAKE_DUPLICATE_WINDOW"
     exit 0
