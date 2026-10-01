@@ -2627,7 +2627,11 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
   exit 1
 fi
 
-case "$HARNESS" in
+# A raw launch command runs verbatim: its first word's basename records the
+# adapter for the task record only, so no executable is resolved, no CLI surface
+# is probed, and no catalog check runs - all of which exist to serve the launch
+# templates a raw command never carries.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
 pi | pi-signed)
   PI_BIN=$(resolve_pi_executable "$HARNESS") || {
     echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
@@ -2699,7 +2703,7 @@ if [ "$EFFORT" = ultra ]; then
     exit 1
   }
 fi
-if [ "$HARNESS" = omp ]; then
+if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" || exit 1
 fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
@@ -3017,7 +3021,10 @@ effort_flag_for_harness() {
   esac
 }
 
-case "$LAUNCH" in
+# The executable placeholders exist only in the launch templates. A raw launch
+# command runs verbatim, so nothing below resolves or substitutes on it - a
+# literal __AGYBIN__ in a raw command is the operator's own text.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__AGYBIN__*)
   AGY_BIN=$(resolve_pi_executable agy) || {
     echo "error: agy executable not found on PATH; install the Antigravity CLI or select a different verified harness" >&2
@@ -3027,13 +3034,13 @@ case "$LAUNCH" in
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__DEVINBIN__*)
   DEVIN_BIN=$(resolve_devin_binary) || exit 1
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__MUSEBIN__*)
   MUSE_BIN=$(resolve_muse_binary) || exit 1
   MUSE_CONFIG_HOME=$(resolve_directory_input XDG_CONFIG_HOME "${XDG_CONFIG_HOME:-${HOME:-}/.config}") || exit 1
@@ -3053,7 +3060,7 @@ case "$LAUNCH" in
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__KIMIBIN__*)
   KIMI_BIN=$(resolve_kimi_binary) || exit 1
   LAUNCH=${LAUNCH//__KIMIBIN__/$(shell_quote "$KIMI_BIN")}
@@ -3070,7 +3077,7 @@ case "$LAUNCH" in
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__ROVOBIN__*)
   ROVO_BIN=$(resolve_rovo_binary) || exit 1
   LAUNCH=${LAUNCH//__ROVOBIN__/$(shell_quote "$ROVO_BIN")}
@@ -4863,7 +4870,9 @@ if [ "$KIND" != secondmate ]; then
   [ "$RELAUNCH" -eq 1 ] || SPAWN_PRELAUNCH_WIRING=1
   case "$HARNESS" in
   codex*)
-    if fm_busy_codex_semantic_source; then
+    # A raw launch carries no wiring to arbitrate, so the gate does not apply
+    # to it - same rule as the kimi arm below.
+    if [ "$RAW_LAUNCH" -eq 0 ] && fm_busy_codex_semantic_source; then
       echo "error: codex semantic busy-state wiring is not implemented; extend the probe only together with verified wiring" >&2
       exit 1
     fi
@@ -4890,8 +4899,9 @@ if [ "$KIND" != secondmate ]; then
     # Standalone Kimi stays unknown until fm_busy_kimi_verified opens on a
     # live-verified installed version (bin/fm-busy-lib.sh owns the gate and
     # the required evidence). Arming without wiring would seed a busy record
-    # nothing can ever clear, so the arm waits for the wiring.
-    if fm_busy_kimi_verified; then
+    # nothing can ever clear, so the arm waits for the wiring. A raw launch
+    # carries no wiring to arbitrate, so the check does not apply to it.
+    if [ "$RAW_LAUNCH" -eq 0 ] && fm_busy_kimi_verified; then
       echo "error: kimi semantic busy-state wiring is not implemented; open the gate only together with verified wiring" >&2
       exit 1
     fi
@@ -5212,16 +5222,20 @@ EOF
     # Kimi's Stop hook is global, but it is inert unless cwd contains this
     # task's token pointer and the token resolves through Firstmate's private
     # registry. The installer above owns the format-preserving config edit and
-    # the always-zero, silent hook script.
-    KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
-    old_umask=$(umask)
-    umask 077
-    auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
-    umask "$old_umask"
-    printf '%s\n' "$TURNEND" >"$auth_file"
-    printf '%s\n' "${auth_file##*/}" >"$STATE/$ID.kimi-turnend-token"
-    printf 'token=%s\n' "${auth_file##*/}" >"$WT/.fm-kimi-turnend"
-    exclude_path '.fm-kimi-turnend'
+    # the always-zero, silent hook script. A raw launch never runs that
+    # install, so it has no consumer for a token - and would die here on the
+    # missing registry directory.
+    if [ "$RAW_LAUNCH" -eq 0 ]; then
+      KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
+      old_umask=$(umask)
+      umask 077
+      auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
+      umask "$old_umask"
+      printf '%s\n' "$TURNEND" >"$auth_file"
+      printf '%s\n' "${auth_file##*/}" >"$STATE/$ID.kimi-turnend-token"
+      printf 'token=%s\n' "${auth_file##*/}" >"$WT/.fm-kimi-turnend"
+      exclude_path '.fm-kimi-turnend'
+    fi
     ;;
   esac
 fi
@@ -5496,7 +5510,7 @@ if [ "$KEEP_AI_TRAILERS" = 1 ]; then
 else
   LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
 fi
-if [ "$HARNESS" = rovo ]; then
+if [ "$HARNESS" = rovo ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
     echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
     exit 1
@@ -5511,23 +5525,26 @@ LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OMPEXT__/$sq_ompext}
 LAUNCH=${LAUNCH//__OMPWORKERCFG__/$sq_ompcfg}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
-case "$HARNESS" in
+# The adapter-specific substitutions exist for the launch templates only: a raw
+# launch command runs verbatim, so this step is skipped for it entirely. The
+# binary variables resolve inside the placeholder-gated blocks above, so each
+# substitution still tolerates an unset value rather than aborting under set -u
+# if a template ever drops its placeholder.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
 pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
 omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
-# A raw launch carries no placeholder and resolves no executable, so the
-# substitution must tolerate an unset binary rather than abort under set -u.
 agy) LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "${AGY_BIN:-}")"} ;;
 devin)
   LAUNCH=${LAUNCH//__DEVINBIN__/"$(shell_quote "${DEVIN_BIN:-}")"}
   LAUNCH=${LAUNCH//__DEVINCONFIG__/"$(shell_quote "$STATE_REAL/$ID.devin-config.json")"}
-  [ "$RAW_LAUNCH" -ne 0 ] || fm_devin_launch_assert "$LAUNCH" "$CREW_PERMISSION_MODE" "$STATE_REAL/$ID.devin-config.json" || exit 1
+  fm_devin_launch_assert "$LAUNCH" "$CREW_PERMISSION_MODE" "$STATE_REAL/$ID.devin-config.json" || exit 1
   ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 LAUNCH=${LAUNCH//__TASKTMP__/$sq_tasktmp}
-case "$HARNESS" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
 claude | codex)
   permission_dirs="--add-dir $(shell_quote "$STATE_REAL") --add-dir $(shell_quote "$(cd "$(dirname "$BRIEF")" && pwd -P)") "
   LAUNCH=${LAUNCH//__PERMISSIONDIRS__/$permission_dirs}
@@ -5843,7 +5860,10 @@ if [ "$BACKEND" = tmux ] && [ "$RELAUNCH" -eq 1 ]; then
 else
   spawn_send_key "$T" Enter
 fi
-if [ "$HARNESS" = kimi ]; then
+# A raw launch command is the whole interaction: the ready gates and typed
+# brief pointers below presume the launch template's session shape, so they
+# do not run on the verbatim path.
+if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"
     exit 1
@@ -5867,7 +5887,7 @@ if [ "$HARNESS" = kimi ]; then
     exit 1
   fi
 fi
-if [ "$HARNESS" = rovo ]; then
+if [ "$HARNESS" = rovo ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   if ! rovo_wait_for_ready; then
     rovo_spawn_fail "rovo did not show a verified ready signal before brief delivery in window $T"
     exit 1
