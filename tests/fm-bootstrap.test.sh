@@ -820,6 +820,7 @@ case "${1:-}" in
   display-message)
     case "$*" in
       *'#{cursor_y}'*) printf '%s\n' 0 ;;
+      *'#{pane_width}'*) printf '%s\n' 200 ;;
       *) printf '%s\n' codex ;;
     esac
     ;;

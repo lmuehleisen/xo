@@ -162,6 +162,7 @@ case "${1:-}" in
   display-message)
     for a in "$@"; do
       case "$a" in
+        *pane_width*) printf '200\n'; exit 0 ;;
         *cursor_y*)
           # A modelled Devin screen parks the cursor on its composer row.
           if [ -f "$D/devin" ]; then

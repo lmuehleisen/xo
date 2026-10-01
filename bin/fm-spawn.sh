@@ -51,6 +51,9 @@
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
 #   tmux lease entry and replacement launch verify execution with the bounded
 #   shell-submit owner in bin/fm-tmux-lib.sh; failure stops before further input.
+#   An adopted tmux pane first waits up to FM_SPAWN_SHELL_READY_WAIT seconds
+#   (default 120, polled every FM_SPAWN_SHELL_READY_POLL) for a shell ready to
+#   read input (fm_tmux_shell_ready_wait), and refuses before typing otherwise.
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -2012,7 +2015,16 @@ if [ "$RELAUNCH" -eq 1 ]; then
     esac
   fi
   case "$RELAUNCH_STATE" in
-    dead) ;;
+    dead)
+      # An adopted tmux pane must hold a shell that will read the launch line
+      # before anything is published or typed; a pane that never gets there
+      # refuses here with the prior record intact.
+      if [ "$BACKEND" = tmux ] &&
+        ! fm_backend_tmux_shell_ready_wait "$RELAUNCH_TARGET" \
+          "${FM_SPAWN_SHELL_READY_WAIT:-120}" "${FM_SPAWN_SHELL_READY_POLL:-0.5}"; then
+        exit 1
+      fi
+      ;;
     missing) RELAUNCH_REBIND=1 ;;
     *)
       echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2

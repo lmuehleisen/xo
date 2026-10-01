@@ -85,7 +85,8 @@
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
 #              the prior durable record in place and reports the concrete
 #              state; it never leaves a half-transitioned task claiming to be
-#              running.
+#              running. A launch failure after publication still waits for the
+#              agent, so a late start completes the transaction.
 #
 # Teardown and discard are NOT verbs here and never will be. `exit` stops an
 # agent and preserves everything else; removing a worktree, killing an
@@ -960,7 +961,7 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line
+  local exit_result state note_line spawn_ok
   local -a spawn_args
 
   require_state_verified_backend relaunch
@@ -1008,36 +1009,44 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
-  if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
+  spawn_ok=1
+  if ! FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
-    RELAUNCH_META_PUBLISHED=1
-    # $T was resolved from the record before the launch. When the recorded
-    # endpoint was gone, the launch owner created a fresh one and republished
-    # the record pointing at it, so every postcondition below must be read from
-    # the endpoint the task now HAS, not the one it had. Re-resolving through
-    # the same shared validation is what makes that safe: a record that no
-    # longer passes it refuses here rather than leaving this transaction
-    # polling an address nothing owns.
-    # stdout is dropped (it is only the resolved target), but the refusal on
-    # stderr names the exact row that failed - and in this one branch the record
-    # was just rewritten by the launch owner, so that row is the whole
-    # diagnostic. Let it through rather than dying with nothing to act on.
-    if fm_backend_validate_task_endpoint "$META" "$ID" >/dev/null \
-       && [ -n "$FM_BACKEND_VALIDATED_TARGET" ]; then
-      T=$FM_BACKEND_VALIDATED_TARGET
-    else
-      die "the replacement agent for $ID was launched, but task $ID's republished record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to confirm it on; reconcile $META before any further control action"
-    fi
+    spawn_ok=0
+    [ "$(fm_meta_get "$META" control_relaunch_tx)" = "$RELAUNCH_TX" ] \
+      || die "the replacement agent for $ID could not be launched on $TARGET_HARNESS"
+  fi
+  # A launch owner that failed after publishing this transaction's record may
+  # still have delivered the launch line, which a slow shell can run late. The
+  # agent-start wait below is the same either way, so a late start completes
+  # the transaction instead of leaving it failed beside a running agent.
+  RELAUNCH_META_PUBLISHED=1
+  # $T was resolved from the record before the launch. When the recorded
+  # endpoint was gone, the launch owner created a fresh one and republished
+  # the record pointing at it, so every postcondition below must be read from
+  # the endpoint the task now HAS, not the one it had. Re-resolving through
+  # the same shared validation is what makes that safe: a record that no
+  # longer passes it refuses here rather than leaving this transaction
+  # polling an address nothing owns.
+  # stdout is dropped (it is only the resolved target), but the refusal on
+  # stderr names the exact row that failed - and in this one branch the record
+  # was just rewritten by the launch owner, so that row is the whole
+  # diagnostic. Let it through rather than dying with nothing to act on.
+  if fm_backend_validate_task_endpoint "$META" "$ID" >/dev/null \
+     && [ -n "$FM_BACKEND_VALIDATED_TARGET" ]; then
+    T=$FM_BACKEND_VALIDATED_TARGET
   else
-    [ "$(fm_meta_get "$META" control_relaunch_tx)" != "$RELAUNCH_TX" ] \
-      || RELAUNCH_META_PUBLISHED=1
-    die "the replacement agent for $ID could not be launched on $TARGET_HARNESS"
+    die "the replacement agent for $ID was launched, but task $ID's republished record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to confirm it on; reconcile $META before any further control action"
   fi
 
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {
+    [ "$spawn_ok" = 1 ] \
+      || die "the replacement agent for $ID could not be launched on $TARGET_HARNESS and did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"
     die "the replacement agent for $ID did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"
   }
   RELAUNCH_AGENT_CONFIRMED=1
+  [ "$spawn_ok" = 1 ] \
+    || echo "warning: the launch of $ID's replacement reported a failure, but the agent came up on $TARGET_HARNESS; the relaunch completed" >&2
 
   journal_write complete "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
   RELAUNCH_ACTIVE=0
