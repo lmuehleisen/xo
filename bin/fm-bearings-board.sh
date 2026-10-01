@@ -35,6 +35,10 @@
 #                     credential cards and Charted Next stay display-only;
 #                     those answers stay in chat.
 #
+#            In view and answers, a failure to bind or arm ends the board's
+#            Lavish session before the build fails, so the page never takes
+#            feedback while nothing listens; a later build reopens it.
+#
 #            A wanted mode whose pinned lavish-axi is unavailable resolves to
 #            off and says why. A mode below answers first unbinds an earlier
 #            answers build's source, refusing the build when it cannot, so a
@@ -333,22 +337,25 @@ publish_page() {  # <staged-page> <board>
 # binding it to the keyed-answer intake first only in answers mode, then make
 # sure this generation is listening. A view board stays unbound, so its
 # annotations arrive as ordinary review feedback and can never close a task.
+# The session is already open by now, so any failure here ends it before the
+# build fails: the page must not take feedback while nothing listens. A later
+# build reopens an agent-ended session without asking.
 arm_board_source() {  # <board> <bind: 0|1>
   local board=$1 bind=$2 sid out rc=0
   sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board") \
-    || fail "cannot derive the board source id"
+    || arm_fail "$board" "cannot derive the board source id"
   if [ "$BOARD_SESSION_REOPENED" = 1 ] && [ -n "$(source_owner "$sid")" ]; then
     FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null \
-      || fail "cannot retire the pre-reopen board source $sid"
+      || arm_fail "$board" "cannot retire the pre-reopen board source $sid"
   fi
   if [ "$bind" = 1 ]; then
     "$SCRIPT_DIR/fm-captain-hold.sh" bind "$sid" >/dev/null \
-      || fail "cannot bind the board source to the keyed-answer intake"
+      || arm_fail "$board" "cannot bind the board source to the keyed-answer intake"
     printf 'bound: %s\n' "$sid"
   fi
   if [ -z "$(source_owner "$sid")" ]; then
     out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent-lavish.sh" arm "$board") \
-      || fail "cannot arm the board as a process-event source"
+      || arm_fail "$board" "cannot arm the board as a process-event source"
     printf '%s\n' "$out" | grep -E '^(armed|still-listening): ' || true
     return 0
   fi
@@ -356,8 +363,15 @@ arm_board_source() {  # <board> <bind: 0|1>
   case "$rc" in
     0) printf 'already-armed: %s\n' "$sid" ;;
     3) printf 'still-listening: %s\n' "$sid" ;;
-    *) fail "board source $sid is registered but not listening (observed owner: $(source_owner "$sid"))" ;;
+    *) arm_fail "$board" "board source $sid is registered but not listening (observed owner: $(source_owner "$sid"))" ;;
   esac
+}
+
+arm_fail() {  # <board> <message>
+  if lavish end "$1" >/dev/null 2>&1; then
+    fail "$2; ended the board session so it takes no feedback while nothing listens"
+  fi
+  fail "$2; could not end the board session either, so feedback sent from it waits until a later build arms it"
 }
 
 # --- Captain's Call hygiene ---------------------------------------------------

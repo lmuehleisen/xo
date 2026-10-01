@@ -74,6 +74,7 @@ case "${1-}" in
     printf 'session:\n  status: ended\n'
     exit 0
     ;;
+  end) : > "$state/ended"; printf 'session:\n  status: ended\n'; exit 0 ;;
 esac
 printf 'TELEMETRY=%s NO_OPEN=%s HOST=%s\n' "${LAVISH_AXI_TELEMETRY-unset}" \
   "${LAVISH_AXI_NO_OPEN-unset}" "${LAVISH_AXI_HOST-unset}" >> "$state/env"
@@ -701,6 +702,20 @@ test_answers_mode_keeps_controls_hidden_until_listening() {
   pass "answers mode serves the board read-only until its source is bound and listening"
 }
 
+test_view_mode_ends_the_session_when_it_cannot_listen() {
+  local home data out
+  home=$(make_lavish_home view-no-listener view)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  if out=$(FM_LAVISH_POLL_RETRY_DELAY=0 run_board "$home" build "$data" 2>&1); then
+    fail "a view build succeeded without a listener: $out"
+  fi
+  assert_contains "$out" "cannot arm the board" "the view build did not fail at arming: $out"
+  assert_contains "$out" "ended the board session" "the failed view build did not say it ended the session: $out"
+  assert_present "$home/lavish-state/ended" "a view board that cannot listen kept its session open for feedback"
+  pass "a view build that cannot arm its listener ends the session instead of taking feedback nobody collects"
+}
+
 test_answers_mode_reopens_a_session_the_captain_ended() {
   local home data out
   home=$(make_lavish_home reopen answers)
@@ -783,5 +798,6 @@ test_malformed_toggle_counts_as_off_and_a_malformed_request_refuses
 test_answers_mode_binds_then_arms
 test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended
 test_answers_mode_keeps_controls_hidden_until_listening
+test_view_mode_ends_the_session_when_it_cannot_listen
 test_answers_mode_reopens_a_session_the_captain_ended
 test_dropping_below_answers_retires_the_answer_source
