@@ -498,8 +498,8 @@ HERDR_SECTION=$(printf '%s\n' \
 '' \
 'For tmux-based lab primaries, `bin/fm-lab-home.sh` owns the short private socket directory; do not place `TMUX_TMPDIR` under the lab home or worktree.' \
 'Use `LAB_HOME_HELPER='"$(shell_quote "$FM_ROOT/bin/fm-lab-home.sh")"'`, then `LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$FM_HOME")` and launch tmux with `TMUX_TMPDIR="$LAB_TMUX_DIR"`.' \
-'Your single EXIT cleanup trap must kill only the server addressed through that `TMUX_TMPDIR`, call `"$LAB_HOME_HELPER" teardown "$FM_HOME"`, and call the Herdr teardown below; do not install a second trap that replaces either cleanup.' \
-'Address that server only through its explicit socket, `tmux -S "$LAB_TMUX_DIR/tmux-$(id -u)/default"`, never through `TMUX_TMPDIR`, which falls back to the default server once that directory is gone.' \
+'Use `TMUX_TMPDIR` only to launch that server: once its directory is gone, a `TMUX_TMPDIR` lookup falls back to the default server, so address it afterwards only through its explicit socket, `tmux -S "$LAB_TMUX_DIR/tmux-$(id -u)/default"`.' \
+'Your single EXIT cleanup trap must stop only that server with `tmux -S "$LAB_TMUX_DIR/tmux-$(id -u)/default" kill-server`, call `"$LAB_HOME_HELPER" teardown "$FM_HOME"`, and call the lab session teardown below; do not install a second trap that replaces either cleanup.' \
 '' \
 '1. Set `HERDR_LAB_HELPER='"$HERDR_LAB_HELPER"'` and generate the session name with `HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name '"$ID"')`.' \
 '   Install the combined EXIT cleanup before provisioning, then provision only with `"$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION"`.' \
