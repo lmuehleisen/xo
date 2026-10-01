@@ -103,7 +103,7 @@ TAG="fm-publish-judge"
 
 # Bump when judge_prompt changes meaning, so cached verdicts from an older
 # policy are not reused.
-PROMPT_VERSION=1
+PROMPT_VERSION=2
 
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
