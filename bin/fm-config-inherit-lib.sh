@@ -17,7 +17,9 @@
 # config/trace-context is copied at the launch convergence point as part of the
 # default-off W3C trace-context setup, while live convergence leaves it unchanged.
 # Primary config/lavish-axi-host carries the one per-machine Lavish server address
-# to every worker so a worker never starts a second server on another interface.
+# to every worker so a worker never starts a second server on another interface,
+# and primary config/lavish carries the same optional Lavish mode (off, view, or
+# answers; bin/fm-lavish-lib.sh) to every secondmate home.
 # The primary passes its frozen home-session decision into a newly launched
 # Secondmate; see docs/trace-context.md.
 # Primary config/crew-permissions is a captain-wide safety preference
@@ -85,7 +87,7 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context launch-env-allowlist crew-permissions lavish-axi-host keep-ai-trailers publish-guard/identity publish-guard/allowlist publish-guard/denylist publish-guard/poison-commits publish-guard/upstream publish-guard/owners}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context launch-env-allowlist crew-permissions lavish-axi-host lavish keep-ai-trailers publish-guard/identity publish-guard/allowlist publish-guard/denylist publish-guard/poison-commits publish-guard/upstream publish-guard/owners}"
 
 # Inherited items a script reads at each use rather than an agent at intake.
 # They are never inlined into a config re-read instruction: there is nothing

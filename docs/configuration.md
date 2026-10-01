@@ -928,13 +928,28 @@ A public push or public `gh` text that passes those checks then goes to the publ
 It runs Codex (`codex login`) and falls back to Pi with an xAI key, so at least one must be signed in on every machine that publishes publicly; when neither answers, the publication is refused with the fix.
 The judge never receives this directory's files, caches each verdict by content so identical content is judged once, and names a content hash the captain can approve from their own terminal; its header owns the judges, the policy categories, the cache, and the override.
 
+## Optional Lavish (config/lavish)
+
+The optional local, gitignored `config/lavish` turns on Lavish for this home and is inherited into secondmate homes through the primary-authoritative configuration contract.
+It holds one word:
+
+- `off`, the default when the file is absent: `/bearings lavish` builds a static local HTML board, scouts get no Lavish review loop, and every answer stays in chat.
+- `view`: `/bearings lavish` opens its read-only board in Lavish, and scout briefs offer the crew-hosted review loop below for visual deliverables.
+- `answers`: `view`, plus answer controls on the board's decision cards, bound to the keyed-answer intake in `bin/fm-captain-hold.sh` before the board is armed; merge, credential, and dispatch requests stay in chat.
+
+A per-request choice wins over the file in both directions for one artifact: `bin/fm-bearings-board.sh build --lavish <mode>` for one board, and `bin/fm-brief.sh --scout --lavish <mode>` for one scout.
+Any other value refuses the board build and the scout scaffold, and session start reports it.
+A wanted mode resolves to `off` unless `lavish-axi` reports exactly the pinned version; the board says why, and session start prints one line with the hook-free install command when the file asks for Lavish that is not available.
+`bin/fm-lavish-lib.sh` owns the modes, the pin, and the environment every Lavish call runs under, and [`docs/lavish.md`](lavish.md) covers installing it and viewing it from another computer.
+
 ## Lavish server address (config/lavish-axi-host)
 
 The optional local, gitignored `config/lavish-axi-host` contains one non-empty address without whitespace for the per-machine Lavish server.
 `fm-spawn.sh` exports that address into every new worker and relaunch for opening boards, and the file is inherited into secondmate homes through the primary-authoritative configuration contract.
 
 Once a board exists, the process-event adapter derives the polling address from that board's own saved Lavish session instead; its header owns the lookup contract.
-When the file is absent, worker launches do not add a board address and retain the existing ambient-environment behavior.
+When the file is absent, worker launches do not add a board address, and every Lavish session Firstmate opens binds `127.0.0.1`, which also stops Lavish's own Tailscale detection.
+Keep it absent or loopback unless the network it names is trusted: the Lavish server has no authentication ([`docs/lavish.md`](lavish.md#view-lavish-pages-from-another-computer-over-ssh)).
 
 Malformed or unreadable values refuse the launch before the worker starts.
 The address selects the existing shared server; it does not authorize starting or stopping the server, and the Lavish startup crash remains a vendor-tool concern.
@@ -1276,7 +1291,7 @@ Every home requires:
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 
 In that list, `gh` covers GitHub operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
-This home does not require no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi.
+This home does not require no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi; Lavish is the optional [`config/lavish`](#optional-lavish-configlavish) toggle.
 
 **Backend requirements**
 
@@ -1878,7 +1893,7 @@ A long-polling external process is registered as a *source* through its adapter,
 
 **Open the Lavish artifact first**
 
-Before arming any Lavish source, open its artifact with `lavish-axi` so the saved session identifies the board's server; each poll attempt derives its host and port from that session and refuses missing or invalid session evidence before consuming a staged worker reply.
+Before arming any Lavish source, open its artifact with `bin/fm-lavish.sh run <artifact.html>` so the saved session identifies the board's server; each poll attempt derives its host and port from that session and refuses missing or invalid session evidence before consuming a staged worker reply.
 
 **Retry interrupted Lavish polls**
 
@@ -1893,6 +1908,7 @@ An already-armed Lavish source keeps its registered listener command until it is
 **Arm and confirm a listener**
 
 A live task that hosts a Lavish board owns its listener, so firstmate must never arm that board.
+A scout brief offers this loop only when its effective Lavish mode is not `off` ([`config/lavish`](#optional-lavish-configlavish)).
 After opening the artifact as required above, the worker arms it with `bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>` and never runs `lavish-axi poll` itself.
 
 `arm` prints `armed` only after the process-event owner confirms this registration generation's listener is running, and otherwise returns nonzero without that line.

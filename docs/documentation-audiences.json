@@ -393,6 +393,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/lavish.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/orca-backend.md",
       "audience": "operator-current"
     },
@@ -486,6 +490,10 @@
     },
     {
       "path": "docs/verification/dispatch-resolve.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/lavish-remote-forward.md",
       "audience": "maintainer-verification"
     },
     {

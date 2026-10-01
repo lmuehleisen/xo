@@ -99,9 +99,9 @@
 #
 # `read` is the presentation command summarized above; keyed intake remains
 # the separate `answers` contract described here.
-# The versioned `fm-bearings-answer.v1` parser remains only as compatibility for
-# separately supplied captured review artifacts. The static `/bearings lavish`
-# page emits no answers, binds no source, and never enters this adapter.
+# The versioned `fm-bearings-answer.v1` context is what an answers-mode
+# `/bearings lavish` board queues for each decision card (bin/fm-bearings-board.sh
+# owns when a board is interactive); a static or view-mode board emits none.
 #
 # It wraps ONLY the currently published interface, verified against 0.1.45:
 #   Usage: lavish-axi poll <html-file> [--agent-reply "..."]
@@ -145,6 +145,13 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
+# shellcheck source=bin/fm-lavish-lib.sh
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
+
+# Every lavish-axi call below runs with telemetry and auto-open pinned off. A
+# malformed config/lavish-axi-host is not fatal here: a poll routes by the
+# board's own saved session (apply_session_host), never the configured host.
+fm_lavish_pin_env "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" 2>/dev/null || true
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2; }

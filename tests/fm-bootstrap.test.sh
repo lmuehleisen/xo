@@ -357,6 +357,45 @@ ROWS
   pass "bootstrap reports an opted-in but unavailable no-mistakes CLI as one non-blocking fact"
 }
 
+# config/lavish is an optional toggle: silent when off or when the pinned
+# lavish-axi is present, one non-blocking fact with the pinned hook-free install
+# when it is on and unavailable, and one fact naming a malformed value.
+test_lavish_opt_in_reports_unavailable_cli() {
+  local case_dir fakebin out label toggle cli expect
+  while IFS='|' read -r label toggle cli expect; do
+    [ -n "$label" ] || continue
+    case_dir="$TMP_ROOT/lavish-opt-in-$toggle-$cli"
+    mkdir -p "$case_dir/home/config"
+    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    [ "$toggle" = absent ] || printf '%s\n' "$toggle" > "$case_dir/home/config/lavish"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    [ "$cli" != absent ] || rm -f "$fakebin/lavish-axi"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_LAVISH_AXI_VERSION="$cli" "$ROOT/bin/fm-bootstrap.sh")
+    case "$expect" in
+      silent) [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
+      missing)
+        [ "$out" = "BOOTSTRAP_INFO: Lavish unavailable (config/lavish is view; lavish-axi is not installed; install: npm install -g --ignore-scripts lavish-axi@0.1.80) - boards stay static local files and answers stay in chat until it is installed" ] \
+          || fail "$label: expected exactly the unavailable fact, got: $out" ;;
+      off-pin)
+        assert_contains "$out" "BOOTSTRAP_INFO: Lavish unavailable (config/lavish is answers; lavish-axi 0.1.77 is installed but this home is pinned to 0.1.80" \
+          "$label: expected the off-pin fact, got: $out" ;;
+      malformed)
+        [ "$out" = "BOOTSTRAP_INFO: Lavish off (config/lavish must be off, view, or answers (got sometimes))" ] \
+          || fail "$label: expected exactly the malformed fact, got: $out" ;;
+    esac
+    assert_not_contains "$out" "setup hooks" "$label: an install hint still runs Lavish hooks: $out"
+  done <<'ROWS'
+toggle absent with an off-pin CLI|absent|0.1.77|silent
+toggle off without the CLI|off|absent|silent
+toggle view with the pinned CLI|view|0.1.80|silent
+toggle view without the CLI|view|absent|missing
+toggle answers with an off-pin CLI|answers|0.1.77|off-pin
+malformed toggle|sometimes|0.1.80|malformed
+ROWS
+  pass "bootstrap reports an opted-in but unavailable Lavish as one non-blocking fact with a hook-free install"
+}
+
 test_tasks_axi_min_version() {
   local label version mode case_dir fakebin out missing n archive_body multi_id
   missing='MISSING: tasks-axi (install: npm install -g tasks-axi)'
@@ -1209,6 +1248,7 @@ ROWS
 test_bootstrap_reporting
 test_dropped_tools_are_not_required
 test_no_mistakes_opt_in_reports_unavailable_cli
+test_lavish_opt_in_reports_unavailable_cli
 test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction

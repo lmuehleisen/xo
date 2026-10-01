@@ -38,13 +38,13 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required`.
 - Upstream: requires `chrome-devtools-axi`.
 
-### no-lavish-axi
+### optional-lavish-axi
 
-- Intent: decisions and reports use chat, and `/bearings lavish` is a read-only snapshot; README "No required `lavish-axi`".
+- Intent: Lavish is optional, off by default, hook-free, version-pinned, and loopback-only; chat stays the primary answer path, and an answers board carries decision cards only; README "Optional `lavish-axi`".
 - Class: intended.
-- Seam: `bin/fm-bearings-board.sh`, `.agents/skills/bearings/assets/board-template.html`, the scout-brief Lavish line in `bin/fm-brief.sh`, `bin/fm-bootstrap.sh`, `bin/fm-config-inherit-lib.sh`, `bin/fm-procevent-lavish.sh`, `bin/fm-test-run.sh`, and the Lavish wording in the bearings, bootstrap-diagnostics, captain-hold-lifecycle, and process-event-sources skills (shared); upstream's `tests/fm-bearings-board-lavish-live-e2e.test.sh` is deleted.
-- Guard: `tests/fm-bearings-board.test.sh` `test_build_does_not_invoke_lavish`; `tests/fm-brief.test.sh` `test_scout_and_secondmate_scaffold`; `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required`.
-- Upstream: requires `lavish-axi` and drives an interactive board.
+- Seam: `bin/fm-lavish-lib.sh` and `bin/fm-lavish.sh` (fork-only), `bin/fm-bearings-board.sh`, `.agents/skills/bearings/assets/board-template.html`, the scout-brief Lavish line and `--lavish` in `bin/fm-brief.sh`, the Lavish install hint and toggle line in `bin/fm-bootstrap.sh`, `bin/fm-config-inherit-lib.sh`, the pinned environment in `bin/fm-procevent-lavish.sh`, and the Lavish wording in the bearings, bootstrap-diagnostics, captain-hold-lifecycle, operational-home-layout, and process-event-sources skills (shared).
+- Guard: `tests/fm-lavish.test.sh`; `tests/fm-bearings-board.test.sh` `test_build_does_not_invoke_lavish` and the Lavish mode tests; `tests/fm-brief.test.sh` `test_scout_lavish_follows_toggle_and_override`; `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required` and `test_lavish_opt_in_reports_unavailable_cli`; live, `tests/fm-bearings-board-lavish-live-e2e.test.sh`.
+- Upstream: requires `lavish-axi`, installs it with `setup hooks`, always drives an interactive board with merge and dispatch controls, and lets Lavish bind a Tailscale address by default.
 
 ### no-mistakes-optional
 

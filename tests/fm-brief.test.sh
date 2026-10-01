@@ -967,6 +967,59 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
+# The scout's crew-hosted Lavish loop follows the effective Lavish mode: the
+# home toggle, a per-brief --lavish override that wins both ways, and the
+# pinned lavish-axi's availability.
+test_scout_lavish_follows_toggle_and_override() {
+  local home stub path brief out
+  home="$TMP_ROOT/scout-lavish"
+  mkdir -p "$home/config" "$home/data" "$home/state"
+  stub="$home/stub"
+  mkdir -p "$stub"
+  cat > "$stub/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+[ "${1-}" = --version ] && echo 0.1.80
+SH
+  chmod +x "$stub/lavish-axi"
+  path=$(printf '%s' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
+    [ -n "$dir" ] && [ ! -e "$dir/lavish-axi" ] && printf '%s:' "$dir"
+  done)
+  path=${path%:}
+
+  printf 'view\n' > "$home/config/lavish"
+  PATH="$stub:$path" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lavish-on sample --scout >/dev/null \
+    || fail "a view-home scout scaffold failed"
+  brief="$home/data/lavish-on/brief.md"
+  assert_grep "you may host a Lavish review loop" "$brief" "a view home did not offer the scout loop"
+  assert_grep "$ROOT/bin/fm-lavish.sh' run <artifact.html>" "$brief" "the loop does not open through the pinned wrapper"
+  assert_grep "fm-procevent-lavish.sh' arm <artifact.html> --for lavish-on" "$brief" "the loop does not arm a task-owned board"
+  assert_grep "invoke lavish-axi only as the Definition of done says" "$brief" "rule 7 still forbids the offered loop"
+  assert_no_grep "Do not install or invoke no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi." "$brief" \
+    "rule 7 kept the blanket lavish-axi ban beside the offered loop"
+
+  PATH="$stub:$path" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lavish-declined sample --scout --lavish off >/dev/null \
+    || fail "a declined scout scaffold failed"
+  assert_grep "Lavish is not enabled for this task" "$home/data/lavish-declined/brief.md" "--lavish off did not decline the loop"
+
+  PATH="$path" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lavish-missing sample --scout >/dev/null \
+    || fail "a scout scaffold without lavish-axi failed"
+  assert_grep "Lavish is not enabled for this task" "$home/data/lavish-missing/brief.md" \
+    "a scout was offered Lavish while lavish-axi is missing"
+
+  rm -f "$home/config/lavish"
+  PATH="$stub:$path" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lavish-asked sample --scout --lavish view >/dev/null \
+    || fail "a requested scout scaffold failed"
+  assert_grep "you may host a Lavish review loop" "$home/data/lavish-asked/brief.md" "--lavish view on an off home did not offer the loop"
+
+  if out=$(PATH="$stub:$path" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lavish-ship sample --mode direct-PR --lavish view 2>&1); then
+    fail "--lavish was accepted on a ship brief: $out"
+  fi
+  if out=$(PATH="$stub:$path" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lavish-bad sample --scout --lavish yes 2>&1); then
+    fail "a malformed --lavish was accepted: $out"
+  fi
+  pass "fm-brief.sh: the scout Lavish loop follows the home toggle, the per-brief override, and availability"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -976,10 +1029,10 @@ test_scout_and_secondmate_scaffold() {
   assert_present "$brief" "scout brief was not scaffolded"
   assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
-  assert_no_grep "host the Lavish review loop" "$brief" \
-    "scout brief must not reinstate Lavish"
-  assert_grep "Lavish is not available to this fork's workers" "$brief" \
-    "scout brief must declare Lavish unavailable, so AGENTS.md's Lavish board line does not apply"
+  assert_no_grep "host a Lavish review loop" "$brief" \
+    "a scout brief offered Lavish without the home toggle or a request"
+  assert_grep "Lavish is not enabled for this task" "$brief" \
+    "scout brief must declare Lavish off, so AGENTS.md's Lavish board line does not apply"
   assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
   assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
   assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
@@ -1366,3 +1419,4 @@ test_branch_prefix_is_refused_where_it_does_not_apply
 test_branch_prefix_value_is_validated
 test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
+test_scout_lavish_follows_toggle_and_override

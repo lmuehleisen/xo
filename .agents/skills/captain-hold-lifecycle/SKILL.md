@@ -44,7 +44,7 @@ A bound captured source uses a separate seam: its adapter omits reconcile from k
 A remote-secondmate card whose task is absent from the main backlog therefore remains announced but cannot create a main-home request; owner-aware request and mutation routing to the authoritative secondmate home is a separate follow-up.
 That captured-source request is yours to work off in the turn that receives it: `bin/fm-captain-hold.sh reconcile close <id> --evidence-file <path>` records the EVIDENCE and closes a moot call, while `reconcile note <id> --note-file <path>` annotates a genuinely active call and leaves it held.
 Both outcomes refuse unless that task still has the pending request created through the bound captured source, so neither is a standalone way to mutate a captain call.
-A `/bearings lavish` artifact is static and read-only: it never binds a source, submits a selection, or creates a reconcile request.
+A `/bearings lavish` board is read-only unless its effective Lavish mode is `answers`; only then is it a bound captured source like any other, carrying decision-card answers and the reconcile choice, while merge, credential, and dispatch requests stay in chat.
 A normal captain answer also retires any pending request because the call is settled, including close, release, and idempotent replay paths.
 A retirement failure makes the command fail without reversing the already-durable answer, close, or note, and `reconcile list` keeps the surviving request visible for retry.
 `reconcile list` names every request still outstanding.

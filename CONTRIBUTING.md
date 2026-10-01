@@ -1,7 +1,7 @@
 # Contributing
 
 Thanks for wanting to contribute.
-This fork supports local use and ordinary Git pushes to a personal repository without no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi.
+This fork supports local use and ordinary Git pushes to a personal repository without no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi; Lavish is an optional, off-by-default toggle.
 Use the development checks below and standard `git` / `gh` commands; tasks-axi and quota-axi remain required runtime tools.
 Pull requests to this fork use the ordinary branch, test, push, and review workflow below.
 This fork does not remove preexisting global agent hooks, Git hooks, proxy remotes, or running validation jobs.
