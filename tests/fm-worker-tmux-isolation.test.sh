@@ -153,41 +153,66 @@ test_control_inherited_tmux_reaches_the_fleet() {
   pass "control: without the launch boundary an inherited TMUX outranks TMUX_TMPDIR"
 }
 
-# Teardown stops every server the worker left in its private directory, including
-# one it named with -S there, removes the directory, and leaves the fleet running.
-test_teardown_retires_the_private_directory() {
-  local case_dir home id=leak-t1 dir sock own_pid fakebin out status
-  case_dir="$TMP_ROOT/teardown"
-  home="$case_dir/home"
-  fakebin="$case_dir/fakebin"
-  mkdir -p "$home/state" "$home/config" "$home/data" "$fakebin"
-  touch "$home/state/.last-watcher-beat"
-  git init -q --bare "$case_dir/origin.git"
-  git -C "$case_dir/origin.git" symbolic-ref HEAD refs/heads/main
-  git clone -q "$case_dir/origin.git" "$case_dir/seed" 2>/dev/null
-  git -C "$case_dir/seed" commit -q --allow-empty -m baseline || fail "could not commit the teardown fixture baseline"
-  git -C "$case_dir/seed" push -q origin HEAD:main || fail "could not push the teardown fixture baseline"
-  git clone -q "$case_dir/origin.git" "$case_dir/project"
-  git -C "$case_dir/project" remote set-head origin main 2>/dev/null || true
-  git -C "$case_dir/project" worktree add -q -b "fm/$id" "$case_dir/wt" main
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/treehouse"
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/gh"
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/gh-axi"
+# make_teardown_case <name> <id>: a home whose landed local-only ship <id> can be
+# torn down, with fake endpoint tools; sets TD_CASE, TD_HOME, and TD_FAKEBIN.
+make_teardown_case() {
+  local id=$2
+  TD_CASE="$TMP_ROOT/$1"
+  TD_HOME="$TD_CASE/home"
+  TD_FAKEBIN="$TD_CASE/fakebin"
+  mkdir -p "$TD_HOME/state" "$TD_HOME/config" "$TD_HOME/data" "$TD_FAKEBIN"
+  touch "$TD_HOME/state/.last-watcher-beat"
+  git init -q --bare "$TD_CASE/origin.git"
+  git -C "$TD_CASE/origin.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$TD_CASE/origin.git" "$TD_CASE/seed" 2>/dev/null
+  git -C "$TD_CASE/seed" commit -q --allow-empty -m baseline || fail "could not commit the teardown fixture baseline"
+  git -C "$TD_CASE/seed" push -q origin HEAD:main || fail "could not push the teardown fixture baseline"
+  git clone -q "$TD_CASE/origin.git" "$TD_CASE/project"
+  git -C "$TD_CASE/project" remote set-head origin main 2>/dev/null || true
+  git -C "$TD_CASE/project" worktree add -q -b "fm/$id" "$TD_CASE/wt" main
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$TD_FAKEBIN/treehouse"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$TD_FAKEBIN/gh"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$TD_FAKEBIN/gh-axi"
   # The endpoint is fake; only an exact-socket call reaches the real tmux.
-  cat > "$fakebin/tmux" <<SH
+  cat > "$TD_FAKEBIN/tmux" <<SH
 #!/usr/bin/env bash
 [ "\${1:-}" = -S ] || exit 0
 exec '$REAL_TMUX' "\$@"
 SH
-  chmod +x "$fakebin"/*
-  dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$home" && pwd -P)" "$id" |
+  chmod +x "$TD_FAKEBIN"/*
+}
+
+# write_teardown_meta <id> <worker-tmux-dir>
+write_teardown_meta() {
+  fm_write_meta "$TD_HOME/state/$1.meta" \
+    "window=firstmate:fm-$1" "endpoint_task_id=$1" "worktree=$TD_CASE/wt" \
+    "project=$TD_CASE/project" "kind=ship" "mode=local-only" "spawn_gen=worker-tmux-$1" \
+    "worker_tmux_dir=$2"
+}
+
+# run_teardown <id>: tear the task down from a pane inheriting the stand-in fleet.
+run_teardown() {
+  FM_HOME="$TD_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$TD_HOME/state" \
+    FM_DATA_OVERRIDE="$TD_HOME/data" FM_CONFIG_OVERRIDE="$TD_HOME/config" \
+    TMUX="$FLEET_TMUX" TMUX_PANE="$FLEET_PANE" PATH="$TD_FAKEBIN:$PATH" \
+    "$TEARDOWN" "$1" 2>&1
+}
+
+# private_tmux_dir <home> <id>: the private directory spawn derives for <id>.
+private_tmux_dir() {
+  printf '/tmp/fmwt-%s' "$(printf '%s\n%s' "$(cd "$1" && pwd -P)" "$2" |
     { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+}
+
+# Teardown stops every server the worker left in its private directory, including
+# one it named with -S there, removes the directory, and leaves the fleet running.
+test_teardown_retires_the_private_directory() {
+  local id=leak-t1 dir sock own_pid out status
+  make_teardown_case teardown "$id"
+  dir=$(private_tmux_dir "$TD_HOME" "$id")
   PRIVATE_DIRS+=("$dir")
   (umask 077 && mkdir "$dir") || fail "could not create the private tmux directory $dir"
-  fm_write_meta "$home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" "worktree=$case_dir/wt" \
-    "project=$case_dir/project" "kind=ship" "mode=local-only" "spawn_gen=worker-tmux-$id" \
-    "worker_tmux_dir=$dir"
+  write_teardown_meta "$id" "$dir"
 
   env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$dir" "$REAL_TMUX" new-session -d -s leaked "$REAL_SLEEP 600" ||
     fail "could not start the leaked private server"
@@ -199,30 +224,54 @@ SH
 
   # A server teardown cannot reach keeps the record that names its directory.
   chmod 000 "$dir/own"
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
-    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
-    TMUX="$FLEET_TMUX" TMUX_PANE="$FLEET_PANE" PATH="$fakebin:$PATH" \
-    "$TEARDOWN" "$id" 2>&1)
+  out=$(run_teardown "$id")
   status=$?
   chmod 600 "$dir/own"
   [ "$status" -ne 0 ] || fail "teardown must refuse while a server in the private directory cannot be stopped"
   assert_contains "$out" "private tmux directory $dir could not be retired" \
     "teardown did not name the private tmux directory it could not retire"
-  [ -f "$home/state/$id.meta" ] || fail "teardown must keep the record while its private tmux directory survives"
+  [ -f "$TD_HOME/state/$id.meta" ] || fail "teardown must keep the record while its private tmux directory survives"
   kill -0 "$own_pid" 2>/dev/null || fail "the unreachable server should still be running"
 
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
-    FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
-    TMUX="$FLEET_TMUX" TMUX_PANE="$FLEET_PANE" PATH="$fakebin:$PATH" \
-    "$TEARDOWN" "$id" 2>&1)
+  out=$(run_teardown "$id")
   status=$?
   expect_code 0 "$status" "teardown of a landed task should succeed once its servers are reachable: $out"
   ! ltmux -S "$sock" has-session >/dev/null 2>&1 || fail "teardown must stop the worker's private tmux server"
   pid_gone "$own_pid" || fail "teardown must stop a server the worker started with -S in its directory"
   [ ! -e "$dir" ] || fail "teardown must remove the private tmux directory"
   assert_equals "captain fm-worker " "$(fleet_windows)" "teardown must leave the stand-in fleet running"
-  [ ! -e "$home/state/$id.meta" ] || fail "a completed teardown must remove the task record"
+  [ ! -e "$TD_HOME/state/$id.meta" ] || fail "a completed teardown must remove the task record"
   pass "teardown refuses while a private tmux server is unreachable, then stops the servers, removes the directory, and leaves the fleet running"
+}
+
+# A recorded private directory derived from another home path, as after the home
+# moved, is not touched, but while it survives teardown keeps the record, which
+# may be the only pointer to a live server in it.
+test_teardown_keeps_the_record_for_a_moved_private_directory() {
+  local id=moved-t1 dir out status
+  make_teardown_case moved "$id"
+  mkdir -p "$TD_CASE/old-home"
+  dir=$(private_tmux_dir "$TD_CASE/old-home" "$id")
+  PRIVATE_DIRS+=("$dir")
+  (umask 077 && mkdir "$dir") || fail "could not create the moved private tmux directory $dir"
+  write_teardown_meta "$id" "$dir"
+  start_fleet || fail "could not start the stand-in fleet"
+
+  out=$(run_teardown "$id")
+  status=$?
+  [ "$status" -ne 0 ] || fail "teardown must refuse while a moved private tmux directory survives"
+  assert_contains "$out" "recorded worker tmux directory $dir is not where this home now places" \
+    "teardown did not name the moved private tmux directory"
+  [ -f "$TD_HOME/state/$id.meta" ] || fail "teardown must keep the record while a moved private tmux directory survives"
+  [ -d "$dir" ] || fail "teardown must leave a moved private tmux directory untouched"
+
+  rm -rf "$dir"
+  out=$(run_teardown "$id")
+  status=$?
+  expect_code 0 "$status" "teardown should succeed once the moved directory is gone: $out"
+  [ ! -e "$TD_HOME/state/$id.meta" ] || fail "a completed teardown must remove the task record"
+  assert_equals "captain fm-worker " "$(fleet_windows)" "teardown must leave the stand-in fleet running"
+  pass "teardown keeps the record while a moved private tmux directory survives and leaves that directory untouched"
 }
 
 # A worker can leave sockets in its private directory that name another server:
@@ -300,5 +349,6 @@ test_retire_keeps_the_directory_when_a_server_cannot_be_stopped() {
 test_ship_worker_cannot_reach_the_fleet
 test_control_inherited_tmux_reaches_the_fleet
 test_teardown_retires_the_private_directory
+test_teardown_keeps_the_record_for_a_moved_private_directory
 test_retire_ignores_planted_foreign_sockets
 test_retire_keeps_the_directory_when_a_server_cannot_be_stopped

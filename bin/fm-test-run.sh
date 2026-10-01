@@ -120,9 +120,10 @@
 # configuration, including one that sources no test helper of its own;
 # tests/git-config-helpers.sh owns that contract and its limits.
 # Every selected script also runs with TMUX and TMUX_PANE unset and TMUX_TMPDIR
-# on a short private /tmp directory (socket paths are capped), so a suite's bare
-# tmux never reaches the server the runner was started from; on exit the run
-# stops each server socketed there and removes the directory.
+# on its own short private /tmp directory (socket paths are capped), so a suite's
+# bare tmux never reaches the server the runner was started from or another
+# suite's; after each script, and again on exit, the run stops each server
+# socketed there and removes the directory.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
@@ -2465,7 +2466,7 @@ fi
 # shellcheck source=bin/fm-private-tmux-lib.sh
 . "$ROOT/bin/fm-private-tmux-lib.sh"
 RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run.XXXXXX")
-RUN_TMUX_TMPDIR=
+RUN_TMUX_DIRS="$RUN_TMP/tmux-dirs"
 RECORDS="$RUN_TMP/records.tsv"
 FAMILIES_TSV="$RUN_TMP/families.tsv"
 : >"$RECORDS"
@@ -2476,17 +2477,21 @@ declare -a WORKER_SCRIPTS=()
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_run() {
-  local rc=$?
-  if ! fm_private_tmux_retire "$RUN_TMUX_TMPDIR" && [ -e "$RUN_TMUX_TMPDIR" ]; then
-    echo "fm-test-run: private tmux directory $RUN_TMUX_TMPDIR could not be retired and a tmux server a suite left there may still run; stop it by its exact -S socket and remove the directory" >&2
-    [ "$rc" -ne 0 ] || rc=1
-  fi
+  local rc=$? dir
+  # Every suite's private tmux directory is recorded before the suite starts, so
+  # one left behind by a failed retire or an interrupted run is retried here.
+  while IFS= read -r dir; do
+    [ -e "$dir" ] || continue
+    if ! fm_private_tmux_retire "$dir" && [ -e "$dir" ]; then
+      echo "fm-test-run: private tmux directory $dir could not be retired and a tmux server a suite left there may still run; stop it by its exact -S socket and remove the directory" >&2
+      [ "$rc" -ne 0 ] || rc=1
+    fi
+  done < <(cat "$RUN_TMUX_DIRS" 2>/dev/null)
   rm -rf "$RUN_TMP"
   exit "$rc"
 }
 
 trap cleanup_run EXIT
-RUN_TMUX_TMPDIR=$(mktemp -d /tmp/fmtr.XXXXXXXX) || die "could not create the private tmux directory for this run"
 
 RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"
 TOTAL=0
@@ -2577,8 +2582,14 @@ run_script_bounded() {  # <script> <out> <stream> <id>
   local GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
   # shellcheck source=tests/git-config-helpers.sh
   . "$ROOT/tests/git-config-helpers.sh" || return
-  local rc
-  local -a tmux_env=(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$RUN_TMUX_TMPDIR")
+  local rc tmux_dir
+  if ! tmux_dir=$(mktemp -d /tmp/fmtr.XXXXXXXX); then
+    printf 'not ok - %s could not get a private tmux directory\n' "$script" >>"$out"
+    [ "$stream" -eq 1 ] && tail -1 "$out"
+    return 1
+  fi
+  printf '%s\n' "$tmux_dir" >>"$RUN_TMUX_DIRS"
+  local -a tmux_env=(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$tmux_dir")
   : "$id"
   set +e
   if [ "$stream" -eq 1 ]; then
@@ -2604,6 +2615,8 @@ run_script_bounded() {  # <script> <out> <stream> <id>
       "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"
     [ "$stream" -eq 1 ] && tail -1 "$out"
   fi
+  # A directory this cannot retire stays recorded for cleanup_run to report.
+  fm_private_tmux_retire "$tmux_dir" || true
   return "$rc"
 }
 

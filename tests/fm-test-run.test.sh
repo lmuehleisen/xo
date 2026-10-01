@@ -1643,7 +1643,44 @@ SH
   pass "--max-wall-ms fails an over-budget run and refuses a malformed budget"
 }
 
-# A suite can leave a tmux server the runner's cleanup cannot stop in the run's
+# Each suite gets its own private tmux directory, so one suite's bare tmux
+# kill-server cannot reach another's server, and the runner removes each one.
+test_each_suite_gets_its_own_private_tmux_directory() {
+  local tmp repo runner a=tests/fm-tmux-dir-a.test.sh b=tests/fm-tmux-dir-b.test.sh script rc dir_a dir_b
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-tmux-dirs.XXXXXX")
+  repo="$tmp/repo"
+  runner="$repo/bin/fm-test-run.sh"
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  for script in "$a" "$b"; do
+    cat >"$repo/$script" <<SH
+#!/usr/bin/env bash
+[ -z "\${TMUX-}" ] && [ -z "\${TMUX_PANE-}" ] || exit 1
+printf '%s\n' "\$TMUX_TMPDIR" >"$tmp/\$(basename "\$0").dir"
+echo "ok - tmux dir fixture"
+SH
+    chmod +x "$repo/$script"
+  done
+  chmod +x "$runner"
+
+  set +e
+  TMUX=/tmp/fm-test-run-fleet,1,0 TMUX_PANE=%0 "$runner" "$a" "$b" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  dir_a=$(cat "$tmp/$(basename "$a").dir" 2>/dev/null || true)
+  dir_b=$(cat "$tmp/$(basename "$b").dir" 2>/dev/null || true)
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "the tmux directory fixtures should pass, got $rc: $(cat "$tmp/out" "$tmp/err" 2>/dev/null)"; }
+  case "$dir_a" in /tmp/fmtr.*) ;; *) rm -rf "$tmp"; fail "suite a did not get a private tmux directory: $dir_a" ;; esac
+  case "$dir_b" in /tmp/fmtr.*) ;; *) rm -rf "$tmp"; fail "suite b did not get a private tmux directory: $dir_b" ;; esac
+  [ "$dir_a" != "$dir_b" ] || { rm -rf "$tmp"; fail "two suites shared one private tmux directory: $dir_a"; }
+  [ ! -e "$dir_a" ] && [ ! -e "$dir_b" ] || { rm -rf "$tmp"; fail "the runner left a suite's private tmux directory behind"; }
+  rm -rf "$tmp"
+  pass "each suite runs on its own private tmux directory, which the runner removes"
+}
+
+# A suite can leave a tmux server the runner's cleanup cannot stop in its
 # private tmux directory. The runner must keep that directory, say so, and fail
 # the otherwise green run rather than hide a leaked server.
 test_unretired_private_tmux_directory_fails_the_run() {
@@ -1935,6 +1972,7 @@ test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
 test_changed_bound_gives_slow_watcher_suites_headroom
 test_max_wall_ms_is_a_result_not_advice
+test_each_suite_gets_its_own_private_tmux_directory
 test_unretired_private_tmux_directory_fails_the_run
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout

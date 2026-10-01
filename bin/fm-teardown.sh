@@ -3291,14 +3291,25 @@ endpoint_close_refusal() {  # <subject> <backend> <target> <honors-force>
 # tmux servers and remove their directory through fm_private_tmux_retire
 # (docs/tmux-backend.md). Only the task's own expected directory is touched, and
 # only while it is still private to this user. Returns 1 while that directory
-# survives, so the caller keeps the record that names it.
+# survives, so the caller keeps the record that names it. A surviving
+# spawn-shaped directory that is not the expected one, such as after the home
+# moved, is left untouched but also keeps the record, since it may be the only
+# pointer to a live server.
 retire_worker_tmux_dir() {
   local home=$1 id=$2 dir=$3
   [ -n "$dir" ] || return 0
   if [ "$dir" != "/tmp/fmwt-$(printf '%s\n%s' "$(cd "$home" && pwd -P)" "$id" |
     { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)" ]; then
-    { [ ! -e "$dir" ] && [ ! -L "$dir" ]; } ||
-      echo "warning: recorded worker tmux directory $dir is not task $id's private directory; leaving it and any server in it untouched" >&2
+    if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
+      return 0
+    fi
+    case "$dir" in
+      /tmp/fmwt-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+        echo "error: recorded worker tmux directory $dir is not where this home now places task $id's private directory, so teardown leaves it untouched; retaining the task record - stop any tmux server in it by its exact -S socket and remove the directory, then rerun teardown" >&2
+        return 1
+        ;;
+    esac
+    echo "warning: recorded worker tmux directory $dir is not task $id's private directory; leaving it and any server in it untouched" >&2
     return 0
   fi
   if ! fm_private_tmux_retire "$dir" && { [ -e "$dir" ] || [ -L "$dir" ]; }; then
