@@ -1035,8 +1035,10 @@ do_relaunch() {
   if fm_backend_validate_task_endpoint "$META" "$ID" >/dev/null \
      && [ -n "$FM_BACKEND_VALIDATED_TARGET" ]; then
     T=$FM_BACKEND_VALIDATED_TARGET
-  else
+  elif [ "$spawn_ok" = 1 ]; then
     die "the replacement agent for $ID was launched, but task $ID's republished record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to confirm it on; reconcile $META before any further control action"
+  else
+    die "the launch of $ID's replacement reported a failure after republishing task $ID's record, and that record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to check for the agent; reconcile $META before any further control action"
   fi
 
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {

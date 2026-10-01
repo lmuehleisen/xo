@@ -319,7 +319,10 @@ fm_tmux_shell_line_pending() { # <target> <text>
   case "$cursor" in ''|*[!0-9]*) return 2 ;; esac
   width=$(tmux display-message -p -t "$target" '#{pane_width}') || return 2
   case "$width" in ''|0|*[!0-9]*) return 2 ;; esac
-  rows=$(( (${#text} + width - 1) / width + 2 ))
+  # ${#text} counts characters, not cells: a double-width character fills two,
+  # so size the window for the worst case rather than undercount and start the
+  # capture inside the command.
+  rows=$(( (2 * ${#text} + width - 1) / width + 2 ))
   # Preserve terminal row endings across command substitution. Remove only
   # capture-pane's final terminator, so a blank cursor row stays distinguishable
   # from the submitted command echoed immediately above it.
