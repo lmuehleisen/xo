@@ -490,6 +490,9 @@ command_build() {
 
   board=$(board_path)
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
+  # The board's source id is its real path, so a board replaced by a symlink
+  # would name some other source; refuse it rather than lose track of a listener.
+  [ ! -L "$board" ] || fail "the board path is a symlink, which is never built: $board"
   [ "$FM_LAVISH_MODE" = answers ] || disarm_board_below_answers "$board" "$FM_LAVISH_MODE"
   page=$(stage_page "$board" "$json")
   if [ "$FM_LAVISH_MODE" = answers ]; then

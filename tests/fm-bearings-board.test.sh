@@ -716,6 +716,23 @@ test_view_mode_ends_the_session_when_it_cannot_listen() {
   pass "a view build that cannot arm its listener ends the session instead of taking feedback nobody collects"
 }
 
+test_build_refuses_a_symlinked_board_path() {
+  local home data out
+  home=$(make_lavish_home symlinked answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the answers build failed"
+  printf '<html></html>\n' > "$home/elsewhere.html"
+  rm -f "$home/.lavish/bearings-board.html"
+  ln -s "$home/elsewhere.html" "$home/.lavish/bearings-board.html"
+  if out=$(run_board "$home" build "$data" --lavish off 2>&1); then
+    fail "a build replaced a symlinked board path: $out"
+  fi
+  assert_contains "$out" "the board path is a symlink" "the symlink refusal was not named: $out"
+  [ -L "$home/.lavish/bearings-board.html" ] || fail "the refused build touched the symlinked board path"
+  pass "a build refuses a board path replaced by a symlink"
+}
+
 test_answers_mode_reopens_a_session_the_captain_ended() {
   local home data out
   home=$(make_lavish_home reopen answers)
@@ -799,5 +816,6 @@ test_answers_mode_binds_then_arms
 test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended
 test_answers_mode_keeps_controls_hidden_until_listening
 test_view_mode_ends_the_session_when_it_cannot_listen
+test_build_refuses_a_symlinked_board_path
 test_answers_mode_reopens_a_session_the_captain_ended
 test_dropping_below_answers_retires_the_answer_source
