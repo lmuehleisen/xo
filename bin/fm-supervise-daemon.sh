@@ -1648,11 +1648,16 @@ _inject_turn_started() {  # <target> <baseline-idle 0|1> [op-record] [backend]
 }
 
 # The owned digest was delivered: a readable composer no longer holds it, and
-# a turn provably started. _owned_backend has set OWNED_INPUT_FN.
+# a turn provably started. On herdr a composer that reads empty again is that
+# proof too, as in its normal submit (fm_backend_herdr_send_text_submit): Claude
+# can take a turn while native agent state stays idle throughout.
+# _owned_backend has set OWNED_INPUT_FN.
 _owned_submit_landed() {  # <backend> <target> <baseline-idle 0|1> <op-record>
   local rc=0
   "$OWNED_INPUT_FN" "$2" "$OWNED_TEXT" || rc=$?
-  [ "$rc" = 1 ] && _inject_turn_started "$2" "$3" "$4" "$1" >/dev/null
+  [ "$rc" = 1 ] || return 1
+  _inject_turn_started "$2" "$3" "$4" "$1" >/dev/null && return 0
+  [ "$1" = herdr ] && [ "$(fm_backend_composer_state herdr "$2")" = empty ]
 }
 
 # _owned_clear_presses: Ctrl+U presses that remove the digest a wrapped row at

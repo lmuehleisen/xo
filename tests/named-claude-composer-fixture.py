@@ -39,6 +39,12 @@ def report(state):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def quiet():
+    # <dir>/.no-turn: a submit shows no busy footer and reports no working
+    # state, like a turn native agent state never sees.
+    return os.path.exists(os.path.join(DIR, ".no-turn"))
+
+
 def log(name, line):
     with open(os.path.join(DIR, name), "a") as f:
         f.write(line + "\n")
@@ -83,7 +89,8 @@ def submit(now):
         subprocess.run([ROOT + "/bin/fm-operational-input.sh", "open", path],
                        env=dict(os.environ, FM_STATE_OVERRIDE=STATE),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    working_until = now + 1.2
+    if not quiet():
+        working_until = now + 1.2
     buf = ""
 
 

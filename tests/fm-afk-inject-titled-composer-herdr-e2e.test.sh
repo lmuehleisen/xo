@@ -74,7 +74,7 @@ hdaemon() {  # <shell snippet>
     # shellcheck disable=SC2030 # the shim PATH is scoped to this subshell on purpose
     export HERDR_SESSION="$HSESSION" FM_STATE_OVERRIDE="$HSTATE" FM_HOME="$TMP" FM_SUPERVISOR_TARGET="$HSESSION:${HPANE:-}" \
       FM_SUPERVISOR_BACKEND=herdr FM_INJECT_CONFIRM_SLEEP=1 FM_INJECT_CONFIRM_RETRIES=3 \
-      LC_ALL="$UTF8" FM_DAEMON_PRIMARY_HARNESS=claude PATH="$TMP/hbin:$PATH"
+      LC_ALL="$UTF8" FM_DAEMON_PRIMARY_HARNESS="${HHARNESS:-claude}" PATH="$TMP/hbin:$PATH"
     LOG="$HSTATE/.supervise-daemon.log"
     # shellcheck source=bin/fm-supervise-daemon.sh
     . "$ROOT/bin/fm-supervise-daemon.sh"
@@ -118,7 +118,7 @@ hwait() {  # <state>
   return 1
 }
 hreset() {
-  rm -f "$HFX"/* "$HFX/.drop-enter" "$HSTATE"/.subsuper-* 2>/dev/null
+  rm -f "$HFX"/* "$HFX/.drop-enter" "$HFX/.no-turn" "$HSTATE"/.subsuper-* 2>/dev/null
   rm -rf "$HSTATE/.subsuper-submit-failures" "$HSTATE/operational-inbox"
   hdaemon 'fm_backend_herdr_send_key "$FM_SUPERVISOR_TARGET" C-u'
   sleep 1.5
@@ -158,6 +158,25 @@ hlogged 'inject recovered: submitted the owned digest left in the composer' \
 [ "$(doorbells)" -eq 1 ] || fail "the doorbell left on herdr was not submitted exactly once: $(cat "$HFX/submitted.log")"
 [ ! -s "$HSTATE/.subsuper-escalations" ] || fail "the recovered herdr events stayed buffered"
 pass "a doorbell whose Enter herdr's primary never took is submitted by the next flush's recovery"
+
+# The same recovery for a typed envelope (no operational record to open) into a
+# primary whose turn native agent state never shows: the composer emptying
+# after Enter is the proof, as in herdr's normal submit, so it is not retyped.
+hreset
+: > "$HFX/.no-turn"
+: > "$HFX/.drop-enter"
+hbuffer 'lab-h2b.status: done: EVENT-KILO'
+if HHARNESS=unknown hflush; then fail "a typed envelope whose every Enter was dropped counted as delivered: $(hlog)"; fi
+[ "$(hcomposer)" = pending ] || fail "the undelivered typed envelope is not in the herdr composer: $(hcomposer)"
+rm -f "$HFX/.drop-enter"
+HHARNESS=unknown hflush || fail "recovery did not count a typed envelope whose composer emptied as delivered: $(hlog)"
+hlogged 'inject recovered: submitted the owned digest left in the composer' \
+  || fail "herdr recovery did not submit the owned typed envelope: $(hlog)"
+HHARNESS=unknown hflush || true
+[ "$(count 'EVENT-KILO' "$HFX/submitted.log")" -eq 1 ] \
+  || fail "the recovered typed envelope was submitted more than once: $(cat "$HFX/submitted.log")"
+rm -f "$HFX/.no-turn"
+pass "a recovered digest whose turn native state never shows counts as delivered once the herdr composer empties"
 
 hreset
 hdaemon 'fm_backend_herdr_send_literal "$FM_SUPERVISOR_TARGET" "a human draft"'
