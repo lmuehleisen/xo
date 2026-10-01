@@ -5047,8 +5047,13 @@ const publishCheck = (command: string, cwd: string | undefined) =>
     execFile("$FM_ROOT/bin/fm-arm-pretool-check.sh", [
       "--publish-only", "--command", command,
     ], { cwd: cwd || process.cwd() }, (error: any, _stdout: string, stderr: string) => {
-      const code = error && typeof error.code === "number" ? error.code : 0;
-      resolve({ code, stderr: String(stderr || "") });
+      // A checker that could not run or was killed (no numeric exit code)
+      // denies, matching the checker's own refusal when it cannot decide.
+      if (error && typeof error.code !== "number") {
+        resolve({ code: 2, stderr: "publish policy check could not run: " + String(error.code || error.signal || error.message) });
+        return;
+      }
+      resolve({ code: error ? error.code : 0, stderr: String(stderr || "") });
     });
   });
 export default function (pi: any) {

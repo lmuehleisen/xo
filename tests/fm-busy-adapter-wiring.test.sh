@@ -200,6 +200,30 @@ test_pi_extension_enforces_the_publish_policy() {
   pass "pi worker extension blocks a gh publish and a --no-verify push through the publish policy and passes ordinary commands"
 }
 
+test_pi_extension_denies_when_the_publish_check_cannot_run() {
+  local rec id=publish-pi-2 out ext checker variant killed
+  rec=$(make_spawn_case pi-publish-unrunnable pi "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "pi spawn should succeed: $out"
+  ext="$HOME_DIR/state/$id.pi-ext.ts"
+  checker="$ROOT/bin/fm-arm-pretool-check.sh"
+  grep -qF "$checker" "$ext" || fail "the generated extension must call the checker at $checker"
+
+  # Point copies of the generated extension at a missing checker and at one
+  # that is killed by a signal; neither exits with a number.
+  killed="$CASE_DIR/killed-check.sh"
+  printf '#!/usr/bin/env bash\nkill -KILL $$\n' >"$killed"
+  chmod +x "$killed"
+  for variant in "$CASE_DIR/absent-check.sh" "$killed"; do
+    sed "s#$checker#$variant#g" "$ext" >"$CASE_DIR/variant.pi-ext.ts"
+    out=$(pi_tool_call "$CASE_DIR/variant.pi-ext.ts" bash 'ls -la' "$WT_DIR") || fail "drive failed for $variant: $out"
+    [ "$(printf '%s' "$out" | jq -r .block)" = true ] || fail "a checker that cannot run must deny, got $out for $variant"
+    assert_contains "$out" "publish policy check could not run" "the denial names the unrunnable check for $variant"
+  done
+  pass "pi worker extension denies a bash call when the publish check is missing or killed"
+}
+
 # drive_oc_plugin <plugin-path> <events-json-lines...>: load the generated
 # OpenCode plugin in a plain Node host and feed it one event per argument, in
 # order, through the same hooks.event entry OpenCode calls.
@@ -471,6 +495,7 @@ test_pi_extension_semantic_lifecycle
 test_pi_extension_serializes_settle_before_next_start
 test_pi_extension_stale_incarnation_rejected
 test_pi_extension_enforces_the_publish_policy
+test_pi_extension_denies_when_the_publish_check_cannot_run
 test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
