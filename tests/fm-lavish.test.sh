@@ -66,6 +66,9 @@ test_malformed_toggle_and_request_exit_2() {
   printf 'a n s w e r s\n' > "$home/config/lavish"
   rc=0; run_lavish "$home" mode >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "a mode word with internal whitespace exited $rc, not 2"
+  : > "$home/config/lavish"
+  rc=0; run_lavish "$home" mode >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "an empty config/lavish exited $rc, not 2"
   printf '  view  \n' > "$home/config/lavish"
   [ "$(run_lavish "$home" mode)" = view ] || fail "a mode word with surrounding whitespace was not read"
   home=$(make_home bad-request)

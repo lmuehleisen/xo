@@ -101,8 +101,9 @@ Three checks run, all on exact identity and none on prose:
 Dropped cards are named on stderr as `dropped-landed-card:` lines so a rebuild states what it removed rather than quietly shrinking Captain's Call.
 The landing procedure requires one immediate board rebuild to remove already-stale merged-PR and superseded-version cards without a committed migration or change-worktree state mutation.
 A subject whose state cannot be established is kept, because a wrongly shown card is safer than a wrongly hidden call.
-The emitted HTML is a read-only projection, so this hygiene creates no answer, merge, dispatch, or reconciliation operation and mutates no task.
-The schema reserves the `reconcile` option value across all card types so input data cannot make the static board appear to offer a control it does not implement.
+This hygiene creates no answer, merge, dispatch, or reconciliation operation and mutates no task.
+The board is a read-only projection unless its effective Lavish mode is `answers` ([`config/lavish`](configuration.md#optional-lavish-configlavish)); only then does `build` add the standard `reconcile` choice to each decision card and bind the board as a captured source before arming it, so decision answers and reconcile selections reach the intakes above while merge, credential, and dispatch requests stay in chat.
+The schema reserves the `reconcile` option value across all card types, so input data can never author that choice itself.
 Owner-aware landedness checks for remote-secondmate decision cards remain tracked separately and must query the authoritative secondmate home while honoring the remote and local consistency principle.
 
 ## Structured read surfaces
@@ -207,9 +208,9 @@ The markdown-to-beads migration family runs the same suite's beads fixture (bd-d
 One case in that family needs no beads install and always runs: a stubbed tasks-axi that fails any markdown file override proves the captain-hold hold, answer, and close mutations reach a beads-configured home without one.
 
 The lifecycle suite separately pins evidence-backed reconciliation against pre-existing durable requests, including idempotent close and note outcomes, without treating the evidence as the captain's words.
-Those cases exercise the lifecycle repair mechanism only; the read-only board originates no request and offers no reconciliation option.
-The board's half is pinned in `tests/fm-bearings-board.test.sh`: it validates and injects a local HTML payload, registers no answer source, refreshes the stable file in place, drops exactly identified landed subjects, keeps uncertain or remote subjects visible, and rejects the reserved `reconcile` value instead of presenting a nonfunctional control.
-`tests/fm-bearings-board-render.test.sh` verifies that decision and queued rows render without answer, merge, dispatch, or reconciliation controls.
+Those cases exercise the lifecycle repair mechanism only; a board below `answers` originates no request and offers no reconciliation option.
+The board's half is pinned in `tests/fm-bearings-board.test.sh`: it validates and injects a local HTML payload, registers no answer source below `answers`, refreshes the stable file in place, drops exactly identified landed subjects, keeps uncertain or remote subjects visible, and rejects the reserved `reconcile` value; in `answers` mode it binds before arming, adds reconcile to decision cards only, and retires that source when a later build drops below `answers`.
+`tests/fm-bearings-board-render.test.sh` verifies that decision and queued rows of a non-interactive board render without answer, merge, dispatch, or reconciliation controls.
 
 `tests/fm-classify-decision-key.test.sh` pins `status_key_closing_verb` itself: it separates a resolution from the durable-transfer close and from a still-open key, reports the last real transition across re-openings and both key positions, and treats a prose mention as no transition.
 

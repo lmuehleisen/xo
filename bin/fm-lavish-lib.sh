@@ -64,13 +64,13 @@ fm_lavish_home_mode() {
     printf 'config/lavish must be a readable regular file\n' >&2
     return 2
   fi
-  # Trim the ends only: whitespace inside the word leaves it malformed.
+  # Trim the ends only: whitespace inside the word leaves it malformed, and a
+  # present but empty file is malformed rather than the absent-file default.
   value=$(tr -s '[:space:]' ' ' < "$file")
   value=${value# }
   value=${value% }
-  [ -n "$value" ] || value=off
   if ! fm_lavish_mode_valid "$value"; then
-    printf 'config/lavish must be off, view, or answers (got %s)\n' "$value" >&2
+    printf 'config/lavish must be off, view, or answers (got %s)\n' "${value:-an empty file}" >&2
     return 2
   fi
   printf '%s\n' "$value"
