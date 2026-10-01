@@ -183,6 +183,51 @@ test_read_only_decisions() {
 }
 
 test_read_only_decisions
+
+# Only an answers-mode build makes a card answerable, and that build needs a live
+# Lavish session, so this marks the built static page the way that build does
+# and drives the shipped template's answer form directly.
+mark_answerable() {  # <board.html> <card-key>
+  node -e '
+    const fs = require("fs");
+    const [file, key] = process.argv.slice(1);
+    const open = "<script id=\"bearings-data\" type=\"application/json\">";
+    const html = fs.readFileSync(file, "utf8");
+    const [head, rest] = html.split(open);
+    const end = rest.indexOf("</script>");
+    const data = JSON.parse(rest.slice(0, end));
+    data.interactive = true;
+    data.captains_call.forEach((c) => { if (c.key === key) c.answerable = true; });
+    const json = JSON.stringify(data).replace(/</g, "\\u003c");
+    fs.writeFileSync(file, head + open + json + rest.slice(end));
+  ' "$1" "$2"
+}
+
+test_a_queued_answer_shows_the_label_the_captain_picked() {
+  local home board out
+  home=$(make_home answer-label)
+  render "$home" '[]' 0 0 '[
+    {"key":"sample-label-call","type":"decision","repo":"sample","title":"Adopt it",
+     "options":[{"value":"yes","label":"Adopt"},{"value":"no","label":"Keep current"}],
+     "allow_freeform":true}
+  ]' >/dev/null
+  board="$home/.lavish/bearings-board.html"
+  mark_answerable "$board" sample-label-call || fail "could not mark the built card answerable"
+  out=$(node "$HARNESS" "$board" sample-label-call yes "after the release") \
+    || fail "the answer form could not be submitted"
+  printf '%s' "$out" | jq -e '
+    (.queued | length) == 1
+    and .queued[0].text == "Adopt it -> Adopt - after the release"
+    and .queued[0].data.selection == "yes"
+    and .queued[0].data.note == "after the release"
+  ' >/dev/null || fail "a queued answer lost the label the captain picked: $out"
+  out=$(node "$HARNESS" "$board" sample-label-call "" "later") \
+    || fail "a typed-only answer could not be submitted"
+  printf '%s' "$out" | jq -e '
+    .queued[0].text == "Adopt it -> later" and .queued[0].data.selection == ""
+  ' >/dev/null || fail "a typed-only answer was not queued as typed: $out"
+  pass "a queued answer shows the option label the captain picked and keeps its value"
+}
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status() {
   local home out
   home=$(make_home underway-name)
@@ -255,3 +300,4 @@ test_warnings_are_excluded_from_the_charted_next_count
 test_a_board_of_only_warnings_still_reports_nothing_queued
 test_omitted_warnings_never_count_as_more_queued
 test_an_omitted_kind_keeps_the_existing_queued_rendering
+test_a_queued_answer_shows_the_label_the_captain_picked

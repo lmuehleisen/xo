@@ -522,7 +522,10 @@ __FM_BEARINGS_BOARD_DATA__
       var fd = new FormData(form);
       var value = fd.get("answer");
       var note = (fd.get("note") || "").trim();
-      var displayAnswer = value ? (note ? value + " - " + note : value) : note;
+      /* The record shows the label the captain picked; the value stays in selection. */
+      var picked = value;
+      item.options.forEach(function (o) { if (o.value === value && o.label) picked = o.label; });
+      var displayAnswer = value ? (note ? picked + " - " + note : picked) : note;
       if (!displayAnswer) return;
       if (utf8ByteLength(displayAnswer) > 512) {
         answerLimit.textContent = "Answer is too long to queue (512 bytes maximum).";
