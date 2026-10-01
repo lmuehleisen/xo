@@ -3853,8 +3853,15 @@ remove_kimi_turnend_auth "$STATE" "$ID" || exit 1
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
-# Stop the worker's private tmux servers and remove their directory.
-retire_worker_tmux_dir "$FM_HOME" "$ID" "$WORKER_TMUX_DIR" || exit 1
+# Stop the worker's private tmux servers and remove their directory. A
+# record-only retirement preserves every endpoint, so it only names the
+# directory it leaves.
+if [ "$TEARDOWN_RECORD_ONLY" = 1 ]; then
+  [ -z "$WORKER_TMUX_DIR" ] || { [ ! -e "$WORKER_TMUX_DIR" ] && [ ! -L "$WORKER_TMUX_DIR" ]; } ||
+    echo "warning: record-only retirement leaves task $ID's private tmux directory $WORKER_TMUX_DIR and any server in it untouched; stop such a server by its exact -S socket and remove the directory once nothing uses it" >&2
+else
+  retire_worker_tmux_dir "$FM_HOME" "$ID" "$WORKER_TMUX_DIR" || exit 1
+fi
 # Retire only this Firstmate home's launch namespace. Its never-reused per-spawn
 # files leave the equal task-id namespace of every other home untouched.
 teardown_launch_home_token() {
