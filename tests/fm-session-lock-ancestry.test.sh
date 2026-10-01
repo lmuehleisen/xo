@@ -38,11 +38,11 @@ APP_BUNDLE_CLAUDE="$APP_BUNDLE_DIR/claude"
 # The Claude desktop app's session executable and the shared server above it,
 # each inside the app's own install tree under .claude/remote.
 DESKTOP_DIR="$TMP_ROOT/desktop-home/.claude/remote"
-mkdir -p "$DESKTOP_DIR/ccd-cli" "$DESKTOP_DIR/srv/f6010b97"
+mkdir -p "$DESKTOP_DIR/ccd-cli" "$DESKTOP_DIR/srv/0a1b2c3d"
 ln -s /bin/bash "$DESKTOP_DIR/ccd-cli/2.1.284"
-ln -s /bin/bash "$DESKTOP_DIR/srv/f6010b97/server"
+ln -s /bin/bash "$DESKTOP_DIR/srv/0a1b2c3d/server"
 DESKTOP_CLAUDE="$DESKTOP_DIR/ccd-cli/2.1.284"
-DESKTOP_SERVER="$DESKTOP_DIR/srv/f6010b97/server"
+DESKTOP_SERVER="$DESKTOP_DIR/srv/0a1b2c3d/server"
 
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/harness-bin")
 ln -s /bin/bash "$FAKEBIN/claude"
@@ -131,7 +131,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 session=/Users/u/.claude/remote/ccd-cli/2.1.284
-server=/Users/u/.claude/remote/srv/f6010b97/server
+server=/Users/u/.claude/remote/srv/0a1b2c3d/server
 case "$pid:$field:${FM_TEST_CLAUDE_SHAPE:-linux}" in
   730:comm=:linux|735:comm=:linux) printf '%s\n' '2.1.284' ;;
   730:comm=:macos|735:comm=:macos) printf '%s\n' "$session" ;;
@@ -235,8 +235,8 @@ case "$pid:$field:${FM_TEST_PATH_SHAPE:-hookdir}" in
   810:args=:hookdir) printf '%s\n' '/home/u/.claude/hooks/notify.sh --quiet' ;;
   810:comm=:piprefix) printf '%s\n' '/opt/pipeline/bin/runner' ;;
   810:args=:piprefix) printf '%s\n' '/opt/pipeline/bin/runner --once' ;;
-  810:comm=:desktopserver) printf '%s\n' '/home/u/.claude/remote/srv/f6010b97/server' ;;
-  810:args=:desktopserver) printf '%s\n' '/home/u/.claude/remote/srv/f6010b97/server --serve' ;;
+  810:comm=:desktopserver) printf '%s\n' '/home/u/.claude/remote/srv/0a1b2c3d/server' ;;
+  810:args=:desktopserver) printf '%s\n' '/home/u/.claude/remote/srv/0a1b2c3d/server --serve' ;;
   810:comm=:desktopscript) printf '%s\n' '/home/u/.claude/remote/ccd-cli/install.sh' ;;
   810:args=:desktopscript) printf '%s\n' '/home/u/.claude/remote/ccd-cli/install.sh' ;;
   810:comm=:desktopnested) printf '%s\n' '/home/u/.claude/remote/ccd-cli/2.1.284/bin/helper' ;;
