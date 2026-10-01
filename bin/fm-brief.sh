@@ -307,6 +307,10 @@ if [ "$LAVISH_SET" -eq 1 ] && [ "$KIND" != scout ]; then
   echo "error: --lavish applies only to scout briefs, whose crew-hosted review loop it enables or declines" >&2
   exit 1
 fi
+if [ "$LAVISH_SET" -eq 1 ] && [ -z "$LAVISH_REQUEST" ]; then
+  echo "error: --lavish must be off, view, or answers (got an empty value)" >&2
+  exit 1
+fi
 ID=${POS[0]}
 BRANCH="$BRANCH_PREFIX$ID"
 if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then

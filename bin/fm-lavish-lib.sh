@@ -25,11 +25,13 @@
 # Every Firstmate invocation of lavish-axi runs under fm_lavish_pin_env:
 #   LAVISH_AXI_TELEMETRY=0   the published build reports usage by default
 #   LAVISH_AXI_NO_OPEN=1     never open a browser on this machine's own screen
-#   LAVISH_AXI_HOST          config/lavish-axi-host, else an already-exported
-#                            LAVISH_AXI_HOST (bin/fm-spawn.sh exports the config
-#                            value into workers), else 127.0.0.1. An explicit
-#                            host also stops Lavish's own Tailscale detection, so
-#                            the default never binds a tailnet address.
+#   LAVISH_AXI_HOST          config/lavish-axi-host, else 127.0.0.1; an ambient
+#                            LAVISH_AXI_HOST is ignored, so only the home's own
+#                            file can widen the bound address. Workers reach the
+#                            home's file through the FM_HOME their brief names.
+#                            An explicit host also stops Lavish's own Tailscale
+#                            detection, so the default never binds a tailnet
+#                            address.
 # fm_lavish_forbidden_command refuses the subcommands that install agent hooks
 # or plugins, self-update, or publish to a third-party host.
 # FM_LAVISH_AXI_PIN is also the version in fm_lavish_install_command, the one
@@ -88,7 +90,7 @@ fm_lavish_host() {
     printf '%s\n' "$value"
     return 0
   fi
-  printf '%s\n' "${LAVISH_AXI_HOST:-127.0.0.1}"
+  printf '127.0.0.1\n'
 }
 
 # fm_lavish_pin_env <config-dir>

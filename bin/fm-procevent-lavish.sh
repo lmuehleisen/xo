@@ -151,6 +151,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # Every lavish-axi call below runs with telemetry and auto-open pinned off. A
 # malformed config/lavish-axi-host is not fatal here: a poll routes by the
 # board's own saved session (apply_session_host), never the configured host.
+# arm and every listener start (poll) refuse a lavish-axi other than the pinned
+# version, so a source armed before an upgrade cannot restart on it.
 fm_lavish_pin_env "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" 2>/dev/null || true
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
@@ -208,7 +210,7 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real owner listening
+  local artifact='' task='' reply_file='' id real owner listening lavish_reason
   local -a listener=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -232,7 +234,7 @@ cmd_arm() {
   done
   [ -n "$artifact" ] || usage
   [ -z "$reply_file" ] || [ -n "$task" ] || usage
-  command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
+  lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
   poll_retry_delay >/dev/null
   id=$(cmd_source_id "$artifact") || exit 1
   real=$(perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$artifact" 2>/dev/null) \
@@ -373,7 +375,7 @@ poll_iteration_floor_wait() {
 }
 
 cmd_poll() {
-  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started
+  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started lavish_reason
   local pipeline_status reply_file=''
   local reply_text='' reply_pending=0
   [ -n "$artifact" ] || usage
@@ -382,7 +384,7 @@ cmd_poll() {
   elif [ "$#" -ne 1 ]; then
     usage
   fi
-  command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
+  lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
   delay=$(poll_retry_delay) || exit 1
   response=$(mktemp "${TMPDIR:-/tmp}/fm-lavish-poll.XXXXXX") || die "cannot stage the poll response"
   printf -v cleanup_command 'rm -f -- %q' "$response"

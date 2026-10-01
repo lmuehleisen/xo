@@ -1017,6 +1017,12 @@ SH
   if out=$(PATH="$stub:$path" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lavish-bad sample --scout --lavish yes 2>&1); then
     fail "a malformed --lavish was accepted: $out"
   fi
+  printf 'view\n' > "$home/config/lavish"
+  for empty in --lavish= "--lavish ''"; do
+    if out=$(eval "PATH=\"\$stub:\$path\" FM_HOME=\"\$home\" \"\$ROOT/bin/fm-brief.sh\" lavish-empty sample --scout $empty" 2>&1); then
+      fail "an empty $empty override was accepted: $out"
+    fi
+  done
   pass "fm-brief.sh: the scout Lavish loop follows the home toggle, the per-brief override, and availability"
 }
 

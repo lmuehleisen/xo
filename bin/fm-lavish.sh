@@ -17,8 +17,9 @@
 #                  toggle in both directions. A wanted mode resolves to off
 #                  when the pinned lavish-axi is unavailable.
 # run              Run lavish-axi with the given arguments under the pinned
-#                  environment. Refuses `setup`, `update`, and `share`, and
-#                  refuses when the pinned version is not the one installed.
+#                  environment. Refuses any argument that is `setup`, `update`,
+#                  or `share`, wherever it appears, and refuses when the pinned
+#                  version is not the one installed.
 #                  This is the only way Firstmate and its workers start Lavish.
 # install-command  Print the one hook-free, version-pinned install command.
 #
@@ -60,15 +61,14 @@ cmd_resolve() {
 }
 
 cmd_run() {
-  local arg first='' reason
+  local arg reason
+  # Every argument, not just the first non-option one: an option's value can
+  # sit in front of the subcommand.
   for arg in "$@"; do
-    case "$arg" in -*) continue ;; esac
-    first=$arg
-    break
+    if fm_lavish_forbidden_command "$arg"; then
+      die "refusing 'lavish-axi $arg': this home never installs Lavish hooks or plugins, self-updates it, or publishes to a third-party host"
+    fi
   done
-  if fm_lavish_forbidden_command "$first"; then
-    die "refusing 'lavish-axi $first': this home never installs Lavish hooks or plugins, self-updates it, or publishes to a third-party host"
-  fi
   reason=$(fm_lavish_unavailable_reason "$CONFIG") || die "$reason; install: $(fm_lavish_install_command)"
   fm_lavish_pin_env "$CONFIG" || exit 2
   exec lavish-axi "$@"

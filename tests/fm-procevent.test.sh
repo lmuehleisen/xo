@@ -674,6 +674,7 @@ LAVISH_POLL_COUNT="$TMP_ROOT/lavish-poll-count"
 export LAVISH_POLL_COUNT
 cat > "$LAVISH_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 # Stand-in for `lavish-axi poll <file>` around a human `Send & End`: the final
 # feedback is delivered exactly once carrying session_ended, and every later
 # poll returns an empty ended session immediately.
@@ -723,6 +724,7 @@ HEMPTY="$TMP_ROOT/hempty"; new_home "$HEMPTY"
 EMPTY_BIN=$(fm_fakebin "$TMP_ROOT/lavish-empty-stub")
 cat > "$EMPTY_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 # Stand-in for `lavish-axi poll <file>` when the captain closes a board he said
 # nothing on: an ended session carrying no queued content at all.
 printf 'session:\n  file: /quiet.html\n  status: ended\n  ended_by: user\n'
@@ -774,6 +776,7 @@ mkdir -p "$MULTI_ROOT"
 export MULTI_ROOT
 cat > "$MULTI_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
 n=$(cat "$MULTI_ROOT/count" 2>/dev/null || echo 0)
 n=$((n + 1))
@@ -973,6 +976,7 @@ ORPHAN_TRIGGER="$TMP_ROOT/lavish-orphan-hold"
 export ORPHAN_TRIGGER
 cat > "$ORPHAN_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 while [ ! -e "$ORPHAN_TRIGGER" ]; do sleep 0.02; done
 printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","after the crash","","message",""\n'
 SH
@@ -1010,6 +1014,7 @@ HADOPT="$TMP_ROOT/hadopt"; new_home "$HADOPT"
 ADOPT_BIN=$(fm_fakebin "$TMP_ROOT/lavish-adopt-stub")
 cat > "$ADOPT_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","for firstmate","","message",""\n'
 SH
 chmod +x "$ADOPT_BIN/lavish-axi"
@@ -1158,6 +1163,7 @@ HCONC="$TMP_ROOT/hconclude"; new_home "$HCONC"
 CONC_BIN=$(fm_fakebin "$TMP_ROOT/lavish-conclude-stub")
 cat > "$CONC_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 printf 'session:\n  status: ended\n  session_ended: true\n'
 SH
 chmod +x "$CONC_BIN/lavish-axi"
@@ -1211,6 +1217,7 @@ INTR_ROOT="$TMP_ROOT/lavish-interrupted-root"; mkdir -p "$INTR_ROOT"; export INT
 INTR_BIN=$(fm_fakebin "$TMP_ROOT/lavish-interrupted-stub")
 cat > "$INTR_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 n=$(cat "$INTR_ROOT/count" 2>/dev/null || echo 0)
 printf '%s\n' "$((n + 1))" > "$INTR_ROOT/count"
 printf 'session:\n  status: ended\n  session_ended: true\n'
@@ -1255,6 +1262,7 @@ ROLL_ROOT="$TMP_ROOT/lavish-rollback-root"; mkdir -p "$ROLL_ROOT"; export ROLL_R
 ROLL_BIN=$(fm_fakebin "$TMP_ROOT/lavish-rollback-stub")
 cat > "$ROLL_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
 [ "${3-}" != --agent-reply ] || printf '%s\n' "$4" >> "$ROLL_ROOT/replies"
 printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","another round","","message",""\n'
@@ -1312,6 +1320,7 @@ REARM_ROOT="$TMP_ROOT/lavish-rearm-root"; mkdir -p "$REARM_ROOT"; export REARM_R
 REARM_BIN=$(fm_fakebin "$TMP_ROOT/lavish-rearm-stub")
 cat > "$REARM_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
 [ "${3-}" != --agent-reply ] || printf '%s\n' "$4" >> "$REARM_ROOT/replies"
 while [ ! -e "$REARM_ROOT/release" ]; do sleep 0.02; done
@@ -1372,6 +1381,7 @@ HANSWER="$TMP_ROOT/hanswer"; new_home "$HANSWER"
 ANSWER_BIN=$(fm_fakebin "$TMP_ROOT/lavish-answer-stub")
 cat > "$ANSWER_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 # Stand-in for `lavish-axi poll <file>` on a real `Send & End`: the captain's
 # own choice, delivered with session_ended.
 printf 'session:\n  file: /answered.html\n  status: feedback\n  session_ended: true\n  ended_by: user\nprompts[1]{tag,text,prompt}:\n  "choice","Option B","Context data: {\\"question\\":\\"noop-check-routing\\",\\"answer\\":\\"b\\"}"\n'
@@ -1405,6 +1415,7 @@ pass "a board close carrying the captain's real answer is still announced"
 LAVISH_SCRIPTED_BIN=$(fm_fakebin "$TMP_ROOT/lavish-scripted-stub")
 cat > "$LAVISH_SCRIPTED_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 # Stand-in for `lavish-axi poll <file>`, scripted per scenario: LAVISH_SCRIPT
 # names the response for each successive poll, one word per poll, and its last
 # word repeats forever. `interrupt` is the exact transient response the server
@@ -2968,6 +2979,7 @@ HOST_SEEN="$TMP_ROOT/session-route-seen"
 HOST_BIN=$(fm_fakebin "$TMP_ROOT/session-route-bin")
 cat > "$HOST_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 [ "${1-}" = poll ] || exit 2
 printf '%s:%s\n' "${LAVISH_AXI_HOST-unset}" "${LAVISH_AXI_PORT-unset}" >> "$HOST_SEEN"
 if [ -n "${HOST_RETRY-}" ] && [ "$(wc -l < "$HOST_SEEN" | tr -d ' ')" = 1 ]; then
@@ -4460,6 +4472,7 @@ READY="$TMP_ROOT/ready-arm"
 mkdir -p "$READY/bin" "$READY/home/state"
 cat > "$READY/bin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 printf 'started\n' >> "${READY_MARK:?}"
 while [ ! -e "${READY_RELEASE:?}" ]; do sleep 0.02; done
 printf 'session:\n  status: ended\n'
@@ -4542,6 +4555,7 @@ arm_blocked_claim() {  # <dir> <confirm-seconds>
   mkdir -p "$dir/bin" "$dir/home/state"
   cat > "$dir/bin/lavish-axi" <<'SH'
 #!/bin/sh
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 printf started >> "${READY_MARK:?}"
 SH
   chmod +x "$dir/bin/lavish-axi"
@@ -4635,6 +4649,7 @@ mkdir -p "$DRAIN/bin" "$DRAIN/home/state"
 export DRAIN
 cat > "$DRAIN/bin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
 [ "${3-}" != --agent-reply ] || printf '%s\n' "$4" >> "$DRAIN/replies"
 printf 'poll\n' >> "$DRAIN/polls"

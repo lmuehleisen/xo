@@ -115,6 +115,10 @@ test_run_refuses_hooks_updates_and_sharing() {
   if out=$(run_lavish "$home" run --json setup plugin 2>&1); then
     fail "a flag-prefixed setup was allowed: $out"
   fi
+  if out=$(run_lavish "$home" run --port 4387 setup hooks 2>&1); then
+    fail "setup behind an option value was allowed: $out"
+  fi
+  assert_contains "$out" "refusing 'lavish-axi setup'" "setup behind an option value was not refused by name: $out"
   pass "run refuses setup, update, and share before lavish-axi starts"
 }
 
@@ -128,6 +132,10 @@ test_run_pins_the_environment() {
   out=$(LAVISH_AXI_TELEMETRY=1 LAVISH_AXI_NO_OPEN=0 \
     PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" "$LAVISH" run board.html) || fail "run failed: $out"
   assert_contains "$out" "TELEMETRY=0 NO_OPEN=1" "an ambient opt-in overrode the pin: $out"
+
+  out=$(LAVISH_AXI_HOST=0.0.0.0 PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" "$LAVISH" run board.html) \
+    || fail "run failed with an ambient host: $out"
+  assert_contains "$out" "HOST=127.0.0.1" "an ambient LAVISH_AXI_HOST widened the bound address: $out"
 
   printf '%s\n' 10.0.0.5 > "$home/config/lavish-axi-host"
   out=$(run_lavish "$home" run board.html) || fail "run failed with a host file: $out"
@@ -149,6 +157,27 @@ test_run_refuses_an_off_pin_binary() {
   pass "run refuses an off-pin lavish-axi"
 }
 
+# The process-event adapter enforces the same pin at registration and at every
+# listener start, so a source armed before an upgrade cannot restart on it.
+test_adapter_refuses_an_off_pin_binary() {
+  local home out
+  home=$(make_home adapter-off-pin)
+  mkdir -p "$home/state" "$home/art"
+  printf '<html></html>\n' > "$home/art/board.html"
+  if out=$(LAVISH_FAKE_VERSION=0.1.81 PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-procevent-lavish.sh" arm "$home/art/board.html" 2>&1); then
+    fail "the adapter armed a board on an off-pin lavish-axi: $out"
+  fi
+  assert_contains "$out" "pinned to 0.1.80" "the arm refusal did not name the pin: $out"
+  if out=$(LAVISH_FAKE_VERSION=0.1.81 PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-procevent-lavish.sh" poll "$home/art/board.html" 2>&1); then
+    fail "a listener started on an off-pin lavish-axi: $out"
+  fi
+  assert_contains "$out" "pinned to 0.1.80" "the poll refusal did not name the pin: $out"
+  assert_not_contains "$out" "args=" "the off-pin lavish-axi was invoked: $out"
+  pass "the process-event adapter refuses an off-pin lavish-axi at arm and at every listener start"
+}
+
 test_install_command_is_pinned_and_hook_free() {
   local out
   out=$("$LAVISH" install-command)
@@ -164,4 +193,5 @@ test_unavailable_or_off_pin_resolves_off_with_a_reason
 test_run_refuses_hooks_updates_and_sharing
 test_run_pins_the_environment
 test_run_refuses_an_off_pin_binary
+test_adapter_refuses_an_off_pin_binary
 test_install_command_is_pinned_and_hook_free
