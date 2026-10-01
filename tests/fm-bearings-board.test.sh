@@ -723,6 +723,14 @@ test_dropping_below_answers_retires_the_answer_source() {
   out=$(run_board "$home" build "$data" --lavish view) || fail "a second view rebuild failed: $out"
   assert_not_contains "$out" "retired: " "a view rebuild with nothing bound reported a retirement: $out"
 
+  # A deleted board still has its answer source found and retired.
+  run_board "$home" build "$data" >/dev/null || fail "the answers build before deletion failed"
+  rm -f "$home/.lavish/bearings-board.html"
+  out=$(run_board "$home" build "$data" --lavish off) || fail "an off rebuild of a deleted board failed: $out"
+  assert_contains "$out" "retired: $sid" "a deleted board's answer source was not retired: $out"
+  ! run_hold "$home" binding "$sid" >/dev/null 2>&1 || fail "a deleted board kept its answer binding"
+  ! source_registered "$home" "$sid" || fail "a deleted board kept its answer source registered"
+
   # A binding that cannot be removed refuses the downgrade and keeps the
   # earlier board, because that binding is what lets an open page change tasks.
   # A read-only directory cannot stop root, so root skips only this case.

@@ -268,14 +268,23 @@ source_owner() {  # <source-id>
 # new page is published. Unbinding is what stops a still-open answers page from
 # changing a held task, so a failed unbind refuses the build and leaves the
 # earlier board in place. Retiring the now-unbound listener is best effort: a
-# capture it still takes feeds nothing and only wakes firstmate.
+# capture it still takes feeds nothing and only wakes firstmate. The source id
+# is derived from the board file's real path, so a deleted board is recreated
+# empty for the derivation; the build publishes over it at once, and a refused
+# unbind removes it again.
 retire_board_answers() {  # <board>
-  local board=$1 sid
-  [ -f "$board" ] || return 0
-  sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board" 2>/dev/null) || return 0
+  local board=$1 sid placeholder=0
+  if [ ! -e "$board" ] && [ ! -L "$board" ]; then
+    (umask 077; : > "$board") || fail "cannot recreate the missing board to find its answer source"
+    placeholder=1
+  fi
+  sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board" 2>/dev/null) \
+    || fail "cannot derive the board source id to check for an earlier answer source"
   "$SCRIPT_DIR/fm-captain-hold.sh" binding "$sid" >/dev/null 2>&1 || return 0
-  "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$sid" >/dev/null 2>&1 \
-    || fail "cannot unbind the earlier answer source $sid; refusing to drop below answers while it can still change held tasks"
+  if ! "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$sid" >/dev/null 2>&1; then
+    [ "$placeholder" = 0 ] || rm -f -- "$board"
+    fail "cannot unbind the earlier answer source $sid; refusing to drop below answers while it can still change held tasks"
+  fi
   if [ -n "$(source_owner "$sid")" ] \
     && ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
     printf 'fm-bearings-board: warning: unbound %s, but its listener could not be retired; its captures feed nothing\n' "$sid" >&2
