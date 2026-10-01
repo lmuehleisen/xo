@@ -24,9 +24,9 @@
   <img alt="firstmate - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
 </p>
 
-## Personal fork: what differs
+## Fork: what differs
 
-This is [lmuehleisen/xo](https://github.com/lmuehleisen/xo), a personal project derived from [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate).
+This is [lmuehleisen/xo](https://github.com/lmuehleisen/xo), a project derived from [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate).
 It prioritizes reliable local use, familiar tools, and less prescriptive workflows.
 Use this repository when cloning for these changes; the upstream project overview and setup below are otherwise retained.
 
