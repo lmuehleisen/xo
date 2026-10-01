@@ -52,8 +52,9 @@ Teardown, a forced secondmate retire that closes its workers, and a failed spawn
 A failed spawn whose launched worker's endpoint was left open keeps the directory and names it instead, since removing it would send that worker's bare `tmux` back to the default server.
 A socket file there proves nothing on its own, since a hardlinked, renamed, or newline-named socket can answer for another server, so `bin/fm-private-tmux-lib.sh` stops a server only when its own reported socket path is inside the directory too.
 A socket that answers for a server outside the directory, a socket it cannot inspect, other than one a stopped server left behind, or a server it cannot stop keeps the directory, so no live server loses its only reachable socket, and teardown then refuses and keeps the task record until that directory is cleaned up.
-Teardown also keeps the record, without touching the directory, while a recorded private directory survives that is not where the home now places it, such as after the home moved.
-Secondmates keep `TMUX`, because they place their own crew on the fleet server, and the behavior test runner gives every suite the same boundary.
+Teardown and relaunch both refuse, keeping the record and leaving the directory untouched, while a recorded private directory survives that is not where the home now places it, such as after the home moved.
+A fresh spawn refuses its private directory while it still holds a socket from an earlier run of the task, and reuses it when empty.
+Secondmates keep `TMUX`, because they place their own crew on the fleet server, and the behavior test runner gives every suite its own such directory.
 Worker briefs require any server a worker starts with `-S` to use a socket under its `TMUX_TMPDIR`; a Herdr lab primary instead keeps the socket directory `bin/fm-lab-home.sh` owns, which its own cleanup trap stops.
 Naming the fleet socket with `-S`, killing tmux by process name, or clearing the environment still reaches the fleet; the worker rules forbid the first two.
 `tests/fm-worker-tmux-isolation.test.sh` is the regression.

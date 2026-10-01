@@ -122,8 +122,9 @@
 # Every selected script also runs with TMUX and TMUX_PANE unset and TMUX_TMPDIR
 # on its own short private /tmp directory (socket paths are capped), so a suite's
 # bare tmux never reaches the server the runner was started from or another
-# suite's; after each script, and again on exit, the run stops each server
-# socketed there and removes the directory.
+# suite's; after each script the run stops each server socketed there and
+# removes the directory, failing that script when it cannot, and retries any
+# directory still left on exit.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
@@ -2615,8 +2616,14 @@ run_script_bounded() {  # <script> <out> <stream> <id>
       "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"
     [ "$stream" -eq 1 ] && tail -1 "$out"
   fi
-  # A directory this cannot retire stays recorded for cleanup_run to report.
-  fm_private_tmux_retire "$tmux_dir" || true
+  # A directory this cannot retire fails the suite, so the summary and timing
+  # artifact count it, and stays recorded for cleanup_run to retry.
+  if ! fm_private_tmux_retire "$tmux_dir" && [ -e "$tmux_dir" ]; then
+    printf 'not ok - %s left private tmux directory %s that could not be retired; a tmux server in it may still run\n' \
+      "$script" "$tmux_dir" >>"$out"
+    [ "$stream" -eq 1 ] && tail -1 "$out"
+    [ "$rc" -ne 0 ] || rc=1
+  fi
   return "$rc"
 }
 

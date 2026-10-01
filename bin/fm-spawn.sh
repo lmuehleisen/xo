@@ -4833,11 +4833,28 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     *) echo "error: could not derive a private tmux directory for $ID (needs shasum or sha256sum)" >&2; exit 1 ;;
   esac
   WORKER_TMUX_DIR="/tmp/fmwt-$WORKER_TMUX_DIR"
+  # A relaunch must not drop a recorded directory it would no longer derive,
+  # such as after the home moved: it may be the only pointer to a live server.
+  if [ "$RELAUNCH" -eq 1 ]; then
+    recorded_tmux_dir=$(fm_meta_get "${RELAUNCH_META:-}" worker_tmux_dir)
+    if [ -n "$recorded_tmux_dir" ] && [ "$recorded_tmux_dir" != "$WORKER_TMUX_DIR" ] &&
+      { [ -e "$recorded_tmux_dir" ] || [ -L "$recorded_tmux_dir" ]; }; then
+      echo "error: task $ID's record names private tmux directory $recorded_tmux_dir, not $WORKER_TMUX_DIR where this home now places it; refusing a relaunch that would drop it - stop any tmux server in it by its exact -S socket and remove the directory, then retry" >&2
+      exit 1
+    fi
+  fi
   if ! (umask 077 && mkdir "$WORKER_TMUX_DIR") 2>/dev/null; then
     if [ -L "$WORKER_TMUX_DIR" ] || [ ! -d "$WORKER_TMUX_DIR" ] || [ ! -O "$WORKER_TMUX_DIR" ] ||
       [ -n "$(find "$WORKER_TMUX_DIR" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
       ! chmod 700 "$WORKER_TMUX_DIR"; then
       echo "error: private worker tmux directory $WORKER_TMUX_DIR already exists and is not a private directory owned by this user; refusing to launch a worker that could reach another tmux server; inspect and remove it, then retry" >&2
+      exit 1
+    fi
+    # A fresh spawn has no record owning a server here, so a socket left by an
+    # earlier run of this id, such as one whose rollback kept a launched
+    # worker's directory, is refused rather than handed to the new worker.
+    if [ "$RELAUNCH" -eq 0 ] && [ -n "$(find "$WORKER_TMUX_DIR" -type s -print 2>/dev/null | head -1)" ]; then
+      echo "error: private worker tmux directory $WORKER_TMUX_DIR still holds a tmux socket from an earlier run of task $ID; refusing to hand it to a fresh worker - stop any tmux server in it by its exact -S socket and remove the directory, then retry" >&2
       exit 1
     fi
   fi

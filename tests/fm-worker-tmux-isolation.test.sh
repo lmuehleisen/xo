@@ -137,6 +137,42 @@ $(cat "$case_dir/launch.log")" || fail "allowlist=$setting: the emitted launch f
   pass "a ship worker's bare tmux kill-server reaches only its private server, with and without an allowlist"
 }
 
+# A fresh spawn must not hand a new worker a private directory still holding a
+# socket from an earlier run of the same id. tests/fm-control-relaunch.test.sh
+# covers the relaunch side.
+test_spawn_refuses_a_directory_it_cannot_own() {
+  local id=reuse-t1 case_dir home proj wt fakebin dir out status
+  case_dir="$TMP_ROOT/reuse"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  fakebin=$(fm_test_make_spawn_fakebin "$case_dir/fake")
+  fm_test_spawn_home "$home" codex
+  fm_git_worktree "$proj" "$wt" wt-reuse
+  fm_test_spawn_brief "$home" "$id"
+  dir=$(private_tmux_dir "$home" "$id")
+  PRIVATE_DIRS+=("$dir")
+  (umask 077 && mkdir "$dir") || fail "could not create the private tmux directory $dir"
+  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$dir/s" ||
+    fail "could not plant a socket in the private tmux directory"
+
+  out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" FM_FAKE_PANE_LOG="$case_dir/pane.log" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --mode direct-PR --yolo off 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a fresh spawn must refuse a private tmux directory that still holds a socket"
+  assert_contains "$out" "private worker tmux directory $dir still holds a tmux socket" \
+    "the refused spawn did not name the private tmux directory"
+  [ -S "$dir/s" ] || fail "the refused spawn must leave the earlier socket untouched"
+  [ ! -e "$home/state/$id.meta" ] || fail "the refused spawn must not publish a task record"
+
+  rm -f "$dir/s"
+  out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" FM_FAKE_PANE_LOG="$case_dir/pane.log" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --mode direct-PR --yolo off 2>&1)
+  status=$?
+  expect_code 0 "$status" "a fresh spawn should reuse an empty private tmux directory: $out"
+  pass "a fresh spawn refuses a private tmux directory that still holds a socket and reuses an empty one"
+}
+
 # Without the boundary, the same probe with the fleet's TMUX inherited does stop
 # the stand-in fleet even though TMUX_TMPDIR is private, so the case above is
 # not passing vacuously.
@@ -348,6 +384,7 @@ test_retire_keeps_the_directory_when_a_server_cannot_be_stopped() {
 
 test_ship_worker_cannot_reach_the_fleet
 test_control_inherited_tmux_reaches_the_fleet
+test_spawn_refuses_a_directory_it_cannot_own
 test_teardown_retires_the_private_directory
 test_teardown_keeps_the_record_for_a_moved_private_directory
 test_retire_ignores_planted_foreign_sockets

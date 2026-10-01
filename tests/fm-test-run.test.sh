@@ -1719,6 +1719,8 @@ SH
   [ "$rc" -eq 1 ] || { rm -rf "$tmp"; fail "an unretired private tmux directory must fail the run, got $rc"; }
   grep -qF "private tmux directory $left could not be retired" "$tmp/err" ||
     { rm -rf "$tmp"; fail "the runner did not name the directory it could not retire: $(cat "$tmp/err")"; }
+  grep -qF "FM_TEST_SUMMARY total=1 failed=1 " "$tmp/out" ||
+    { rm -rf "$tmp"; fail "the summary must count the suite whose tmux directory could not be retired: $(cat "$tmp/out")"; }
   rm -rf "$tmp"
   pass "an unretired private tmux directory is reported and fails the run"
 }

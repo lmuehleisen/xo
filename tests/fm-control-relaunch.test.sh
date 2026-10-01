@@ -560,6 +560,43 @@ test_relaunch_preserves_durable_task_metadata() {
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
 }
 
+# private_tmux_dir <home> <id>: the private tmux directory a ship spawn derives.
+private_tmux_dir() {
+  printf '/tmp/fmwt-%s' "$(printf '%s\n%s' "$(cd "$1" && pwd -P)" "$2" |
+    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+}
+
+# A relaunch keeps the ship's private tmux directory in its record, and refuses
+# rather than drop a recorded one it would no longer derive, such as after the
+# home moved, since that may be the only pointer to a live server.
+test_relaunch_keeps_the_private_tmux_directory() {
+  local dir out rc derived moved
+  dir=$(new_case tmux-dir rl40)
+  add_ship_task "$dir" rl40 claude
+  derived=$(private_tmux_dir "$dir/home" rl40)
+  mkdir -p "$dir/old-home"
+  moved=$(private_tmux_dir "$dir/old-home" rl40)
+  TASK_TMPS+=("$derived" "$moved")
+
+  out=$(run_control "$dir" rl40 relaunch --note "continuing the task"); rc=$?
+  expect_code 0 "$rc" "a ship relaunch should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl40 worker_tmux_dir)" = "$derived" ] \
+    || fail "the relaunched record must name the ship's private tmux directory"
+  [ -d "$derived" ] || fail "the relaunch must create the ship's private tmux directory"
+
+  (umask 077 && mkdir "$moved") || fail "could not create the moved private tmux directory"
+  sed -i.bak "s|^worker_tmux_dir=.*|worker_tmux_dir=$moved|" "$dir/home/state/rl40.meta"
+  printf 'claude' > "$dir/fake/command"
+  out=$(run_control "$dir" rl40 relaunch --note "continuing the task"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a relaunch must refuse to drop a recorded private tmux directory it no longer derives"
+  assert_contains "$out" "record names private tmux directory $moved" \
+    "the refused relaunch did not name the recorded private tmux directory"
+  [ "$(meta_field "$dir" rl40 worker_tmux_dir)" = "$moved" ] \
+    || fail "the refused relaunch must keep the record that names the moved directory"
+  [ -d "$moved" ] || fail "the refused relaunch must leave the moved directory untouched"
+  pass "fm-control relaunch: keeps the private tmux directory and refuses to drop a moved one"
+}
+
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
   local dir control_pid link_pid rc i=0 traceparent prepare launch_release waiting ready release
   dir=$(new_case metadata-race rl28)
@@ -2469,6 +2506,7 @@ test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
+test_relaunch_keeps_the_private_tmux_directory
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
