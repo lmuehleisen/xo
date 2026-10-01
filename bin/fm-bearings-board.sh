@@ -268,9 +268,12 @@ establish_board_session() {  # <board>
 }
 
 # The OWNER column bin/fm-procevent.sh publishes; empty means not registered.
+# A listing that fails returns nonzero, so no caller mistakes an unreadable
+# registry for an absent source.
 source_owner() {  # <source-id>
-  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" list 2>/dev/null \
-    | awk -v id="$1" 'NR > 1 && $1 == id { print $3; exit }'
+  local listing
+  listing=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" list 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | awk -v id="$1" 'NR > 1 && $1 == id { print $3; exit }'
 }
 
 # Before a build below answers publishes, an earlier answers build's binding is
@@ -282,7 +285,7 @@ source_owner() {  # <source-id>
 # empty for the derivation; the build publishes over it at once, and a refused
 # unbind removes it again.
 disarm_board_below_answers() {  # <board> <mode>
-  local board=$1 mode=$2 sid placeholder=0
+  local board=$1 mode=$2 sid owner placeholder=0
   if [ ! -e "$board" ] && [ ! -L "$board" ]; then
     (umask 077; : > "$board") || fail "cannot recreate the missing board to find its source"
     placeholder=1
@@ -296,7 +299,12 @@ disarm_board_below_answers() {  # <board> <mode>
     fi
     printf 'unbound: %s\n' "$sid"
   fi
-  [ "$mode" = off ] && [ -n "$(source_owner "$sid")" ] || return 0
+  [ "$mode" = off ] || return 0
+  if ! owner=$(source_owner "$sid"); then
+    [ "$placeholder" = 0 ] || rm -f -- "$board"
+    fail "cannot list process-event sources to check the board listener $sid; refusing an off build that could leave it collecting"
+  fi
+  [ -n "$owner" ] || return 0
   if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
     [ "$placeholder" = 0 ] || rm -f -- "$board"
     fail "cannot retire the board listener $sid; refusing an off build while it can still collect feedback"
