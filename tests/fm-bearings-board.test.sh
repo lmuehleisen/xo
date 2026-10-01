@@ -173,6 +173,7 @@ write_valid_payload() {  # <path>
       "title": "Perishable-first admission",
       "about": "A payload string that tries to break out: </script><b>x</b>",
       "decide": "Adopt it?",
+      "owner": "(main)",
       "options": [
         { "value": "yes", "label": "Adopt", "hint": "recommended" },
         { "value": "no", "label": "Keep current" }
@@ -710,7 +711,7 @@ test_answers_mode_keeps_other_homes_calls_display_only() {
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
   jq '.captains_call += [{
-        "key":"remote-mate-call","type":"decision","repo":"sample",
+        "key":"remote-mate-call","type":"decision","repo":"sample","owner":"mate-one",
         "title":"Secondmate decision","options":[{"value":"yes","label":"Yes"}]
       }]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
   out=$(run_board "$home" build "$data") || fail "the answers build failed: $out"
@@ -718,7 +719,25 @@ test_answers_mode_keeps_other_homes_calls_display_only() {
     [.captains_call[] | select(.key == "remote-mate-call")]
     | length == 1 and (.[0] | (has("answerable") | not) and ([.options[].value] | index("reconcile") == null))' >/dev/null \
     || fail "a call this home does not hold was made answerable"
-  pass "answers mode keeps a call another home holds display-only"
+  if held_call_readable "$home"; then
+    # A secondmate card whose task id collides with a call this home holds, and
+    # a card that does not say whose call it is, both stay display-only.
+    jq '.captains_call = [(.captains_call[0] | .owner = "mate-one")]' "$data" > "$data.remote"
+    out=$(run_board "$home" build "$data.remote") || fail "the colliding-id answers build failed: $out"
+    extract_payload "$board" | jq -e '[.captains_call[] | select(has("answerable"))] | length == 0' >/dev/null \
+      || fail "a secondmate card sharing a local task id was made answerable"
+    jq '.captains_call[0] |= del(.owner)' "$data" > "$data.unowned"
+    out=$(run_board "$home" build "$data.unowned") || fail "the ownerless answers build failed: $out"
+    extract_payload "$board" | jq -e '[.captains_call[] | select(has("answerable"))] | length == 0' >/dev/null \
+      || fail "a card with no owner was made answerable"
+    jq '.captains_call = [(.captains_call[0] | .owner = "mate-one"), .captains_call[0]]' "$data" > "$data.both"
+    out=$(run_board "$home" build "$data.both") || fail "the shared-id answers build failed: $out"
+    extract_payload "$board" | jq -e '
+      [.captains_call[] | select(.type == "decision") | {owner, answerable}]
+      == [{"owner":"mate-one","answerable":null},{"owner":"(main)","answerable":true}]' >/dev/null \
+      || fail "a shared task id did not keep only this home's card answerable"
+  fi
+  pass "answers mode keeps a call another home holds display-only, even when its task id matches a local call"
 }
 
 test_answers_mode_keeps_controls_hidden_until_listening() {

@@ -188,6 +188,7 @@ validate_payload() {  # <data.json>
       and optional_subject
       and (if has("subject") then .type == "decision" else true end)
       and (optional_string("freeform_hint"))
+      and (optional_string("owner"))
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
       and ((has("recommend_value") | not)
@@ -409,8 +410,8 @@ decision_card_is_stale() {  # <task-id> <landed-0-or-1>
 
 # Drop every stale decision card while preserving every surviving input field.
 # The build alone decides `interactive` and each card's `answerable`: set true
-# only in answers mode, for decision cards whose call this home holds open, and
-# removed otherwise, so an off board embeds the input payload unchanged. Only
+# only in answers mode, for decision cards owned by this home (`owner` is the
+# snapshot's "(main)") whose call this home holds open, and removed otherwise, so an off board embeds the input payload unchanged. Only
 # those answerable cards get the standard reconcile choice. The validator
 # reserves that value, so no composer can author it;
 # docs/captain-hold-lifecycle.md owns what it means.
@@ -445,7 +446,9 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
     fi
     # Only a call this home's own backlog holds open can take a board answer:
     # the binding feeds this home's intake, so a secondmate's call, or one whose
-    # state cannot be read, stays display-only and is answered in chat.
+    # state cannot be read, stays display-only and is answered in chat. The
+    # owner check below keeps a secondmate card that shares a local task id
+    # display-only too.
     if [ "$mode" = answers ] \
       && "$SCRIPT_DIR/fm-captain-hold.sh" open "$key" --distinguish-absent >/dev/null 2>&1; then
       here=$here$key$'\n'
@@ -460,7 +463,8 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
       | . as $card
       | select($card.type != "decision" or (($dropped | index($card.key)) == null))
       | del(.answerable)
-      | if $mode == "answers" and .type == "decision" and (($here | index($card.key)) != null)
+      | if $mode == "answers" and .type == "decision" and .owner? == "(main)"
+          and (($here | index($card.key)) != null)
         then .answerable = true
           | .options += [{
             value: "reconcile",
