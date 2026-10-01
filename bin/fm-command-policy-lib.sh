@@ -127,8 +127,12 @@
 #     task data directory, or the task temp root, and mv between paths inside
 #     the task steering inbox (the inbox acknowledgement)
 #   - read-only web lookups: a GET-shaped curl or wget whose output lands on
-#     stdout, a pipe that is not a shell or interpreter, or a file inside the
-#     task's write roots - the full fetch contract is under "Fetches" below
+#     stdout, a pipe that is not a shell or interpreter, a file inside the
+#     task's write roots, or /dev/null - the full fetch contract is under
+#     "Fetches" below
+#   - this home's fm-fleet-ledger.sh, only as `appended <config>
+#     <this-task-status>` while <config>/fleet-ledger is absent (the brief
+#     scaffold's status command; that invocation writes nothing)
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -168,7 +172,8 @@
 #
 # Fetches (curl and wget). A read-only web lookup is approved for ANY host: a
 # GET-shaped request whose output lands on stdout, a pipe that is not a shell
-# or interpreter, or a file inside the task's write roots. GET-shaped means no
+# or interpreter, a file inside the task's write roots, or /dev/null (a
+# discard, the same as a redirect there). GET-shaped means no
 # request body (-d / --data* / -F / --form* / -T / --upload-file / --json /
 # wget --post-* / --body-*), no non-GET/HEAD method (-X / --request / wget
 # --method), no option that hides the request in a file this policy cannot
@@ -928,6 +933,12 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
         esac
       fi
       fetch_out_seen=1
+      # A literal /dev/null discards the body. It is not a file write, matching
+      # an output redirect to /dev/null; anything else, including a lookalike
+      # path, is still a destination.
+      if [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
+        return 0
+      fi
       [ "$v" = - ] || {
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=$vev
@@ -2323,6 +2334,28 @@ approve_ensure_agents_md() {
   [ "$pos" -le 1 ] || no_approve "fm-ensure-agents-md.sh form"
 }
 
+# The brief scaffold appends the status line, then runs this home's
+# fm-fleet-ledger.sh as `appended <config> <this-task-status>` so an opt-in
+# ledger can record it. While <config>/fleet-ledger is absent that invocation
+# writes nothing and is approved. A present flag, another subcommand, or
+# another status file stays judged: the helper can then write the ledger.
+approve_fleet_ledger() {
+  local sub=${E[1]-} cfg='' status=''
+  [ "$sub" = appended ] || { no_approve "fm-fleet-ledger.sh ${sub:-without a subcommand}"; return 0; }
+  [ "${#E[@]}" -eq 4 ] || { no_approve "fm-fleet-ledger.sh form"; return 0; }
+  [ "${EV[1]}" = 0 ] && [ "${EV[2]}" = 0 ] && [ "${EV[3]}" = 0 ] \
+    && [ "${EG[1]}" = 0 ] && [ "${EG[2]}" = 0 ] && [ "${EG[3]}" = 0 ] \
+    || { no_approve "fm-fleet-ledger.sh with an unresolvable path"; return 0; }
+  [ -n "$STATUS" ] || { no_approve "fm-fleet-ledger.sh without a known status file"; return 0; }
+  cfg=$(resolve_path "${E[2]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
+  status=$(resolve_path "${E[3]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
+  [ "$status" = "$(norm_abs "$STATUS")" ] || { no_approve "fm-fleet-ledger.sh names another status file"; return 0; }
+  if [ -e "$cfg/fleet-ledger" ] || [ -L "$cfg/fleet-ledger" ]; then
+    no_approve "fm-fleet-ledger.sh appended writes the fleet ledger"
+    return 0
+  fi
+}
+
 # fm-captain-hold.sh completes and holds the worker's OWN task. Every task id
 # argument must be this task's id; naming any other task keeps escalating.
 approve_captain_hold() {
@@ -2363,6 +2396,7 @@ approve_plain() {  # <base>
   # The worker-contract helpers this home owns, matched by resolved path.
   if home_helper "${E[0]}" "${EV[0]}" fm-ensure-agents-md.sh; then approve_ensure_agents_md; return 0; fi
   if home_helper "${E[0]}" "${EV[0]}" fm-captain-hold.sh; then approve_captain_hold; return 0; fi
+  if home_helper "${E[0]}" "${EV[0]}" fm-fleet-ledger.sh; then approve_fleet_ledger; return 0; fi
   for w in fm-lint.sh fm-test-run.sh fm-doc-audience-check.sh fm-install-shellcheck.sh fm-install-actionlint.sh; do
     home_helper "${E[0]}" "${EV[0]}" "$w" && return 0
   done
@@ -2794,7 +2828,7 @@ Decide whether the call is safe to run without asking a human.
 PRECEDENCE, in this order:
 1. Some actions are always declined, whatever the task instructions say: commenting on, reviewing, resolving threads on, merging, closing, or editing a pull request or issue; publishing a release or package; pushing to, merging into, or deleting a default branch or a branch this task does not own; rewriting history (rebase, filter-branch, commit --amend, reset --hard, reflog expire, a force push); and a download that does something with what it fetches - piping or redirecting it into an interpreter or a file that is run or made executable, writing it outside the task's write roots or into agent or git configuration, or a request that carries a body or a non-GET method.
 2. Otherwise, an action the task instructions below sanction is APPROVED even when it appears in the general decline list. A task that names a credential file may load that file into its environment; a task whose purpose is to write to a remote service may run its own write pass against that service; a task that names an output directory may write there. Sanctioned means the instructions actually name that file, service, or location - not that the action would be convenient.
-3. Otherwise, APPROVE routine development work confined to this task: building, testing, linting, formatting, inspecting files, creating, editing, moving, or deleting files inside the task worktree, the task data directory, the task temp root, or a scratch file under /tmp; appending to this task's own status file; moving this task's own inbox messages into its handled directory; project-local dependency installs; read-only web lookups - a plain GET or HEAD request to any host whose output stays inside the task or on stdout; and routine git work on the task's own branch.
+3. Otherwise, APPROVE routine development work confined to this task: building, testing, linting, formatting, inspecting files, creating, editing, moving, or deleting files inside the task worktree, the task data directory, the task temp root, or a scratch file under /tmp; appending to this task's own status file; moving this task's own inbox messages into its handled directory; project-local dependency installs; read-only web lookups - a plain GET or HEAD request to any host whose output stays inside the task, on stdout, or is discarded to /dev/null; and routine git work on the task's own branch.
 4. Otherwise DECLINE, in particular anything that: prints, copies, or transmits credential material rather than loading it (loading a sanctioned credential file is approvable, printing its contents is not); writes outside the locations above; installs or changes software machine-wide; discards uncommitted work; changes remote services or cloud resources the instructions do not name; or stops processes the worker did not start.
 5. DECLINE when the effect of the call cannot be determined from the input you were given - for example an unresolvable variable or substitution in a path being deleted or written, or an argument whose target you cannot identify. Uncertainty about the effect is a decline; a call whose effect is clear and sanctioned is not.
 
