@@ -772,6 +772,7 @@ note_remote_names() {
     [ -n "$bn" ] || bn=index.html
     fetch_out_words[${#fetch_out_words[@]}]=$bn
     fetch_out_ev[${#fetch_out_ev[@]}]=0
+    fetch_out_doc[${#fetch_out_doc[@]}]=1
     fetch_out_dirs[${#fetch_out_dirs[@]}]=$odir
     fetch_out_stamped[${#fetch_out_stamped[@]}]=1
   done <<<"$transfer_urls"
@@ -987,16 +988,17 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
       # writes <output-dir>/dev/null. Only a document option counts as output
       # seen: wget -o/-a and --output-file are logs, and marking them seen
       # would hide the download wget still writes into the output directory.
+      if fetch_document_output; then fetch_out_seen=1; fi
       if [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
-        if fetch_document_output; then fetch_out_seen=1; fi
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=0
+        fetch_out_doc[${#fetch_out_doc[@]}]=$(fetch_document_output && echo 1 || echo 0)
         return 0
       fi
-      fetch_out_seen=1
       [ "$v" = - ] || {
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=$vev
+        fetch_out_doc[${#fetch_out_doc[@]}]=$(fetch_document_output && echo 1 || echo 0)
       }
       return 0 ;;
   esac
@@ -2491,7 +2493,7 @@ approve_plain() {  # <base>
       # remainder is its glued value, and every non-option positional is a URL
       # both tools guess as http.
       local opts_done=0 fetch_cwd_out=0 fetch_out_seen=0 transfer_remote=0 transfer_urls=''
-      local -a fetch_out_words=() fetch_out_ev=() fetch_out_dirs=() fetch_out_stamped=()
+      local -a fetch_out_words=() fetch_out_ev=() fetch_out_doc=() fetch_out_dirs=() fetch_out_stamped=()
       FETCH_OUTDIR='' FETCH_URLS=''
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
@@ -2608,12 +2610,16 @@ approve_plain() {  # <base>
         # wget -O /dev/null is the named file, not a path under -P. curl joins
         # --output-dir onto every -o name, including an absolute one, and only
         # for the transfer that set that directory.
-        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] && { [ "$base" = wget ] || [ -z "$word_dir" ]; }; then
+        # A document -o is placed under --output-dir, even when the name is
+        # absolute. A dump-header or other auxiliary file is the path given.
+        # wget -O /dev/null is a discard; a wget log is not the download.
+        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] \
+          && { [ "${fetch_out_doc[oi]-0}" != 1 ] || [ "$base" = wget ] || [ -z "$word_dir" ]; }; then
           continue
         fi
         odir2=$CWD
         rel=${fetch_out_words[oi]}
-        if [ "$base" = curl ] && [ -n "$word_dir" ]; then
+        if [ "$base" = curl ] && [ -n "$word_dir" ] && [ "${fetch_out_doc[oi]-0}" = 1 ]; then
           odir2=$word_dir
           rel=${rel#/}
         else

@@ -1407,6 +1407,13 @@ cd etc-dir && curl -O https://lookup.example/x
 curl --output-dir etc-dir -O https://lookup.example/x
 wget -P etc-dir https://archive.example/x
 EOF
+  hook "$policy" permission-request exec "curl --output-dir '$dir/tmp' --dump-header /etc/headers https://lookup.example/x"
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "a dump-header outside the task must escalate even when --output-dir is inside, got rc=$RC out=$OUT"
+  hook "$policy" permission-request exec "wget -P /etc -o '$dir/tmp/wget.log' https://archive.example/x"
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "a wget log inside the task must not hide a download under -P outside the task, got rc=$RC out=$OUT"
+
   # curl places even an absolute -o name under --output-dir.
   hook "$policy" permission-request exec "curl --create-dirs --output-dir /etc -o '$dir/tmp/safe' https://lookup.example/x"
   [ "$RC" = 0 ] && [ -z "$OUT" ] \
