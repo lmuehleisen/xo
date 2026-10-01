@@ -1262,7 +1262,9 @@ test_server_ensure_releases_caller_output() {
     fail "server_ensure kept the caller's output open while the herdr server ran"
   fi
   wait "$reader" 2>/dev/null
-  [ -n "$server_pid" ] && kill -0 "$server_pid" 2>/dev/null || fail "server_ensure did not leave the herdr server running"
+  if [ -z "$server_pid" ] || ! kill -0 "$server_pid" 2>/dev/null; then
+    fail "server_ensure did not leave the herdr server running"
+  fi
   kill "$server_pid" 2>/dev/null
   [ "$(cat "$dir/out")" = ensured ] || fail "server_ensure caller output was not delivered"
   pass "fm_backend_herdr_server_ensure: releases the caller's output while the started server keeps running"
