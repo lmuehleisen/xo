@@ -2619,14 +2619,12 @@ approve_plain() {  # <base>
         fi
         odir2=$CWD
         rel=${fetch_out_words[oi]}
-        if [ "$base" = curl ] && [ -n "$word_dir" ] && [ "${fetch_out_doc[oi]-0}" = 1 ]; then
+        # Only a curl document (-o/-O) is placed under --output-dir. A log,
+        # dump-header, or other auxiliary file is the path given, relative to
+        # the command's directory, not the output directory.
+        if [ "$base" = curl ] && [ "${fetch_out_doc[oi]-0}" = 1 ] && [ -n "$word_dir" ]; then
           odir2=$word_dir
           rel=${rel#/}
-        else
-          case "$rel" in
-            /*|"$TILDE"/*) ;;
-            *) [ -n "$word_dir" ] && odir2=$word_dir ;;
-          esac
         fi
         oabs=$(resolve_maybe_tilde "$rel" "${fetch_out_ev[oi]}" "$odir2" 2>/dev/null) || oabs=''
         if [ -n "$oabs" ] && fetch_dest_ok "$oabs"; then

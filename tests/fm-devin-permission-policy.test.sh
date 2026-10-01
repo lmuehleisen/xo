@@ -1368,7 +1368,7 @@ wget -nx https://archive.example/x
 wget -n https://archive.example/x
 wget --brand-new-opt https://archive.example/x
 curl --libcurl /etc/gen.c https://lookup.example/v1
-curl --libcurl gen.c --output-dir /etc https://lookup.example/v1
+cd /etc && curl --libcurl gen.c https://lookup.example/v1
 curl --etag-save /etc/etags https://lookup.example/v1
 curl --alt-svc /etc/alt.cache https://lookup.example/v1
 curl --hsts /etc/hsts https://lookup.example/v1
@@ -1410,6 +1410,12 @@ EOF
   hook "$policy" permission-request exec "curl --output-dir '$dir/tmp' --dump-header /etc/headers https://lookup.example/x"
   [ "$RC" = 0 ] && [ -z "$OUT" ] \
     || fail "a dump-header outside the task must escalate even when --output-dir is inside, got rc=$RC out=$OUT"
+  hook "$policy" permission-request exec "cd /etc && wget -P '$dir/tmp' -o outside.log https://archive.example/x"
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "a relative wget log must be checked against the command directory, got rc=$RC out=$OUT"
+  hook "$policy" permission-request exec "cd /etc && curl --output-dir '$dir/tmp' --dump-header headers https://lookup.example/x"
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "a relative dump-header must be checked against the command directory, got rc=$RC out=$OUT"
   hook "$policy" permission-request exec "wget -P /etc -o '$dir/tmp/wget.log' https://archive.example/x"
   [ "$RC" = 0 ] && [ -z "$OUT" ] \
     || fail "a wget log inside the task must not hide a download under -P outside the task, got rc=$RC out=$OUT"
