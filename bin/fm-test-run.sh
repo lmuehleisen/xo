@@ -2590,7 +2590,12 @@ run_script_bounded() {  # <script> <out> <stream> <id>
     [ "$stream" -eq 1 ] && tail -1 "$out"
     return 1
   fi
-  printf '%s\n' "$tmux_dir" >>"$RUN_TMUX_DIRS"
+  if ! printf '%s\n' "$tmux_dir" >>"$RUN_TMUX_DIRS"; then
+    rmdir "$tmux_dir" 2>/dev/null || true
+    printf 'not ok - %s could not record its private tmux directory for cleanup\n' "$script" >>"$out"
+    [ "$stream" -eq 1 ] && tail -1 "$out"
+    return 1
+  fi
   local -a tmux_env=(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$tmux_dir")
   : "$id"
   set +e
