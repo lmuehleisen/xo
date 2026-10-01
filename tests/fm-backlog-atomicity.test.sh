@@ -1332,11 +1332,23 @@ test_dispatch_refuses_to_commit_without_a_published_record() {
 }
 
 test_dispatch_leaves_no_record_when_the_transition_fails() {
-  local case_dir id out rc=0
+  local case_dir id out dir rc=0
   id=atomic-dispatch-b4
   case_dir=$(make_home dispatch-transition-fails "$id")
   add_item "$case_dir" "$id"
   break_verb "$case_dir" start
+  # Once the launch line is typed, the task window reads present, as a launched
+  # worker's endpoint does.
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\$*" in *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
+case "\${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  send-keys) for a in "\$@"; do case "\$a" in ". '"*) : > "$case_dir/launched" ;; esac; done ;;
+  list-windows) [ ! -e "$case_dir/launched" ] || printf 'fm-%s\n' "$id" ;;
+esac
+exit 0
+SH
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn reported success though the backlog transition failed"
@@ -1348,6 +1360,15 @@ test_dispatch_leaves_no_record_when_the_transition_fails() {
     "a failed backlog transition lost the acquired lease receipt"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "a failed backlog transition left the task's armed busy generation behind"
+  # The launched worker's endpoint is left for manual cleanup, so its private
+  # tmux directory stays: removing it would send the worker's bare tmux back to
+  # the default server.
+  dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$(home_of "$case_dir")" && pwd -P)" "$id" |
+    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+  [ -d "$dir" ] || fail "a failed backlog transition removed a launched worker's private tmux directory"
+  rm -rf "$dir"
+  assert_contains "$out" "private tmux directory $dir is kept" \
+    "the failed dispatch did not name the launched worker's private tmux directory it kept"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
     || fail "a failed dispatch left the backlog item in $(row_state "$case_dir" "$id")"
   pass "a failed backlog transition fails the dispatch loudly and leaves no record"

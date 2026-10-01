@@ -46,14 +46,29 @@ pass() { printf 'ok - %s\n' "$1"; }
 SLEEPER=$(mktemp "${TMPDIR:-/tmp}/fm-afk-sleeper.XXXXXX")
 printf '#!/usr/bin/env bash\nexec sleep 600\n' > "$SLEEPER"
 chmod +x "$SLEEPER"
-TRACK_TMUX_SESSIONS=""
+# Every real tmux call below, including bin/fm-afk-launch.sh's own bare
+# `tmux ...`, goes through a PATH shim onto a private socket, so a direct
+# `bash tests/fm-afk-launch.test.sh` from inside a tmux pane never creates or
+# kills sessions on the server hosting that pane.
+REAL_TMUX=$(command -v tmux 2>/dev/null || true)
+TMUX_SOCKET="fm-afk-launch-$$"
+TMUX_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-tmux-shim.XXXXXX")
+if [ -n "$REAL_TMUX" ]; then
+  cat > "$TMUX_SHIM_DIR/tmux" <<SH
+#!/usr/bin/env bash
+exec env -u TMUX -u TMUX_PANE "$REAL_TMUX" -L "$TMUX_SOCKET" "\$@"
+SH
+  chmod +x "$TMUX_SHIM_DIR/tmux"
+  PATH="$TMUX_SHIM_DIR:$PATH"
+  export PATH
+fi
 GLOBAL_CLEANUP() {
   rm -f "$SLEEPER" 2>/dev/null || true
   rm -rf "$OFF_CONFIG" 2>/dev/null || true
-  local s
-  for s in $TRACK_TMUX_SESSIONS; do
-    tmux kill-session -t "$s" 2>/dev/null || true
-  done
+  if [ -n "$REAL_TMUX" ]; then
+    env -u TMUX -u TMUX_PANE "$REAL_TMUX" -L "$TMUX_SOCKET" kill-server >/dev/null 2>&1 || true
+  fi
+  rm -rf "$TMUX_SHIM_DIR" 2>/dev/null || true
 }
 trap GLOBAL_CLEANUP EXIT
 
@@ -616,7 +631,6 @@ unit_concurrent_start_serialized() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-concurrent.XXXXXX")
   cap_session="fm-afk-concurrent-cap-$$"
   tmux new-session -d -s "$cap_session" 2>/dev/null || { fail "concurrent start: captain session creation failed"; rm -rf "$st"; return 0; }
-  TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $cap_session"
   cap_pane=$(tmux display-message -p -t "$cap_session" '#{pane_id}')
   enter_posture "$st" || fail "concurrent start: could not enter fixture posture"
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET="$cap_pane" \
@@ -630,7 +644,6 @@ unit_concurrent_start_serialized() {
   wait "$first"; wait "$second"
   rec=$(cut -f2 "$st/state/.afk-daemon-terminal" 2>/dev/null || true)
   count=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | awk -v expected="$rec" '$0 == expected {n++} END{print n+0}')
-  TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $rec"
   if [ -n "$rec" ] && tmux has-session -t "$rec" 2>/dev/null && [ "$count" -eq 1 ]; then
     pass "concurrent start: one serialized daemon terminal remains tracked"
   else
@@ -1727,7 +1740,6 @@ e2e_tmux() {
   cap_session="fm-afk-launch-cap-$$"
   home_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-tmux-home.XXXXXX")
   tmux new-session -d -s "$cap_session" 2>/dev/null || { fail "tmux e2e: could not create captain session"; rm -rf "$home_tmp"; return 0; }
-  TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $cap_session"
   cap_pane=$(tmux display-message -p -t "$cap_session" '#{pane_id}')
   enter_posture "$home_tmp" || fail "tmux e2e: could not enter fixture posture"
   before=$(tmux list-panes -t "$cap_session" | wc -l | tr -d ' ')
@@ -1738,7 +1750,6 @@ e2e_tmux() {
 
   during=$(tmux list-panes -t "$cap_session" | wc -l | tr -d ' ')
   rec=$(cut -f2 "$home_tmp/state/.afk-daemon-terminal" 2>/dev/null || true)
-  TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $rec"
   if [ "$before" = "$during" ]; then pass "tmux e2e: captain window pane count unchanged after start (no split-window)"; else fail "tmux e2e: captain window pane count changed ($before -> $during)"; fi
   if [ -n "$rec" ] && tmux has-session -t "$rec" 2>/dev/null && [ "$rec" != "$cap_session" ]; then pass "tmux e2e: daemon launched in a separate detached session"; else fail "tmux e2e: no separate daemon session ($rec)"; fi
 

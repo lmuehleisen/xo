@@ -356,6 +356,8 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-agy-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
+# shellcheck source=bin/fm-private-tmux-lib.sh
+. "$SCRIPT_DIR/fm-private-tmux-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -1147,6 +1149,7 @@ PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
+WORKER_TMUX_DIR=$(fm_meta_get "$META" worker_tmux_dir)
 BUSY_GEN=$(fm_meta_get "$META" busy_gen)
 if [ -z "$BUSY_GEN" ]; then
   BUSY_GEN=$(cat "$STATE/$ID.busy-gen" 2>/dev/null || true)
@@ -3284,6 +3287,29 @@ endpoint_close_refusal() {  # <subject> <backend> <target> <honors-force>
   return 1
 }
 
+# retire_worker_tmux_dir <id> <dir>: stop a ship or scout worker's private tmux
+# servers and remove the directory its record names, through
+# fm_private_tmux_retire (docs/tmux-backend.md). Only a directory of the shape
+# spawn creates is touched, and only while it is still private to this user.
+# Returns 1 while that directory survives, so the caller keeps the record that
+# names it.
+retire_worker_tmux_dir() {
+  local id=$1 dir=$2
+  [ -n "$dir" ] || return 0
+  case "$dir" in
+    /tmp/fmwt-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *)
+      { [ ! -e "$dir" ] && [ ! -L "$dir" ]; } ||
+        echo "warning: recorded worker tmux directory $dir is not a private directory spawn creates; leaving it and any server in it untouched" >&2
+      return 0
+      ;;
+  esac
+  if ! fm_private_tmux_retire "$dir" && { [ -e "$dir" ] || [ -L "$dir" ]; }; then
+    echo "error: task $id's private tmux directory $dir could not be retired: it is no longer private to this user, or a tmux server in it could not be inspected or stopped; retaining the task record - stop that server by its exact -S socket and remove the directory, then rerun teardown" >&2
+    return 1
+  fi
+}
+
 cleanup_firstmate_home_children() {
   local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen
   sub_state="$home/state"
@@ -3329,6 +3355,7 @@ cleanup_firstmate_home_children() {
           || { endpoint_close_refusal "child $child_id" "$child_backend" "$child_t" 0; return 1; }
       fi
     fi
+    retire_worker_tmux_dir "$child_id" "$(meta_value "$child_meta" worker_tmux_dir)" || return 1
     if [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
@@ -3818,6 +3845,15 @@ remove_kimi_turnend_auth "$STATE" "$ID" || exit 1
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
+# Stop the worker's private tmux servers and remove their directory. A
+# record-only retirement preserves every endpoint, so it only names the
+# directory it leaves.
+if [ "$TEARDOWN_RECORD_ONLY" = 1 ]; then
+  [ -z "$WORKER_TMUX_DIR" ] || { [ ! -e "$WORKER_TMUX_DIR" ] && [ ! -L "$WORKER_TMUX_DIR" ]; } ||
+    echo "warning: record-only retirement leaves task $ID's private tmux directory $WORKER_TMUX_DIR and any server in it untouched; stop such a server by its exact -S socket and remove the directory once nothing uses it" >&2
+else
+  retire_worker_tmux_dir "$ID" "$WORKER_TMUX_DIR" || exit 1
+fi
 # Retire only this Firstmate home's launch namespace. Its never-reused per-spawn
 # files leave the equal task-id namespace of every other home untouched.
 teardown_launch_home_token() {

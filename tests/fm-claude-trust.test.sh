@@ -640,7 +640,7 @@ test_refused_spawn_leaves_no_task_state() {
 # pane sees after the leading export statements.
 claude_launch_doorbell() {  # <launch command>
   local command=$1
-  while [[ "$command" == export\ *\;* ]]; do
+  while [[ "$command" == export\ *\;* || "$command" == unset\ *\;* ]]; do
     command=${command#*; }
   done
   (

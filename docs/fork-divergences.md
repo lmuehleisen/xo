@@ -272,6 +272,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: fork-only `tests/fm-afk-sentinel.test.sh`; `tests/fm-afk-return.test.sh` `test_return_brief_reports_away_watchdog_findings`.
 - Upstream: has no watchdog outside the fleet's tmux server, and its supervision host, on by default for Claude primaries since upstream #6124, shares that failure domain; drop once upstream reports a lost fleet server equivalently.
 
+### worker-tmux-isolation
+
+- Intent: a ship or scout worker's tmux commands reach a private per-task server, never the fleet server hosting its pane; docs/tmux-backend.md "Worker isolation from the fleet server".
+- Class: carried.
+- Seam: fork-only `bin/fm-private-tmux-lib.sh` and its row in `docs/scripts.md`, plus the private-directory hunks in `bin/fm-spawn.sh`, `bin/fm-teardown.sh`, and `bin/fm-test-run.sh`, the worker tmux rule in `bin/fm-brief.sh`, and the private-socket shim in `tests/fm-afk-launch.test.sh` (shared).
+- Guard: fork-only `tests/fm-worker-tmux-isolation.test.sh`; `tests/fm-test-run.test.sh` `test_unretired_private_tmux_directory_fails_the_run`; `tests/fm-backlog-atomicity.test.sh` `test_dispatch_leaves_no_record_when_the_transition_fails`; `tests/fm-backend-orca.test.sh` `test_spawn_orca_recovery_record_keeps_the_private_tmux_directory`; `tests/fm-control-relaunch.test.sh` `test_relaunch_keeps_the_private_tmux_directory`.
+- Upstream: workers inherit the fleet pane's `TMUX`, so a bare `tmux kill-server` stops the fleet; not upstream, and a candidate contribution that would retire this entry.
+
 ### claude-desktop-identity
 
 - Intent: a firstmate primary started from the Claude desktop app identifies its own harness and can take the session lock.

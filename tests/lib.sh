@@ -785,6 +785,16 @@ fm_git_worktree() {
   git -C "$repo" worktree add --quiet -b "$branch" "$worktree"
 }
 
+# fm_test_worker_tmux_prefix <meta>: the launch statements that start a ship or
+# scout worker on the private tmux directory its task record names
+# (docs/tmux-backend.md), for suites that pin exact launch text.
+fm_test_worker_tmux_prefix() {
+  local dir
+  dir=$(sed -n 's/^worker_tmux_dir=//p' "$1")
+  [ -n "$dir" ] || return 1
+  printf "unset TMUX TMUX_PANE; export TMUX_TMPDIR='%s'; " "$dir"
+}
+
 # --- state/<id>.meta writers ------------------------------------------------
 
 # fm_write_meta <file> <key=val> ...: write the given key=val lines to a meta

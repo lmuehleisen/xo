@@ -727,6 +727,75 @@ test_spawn_preserves_orca_metadata_when_abort_cleanup_fails() {
   pass "fm-spawn.sh --backend orca: preserves metadata when abort cleanup fails"
 }
 
+# An Orca spawn that aborts after creating the worker's private tmux directory,
+# and whose Orca cleanup and tmux retire both fail, must name that directory in
+# its recovery record so teardown can still stop the server in it. The first
+# record publication fails, the planted socket cannot be inspected, and the
+# recovery record's own publication succeeds.
+test_spawn_orca_recovery_record_keeps_the_private_tmux_directory() {
+  local proj wt data state config home id out status tmux_dir fakes real_mv
+  id="orcatmuxkeepz7"
+  proj="$TMP_ROOT/tmux-keep-project"
+  wt="$TMP_ROOT/tmux-keep-wt"
+  data="$TMP_ROOT/tmux-keep-data"
+  state="$TMP_ROOT/tmux-keep-state"
+  config="$TMP_ROOT/tmux-keep-config"
+  home="$TMP_ROOT/tmux-keep-home"
+  fakes="$TMP_ROOT/tmux-keep-fakes"
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  mkdir -p "$data/$id" "$state" "$config" "$home" "$fakes"
+  write_spawn_brief "$data" "$id"
+  touch "$state/.last-watcher-beat"
+  tmux_dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$home" && pwd -P)" "$id" |
+    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+  real_mv=$(command -v mv)
+  # The failing publication also plants, in the private directory the spawn
+  # just created, a socket that cannot be inspected.
+  cat > "$fakes/mv" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = "$state/$id.meta" ] && [ ! -e "$fakes/failed" ]; then
+    : > "$fakes/failed"
+    python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$tmux_dir/s"
+    exit 1
+  fi
+done
+exec "$real_mv" "\$@"
+SH
+  cat > "$fakes/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in "-S /tmp/fmwt-"*" display-message "*) echo "error connecting to $2 (Permission denied)" >&2; exit 1 ;; esac
+exit 0
+SH
+  orca_case tmux-keep
+  # Orca terminal close and worktree removal fail; every other call reaches the
+  # sequenced fake.
+  cat > "$fakes/orca" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in "terminal close" | "worktree rm") exit 1 ;; esac
+exec "$FB/orca" "\$@"
+SH
+  chmod +x "$fakes/mv" "$fakes/tmux" "$fakes/orca"
+  printf '1\n' > "$RESP/1.exit"
+  printf '{"ok":true,"result":{"repo":{"id":"repo-tmux-keep"}}}\n' > "$RESP/2.out"
+  printf '{"ok":true,"result":{"worktree":{"id":"wt-tmux-keep::/orca/wt-tmux-keep","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
+  printf '{"ok":true,"result":{"terminal":{"handle":"term-tmux-keep"}}}\n' > "$RESP/4.out"
+  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fakes:$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
+  status=$?
+  [ -S "$tmux_dir/s" ] || fail "the aborted spawn removed a private tmux directory it could not retire"
+  rm -rf "$tmux_dir"
+  [ "$status" -ne 0 ] || fail "Orca spawn should fail when its record cannot be published"
+  assert_contains "$out" "private tmux directory $tmux_dir could not be retired" \
+    "the aborted spawn did not report the private tmux directory it could not retire"
+  assert_grep "cleanup_recovery=orca" "$state/$id.meta" "failed Orca abort cleanup should leave a recovery record"
+  assert_grep "worker_tmux_dir=$tmux_dir" "$state/$id.meta" \
+    "the recovery record must name the surviving private tmux directory"
+  pass "fm-spawn.sh --backend orca: the recovery record keeps a surviving private tmux directory"
+}
+
 test_spawn_releases_orca_resources_when_metadata_write_fails() {
   local proj wt data state config id out status
   id="orcametafailz9"
@@ -1383,6 +1452,7 @@ test_spawn_refuses_orca_when_runtime_not_ready
 test_spawn_refuses_orca_nonisolated_worktree
 test_spawn_removes_orca_worktree_when_terminal_create_fails
 test_spawn_preserves_orca_metadata_when_abort_cleanup_fails
+test_spawn_orca_recovery_record_keeps_the_private_tmux_directory
 test_spawn_releases_orca_resources_when_metadata_write_fails
 test_peek_send_and_crew_state_route_through_orca_meta
 test_peek_and_crew_state_fail_closed_on_orca_error_json
