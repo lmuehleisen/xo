@@ -369,9 +369,12 @@ case "$*" in
   *"#{pane_current_command}"*)
     if [ -s "$FM_FAKE_LAUNCH_LOG.command" ]; then cat "$FM_FAKE_LAUNCH_LOG.command"; else printf '%s\n' "${FM_FAKE_PANE_COMMAND:-bash}"; fi
     exit 0 ;;
+  # A relaunch waits for the adopted pane's shell to hold a steady prompt row.
+  *"#{cursor_y}"*) printf '0\n'; exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
+  capture-pane) printf '$ \n'; exit 0 ;;
   new-window)
     prev=
     for arg in "$@"; do

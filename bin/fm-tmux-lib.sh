@@ -367,7 +367,7 @@ fm_tmux_shell_ready_wait() {
       if [ "$alt" = 1 ]; then
         seen="shell $command under a stale full-screen frame"
         case "$tty" in /dev/*) printf '\033[?1049l' 2>/dev/null >"$tty" || true ;; esac
-      elif [ -n "$tty" ] && attrs=$(LC_ALL=C stty -a <"$tty" 2>/dev/null) &&
+      elif [[ "$tty" == /dev/* ]] && attrs=$(LC_ALL=C stty -a 2>/dev/null <"$tty") &&
         [[ " ${attrs//$'\n'/ } " == *" -icanon "* ]]; then
         return 0
       else
