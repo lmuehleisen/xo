@@ -68,6 +68,9 @@ export PATH
 . "$ROOT/bin/fm-cursor-lib.sh"
 fm_backend_source tmux || fail "fm_backend_source tmux failed"
 
+# Pi records a session for every launch, even with no prompt; keep it in the lab.
+export PI_CODING_AGENT_SESSION_DIR="$LAB/pi-sessions"
+
 "$REAL_TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -n control -c "$LAB/wt" \
   || fail "could not start the private tmux server"
 
