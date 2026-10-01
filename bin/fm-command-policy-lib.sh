@@ -131,8 +131,9 @@
 #     task's write roots, or /dev/null - the full fetch contract is under
 #     "Fetches" below
 #   - this home's fm-fleet-ledger.sh, only as `appended <config>
-#     <this-task-status>` while <config>/fleet-ledger is absent (the brief
-#     scaffold's status command; that invocation writes nothing)
+#     <this-task-status>` while the home config beside the status file's
+#     state directory has no fleet-ledger flag (the brief scaffold's status
+#     command; that invocation writes nothing)
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -2336,11 +2337,15 @@ approve_ensure_agents_md() {
 
 # The brief scaffold appends the status line, then runs this home's
 # fm-fleet-ledger.sh as `appended <config> <this-task-status>` so an opt-in
-# ledger can record it. While <config>/fleet-ledger is absent that invocation
-# writes nothing and is approved. A present flag, another subcommand, or
-# another status file stays judged: the helper can then write the ledger.
+# ledger can record it. <config> must be the home config beside the status
+# file's state directory, and both paths must physically resolve there: a
+# lexical match through a symlink is not enough, because the helper opens the
+# path it was given. While that config's fleet-ledger flag is absent the
+# invocation writes nothing and is approved. A present flag, another
+# subcommand, or another status file stays judged.
 approve_fleet_ledger() {
-  local sub=${E[1]-} cfg='' status=''
+  local sub=${E[1]-} cfg='' status='' expected='' state_dir=''
+  local cfg_phys='' expected_phys='' status_phys='' status_expected_phys=''
   [ "$sub" = appended ] || { no_approve "fm-fleet-ledger.sh ${sub:-without a subcommand}"; return 0; }
   [ "${#E[@]}" -eq 4 ] || { no_approve "fm-fleet-ledger.sh form"; return 0; }
   [ "${EV[1]}" = 0 ] && [ "${EV[2]}" = 0 ] && [ "${EV[3]}" = 0 ] \
@@ -2350,7 +2355,19 @@ approve_fleet_ledger() {
   cfg=$(resolve_path "${E[2]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
   status=$(resolve_path "${E[3]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
   [ "$status" = "$(norm_abs "$STATUS")" ] || { no_approve "fm-fleet-ledger.sh names another status file"; return 0; }
-  if [ -e "$cfg/fleet-ledger" ] || [ -L "$cfg/fleet-ledger" ]; then
+  state_dir=$(dirname "$(norm_abs "$STATUS")")
+  case "$state_dir" in
+    */state) expected=$(norm_abs "$(dirname "$state_dir")/config") ;;
+    *) no_approve "fm-fleet-ledger.sh cannot derive the home config from the status file"; return 0 ;;
+  esac
+  [ "$cfg" = "$expected" ] || { no_approve "fm-fleet-ledger.sh names another config"; return 0; }
+  cfg_phys=$(physical_target "${E[2]}" "$CWD" 1) || { no_approve "fm-fleet-ledger.sh config path cannot be resolved"; return 0; }
+  expected_phys=$(physical_target "$expected" '' 1) || { no_approve "fm-fleet-ledger.sh config path cannot be resolved"; return 0; }
+  [ "$cfg_phys" = "$expected_phys" ] || { no_approve "fm-fleet-ledger.sh config path does not resolve to the home config"; return 0; }
+  status_phys=$(physical_target "${E[3]}" "$CWD" 0) || { no_approve "fm-fleet-ledger.sh status path cannot be resolved"; return 0; }
+  status_expected_phys=$(physical_target "$(norm_abs "$STATUS")" '' 0) || { no_approve "fm-fleet-ledger.sh status path cannot be resolved"; return 0; }
+  [ "$status_phys" = "$status_expected_phys" ] || { no_approve "fm-fleet-ledger.sh status path does not resolve to this task's status file"; return 0; }
+  if [ -e "$cfg_phys/fleet-ledger" ] || [ -L "$cfg_phys/fleet-ledger" ]; then
     no_approve "fm-fleet-ledger.sh appended writes the fleet ledger"
     return 0
   fi

@@ -477,6 +477,22 @@ $ROOT/bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'
 echo "done [at=1]: finished" >> '$dir/state/t1.status' && { [ ! -e '$cfg/fleet-ledger' ] || '$ROOT/bin/fm-fleet-ledger.sh' appended '$cfg' '$dir/state/t1.status' >/dev/null 2>&1 || true; }
 cd $ROOT && bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'
 EOF
+  mkdir -p "$dir/elsewhere/config" "$dir/other-config"
+  : > "$dir/elsewhere/config/fleet-ledger"
+  ln -s "$dir/elsewhere/config" "$dir/hop"
+  ln -s "$dir/elsewhere" "$dir/state/out"
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    rm -rf "$dir/state/t1.devin-permission-pending"
+    hook "$policy" permission-request exec "$cmd"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] \
+      || fail "'$cmd' must not be approved: a config that is not this status file's home config can still write the ledger, got rc=$RC out=$OUT"
+  done <<EOF
+$ROOT/bin/fm-fleet-ledger.sh appended '$dir/other-config' '$dir/state/t1.status'
+$ROOT/bin/fm-fleet-ledger.sh appended '$dir/hop/../config' '$dir/state/t1.status'
+$ROOT/bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/out/../t1.status'
+touch '$dir/other-config/fleet-ledger' && $ROOT/bin/fm-fleet-ledger.sh appended '$dir/other-config' '$dir/state/t1.status'
+EOF
   mkdir -p "$cfg"
   : > "$cfg/fleet-ledger"
   while IFS= read -r cmd; do
