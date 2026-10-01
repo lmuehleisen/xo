@@ -45,7 +45,8 @@
 #            it is about to publish. Exit 0 once Lavish accepts the staged reply,
 #            3 when the installed Lavish is a confirmed older release without
 #            synchronous reply so the listener keeps the legacy path, and any
-#            other status when the reply failed or the version is unknown.
+#            other status when the reply failed, the version is unknown, or the
+#            installed version is off this home's pin.
 # terminal   Exit 0 when the captured result means this Lavish source will never
 #            produce another result, so the runner may retire it; any other exit
 #            keeps it armed. This is the generic adapter contract bin/fm-procevent.sh
@@ -299,7 +300,11 @@ cmd_arm() {
 }
 
 cmd_deliver_reply() {
+  local lavish_reason
   [ "$#" -eq 4 ] && [ "$1" = poll ] && [ "$3" = --agent-reply-file ] || usage
+  # Like every other lavish-axi invocation here, never post through a binary
+  # that is off this home's pin, even one upgraded since arm checked it.
+  lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
   lavish_reply_compatible || exit 3
   apply_session_host "$2"
   post_lavish_reply "$2" "$4"

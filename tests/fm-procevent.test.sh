@@ -4697,6 +4697,21 @@ assert_contains "$(cat "$LEGACY/arm.err")" "pinned to" \
   || fail "an off-pin refusal still registered the board"
 pass "an off-pin older Lavish is refused before any reply is posted"
 
+# The reply hand-off itself rechecks the pin, so a binary upgraded off it after
+# arm's check is never asked to post, and the refusal is not the legacy-path
+# status that would let registration carry the reply on.
+legacy_deliver_rc=0
+PATH="$LEGACY/bin:$PATH" FM_HOME="$LEGACY/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" deliver-reply poll "$legacy_art" \
+  --agent-reply-file "$LEGACY/reply-file" >/dev/null 2>"$LEGACY/deliver.err" || legacy_deliver_rc=$?
+[ "$legacy_deliver_rc" -ne 0 ] && [ "$legacy_deliver_rc" -ne 3 ] \
+  || fail "an off-pin reply hand-off exited $legacy_deliver_rc instead of refusing"
+assert_contains "$(cat "$LEGACY/deliver.err")" "pinned to" \
+  "the off-pin reply hand-off did not name the pinned version"
+[ ! -e "$LEGACY/invoked" ] \
+  || fail "an off-pin reply hand-off invoked Lavish: $(cat "$LEGACY/invoked")"
+pass "an off-pin Lavish is refused at the reply hand-off"
+
 # A failed synchronous reply must leave the worker board unarmed.
 REPLY_FAIL="$TMP_ROOT/reply-fail"
 mkdir -p "$REPLY_FAIL/bin" "$REPLY_FAIL/home/state"
