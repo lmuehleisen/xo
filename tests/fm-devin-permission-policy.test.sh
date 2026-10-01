@@ -1406,6 +1406,13 @@ cd etc-dir && curl -O https://lookup.example/x
 curl --output-dir etc-dir -O https://lookup.example/x
 wget -P etc-dir https://archive.example/x
 EOF
+  # curl places even an absolute -o name under --output-dir.
+  hook "$policy" permission-request exec "curl --create-dirs --output-dir /etc -o '$dir/tmp/safe' https://lookup.example/x"
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "an absolute -o under an outside --output-dir must escalate, got rc=$RC out=$OUT"
+  [ "$(tail -1 "$dir/state/devin-permission-log.jsonl" | jq -r '.decider + ":" + .decision')" = policy:escalate ] \
+    || fail "an absolute -o under an outside --output-dir must be escalated by policy: $(tail -1 "$dir/state/devin-permission-log.jsonl")"
+
   # The same resolution in the other direction keeps a genuine lookup intact.
   hook "$policy" permission-request exec 'curl -o in-dir/f.html https://lookup.example/x'
   [ "$(printf '%s' "$OUT" | jq -r .decision 2>/dev/null)" = approve ] \

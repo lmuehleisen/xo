@@ -2581,20 +2581,23 @@ approve_plain() {  # <base>
       for ((oi = 0; oi < ${#fetch_out_words[@]}; oi++)); do
         word_dir=${fetch_out_dirs[oi]-}
         # wget -O /dev/null is the named file, not a path under -P. curl joins
-        # --output-dir onto -o even when -o is absolute, and only for the
-        # transfer that set that directory.
-        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ]; then
-          if [ "$base" = wget ] || [ -z "$word_dir" ]; then
-            continue
-          fi
-          fetch_out_words[oi]=dev/null
+        # --output-dir onto every -o name, including an absolute one, and only
+        # for the transfer that set that directory.
+        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] && { [ "$base" = wget ] || [ -z "$word_dir" ]; }; then
+          continue
         fi
         odir2=$CWD
-        case "${fetch_out_words[oi]}" in
-          /*|"$TILDE"/*) ;;
-          *) [ -n "$word_dir" ] && odir2=$word_dir ;;
-        esac
-        oabs=$(resolve_maybe_tilde "${fetch_out_words[oi]}" "${fetch_out_ev[oi]}" "$odir2" 2>/dev/null) || oabs=''
+        rel=${fetch_out_words[oi]}
+        if [ "$base" = curl ] && [ -n "$word_dir" ]; then
+          odir2=$word_dir
+          rel=${rel#/}
+        else
+          case "$rel" in
+            /*|"$TILDE"/*) ;;
+            *) [ -n "$word_dir" ] && odir2=$word_dir ;;
+          esac
+        fi
+        oabs=$(resolve_maybe_tilde "$rel" "${fetch_out_ev[oi]}" "$odir2" 2>/dev/null) || oabs=''
         if [ -n "$oabs" ] && fetch_dest_ok "$oabs"; then
           fetch_note_file "$oabs"
         else
