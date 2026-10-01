@@ -775,9 +775,15 @@ mkdir -p "$MULTI_ROOT"
 export MULTI_ROOT
 cat > "$MULTI_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
-[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
+case "${1-}" in
+  --version) printf '0.1.80\n'; exit 0 ;;
+  reply)
+    printf '%s:%s\n' "${LAVISH_AXI_HOST-unset}" "${LAVISH_AXI_PORT-unset}" >> "$MULTI_ROOT/routes"
+    printf 'poll%s reply: %s\n' "$(( $(cat "$MULTI_ROOT/count" 2>/dev/null || echo 0) + 1 ))" "$(cat -- "$4")" >> "$MULTI_ROOT/replies"
+    exit 0
+    ;;
+esac
 n=$(cat "$MULTI_ROOT/count" 2>/dev/null || echo 0)
 n=$((n + 1))
 printf '%s\n' "$n" > "$MULTI_ROOT/count"
@@ -906,7 +912,7 @@ assert_contains "$(cat "$HMULTI/state/worker-1.inbox/003.msg" 2>/dev/null || tru
   || fail "worker replies were not posted once per round"
 assert_contains "$(cat "$MULTI_ROOT/replies")" "poll1 reply: reply one" \
   "the reply staged with the arm was not the one the board received"
-printf '%s\n' '127.0.0.1:14387' '127.0.0.1:14387' '127.0.0.1:14387' > "$MULTI_ROOT/expected-routes"
+printf '127.0.0.1:14387\n%.0s' 1 2 3 4 5 6 > "$MULTI_ROOT/expected-routes"
 cmp -s "$MULTI_ROOT/expected-routes" "$MULTI_ROOT/routes" \
   || fail "worker replies/polls did not use the opened session server across start and reconcile"
 pass "worker board replies and recovered listeners derive their server from the board session"
@@ -1262,10 +1268,11 @@ ROLL_ROOT="$TMP_ROOT/lavish-rollback-root"; mkdir -p "$ROLL_ROOT"; export ROLL_R
 ROLL_BIN=$(fm_fakebin "$TMP_ROOT/lavish-rollback-stub")
 cat > "$ROLL_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
-[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
-[ "${3-}" != --agent-reply ] || printf '%s\n' "$4" >> "$ROLL_ROOT/replies"
+case "${1-}" in
+  --version) printf '0.1.80\n'; exit 0 ;;
+  reply) printf '%s\n' "$(cat -- "$4")" >> "$ROLL_ROOT/replies"; exit 0 ;;
+esac
 printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","another round","","message",""\n'
 SH
 chmod +x "$ROLL_BIN/lavish-axi"
@@ -1305,10 +1312,13 @@ cmp -s "$ROLL_ROOT/generation-one.source" "$HROLL/state/procevent/$roll_id.sourc
 PATH="$ROLL_BIN:$PATH" FM_HOME="$HROLL" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$ROLL_ART" --for worker-8 \
   --agent-reply-file "$ROLL_ROOT/reply2" >/dev/null
-wait_for_lines "$ROLL_ROOT/replies" 2 \
-  || fail "the retried re-arm did not hand the board its generation's reply exactly once"
-[ "$(grep -c 'generation two' "$ROLL_ROOT/replies" 2>/dev/null || true)" = 1 ] \
-  || fail "the retried re-arm did not hand the board its generation's reply exactly once"
+# The pinned build accepts a reply before the round is acknowledged, so the
+# failed re-arm already posted it and the retry posts it once more: the known,
+# benign duplicate docs/configuration.md describes, and never a third copy.
+wait_for_lines "$ROLL_ROOT/replies" 3 \
+  || fail "the retried re-arm did not hand the board its generation's reply"
+[ "$(grep -c 'generation two' "$ROLL_ROOT/replies" 2>/dev/null || true)" = 2 ] \
+  || fail "the retried re-arm did not hand the board its generation's reply exactly once more"
 pass "a re-arm that cannot acknowledge its round leaves the running generation alone"
 
 # --- end-user-aligned regression: re-arm is acknowledgement, nothing else -----
@@ -1321,10 +1331,11 @@ REARM_ROOT="$TMP_ROOT/lavish-rearm-root"; mkdir -p "$REARM_ROOT"; export REARM_R
 REARM_BIN=$(fm_fakebin "$TMP_ROOT/lavish-rearm-stub")
 cat > "$REARM_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
-[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
-[ "${3-}" != --agent-reply ] || printf '%s\n' "$4" >> "$REARM_ROOT/replies"
+case "${1-}" in
+  --version) printf '0.1.80\n'; exit 0 ;;
+  reply) printf '%s\n' "$(cat -- "$4")" >> "$REARM_ROOT/replies"; exit 0 ;;
+esac
 while [ ! -e "$REARM_ROOT/release" ]; do sleep 0.02; done
 printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","one more round","","message",""\n'
 SH
@@ -1417,12 +1428,18 @@ pass "a board close carrying the captain's real answer is still announced"
 LAVISH_SCRIPTED_BIN=$(fm_fakebin "$TMP_ROOT/lavish-scripted-stub")
 cat > "$LAVISH_SCRIPTED_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 # Stand-in for `lavish-axi poll <file>`, scripted per scenario: LAVISH_SCRIPT
 # names the response for each successive poll, one word per poll, and its last
 # word repeats forever. `interrupt` is the exact transient response the server
-# returns while the board's marks stay available.
-[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
+# returns while the board's marks stay available. A reply is posted through the
+# pinned build's one-shot reply command and is not a poll.
+case "${1-}" in
+  --version) printf '0.1.80\n'; exit 0 ;;
+  reply)
+    [ -z "${LAVISH_REPLY_LOG-}" ] || printf '%s\n' "$(cat -- "$4")" >> "$LAVISH_REPLY_LOG"
+    exit 0
+    ;;
+esac
 n=$(cat "$LAVISH_COUNT" 2>/dev/null || echo 0)
 n=$((n + 1))
 printf '%s\n' "$n" > "$LAVISH_COUNT"
@@ -4643,7 +4660,9 @@ PATH="$LIVE/bin:$PATH" FM_HOME="$LIVE/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$live_art" >/dev/null 2>&1 || true
 pass "re-arm over a live earlier listener reports it still serving the board"
 
-# Old compatible Lavish versions keep using their existing poll reply path.
+# Upstream keeps a poll-with-reply path for older compatible Lavish releases.
+# This home pins one exact version, so an older release is refused at arm,
+# before any staged reply is posted, consumed, or carried by a listener.
 LEGACY="$TMP_ROOT/legacy-reply"
 mkdir -p "$LEGACY/bin" "$LEGACY/home/state"
 export LEGACY
@@ -4652,14 +4671,7 @@ cat > "$LEGACY/bin/lavish-axi" <<'SH'
 set -eu
 case "${1-}" in
   --version) printf '0.1.79\n' ;;
-  poll)
-    [ "${3-}" = --agent-reply ] || exit 3
-    printf '%s\n' "$4" > "$LEGACY/reply"
-    printf 'started\n' > "$LEGACY/started"
-    while [ ! -e "$LEGACY/release" ]; do sleep 0.02; done
-    printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","next round","","message",""\n'
-    ;;
-  *) exit 2 ;;
+  *) printf '%s\n' "$*" >> "$LEGACY/invoked" ;;
 esac
 SH
 chmod +x "$LEGACY/bin/lavish-axi"
@@ -4670,17 +4682,20 @@ legacy_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$legacy_art")
 fm_test_track_procevent_home "$LEGACY/home"
 new_task_endpoint "$LEGACY/home" worker-legacy
 printf 'legacy reply body\n' > "$LEGACY/reply-file"
-PATH="$LEGACY/bin:$PATH" FM_HOME="$LEGACY/home" \
+if PATH="$LEGACY/bin:$PATH" FM_HOME="$LEGACY/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$legacy_art" --for worker-legacy \
-  --agent-reply-file "$LEGACY/reply-file" >/dev/null \
-  || fail "the older compatible Lavish reply path did not arm"
-wait_for "$LEGACY/reply" || fail "the older compatible poll never received its staged reply"
-[ "$(cat "$LEGACY/reply")" = 'legacy reply body' ] \
-  || fail "the legacy poll received different reply text"
-touch "$LEGACY/release"
-wait_for "$LEGACY/home/state/procevent-inbox/$legacy_id.1.result" \
-  || fail "the legacy Lavish reply round was not captured"
-pass "older compatible Lavish versions retain the poll-with-reply behavior"
+  --agent-reply-file "$LEGACY/reply-file" >/dev/null 2>"$LEGACY/arm.err"; then
+  fail "an off-pin older Lavish was armed"
+fi
+assert_contains "$(cat "$LEGACY/arm.err")" "pinned to" \
+  "the off-pin refusal did not name the pinned version"
+[ ! -e "$LEGACY/invoked" ] \
+  || fail "an off-pin older Lavish was invoked: $(cat "$LEGACY/invoked")"
+[ "$(cat "$LEGACY/reply-file" 2>/dev/null || true)" = 'legacy reply body' ] \
+  || fail "an off-pin refusal consumed the staged reply"
+[ ! -e "$LEGACY/home/state/procevent/$legacy_id.source" ] \
+  || fail "an off-pin refusal still registered the board"
+pass "an off-pin older Lavish is refused before any reply is posted"
 
 # A failed synchronous reply must leave the worker board unarmed.
 REPLY_FAIL="$TMP_ROOT/reply-fail"
@@ -4831,7 +4846,8 @@ unknown_out=$(PATH="$UNKNOWN/bin:$PATH" FM_HOME="$UNKNOWN/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$unknown_art" --for worker-unknown \
   --agent-reply-file "$UNKNOWN/reply-file" 2>&1) || unknown_rc=$?
 [ "$unknown_rc" -ne 0 ] || fail "arm fell back to a legacy reply when the Lavish version was unknown"
-assert_contains "$unknown_out" 'cannot confirm a supported lavish-axi version' \
+# This home's exact pin refuses an unreadable version before the reply probe.
+assert_contains "$unknown_out" 'of unknown version is installed but this home is pinned to' \
   "an unknown Lavish version lacked a clear arm diagnostic: $unknown_out"
 [ ! -e "$UNKNOWN/home/state/procevent/$unknown_id.source" ] \
   || fail "arm registered a board while the Lavish version was unknown"
@@ -4856,7 +4872,6 @@ mkdir -p "$DRAIN/bin" "$DRAIN/home/state"
 export DRAIN
 cat > "$DRAIN/bin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-[ "${1-}" = --version ] && { echo 0.1.80; exit 0; }
 set -eu
 case "${1-}" in
   --version) printf '0.1.80\n' ;;

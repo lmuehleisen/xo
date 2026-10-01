@@ -1950,6 +1950,7 @@ That compatibility path does not provide the synchronous handoff guarantee: a cr
 Only a version probe that confirms an older compatible release selects that path.
 When `lavish-axi` is missing, its version cannot be read, or it is below the board floor, a reply-carrying arm fails without posting or registering a new listener; the worker's original reply file remains available for retry.
 The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
+This home runs only the exact version `bin/fm-lavish-lib.sh` pins, which takes the synchronous path, so it refuses any other version at arm and poll before either path is chosen.
 
 **Deliver feedback to the worker**
 
