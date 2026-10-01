@@ -64,7 +64,10 @@ fm_lavish_home_mode() {
     printf 'config/lavish must be a readable regular file\n' >&2
     return 2
   fi
-  value=$(tr -d '[:space:]' < "$file")
+  # Trim the ends only: whitespace inside the word leaves it malformed.
+  value=$(tr -s '[:space:]' ' ' < "$file")
+  value=${value# }
+  value=${value% }
   [ -n "$value" ] || value=off
   if ! fm_lavish_mode_valid "$value"; then
     printf 'config/lavish must be off, view, or answers (got %s)\n' "$value" >&2
@@ -109,15 +112,17 @@ fm_lavish_pin_env() {
 
 # fm_lavish_unavailable_reason <config-dir>
 # Prints nothing and returns 0 when the pinned lavish-axi is available;
-# otherwise prints why not and returns 1. The version probe itself runs under
-# the pinned environment, because lavish-axi reports even --version.
+# otherwise prints why not and returns 1. The version probe runs with telemetry
+# and auto-open pinned off, because lavish-axi reports even --version, but it
+# never reads config/lavish-axi-host: a malformed host must not make a binary
+# that is on the pin look unavailable to a poll that routes by its session.
 fm_lavish_unavailable_reason() {
   local version
   if ! command -v lavish-axi >/dev/null 2>&1; then
     printf 'lavish-axi is not installed\n'
     return 1
   fi
-  version=$( (fm_lavish_pin_env "$1" && lavish-axi --version) 2>/dev/null | tr -d '[:space:]')
+  version=$(LAVISH_AXI_TELEMETRY=0 LAVISH_AXI_NO_OPEN=1 lavish-axi --version 2>/dev/null | tr -d '[:space:]')
   if [ "$version" != "$FM_LAVISH_AXI_PIN" ]; then
     printf 'lavish-axi %s is installed but this home is pinned to %s\n' "${version:-of unknown version}" "$FM_LAVISH_AXI_PIN"
     return 1

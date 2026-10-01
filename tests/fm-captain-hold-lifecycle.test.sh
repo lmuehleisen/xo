@@ -1582,7 +1582,7 @@ test_bound_channel_answers_close_at_answer_time() {
 
   artifact="$home/data/$id/review.html"
   printf '<h1>Sample eval proposal</h1>\n' > "$artifact"
-  fm_fake_exit0 "$home/fakebin" lavish-axi
+  fm_fake_version_tool "$home/fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.80
   sid=$(run_lavish "$home" source-id "$artifact") || fail "could not derive the review source id"
   run_captain "$home" bind "$sid" >/dev/null \
     || fail "could not bind the review source to the keyed-answer intake"
@@ -2080,7 +2080,7 @@ test_unbound_source_closes_no_hold() {
 
   artifact="$home/data/$id/review.html"
   printf '<h1>Unbound</h1>\n' > "$artifact"
-  fm_fake_exit0 "$home/fakebin" lavish-axi
+  fm_fake_version_tool "$home/fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.80
   sid=$(run_lavish "$home" source-id "$artifact") || fail "could not derive the unbound source id"
   run_lavish "$home" arm "$artifact" >/dev/null || fail "could not arm the unbound review"
 

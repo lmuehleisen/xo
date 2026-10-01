@@ -62,6 +62,12 @@ test_malformed_toggle_and_request_exit_2() {
   [ "$rc" -eq 2 ] || fail "a malformed config/lavish exited $rc, not 2"
   rc=0; run_lavish "$home" resolve >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "resolve over a malformed config/lavish exited $rc, not 2"
+  home=$(make_home spaced)
+  printf 'a n s w e r s\n' > "$home/config/lavish"
+  rc=0; run_lavish "$home" mode >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a mode word with internal whitespace exited $rc, not 2"
+  printf '  view  \n' > "$home/config/lavish"
+  [ "$(run_lavish "$home" mode)" = view ] || fail "a mode word with surrounding whitespace was not read"
   home=$(make_home bad-request)
   rc=0; run_lavish "$home" resolve --lavish yes >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "a malformed request exited $rc, not 2"
@@ -175,6 +181,15 @@ test_adapter_refuses_an_off_pin_binary() {
   fi
   assert_contains "$out" "pinned to 0.1.80" "the poll refusal did not name the pin: $out"
   assert_not_contains "$out" "args=" "the off-pin lavish-axi was invoked: $out"
+
+  # A malformed host file never makes an on-pin binary look unavailable to a
+  # listener start, which routes by the board's own saved session.
+  printf 'two words\n' > "$home/config/lavish-axi-host"
+  out=$(PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    LAVISH_AXI_STATE_DIR="$home/no-sessions" "$ROOT/bin/fm-procevent-lavish.sh" poll "$home/art/board.html" 2>&1) || true
+  assert_not_contains "$out" "pinned to" "a malformed host file made the on-pin binary look unavailable: $out"
+  assert_contains "$out" "cannot resolve the board server from its Lavish session" \
+    "the listener start did not reach session routing: $out"
   pass "the process-event adapter refuses an off-pin lavish-axi at arm and at every listener start"
 }
 
