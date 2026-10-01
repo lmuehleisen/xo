@@ -6,7 +6,9 @@
 # git worktree, then drive the generated adapter artifact (the Pi extension,
 # the OpenCode plugin) in a plain Node host, so the artifact, the real
 # bin/fm-busy-event.sh writer, and the real classifier are exercised together
-# with no live harness session.
+# with no live harness session. The Pi extension's publish-policy tool_call
+# handler is driven the same way against the real bin/fm-arm-pretool-check.sh;
+# tests/fm-pi-worker-publish-policy-live-e2e.test.sh proves it in a real Pi.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -153,6 +155,49 @@ test_pi_extension_stale_incarnation_rejected() {
   out=$(drive_pi_ext "$ext" progress) || fail "stale progress drive failed: $out"
   [ ! -e "$state/$id.progress" ] || fail "stale native progress refreshed the new incarnation"
   pass "pi extension events from a superseded incarnation are rejected as stale"
+}
+
+# pi_tool_call <ext-path> <tool-name> <command> <cwd>: load the generated Pi
+# extension in a plain Node host, fire its tool_call handler the way Pi does,
+# and print the handler's result as JSON.
+pi_tool_call() {
+  EXT_PATH="$1" TOOL="$2" CMD="$3" CWD="$4" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.EXT_PATH).href);
+const handlers = {};
+mod.default({ on: (name, fn) => { handlers[name] = fn; }, events: { on: () => {} } });
+const result = await handlers["tool_call"](
+  { type: "tool_call", toolName: process.env.TOOL, toolCallId: "t1", input: { command: process.env.CMD } },
+  { cwd: process.env.CWD },
+);
+process.stdout.write(JSON.stringify(result ?? {}));
+EOF
+}
+
+test_pi_extension_enforces_the_publish_policy() {
+  local rec id=publish-pi-1 out ext
+  rec=$(make_spawn_case pi-publish pi "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "pi spawn should succeed: $out"
+  ext="$HOME_DIR/state/$id.pi-ext.ts"
+
+  out=$(pi_tool_call "$ext" bash 'gh pr create --title t --body x' "$WT_DIR") || fail "gh drive failed: $out"
+  [ "$(printf '%s' "$out" | jq -r .block)" = true ] || fail "a gh publish the gate cannot check must be blocked, got $out"
+  assert_contains "$out" "gh-no-repo" "the block carries the publish policy's reason"
+
+  out=$(pi_tool_call "$ext" bash 'git push --no-verify origin HEAD' "$WT_DIR") || fail "push drive failed: $out"
+  [ "$(printf '%s' "$out" | jq -r .block)" = true ] || fail "a hook-skipping push must be blocked, got $out"
+  assert_contains "$out" "git-no-verify" "the push block carries the publish policy's reason"
+
+  local allowed
+  for allowed in 'ls -la' 'git status' 'gh pr view 3'; do
+    out=$(pi_tool_call "$ext" bash "$allowed" "$WT_DIR") || fail "drive failed for $allowed: $out"
+    [ "$out" = '{}' ] || fail "an ordinary command must pass: $allowed -> $out"
+  done
+  out=$(pi_tool_call "$ext" read 'git push --no-verify origin HEAD' "$WT_DIR") || fail "non-bash drive failed: $out"
+  [ "$out" = '{}' ] || fail "only the bash tool is checked, got $out"
+  pass "pi worker extension blocks a gh publish and a --no-verify push through the publish policy and passes ordinary commands"
 }
 
 # drive_oc_plugin <plugin-path> <events-json-lines...>: load the generated
@@ -425,6 +470,7 @@ test_kimi_and_grok_install_no_unverified_wiring() {
 test_pi_extension_semantic_lifecycle
 test_pi_extension_serializes_settle_before_next_start
 test_pi_extension_stale_incarnation_rejected
+test_pi_extension_enforces_the_publish_policy
 test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle

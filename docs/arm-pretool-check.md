@@ -11,7 +11,7 @@ Agy's native PreToolUse transport is `bin/fm-agy-hook.sh`, which forwards `toolC
 
 The transport also carries a second, independent policy: `bin/fm-gh-publish-policy.mjs`, the `gh` publish guard plus the git identity and hook-bypass refusals, whose header owns its contract.
 It reuses this classifier's tokenizer, runs only when the command has a `gh` command word, a `git` command word with one of the refused spellings, or the publish judge's name or its overrides file, and is evaluated after the watcher policy.
-`--publish-only` evaluates it alone; `bin/fm-spawn.sh` registers that form for Claude workers on every project, and the Devin and agy permission layers call it through `bin/fm-command-policy-lib.sh`.
+`--publish-only` evaluates it alone; `bin/fm-spawn.sh` registers that form for Claude and Pi workers on every project, and the Devin and agy permission layers call it through `bin/fm-command-policy-lib.sh`.
 Unlike the watcher policy, it fails closed: a command it must see is denied with code `publish-engine-unavailable` when the transport cannot run it (the header of `bin/fm-arm-pretool-check.sh` lists the cases).
 
 ## Purpose and boundary

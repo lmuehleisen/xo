@@ -659,6 +659,26 @@ skip-runner: pi-signed is not installed, so its pin check was not exercised
 
 The guard submits no prompt and spends no tokens, so it runs by default wherever a runner is installed; rerun it after every Claude or Pi upgrade.
 
+## Pi worker publish policy
+
+The generated Pi worker extension (`state/<id>.pi-ext.ts`, written by `bin/fm-spawn.sh`) answers Pi's `tool_call` event for `bash` with `{block: true}` when `bin/fm-arm-pretool-check.sh --publish-only` denies the command.
+`tests/fm-pi-worker-publish-policy-live-e2e.test.sh` loads the extension that the real `fm-spawn` writes into the real installed runner, in print mode with a local faux provider whose only answer is one bash tool call, so no model is reached.
+Each command touches a marker first: a `gh pr create` with no `--repo` and a `git push --no-verify` leave no marker and return a tool error naming `gh-no-repo` and `git-no-verify`, while an ordinary command leaves its marker.
+The same guard run against the extension from before the handler existed fails on the first case, because Pi ran the `gh` command.
+
+Verified 2026-10-01 on pi 0.87.1 on macOS; pi-signed was not installed.
+
+```sh
+bash tests/fm-pi-worker-publish-policy-live-e2e.test.sh
+```
+
+```
+skip-runner: pi-signed is not installed, so its worker extension was not exercised
+ok - pi 0.87.1: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
+```
+
+The guard spends no tokens, so it runs by default wherever Pi is installed; rerun it after every Pi upgrade.
+
 ## Codex hook trust
 
 Verified 2026-09-16 on codex-cli 0.151.0, macOS arm64, in a fresh linked worktree of this repository.
