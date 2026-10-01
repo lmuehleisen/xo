@@ -225,7 +225,8 @@ ok - claude (2.1.286 (Claude Code)): a long-named composer reads empty idle and 
 ```
 
 This guard is the refresh command after a Claude Code upgrade.
-`tests/fm-afk-inject-titled-composer.test.sh` is the portable regression on tmux and herdr, including the truncated form and a dropped Enter on herdr.
+`tests/fm-afk-inject-titled-composer.test.sh` is the portable regression, covering the offline reads (including the truncated form and herdr's cursorless read) and tmux end to end.
+`tests/fm-afk-inject-titled-composer-herdr-e2e.test.sh` is its herdr end-to-end counterpart, including a dropped Enter.
 
 ## Composer classification matrix
 
