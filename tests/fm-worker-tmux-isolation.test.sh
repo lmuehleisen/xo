@@ -16,6 +16,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 # shellcheck source=bin/fm-private-tmux-lib.sh
 . "$ROOT/bin/fm-private-tmux-lib.sh"
+fm_git_identity
 
 REAL_TMUX=$(command -v tmux 2>/dev/null || true)
 if [ -z "$REAL_TMUX" ]; then
@@ -164,8 +165,8 @@ test_teardown_retires_the_private_directory() {
   git init -q --bare "$case_dir/origin.git"
   git -C "$case_dir/origin.git" symbolic-ref HEAD refs/heads/main
   git clone -q "$case_dir/origin.git" "$case_dir/seed" 2>/dev/null
-  git -C "$case_dir/seed" commit -q --allow-empty -m baseline
-  git -C "$case_dir/seed" push -q origin main
+  git -C "$case_dir/seed" commit -q --allow-empty -m baseline || fail "could not commit the teardown fixture baseline"
+  git -C "$case_dir/seed" push -q origin HEAD:main || fail "could not push the teardown fixture baseline"
   git clone -q "$case_dir/origin.git" "$case_dir/project"
   git -C "$case_dir/project" remote set-head origin main 2>/dev/null || true
   git -C "$case_dir/project" worktree add -q -b "fm/$id" "$case_dir/wt" main
