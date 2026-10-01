@@ -1315,8 +1315,13 @@ spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
     "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
-    # With the record gone, the worker's private tmux servers and directory go too.
-    if ! fm_private_tmux_retire "${WORKER_TMUX_DIR:-}" && [ -e "${WORKER_TMUX_DIR:-}" ]; then
+    # With the record gone, the worker's private tmux servers and directory go
+    # too, unless a launched worker's endpoint was left open: removing the
+    # directory under it would send its bare tmux back to the default server.
+    if [ -n "${WORKER_TMUX_DIR:-}" ] && [ "$SPAWN_LAUNCH_SENT" = 1 ] && [ "$SPAWN_ENDPOINT_CLOSED" != 1 ]; then
+      [ ! -e "$WORKER_TMUX_DIR" ] ||
+        echo "warning: task $ID's worker may still be running, so its private tmux directory $WORKER_TMUX_DIR is kept; once its endpoint is closed, stop any tmux server in it by its exact -S socket and remove the directory" >&2
+    elif ! fm_private_tmux_retire "${WORKER_TMUX_DIR:-}" && [ -e "${WORKER_TMUX_DIR:-}" ]; then
       echo "warning: task $ID's private tmux directory $WORKER_TMUX_DIR could not be retired and a tmux server in it may still run; stop it by its exact -S socket and remove the directory before retrying" >&2
     fi
     return 0

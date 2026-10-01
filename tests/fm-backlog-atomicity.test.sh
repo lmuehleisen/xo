@@ -1331,7 +1331,7 @@ test_dispatch_refuses_to_commit_without_a_published_record() {
 }
 
 test_dispatch_leaves_no_record_when_the_transition_fails() {
-  local case_dir id out rc=0
+  local case_dir id out dir rc=0
   id=atomic-dispatch-b4
   case_dir=$(make_home dispatch-transition-fails "$id")
   add_item "$case_dir" "$id"
@@ -1347,44 +1347,18 @@ test_dispatch_leaves_no_record_when_the_transition_fails() {
     "a failed backlog transition lost the acquired lease receipt"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "a failed backlog transition left the task's armed busy generation behind"
-  assert_absent "/tmp/fmwt-$(printf '%s\n%s' "$(cd "$(home_of "$case_dir")" && pwd -P)" "$id" |
-    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)" \
-    "a failed backlog transition left the worker's private tmux directory behind"
+  # The launched worker's endpoint is left for manual cleanup, so its private
+  # tmux directory stays: removing it would send the worker's bare tmux back to
+  # the default server.
+  dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$(home_of "$case_dir")" && pwd -P)" "$id" |
+    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+  [ -d "$dir" ] || fail "a failed backlog transition removed a launched worker's private tmux directory"
+  rm -rf "$dir"
+  assert_contains "$out" "private tmux directory $dir is kept" \
+    "the failed dispatch did not name the launched worker's private tmux directory it kept"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
     || fail "a failed dispatch left the backlog item in $(row_state "$case_dir" "$id")"
   pass "a failed backlog transition fails the dispatch loudly and leaves no record"
-}
-
-# A server the rollback cannot stop keeps the private tmux directory, and the
-# failed dispatch must say so rather than report a clean rollback.
-test_dispatch_warns_when_the_private_tmux_directory_survives_rollback() {
-  local case_dir id dir out rc=0
-  id=atomic-dispatch-tmux-survives-b4
-  case_dir=$(make_home dispatch-tmux-survives "$id")
-  add_item "$case_dir" "$id"
-  break_verb "$case_dir" start
-  dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$(home_of "$case_dir")" && pwd -P)" "$id" |
-    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
-  (umask 077 && mkdir "$dir") || fail "could not create the private tmux directory"
-  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$dir/s" ||
-    { rm -rf "$dir"; fail "could not create a socket in the private tmux directory"; }
-  cat > "$case_dir/fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-case "$*" in "-S /tmp/fmwt-"*" display-message "*) echo "error connecting to $2 (Permission denied)" >&2; exit 1 ;; esac
-case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
-case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
-exit 0
-SH
-
-  out=$(run_ship_spawn "$case_dir" "$id" 2>&1) || rc=$?
-  [ -S "$dir/s" ] || fail "rollback removed a private tmux directory whose server it could not stop"
-  rm -rf "$dir"
-  [ "$rc" -ne 0 ] || fail "spawn reported success though the backlog transition failed"
-  assert_contains "$out" "private tmux directory $dir could not be retired" \
-    "rollback did not report the private tmux directory it could not retire"
-  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
-    "a failed backlog transition left an orphaned record behind"
-  pass "a failed dispatch reports a private tmux directory its rollback could not retire"
 }
 
 test_dispatch_reports_an_incomplete_record_rollback() {
@@ -3068,7 +3042,6 @@ test_dispatch_reports_a_backlog_read_failure
 test_dispatch_refuses_a_closed_item
 test_dispatch_refuses_to_commit_without_a_published_record
 test_dispatch_leaves_no_record_when_the_transition_fails
-test_dispatch_warns_when_the_private_tmux_directory_survives_rollback
 test_dispatch_reports_an_incomplete_record_rollback
 test_dispatch_reports_an_incomplete_busy_rollback
 test_dispatch_rolls_back_before_a_failed_launch_delivery
