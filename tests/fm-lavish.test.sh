@@ -74,6 +74,9 @@ test_malformed_toggle_and_request_exit_2() {
   home=$(make_home bad-request)
   rc=0; run_lavish "$home" resolve --lavish yes >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "a malformed request exited $rc, not 2"
+  printf 'answers\n' > "$home/config/lavish"
+  rc=0; run_lavish "$home" resolve --lavish= >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "an empty request exited $rc, not 2"
   pass "a malformed toggle or request exits 2 instead of guessing"
 }
 

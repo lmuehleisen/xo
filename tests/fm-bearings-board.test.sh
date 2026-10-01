@@ -609,6 +609,14 @@ test_malformed_toggle_refuses_before_touching_the_board() {
   if out=$(run_board "$home" build "$data" --lavish maybe 2>&1); then
     fail "a malformed request built a board: $out"
   fi
+  home=$(make_lavish_home empty-request answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  if out=$(run_board "$home" build "$data" --lavish= 2>&1); then
+    fail "an empty request built a board: $out"
+  fi
+  assert_contains "$out" "got an empty value" "the empty request was not named: $out"
+  assert_absent "$home/.lavish/bearings-board.html" "an empty request still produced a board"
   pass "a malformed toggle or request refuses before the board is touched"
 }
 

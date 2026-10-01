@@ -377,16 +377,17 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
 }
 
 command_build() {
-  local data='' request='' board json tmp extracted effective
+  local data='' request='' request_set=0 board json tmp extracted effective
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --lavish) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; request=$2; shift 2 ;;
-      --lavish=*) request=${1#--lavish=}; shift ;;
+      --lavish) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; request=$2; request_set=1; shift 2 ;;
+      --lavish=*) request=${1#--lavish=}; request_set=1; shift ;;
       -*) usage >&2; exit 2 ;;
       *) [ -z "$data" ] || { usage >&2; exit 2; }; data=$1; shift ;;
     esac
   done
   [ -n "$data" ] || { usage >&2; exit 2; }
+  [ "$request_set" = 0 ] || [ -n "$request" ] || fail "--lavish must be off, view, or answers (got an empty value)"
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"

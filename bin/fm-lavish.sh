@@ -46,14 +46,15 @@ usage() {
 die() { printf 'fm-lavish: %s\n' "$*" >&2; exit "${2:-1}"; }
 
 cmd_resolve() {
-  local request=
+  local request='' request_set=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --lavish) [ "$#" -ge 2 ] || die "--lavish requires a value" 2; request=$2; shift 2 ;;
-      --lavish=*) request=${1#--lavish=}; shift ;;
+      --lavish) [ "$#" -ge 2 ] || die "--lavish requires a value" 2; request=$2; request_set=1; shift 2 ;;
+      --lavish=*) request=${1#--lavish=}; request_set=1; shift ;;
       *) usage >&2; exit 2 ;;
     esac
   done
+  [ "$request_set" = 0 ] || [ -n "$request" ] || die "--lavish must be off, view, or answers (got an empty value)" 2
   fm_lavish_resolve "$CONFIG" "$request" || exit 2
   printf 'mode: %s\n' "$FM_LAVISH_MODE"
   printf 'wanted: %s (%s)\n' "$FM_LAVISH_WANTED" "$FM_LAVISH_WANTED_FROM"
