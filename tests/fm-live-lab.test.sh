@@ -41,7 +41,7 @@ dir_tmux() {
   local dir=$1
   shift
   [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || return 1
-  mkdir -p -m 700 "$dir/tmux-$(id -u)" || return 1
+  [ -d "$dir/tmux-$(id -u)" ] || mkdir -m 700 "$dir/tmux-$(id -u)" || return 1
   env -u TMUX tmux -S "$dir/tmux-$(id -u)/default" "$@"
 }
 
