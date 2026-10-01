@@ -800,6 +800,50 @@ test_supervision_branch_refuses_an_unknown_primary_pin() {
 # The consequence the captain actually hit: the wrong verdict emitted Claude's
 # Stop-owned protocol to a Codex primary, so every turn end was blocked for
 # missing Claude recovery.
+# --- Claude desktop app sessions -------------------------------------------
+
+# The desktop app runs a session as <home>/.claude/remote/ccd-cli/<version>,
+# whose path has no `claude` component and whose basename is a version. A
+# markerless codex sits ABOVE the session in this fixture, so the walk returns
+# codex whenever the session itself is not recognized: every claude verdict
+# below is decided by the session process, never by a harness further up the
+# real tree running this suite. macOS reports the copied path as comm; Linux
+# reports only the version as comm and carries the path in argv[0], so this one
+# fixture exercises whichever of the two the host provides.
+under_desktop_session() {  # <outer-bin> <session-bin> [VAR=VAL ...]
+  local outer=$1 session=$2
+  shift 2
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS "$@" \
+    FM_TEST_SESSION_BIN="$session" FM_TEST_HARNESS="$HARNESS" \
+    "$outer" -c 'r=$("$FM_TEST_SESSION_BIN" -c '"'"'r=$("$FM_TEST_HARNESS" ancestry); printf "%s|" "$r"; r=$("$FM_TEST_HARNESS"); printf "%s" "$r"'"'"'); printf "%s" "$r"'
+}
+
+test_desktop_app_session_resolves_claude() {
+  local dir codex session impostor got
+  dir="$TMP_ROOT/desktop"
+  codex=$(named_bin "$dir/codex-tree" codex)
+  session=$(named_bin "$dir/home/.claude/remote/ccd-cli" 2.1.284)
+  impostor=$(named_bin "$dir/home/.claude/hooks" 2.1.284)
+
+  got=$(under_desktop_session "$codex" "$impostor")
+  [ "$got" = "comm codex|codex" ] \
+    || fail "a version-named file elsewhere under .claude resolved '$got', expected the codex above it (the fixture is otherwise vacuous)"
+
+  got=$(under_desktop_session "$codex" "$session")
+  [ "$got" = "comm claude|claude" ] \
+    || fail "a markerless desktop-app session resolved '$got', expected claude at comm strength"
+
+  got=$(under_desktop_session "$codex" "$session" CLAUDECODE=1)
+  [ "$got" = "comm claude|claude" ] \
+    || fail "a desktop-app session carrying its own CLAUDECODE resolved '$got', expected claude"
+
+  got=$(under_desktop_session "$codex" "$impostor" CLAUDECODE=1)
+  [ "$got" = "comm codex|codex" ] \
+    || fail "a retained CLAUDECODE under a non-desktop .claude path resolved '$got', expected codex"
+  pass "a Claude desktop-app session resolves claude from its install path alone"
+}
+
 test_supervision_protocol_follows_corrected_verdict() {
   local dir home fakebin bin got
   dir="$TMP_ROOT/supervision"
@@ -841,3 +885,4 @@ test_descent_probe_prefers_comm_strength_when_deepest_leaves_tie
 test_supervision_branch_resolves_the_primary_pin
 test_supervision_branch_refuses_an_unknown_primary_pin
 test_supervision_protocol_follows_corrected_verdict
+test_desktop_app_session_resolves_claude

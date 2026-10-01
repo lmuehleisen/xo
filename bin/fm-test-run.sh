@@ -352,7 +352,7 @@ family_for_basename() {
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
-    fm-claude-stopfailure-live-e2e.test.sh|\
+    fm-claude-stopfailure-live-e2e.test.sh|fm-claude-desktop-identity-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
@@ -736,6 +736,7 @@ tests/fm-check-unregister.test.sh 464
 tests/fm-ci-workflow.test.sh 2073
 tests/fm-classify-corr-token.test.sh 49294
 tests/fm-classify-decision-key.test.sh 3336
+tests/fm-claude-desktop-identity-live-e2e.test.sh 45
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 45
 tests/fm-claude-stop-autoarm.test.sh 60797
 tests/fm-claude-stopfailure-live-e2e.test.sh 78
