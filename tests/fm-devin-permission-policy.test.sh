@@ -1885,6 +1885,52 @@ test_native_writes_resolve_symlinks() {
   pass "fm-devin-permission-policy: native writes are measured where the path physically resolves"
 }
 
+test_exact_inbox_acknowledgements_and_escapes() {
+  local policy dir inbox cmd id=0
+  policy=$(new_case exact-inbox)
+  dir=$(case_dir "$policy")
+  inbox="$dir/state/t1.inbox"
+  rmdir "$inbox/handled"
+  printf 'one\n' > "$inbox/001.msg"
+  printf 'two\n' > "$inbox/002.msg"
+  cmd="mkdir -p '$dir/data/t1' '$inbox/handled' && mv '$inbox'/001.msg '$inbox'/002.msg '$inbox'/handled/"
+  hook "$policy" pre-tool-use exec "$cmd" inbox_setup
+  [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "own acknowledgement must pass the preallow guard: $OUT"
+  hook "$policy" permission-request exec "$cmd" inbox_setup
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail "exact inbox setup and multi-source acknowledgement must be static: $OUT"
+  bash -c "$cmd" || fail "approved acknowledgement must execute"
+  [ -f "$inbox/handled/001.msg" ] && [ -f "$inbox/handled/002.msg" ] \
+    || fail "both messages must actually move to handled"
+  printf 'three\n' > "$inbox/003.msg"
+  mkdir -p "$dir/state/sibling.inbox/handled" "$dir/escape"
+  printf 'sibling\n' > "$dir/state/sibling.inbox/001.msg"
+  while IFS= read -r cmd; do
+    id=$((id + 1))
+    hook "$policy" permission-request exec "$cmd" "inbox_bad_$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "sibling inbox operations must remain at the native prompt: $OUT"
+    [ -f "$dir/state/t1.devin-permission-pending/inbox_bad_$id.pending" ] \
+      || fail "sibling inbox operation must be held for firstmate: $cmd"
+  done <<CASES
+mv '$dir/state/sibling.inbox/001.msg' '$dir/state/sibling.inbox/handled/'
+mkdir -p '$dir/state/sibling.inbox/handled'
+mv '$inbox/003.msg' '$dir/state/sibling.inbox/handled/'
+CASES
+  ln -s "$dir/escape" "$inbox/004.msg"
+  hook "$policy" permission-request exec "mv '$inbox/004.msg' '$inbox/handled/'" inbox_source_escape
+  [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/inbox_source_escape.pending" ] \
+    || fail "message symlink escape must stay held: $OUT"
+  rm -r "$inbox/handled"
+  ln -s "$dir/escape" "$inbox/handled"
+  hook "$policy" permission-request exec "mkdir -p '$inbox/handled' && mv '$inbox/003.msg' '$inbox/handled/'" inbox_destination_escape
+  [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/inbox_destination_escape.pending" ] \
+    || fail "handled symlink escape must stay held: $OUT"
+  [ -f "$inbox/003.msg" ] && [ -f "$dir/state/sibling.inbox/001.msg" ] \
+    || fail "held acknowledgement escapes must leave their sources untouched"
+  pass "fm-devin-permission-policy: exact inbox setup/ack passes; sibling and symlink escapes stay at the native prompt"
+}
+
+
 test_refusal_list
 test_refusal_leaves_safe_commands_alone
 test_recursive_rm_resolves_symlinked_components
@@ -1913,3 +1959,5 @@ test_gh_verbs_are_found_after_inherited_flags
 test_every_fetch_positional_is_classified
 test_judge_prompt_carries_the_task_contract
 test_missing_policy_file_still_refuses
+
+test_exact_inbox_acknowledgements_and_escapes
