@@ -576,16 +576,17 @@ function ghTarget(command, spec, parsed, tokens, cwd, context) {
   if (["pr create", "pr edit"].includes(command) && context.cwdKnown && !context.compound
     && parsed.flags.filter((flag) => ["-B", "--base", "-H", "--head"].includes(flag.name)).every((flag) => flag.value !== null && !flag.missing)) {
     const lastValue = (...names) => parsed.flags.filter((flag) => names.includes(flag.name)).at(-1)?.value || "";
+    const currentBranch = () => {
+      const branch = spawnSync("git", ["branch", "--show-current"], { cwd, encoding: "utf8" });
+      return branch.status === 0 ? branch.stdout.trim() : "";
+    };
     target.prBase = lastValue("-B", "--base");
     if (command === "pr create") {
-      target.prHead = lastValue("-H", "--head");
-      if (!target.prHead) {
-        const branch = spawnSync("git", ["branch", "--show-current"], { cwd, encoding: "utf8" });
-        if (branch.status === 0) target.prHead = branch.stdout.trim();
-      }
+      target.prHead = lastValue("-H", "--head") || currentBranch();
     } else {
       const selector = literalValue(positional[0]);
       target.prNumber = selector?.match(/^(?:#)?(\d+)$/)?.[1] || selector?.match(/\/pull\/(\d+)(?:[/?#]|$)/)?.[1] || "";
+      if (!target.prNumber) target.prBranch = selector || currentBranch();
     }
     target.cwd = cwd;
   }
@@ -868,6 +869,7 @@ function runGate(target) {
     if (target.prBase) args.push("--pr-base", target.prBase);
     if (target.prHead) args.push("--pr-head", target.prHead);
     if (target.prNumber) args.push("--pr", target.prNumber);
+    if (target.prBranch) args.push("--pr-branch", target.prBranch);
     for (const what of target.unscannable) args.push("--unscannable", what);
     for (const entry of target.files) args.push(withKind(entry.kind, entry.path));
     target.texts.forEach((entry, index) => {

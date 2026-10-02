@@ -17,7 +17,7 @@
 #       Commit-msg check for a repository that has a public or unlisted network
 #       remote: refuses a message carrying a non-allowlisted email address or a
 #       denylist or generic-pattern hit. Never rewrites the message.
-#   fm-publish-gate.sh check-text --dest <owner/repo|gist> [--pr-base <branch> --pr-head <branch> | --pr <number>] [--unscannable <what>]... [--config <dir>] [<text>...]
+#   fm-publish-gate.sh check-text --dest <owner/repo|gist> [--pr-base <branch> --pr-head <branch> | --pr <number> | --pr-branch <branch>] [--unscannable <what>]... [--config <dir>] [<text>...]
 #       The scanner the gh publish guard (bin/fm-gh-publish-policy.mjs) calls
 #       for PR, issue, release, gist, repo, and API text. Each <text> is a
 #       file, optionally prefixed with its kind - title:<file>, body:<file> (a
@@ -861,17 +861,22 @@ EVIDENCE_RULE='(^|[^a-z0-9_])pid[ =:]?[0-9]+|(^|[^a-z0-9%])%[0-9]+([^0-9]|$)|(^|
 PR_BASE=""
 PR_HEAD=""
 PR_NUMBER=""
+PR_BRANCH=""
 PR_UPSTREAM=""
 INTEGRATION_SOURCES=""
 
 # Use the same trusted executable and environment isolation as privacy reads.
-integration_api() {
-  local paging=()
-  [ "${3:-}" != paginate ] || paging=(--paginate)
+integration_gh() {
   env -u GH_HOST -u GH_REPO -u GH_CONFIG_DIR -u XDG_CONFIG_HOME \
     -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
     -u SSL_CERT_FILE -u SSL_CERT_DIR \
-    "$INTEGRATION_GH" api --hostname github.com "$1" --jq "$2" ${paging[@]+"${paging[@]}"} 2>/dev/null
+    "$INTEGRATION_GH" "$@" 2>/dev/null
+}
+
+integration_api() {
+  local paging=()
+  [ "${3:-}" != paginate ] || paging=(--paginate)
+  integration_gh api --hostname github.com "$1" --jq "$2" ${paging[@]+"${paging[@]}"}
 }
 
 # Prove a fork-local PR to main contains a two-parent merge since main, whose
@@ -883,7 +888,7 @@ integration_api() {
 verify_integration() {
   local dest=$1 origin upstream metadata base head repo merges merge first source status count=0
   INTEGRATION_SOURCES=""
-  [ -n "$PR_NUMBER" ] || { [ -n "$PR_BASE" ] && [ -n "$PR_HEAD" ]; } || return 0
+  [ -n "$PR_NUMBER" ] || [ -n "$PR_BRANCH" ] || { [ -n "$PR_BASE" ] && [ -n "$PR_HEAD" ]; } || return 0
   printf '%s' "$dest" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 0
   INTEGRATION_GH=$(trusted_gh) || return 0
   origin=$(git remote get-url origin 2>/dev/null) || return 0
@@ -898,6 +903,10 @@ verify_integration() {
   printf '%s' "$upstream" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 0
   [ "$(lower "$upstream")" != "$(lower "$dest")" ] || return 0
   base=$PR_BASE head=$PR_HEAD
+  if [ -n "$PR_BRANCH" ] && [ -z "$PR_NUMBER" ]; then
+    printf '%s' "$PR_BRANCH" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' || return 0
+    PR_NUMBER=$(integration_gh pr view "$PR_BRANCH" --repo "github.com/$dest" --json number --jq .number) || return 0
+  fi
   if [ -n "$PR_NUMBER" ]; then
     printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$' || return 0
     metadata=$(integration_api "repos/$dest/pulls/$PR_NUMBER" '[.base.ref, .head.sha, .head.repo.full_name] | @tsv') || return 0
@@ -933,12 +942,13 @@ parse_text_context() {
   TEXT_ARGS=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
-    --pr-base | --pr-head | --pr | --pr-upstream)
+    --pr-base | --pr-head | --pr | --pr-branch | --pr-upstream)
       [ "$#" -gt 1 ] || usage
       case "$1" in
       --pr-base) PR_BASE=$2 ;;
       --pr-head) PR_HEAD=$2 ;;
       --pr) PR_NUMBER=$2 ;;
+      --pr-branch) PR_BRANCH=$2 ;;
       --pr-upstream) [ "$CMD" = ci-text ] || usage; PR_UPSTREAM=$2 ;;
       esac
       shift 2

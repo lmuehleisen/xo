@@ -1473,13 +1473,17 @@ Also reworked the loop so the retry stops after three attempts.'
 test_integration_pr_body_limits() {
   local repo="$TMP_ROOT/integration-text" source out body="$TMP_ROOT/integration.md"
   source=$(printf 'a%.0s' $(seq 1 40))
-  git init -q -b main "$repo"
+  git init -q -b integration "$repo"
   git -C "$repo" remote add origin https://github.com/acme/widgets.git
   git -C "$repo" remote add upstream https://github.com/acme/upstream.git
   cp "$CFG/upstream" "$TMP_ROOT/upstream.saved" 2>/dev/null || : >"$TMP_ROOT/upstream.saved"
   printf 'acme/upstream\n' >"$CFG/upstream"
   cat >"$FAKEBIN/gh" <<'SH'
 #!/usr/bin/env bash
+if [ "$1 $2 $3 $4 $5 $6 $7 $8 $9" = 'pr view integration --repo github.com/acme/widgets --json number --jq .number' ]; then
+  printf '3\n'
+  exit 0
+fi
 [ "$1 $2 $3" = 'api --hostname github.com' ] || exit 1
 source=$(printf 'a%.0s' $(seq 1 40))
 first=$(printf 'b%.0s' $(seq 1 40))
@@ -1504,6 +1508,8 @@ SH
   out=$(cd "$repo" && FM_TEST_JUDGE_PROMPTS="$TMP_ROOT/integration-prompts" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr create --repo acme/widgets --base main --head integration --title Integration --body-file '$body'" 2>&1) || fail "integration create should pass: $out"
   assert_contains "$(cat "$TMP_ROOT/integration-prompts")" 'Tail review marker.' 'whole description reaches the judge'
   out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit https://github.com/acme/widgets/pull/3 --body-file '$body'" 2>&1) || fail "integration edit should pass: $out"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit integration --repo acme/widgets --body-file '$body'" 2>&1) || fail "branch-selected integration edit should pass: $out"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit --repo acme/widgets --body-file '$body'" 2>&1) || fail "current-branch integration edit should pass: $out"
   out=$(cd "$repo" && "$GATE" ci-text --config "$CFG" --dest acme/widgets --pr 3 --pr-upstream acme/upstream "body:$body" 2>&1) || fail "CI integration should pass: $out"
   out=$(cd "$repo" && FM_CI_PR_DEST=acme/widgets FM_CI_PR_NUMBER=3 FM_CI_PR_UPSTREAM=acme/upstream "$GATE" ci-text --config "$CFG" "body:$body" 2>&1) || fail "CI environment context should pass: $out"
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head feature "body:$body" 2>&1) && fail "non-integration body should refuse"
