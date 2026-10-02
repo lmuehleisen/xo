@@ -79,7 +79,9 @@
 #   fm_agy_teardown_retire <state-dir> <id>
 #   fm_agy_teardown_remove_state <state-dir> <id>
 #       teardown's retire of the bypass layer and worker hooks, and its removal
-#       of the per-task policy state
+#       of the per-task policy state. Retire archives an agy task with
+#       bin/fm-agy-audit.py after permission resolution and before deletion;
+#       an archive failure stops cleanup without deleting the task records.
 #
 # The spawn-side functions read bin/fm-spawn.sh's globals rather than taking
 # them as arguments: AGY_BYPASS, AGY_JUDGE_ARG,
@@ -247,7 +249,7 @@ fm_agy_spawn_wire() {
     case " $agy_verified " in
       *" ${agy_version:-none} "*) ;;
       *)
-        echo "error: cannot spawn agy bypass worker: agy ${agy_version:-unreadable} is outside the live-verified set ($agy_verified); the hook contract this layer depends on is unproven there" >&2
+        echo "error: cannot spawn agy bypass worker: agy ${agy_version:-unreadable} is outside the live-verified set ($agy_verified); the hook contract this layer depends on is unproven there; manual review is a separate explicit choice: config/crew-permissions=manual without --agy-bypass (not judge coverage)" >&2
         exit 1
         ;;
     esac
@@ -269,7 +271,7 @@ fm_agy_spawn_wire() {
     agy_git_root=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$agy_wt_real")
     while :; do
       [ ! -e "$agy_check_dir/.agents/hooks.json" ] && [ ! -L "$agy_check_dir/.agents/hooks.json" ] || {
-        echo "error: cannot spawn agy bypass worker: $agy_check_dir/.agents/hooks.json exists; the bypass posture needs firstmate's worker hooks to be the only hooks in force; drop --agy-bypass for this project" >&2
+        echo "error: cannot spawn agy bypass worker: $agy_check_dir/.agents/hooks.json exists; the bypass posture needs firstmate's worker hooks to be the only hooks in force; choose manual review explicitly with config/crew-permissions=manual and omit --agy-bypass; manual workers are not judge coverage" >&2
         exit 1
       }
       [ "$agy_check_dir" != "$agy_git_root" ] || break
@@ -289,10 +291,10 @@ fm_agy_spawn_wire() {
       --arg status "$STATE_REAL/$ID.status" --arg inbox "$STATE_REAL/$ID.inbox" \
       --arg data "$agy_task_data" --arg tasktmp "$TASK_TMP" --arg brief "$BRIEF" \
       --arg log "$STATE_REAL/agy-permission-log.jsonl" --arg agy "$AGY_BIN" \
-      --arg gen "$BUSY_GEN" --arg grants_sha "$agy_grants_sha" \
+      --arg version "$agy_version" --arg gen "$BUSY_GEN" --arg grants_sha "$agy_grants_sha" \
       --arg judge_tier "$AGY_JUDGE_TIER" --arg judge_bin "$AGY_JUDGE_BIN" \
       --arg judge_model "$AGY_JUDGE_MODEL" --arg config "$agy_config" \
-      '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen, judge_tier:$judge_tier, judge_bin:$judge_bin, judge_model:$judge_model, judge_timeout:"60", grants_sha:$grants_sha, config:$config}' \
+      '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen, agy_version:$version, judge_tier:$judge_tier, judge_bin:$judge_bin, judge_model:$judge_model, judge_timeout:"60", grants_sha:$grants_sha, config:$config}' \
       > "$agy_policy" || {
       echo "error: cannot spawn agy bypass worker: could not write $agy_policy" >&2
       exit 1
@@ -410,6 +412,9 @@ fm_agy_spawn_ready_gate() {
 # same tier, and so the task's own record answers which judge decided its
 # held and approved calls.
 fm_agy_meta_lines() {
+  [ "$HARNESS" = agy ] || return 0
+  echo "agy_version=$("$AGY_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  echo "agy_permission_mode=$CREW_PERMISSION_MODE"
   [ "$AGY_BYPASS" -eq 0 ] || echo "agy_bypass=on"
   [ "$AGY_BYPASS" -eq 0 ] || echo "agy_judge=$AGY_JUDGE_TIER:$AGY_JUDGE_MODEL"
 }
@@ -435,6 +440,11 @@ fm_agy_teardown_retire() {  # <state-dir> <id>
     # The bypass adapter's retire closes every pending escalation as not-run
     # while the policy file still names the status file.
     "$SCRIPT_DIR/fm-agy-permission-policy.sh" retire "$state/$id.agy-permission.json" </dev/null || return 1
+  fi
+  # Archive before metadata/status removal; an archival failure keeps them
+  # available for recovery rather than silently losing judge coverage proof.
+  if [ -f "$state/$id.meta" ] && grep -q '^harness=agy$' "$state/$id.meta"; then
+    python3 "$SCRIPT_DIR/fm-agy-audit.py" "$state" "$id" || return 1
   fi
   if [ -e "$state/$id.agy-hooks" ] || [ -L "$state/$id.agy-hooks" ]; then
     "$SCRIPT_DIR/fm-agy-hook.sh" retire-worker "$state" "$id" || return 1

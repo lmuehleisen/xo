@@ -31,7 +31,7 @@
 #                              approve, decline, or retire.
 #   approve <key>              firstmate's resolution of a held call: caches
 #                              the verdict so the worker's retry runs. For a
-#                              never-approve call the approval is a one-shot
+#                              never-approve or credential call approval is a one-shot
 #                              token consumed by one retry; a further retry
 #                              escalates again.
 #   decline <key>              firstmate's refusal of a held call: a retry of
@@ -97,9 +97,12 @@
 # The pending key is agy-permission-<conversationId>-s<stepIdx>, the only
 # stable call identity agy provides.
 #
+# Credential-sensitive approvals also use one-shot exact-input tokens; no
+# template suffix or .env wildcard bypasses that boundary.
+#
 # Policy file (written by bin/fm-spawn.sh): JSON object with string fields
 # task, worktree, status, inbox, data, tasktmp, brief, log, agy (absolute
-# judge executable), gen (the launch's busy generation, stamped onto the
+# judge executable), agy_version (the launch binary version), gen (the launch's busy generation, stamped onto the
 # armed line so the canary can tell this launch's wiring from a stale record
 # left by an earlier launch), judge_model (a model id for the judge tier below,
 # read on every call, empty disables the judge), judge_timeout (seconds, the
@@ -301,17 +304,20 @@ write_armed() {
   # stale line an earlier launch or a reused task id left in the append-only
   # log. The flag file dedupes; retire removes it with the pending directory
   # so a relaunch re-arms.
-  local flag="$PENDING_DIR/.armed" conv='' model=''
+  local flag="$PENDING_DIR/.armed" conv='' model='' version=''
   [ -n "$PENDING_DIR" ] && [ -n "$LOG" ] || return 0
   [ -e "$flag" ] && return 0
   mkdir -p "$PENDING_DIR" 2>/dev/null || return 0
   (set -C; : > "$flag") 2>/dev/null || return 0
   conv=${SESSION_ID:-$(printf '%s' "$PAYLOAD" | jq -r '.conversationId // ""' 2>/dev/null)}
   model=$(printf '%s' "$PAYLOAD" | jq -r '.modelName // ""' 2>/dev/null)
+  version=$(jq -r ' .agy_version // ""' "$POLICY" 2>/dev/null)
   jq -c -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg task "$TASK" \
+    --arg version "$version" --arg tier "$JUDGE_TIER" --arg judge_model "$JUDGE_MODEL" \
     --arg conv "$conv" --arg model "$model" --arg gen "$GEN" '{
       ts: $ts, task: $task, event: "armed",
       tool: "fm-agy-permission-policy", session_id: $conv, gen: $gen,
+      agy_version: $version, judge_tier: $tier, judge_model: $judge_model,
       step_idx: null, model: $model, input: "", cwd: "", error: ""
     }' >> "$LOG" 2>/dev/null || true
 }
@@ -389,6 +395,18 @@ declined_key_file() {  # cache entry marking a call firstmate declined
   printf '%s/%s.declined' "$CACHE_DIR" "$k"
 }
 
+apply_read_constraints() {
+  READ_CONSTRAINTS=$(brief_read_constraints)
+  [ -n "$READ_CONSTRAINTS" ] || return 0
+  case "$TOOL" in
+    run_command|view_file|grep_search|list_dir)
+      no_approve "brief read exclusions require scope review"
+      # Never reuse an approval from before an exclusion was added/changed.
+      CACHE_INPUT="$CACHE_INPUT"$'\n'"$READ_CONSTRAINTS"
+      ;;
+  esac
+}
+
 case "$EVENT" in
   armed)
     write_armed
@@ -404,6 +422,7 @@ case "$EVENT" in
     else
       evaluate_tool
     fi
+    apply_read_constraints
     if [ -n "$REFUSE_REASON" ]; then judge_probe refuse
     elif [ -z "$NOT_APPROVABLE" ]; then judge_probe read-and-build
     elif [ -n "$NEVER_APPROVE" ]; then judge_probe never-approve
@@ -418,6 +437,7 @@ case "$EVENT" in
     else
       evaluate_tool
     fi
+    apply_read_constraints
     # The armed line is written even for a call about to be denied: any hook
     # invocation proves this launch's wiring is live, and the canary watches
     # the observer log only.
@@ -466,7 +486,7 @@ case "$EVENT" in
       deny "firstmate declined this call; do not retry it"
     fi
     escalate_reason='' escalate_source='first judge'
-    if [ -n "$NEVER_APPROVE" ] && [ -n "$CACHE_DIR" ] \
+    if { [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ]; } && [ -n "$CACHE_DIR" ] \
       && once_key=$(cache_key 2>/dev/null) && [ -n "$once_key" ] \
       && [ -f "$CACHE_DIR/$once_key.once" ]; then
       # Firstmate's one-shot approval of a never-approve call: the token is
@@ -483,16 +503,16 @@ case "$EVENT" in
       # approval is a one-off, so a retry escalates again.
       escalate_reason=$NEVER_APPROVE escalate_source='firstmate policy'
       log_record escalate policy "$NEVER_APPROVE"
-    elif cache_lookup; then
-      log_record approve cache "$CACHE_REASON (static: $NOT_APPROVABLE)"
-      exit 0
     elif [ -n "$SENSITIVE_HIT" ]; then
       # Credential material never reaches the judge under bypass: there is no
       # native prompt behind it, so the call is held for firstmate directly.
-      # The cache is consulted first so firstmate's own approval of the read
-      # takes effect on the retry instead of re-escalating forever.
+      # Only the exact one-shot token above authorizes this retry; a reusable
+      # cache entry from an older policy must not authorize credential reads.
       escalate_reason=$NOT_APPROVABLE escalate_source='firstmate policy'
       log_record escalate policy "$NOT_APPROVABLE"
+    elif cache_lookup; then
+      log_record approve cache "$CACHE_REASON (static: $NOT_APPROVABLE)"
+      exit 0
     else
       run_judge
       if [ "$JUDGE_VERDICT" = approve ]; then
@@ -510,7 +530,7 @@ case "$EVENT" in
       if [ ! -e "$marker" ]; then
         ckey=$(cache_key 2>/dev/null || true)
         mclass=judge
-        [ -n "$NEVER_APPROVE" ] && mclass=never
+        if [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ]; then mclass=never; fi
         printf '%s\n%s\n%s\n%s\n' "$key" "$summary" "$ckey" "$mclass" \
           > "$marker" 2>/dev/null || true
         status_append "needs-decision [key=$key]: agy worker held a tool call for firstmate - $TOOL ($escalate_source: $(one_line "$escalate_reason" 160)): $(one_line "$summary" 300)"
@@ -563,15 +583,15 @@ case "$EVENT" in
         # consumes, so a further retry escalates again.
         if [ -n "$pckey" ] && mkdir -p "$CACHE_DIR" 2>/dev/null \
           && printf 'one-shot\n' > "$CACHE_DIR/$pckey.once" 2>/dev/null; then
-          close_pending "$marker" approved "firstmate approved ONE run of the held call; the worker may retry it once - a further retry escalates again" firstmate
+          close_pending "$marker" approved "firstmate approved ONE run of the held call; the worker must retry the identical command or batch once - a changed call or further retry escalates again" firstmate
         else
           close_pending "$marker" not-run "firstmate approved it, but this call cannot be honored without a verdict cache - run it manually" firstmate
         fi
       elif [ -n "$pckey" ]; then
         cache_store "firstmate approved earlier in this task" "$pckey"
-        close_pending "$marker" approved "firstmate approved the held call; the worker may retry it" firstmate
+        close_pending "$marker" approved "firstmate approved the held call; the worker must retry the identical command or batch; changed inputs need a new decision" firstmate
       else
-        close_pending "$marker" approved "firstmate approved the held call; the worker may retry it" firstmate
+        close_pending "$marker" approved "firstmate approved the held call; the worker must retry the identical command or batch; changed inputs need a new decision" firstmate
       fi
     else
       if [ -n "$pckey" ]; then
