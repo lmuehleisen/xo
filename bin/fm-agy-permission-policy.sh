@@ -379,6 +379,15 @@ evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
         refuse "$TOOL outside the task write roots ($FILE_PATH) is refused by firstmate policy"
       fi
       ;;
+    manage_task)
+      # Native TaskId ownership has no verified binding in this adapter yet.
+      # A model label or a guessed session prefix is not cancellation proof.
+      if [ "$(printf '%s' "$PAYLOAD" | jq -r '.toolCall.args.Action // ""')" = kill ]; then
+        never_approve "native task cancellation requires verified ownership and firstmate approval"
+      else
+        no_approve "$TOOL is not auto-approved"
+      fi
+      ;;
     *) no_approve "$TOOL is not auto-approved" ;;
   esac
 }
@@ -399,7 +408,7 @@ apply_read_constraints() {
   READ_CONSTRAINTS=$(brief_read_constraints)
   [ -n "$READ_CONSTRAINTS" ] || return 0
   case "$TOOL" in
-    run_command|view_file|grep_search|list_dir)
+    run_command|view_file|grep_search|list_dir|search_web|read_url_content)
       no_approve "brief read exclusions require scope review"
       # Never reuse an approval from before an exclusion was added/changed.
       CACHE_INPUT="$CACHE_INPUT"$'\n'"$READ_CONSTRAINTS"

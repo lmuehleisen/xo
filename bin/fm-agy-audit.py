@@ -52,7 +52,10 @@ def archive(state, task):
                 if row.get("task") == task:
                     rows.append(row)
     armed = [r for r in rows if r.get("event") == "armed"]
-    decisions = [r for r in rows if r.get("event") == "pre-tool-use" and "decision" in r]
+    # Retry/timeout-verdict diagnostics use the same hook event as the final
+    # decision and carry cumulative counters. Count each terminal verdict once.
+    decisions = [r for r in rows if r.get("event") == "pre-tool-use"
+                 and r.get("decision") in {"approve", "refuse", "escalate"}]
     holds = {"agy-permission-" + r["tool_use_id"]: timestamp(r.get("ts"))
              for r in decisions if r.get("decision") == "escalate" and r.get("tool_use_id")}
     resolutions = []

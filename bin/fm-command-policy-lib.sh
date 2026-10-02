@@ -3003,7 +3003,14 @@ brief_read_constraints() {
     END {
       for (i=1; i<=n; i++) {
         text=tolower(line[i])
-        if (text ~ /independen|exclud|((not|never|prohibit|forbid|avoid).*(read|inspect|access))|((read|inspect|access).*(prohibit|forbid))/) {
+        reads="(read|inspect|access|consult|search|open)"
+        negative=(text ~ "(not|never|prohibit|forbid|avoid).*" reads || text ~ reads ".*(prohibit|forbid|exclud)")
+        limited=(text ~ "(only|exclusively|limit|restrict|confine).*" reads || text ~ reads ".*(only|exclusively|limit|restrict|confine)")
+        sources=(text ~ /(source|input|research|data|document|file)/)
+        use_limit=(sources && text ~ /(only|exclusively).*use|use.*(only|exclusively)/)
+        excluded=(sources && text ~ /exclud/ && text !~ /(diff|output|format|render)/)
+        independent=(sources && text ~ /independen/)
+        if (negative || limited || use_limit || excluded || independent) {
           for (j=i-1; j<=i+1; j++) if (j>0 && j<=n) selected[j]=1
         }
       }

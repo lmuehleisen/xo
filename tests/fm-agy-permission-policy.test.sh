@@ -1386,6 +1386,80 @@ test_audit_survives_runtime_cleanup() {
 }
 
 
+test_review_read_boundaries_and_nonread_exclusions() {
+  local policy dir cmd tool
+  policy=$(new_case review-web)
+  dir=$(case_dir "$policy")
+  printf '# Task\n## Captain\047s intent\nInspect permitted.csv.\n## Firstmate spec\nDo not read external web sources.\n# Setup\n' > "$dir/data/t1/brief.md"
+  for tool in search_web read_url_content; do
+    hook "$policy" pre-tool-use "$tool" 'https://example.com/source'
+    denied "$OUT" || fail "web read restrictions must reach scope review: $tool => $OUT"
+  done
+  # The identical web inputs normally pass when no restriction applies.
+  policy=$(new_case review-unrestricted)
+  for tool in search_web read_url_content; do
+    hook "$policy" pre-tool-use "$tool" 'https://example.com/source'
+    abstained "$OUT" || fail "unrestricted web reads should remain routine: $OUT"
+  done
+  policy=$(new_case review-diff-exclusions)
+  dir=$(case_dir "$policy")
+  printf '# Task\n## Captain\047s intent\nFix the build.\n## Firstmate spec\nExclude generated files from the diff output.\n# Setup\n' > "$dir/data/t1/brief.md"
+  for cmd in 'git status' 'npm test' 'node -v'; do
+    hook "$policy" pre-tool-use run_command "$cmd"
+    abstained "$OUT" || fail "diff-only exclusions must not force a judge: $cmd => $OUT"
+  done
+  # Positive restrictions beyond the bounded excerpt must still reach a
+  # judge, which can approve precisely named sources and hold broader reads.
+  # shellcheck disable=SC2016
+  policy=$(new_case review-positive '
+while [ $# -gt 0 ]; do case "$1" in -p) prompt=$2; shift 2 ;; *) shift ;; esac; done
+input=${prompt##*Tool input:}
+constraints=${prompt##*Explicit read constraints}
+constraints=${constraints%%Static policy note:*}
+case "$constraints" in
+  *"only inspect permitted.csv"*|*"limit access to the permitted directory"*)
+    case "$input" in *permitted.csv*) echo "APPROVE: permitted source" ;; *) echo "DECLINE: limited read scope" ;; esac ;;
+  *) echo "APPROVE: unrestricted read" ;;
+esac')
+  dir=$(case_dir "$policy")
+  local boundary
+  for boundary in 'only inspect permitted.csv' 'limit access to the permitted directory'; do
+    python3 - "$dir/data/t1/brief.md" "$boundary" <<'PY'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect the source.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + sys.argv[2] + "\n# Setup\n")
+PY
+    hook "$policy" pre-tool-use run_command 'cat broad-source.csv' 2
+    denied "$OUT" || fail "positive read restriction must hold a broad read: $boundary => $OUT"
+    "$POLICY_SH" decline "$policy" agy-permission-c1-s2 </dev/null >/dev/null 2>&1 || fail "close the fixture hold before changing its boundary"
+    hook "$policy" pre-tool-use run_command 'cat permitted.csv' 3
+    abstained "$OUT" || fail "positive restrictions must permit a named source: $boundary => $OUT"
+  done
+  # A judge that would approve any input must not authorize an unproved kill.
+  policy=$(new_case review-unproved-kill 'echo "APPROVE: model assumes ownership"')
+  hook "$policy" pre-tool-use manage_task '' 4 '{"Action":"kill","TaskId":"other-session/task-40","toolSummary":"stop my own task"}'
+  denied "$OUT" "verified ownership" || fail "unproved native cancellation must not depend on model labels: $OUT"
+  pass "fm-agy-permission-policy: web/positive read boundaries hold, diff exclusions remain routine and native cancellation needs proof"
+}
+
+test_audit_counts_terminal_metrics_once() {
+  local policy dir archive
+  policy=$(new_case audit-terminal-metrics)
+  dir=$(case_dir "$policy")
+  printf 'harness=agy\nkind=scout\n' > "$dir/state/t1.meta"
+  cat > "$dir/state/agy-permission-log.jsonl" <<'ROWS'
+{"task":"t1","event":"pre-tool-use","decision":"judge-retry","decider":"judge","judge_attempts":1,"judge_elapsed_seconds":4,"judge_timeouts":1}
+{"task":"t1","event":"pre-tool-use","decision":"judge-timeout-verdict","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":4,"judge_timeouts":2}
+{"task":"t1","event":"pre-tool-use","decision":"approve","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":12,"judge_timeouts":2}
+ROWS
+  python3 "$ROOT/bin/fm-agy-audit.py" "$dir/state" t1 || fail "metrics fixture archive failed"
+  archive="$dir/state/agy-permission-audit.jsonl"
+  jq -e '.judge_attempts == 2 and .judge_retries == 1 and .judge_timeouts == 2 and .judge_elapsed_seconds == 12 and .decisions.approve == 1' "$archive" >/dev/null \
+    || fail "cumulative diagnostics must not inflate terminal metrics: $(cat "$archive")"
+  pass "fm-agy-permission-policy: archive counts terminal metrics once despite cumulative diagnostic rows"
+}
+
+
 test_armed_heartbeat_proves_wiring
 test_refusal_list_denies
 test_refusal_leaves_safe_commands_alone
@@ -1423,3 +1497,6 @@ test_exact_shell_inbox_acknowledgements
 test_read_constraints_and_interpreter_routing
 test_exact_template_batch_retry
 test_audit_survives_runtime_cleanup
+
+test_review_read_boundaries_and_nonread_exclusions
+test_audit_counts_terminal_metrics_once
