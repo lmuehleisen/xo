@@ -1438,6 +1438,7 @@ EOT"
 
 test_pr_text_shape_rules() {
   local long_body reply
+  "$GATE" check-text --config "$CFG" --dest acme/widgets >/dev/null 2>&1 || fail "destination-only text check should pass"
   printf 'Adds a retry to the fetcher.\n\nTested with the fetcher suite.\n' >"$TMP_ROOT/short.md"
   policy 'gh pr create --repo acme/widgets --title "Add fetcher retry" --body-file short.md' \
     || fail "a short neutral PR should pass: $POLICY_OUT"

@@ -1373,7 +1373,7 @@ cmd_check_text() {
   local dest=$1 unscannable=""
   shift
   parse_text_context "$@"
-  set -- "${TEXT_ARGS[@]}"
+  set -- ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   while [ "$#" -gt 0 ] && [ "$1" = --unscannable ]; do
     [ "$#" -gt 1 ] || usage
     unscannable="${unscannable:+$unscannable, }$2"
@@ -1395,12 +1395,12 @@ cmd_check_text() {
   TEXT_ARGS=("$@")
   verify_integration "$DEST_KEY"
   corpus_reset
-  add_texts "${TEXT_ARGS[@]}"
+  add_texts ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   scan_corpus 1
   scan_corpus_emails
   [ "$FINDINGS" -eq 0 ] ||
     refuse "$FINDINGS finding(s) in text for public destination $DEST_KEY (see '$(basename "$SELF") policy')" "rewrite the flagged text (the rule and line are named above) and run the gh command again"
-  judge_public text "${TEXT_ARGS[@]}"
+  judge_public text ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   exit 0
 }
 
@@ -1474,7 +1474,7 @@ cmd_ci_text() {
   parse_text_context "$@"
   [ -z "$dest" ] || verify_integration "$dest"
   corpus_reset
-  add_texts "${TEXT_ARGS[@]}"
+  add_texts ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   scan_corpus 0
   scan_corpus_emails
   [ "$FINDINGS" -eq 0 ] ||
