@@ -4856,7 +4856,13 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_STATE=$STATE_REAL
   RELAUNCH_REPLACEMENT_WT=$WT
 fi
-if [ "$KIND" != secondmate ]; then
+# A raw launch carries no firstmate wiring: its command runs verbatim with no
+# hooks, extensions, or event writers, so arming a busy record for it would
+# seed state nothing can ever clear - the same reason standalone Kimi below
+# waits for verified wiring. The whole arm/wire section is therefore skipped
+# on the raw path, including the hook and plugin files this block writes into
+# the operator's worktree.
+if [ "$KIND" != secondmate ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   # Arm the semantic busy-state contract (bin/fm-busy-lib.sh) for every
   # adapter with a verified semantic source. The launch brief sent below IS a
   # submitted turn, so the seed record is busy/fm-spawn. The minted gen is
@@ -4870,38 +4876,26 @@ if [ "$KIND" != secondmate ]; then
   [ "$RELAUNCH" -eq 1 ] || SPAWN_PRELAUNCH_WIRING=1
   case "$HARNESS" in
   codex*)
-    # A raw launch carries no wiring to arbitrate, so the gate does not apply
-    # to it - same rule as the kimi arm below.
-    if [ "$RAW_LAUNCH" -eq 0 ] && fm_busy_codex_semantic_source; then
+    if fm_busy_codex_semantic_source; then
       echo "error: codex semantic busy-state wiring is not implemented; extend the probe only together with verified wiring" >&2
       exit 1
     fi
     ;;
   esac
   case "$HARNESS" in
-  claude* | opencode* | pi | pi-signed | omp)
+  claude* | opencode* | pi | pi-signed | omp | gemini | agy | devin)
     BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
       echo "error: failed to arm the busy-state contract for $ID" >&2
       exit 1
     }
     [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
     ;;
-  gemini | agy | devin)
-    if [ "$RAW_LAUNCH" -eq 0 ]; then
-      BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
-        echo "error: failed to arm the busy-state contract for $ID" >&2
-        exit 1
-      }
-      [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
-    fi
-    ;;
   kimi*)
     # Standalone Kimi stays unknown until fm_busy_kimi_verified opens on a
     # live-verified installed version (bin/fm-busy-lib.sh owns the gate and
     # the required evidence). Arming without wiring would seed a busy record
-    # nothing can ever clear, so the arm waits for the wiring. A raw launch
-    # carries no wiring to arbitrate, so the check does not apply to it.
-    if [ "$RAW_LAUNCH" -eq 0 ] && fm_busy_kimi_verified; then
+    # nothing can ever clear, so the arm waits for the wiring.
+    if fm_busy_kimi_verified; then
       echo "error: kimi semantic busy-state wiring is not implemented; open the gate only together with verified wiring" >&2
       exit 1
     fi
@@ -4938,38 +4932,36 @@ EOF
     exclude_path '.claude/settings.local.json'
     ;;
   gemini)
-    if [ "$RAW_LAUNCH" -eq 0 ]; then
-      # Semantic busy-state hooks (bin/fm-busy-lib.sh): BeforeAgent opens a
-      # turn and AfterAgent closes it, with SessionEnd closing on process
-      # shutdown so an abnormal end can never leave a stale busy record.
-      # Verified live on gemini-cli 0.58.0 as a clean open/close pair:
-      # mid-turn only BeforeAgent had fired, and AfterAgent followed at turn
-      # end. AfterAgent ALSO fires on a manual Escape interrupt (carrying
-      # prompt_response "[no response text]"), so unlike Claude a cancelled
-      # gemini turn closes its own record instead of leaving it busy.
-      # SessionEnd was observed firing TWICE for one /quit; the busy writer is
-      # idempotent for a repeated idle event, so the duplicate is harmless and
-      # deliberately not de-duplicated here.
-      # These are written into a FIRSTMATE-OWNED settings file under state/,
-      # reached through GEMINI_CLI_SYSTEM_SETTINGS_PATH on the launch command,
-      # never into the worktree's own .gemini/settings.json - that path is the
-      # PROJECT's committed settings file, so writing it would clobber a
-      # project's configuration and retiring it would delete a tracked file.
-      # Hook arrays MERGE across gemini's settings layers rather than
-      # overriding, so a project's own hooks still run alongside these.
-      # AfterAgent keeps the turn-ended NOTIFICATION touch for the watcher.
-      # Every hook command tolerates a refused event (|| true) so a stale-gen
-      # writer can never break gemini's own lifecycle, and each prints the
-      # empty JSON object gemini's hook contract requires on stdout.
-      busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
-      busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source gemini-hook"
-      g_before=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event before-agent >/dev/null 2>&1 || true; printf '{}'")
-      g_after=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event after-agent >/dev/null 2>&1 || true; printf '{}'")
-      g_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end >/dev/null 2>&1 || true; printf '{}'")
-      cat >"$STATE_REAL/$ID.gemini-settings.json" <<EOF
+    # Semantic busy-state hooks (bin/fm-busy-lib.sh): BeforeAgent opens a
+    # turn and AfterAgent closes it, with SessionEnd closing on process
+    # shutdown so an abnormal end can never leave a stale busy record.
+    # Verified live on gemini-cli 0.58.0 as a clean open/close pair:
+    # mid-turn only BeforeAgent had fired, and AfterAgent followed at turn
+    # end. AfterAgent ALSO fires on a manual Escape interrupt (carrying
+    # prompt_response "[no response text]"), so unlike Claude a cancelled
+    # gemini turn closes its own record instead of leaving it busy.
+    # SessionEnd was observed firing TWICE for one /quit; the busy writer is
+    # idempotent for a repeated idle event, so the duplicate is harmless and
+    # deliberately not de-duplicated here.
+    # These are written into a FIRSTMATE-OWNED settings file under state/,
+    # reached through GEMINI_CLI_SYSTEM_SETTINGS_PATH on the launch command,
+    # never into the worktree's own .gemini/settings.json - that path is the
+    # PROJECT's committed settings file, so writing it would clobber a
+    # project's configuration and retiring it would delete a tracked file.
+    # Hook arrays MERGE across gemini's settings layers rather than
+    # overriding, so a project's own hooks still run alongside these.
+    # AfterAgent keeps the turn-ended NOTIFICATION touch for the watcher.
+    # Every hook command tolerates a refused event (|| true) so a stale-gen
+    # writer can never break gemini's own lifecycle, and each prints the
+    # empty JSON object gemini's hook contract requires on stdout.
+    busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
+    busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source gemini-hook"
+    g_before=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event before-agent >/dev/null 2>&1 || true; printf '{}'")
+    g_after=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event after-agent >/dev/null 2>&1 || true; printf '{}'")
+    g_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end >/dev/null 2>&1 || true; printf '{}'")
+    cat >"$STATE_REAL/$ID.gemini-settings.json" <<EOF
 {"hooks":{"BeforeAgent":[{"hooks":[{"type":"command","command":"$g_before"}]}],"AfterAgent":[{"hooks":[{"type":"command","command":"$g_after"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$g_sessionend"}]}]}}
 EOF
-    fi
     ;;
   devin)
     fm_devin_spawn_wire
@@ -5222,20 +5214,16 @@ EOF
     # Kimi's Stop hook is global, but it is inert unless cwd contains this
     # task's token pointer and the token resolves through Firstmate's private
     # registry. The installer above owns the format-preserving config edit and
-    # the always-zero, silent hook script. A raw launch never runs that
-    # install, so it has no consumer for a token - and would die here on the
-    # missing registry directory.
-    if [ "$RAW_LAUNCH" -eq 0 ]; then
-      KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
-      old_umask=$(umask)
-      umask 077
-      auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
-      umask "$old_umask"
-      printf '%s\n' "$TURNEND" >"$auth_file"
-      printf '%s\n' "${auth_file##*/}" >"$STATE/$ID.kimi-turnend-token"
-      printf 'token=%s\n' "${auth_file##*/}" >"$WT/.fm-kimi-turnend"
-      exclude_path '.fm-kimi-turnend'
-    fi
+    # the always-zero, silent hook script.
+    KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
+    old_umask=$(umask)
+    umask 077
+    auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
+    umask "$old_umask"
+    printf '%s\n' "$TURNEND" >"$auth_file"
+    printf '%s\n' "${auth_file##*/}" >"$STATE/$ID.kimi-turnend-token"
+    printf 'token=%s\n' "${auth_file##*/}" >"$WT/.fm-kimi-turnend"
+    exclude_path '.fm-kimi-turnend'
     ;;
   esac
 fi

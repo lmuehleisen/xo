@@ -559,6 +559,15 @@ SH
     || fail "raw claude launch command changed"$'\n'"actual: $launch"
 
   [ ! -s "$probe_log" ] || fail "raw launches executed the adapter binaries they name: $(cat "$probe_log")"
+  # A raw launch installs no firstmate wiring: no busy generation is armed for
+  # a record nothing could clear, and no adapter hook or plugin file is written
+  # into the operator's worktree.
+  grep -q '^busy_gen=' "$HOME_DIR/state/raw-agy-z16.meta" \
+    && fail "raw agy launch armed a busy record with no wiring to clear it"
+  grep -q '^busy_gen=' "$HOME_DIR/state/raw-claude-z17.meta" \
+    && fail "raw claude launch armed a busy record with no wiring to clear it"
+  [ ! -e "$wt2/.claude/settings.local.json" ] \
+    || fail "raw claude launch wrote adapter hooks into the worktree"
   pass "raw launches naming verified adapters record the harness but run verbatim"
 }
 
