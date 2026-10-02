@@ -462,11 +462,14 @@ EOF
 # the whole command is approved. A present flag, another subcommand, or a
 # same-named script that is not this home's helper stays judged.
 test_status_append_ledger_is_approved_when_the_flag_is_absent() {
-  local policy dir cfg cmd
+  local policy dir cfg cmd override
   policy=$(new_case ledger-absent)
   dir=$(case_dir "$policy")
-  cfg="$dir/config"
-  mkdir -p "$cfg"
+  # The fixture temp root is itself a scratch write root, so the config the
+  # approve cases use has to sit outside every task write root.
+  cfg=$(mktemp -d "${HOME:?}/fm-ledger-cfg.XXXXXX")
+  override=$(mktemp -d "${HOME:?}/fm-ledger-override.XXXXXX")
+  jq --arg c "$cfg" '.config = $c' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
   while IFS= read -r cmd; do
     [ -n "$cmd" ] || continue
     hook "$policy" permission-request exec "$cmd"
@@ -478,15 +481,31 @@ echo "done [at=1]: finished" >> '$dir/state/t1.status' && { [ ! -e '$cfg/fleet-l
 cd $ROOT && bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'
 EOF
   # A recorded config that is not the sibling of state/ is the one the brief named.
-  mkdir -p "$dir/override-config"
-  jq --arg c "$dir/override-config" '.config = $c' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
-  hook "$policy" permission-request exec "$ROOT/bin/fm-fleet-ledger.sh appended '$dir/override-config' '$dir/state/t1.status'"
+  jq --arg c "$override" '.config = $c' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  hook "$policy" permission-request exec "$ROOT/bin/fm-fleet-ledger.sh appended '$override' '$dir/state/t1.status'"
   [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision 2>/dev/null)" = approve ] \
     || fail "the config recorded in the policy must approve, got rc=$RC out=$OUT"
   rm -rf "$dir/state/t1.devin-permission-pending"
   hook "$policy" permission-request exec "$ROOT/bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'"
   [ "$RC" = 0 ] && [ -z "$OUT" ] \
     || fail "a sibling config must not approve once the policy records a different one, got rc=$RC out=$OUT"
+  jq 'del(.config)' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  # A config directory the worker can write lets the same command create the flag.
+  local wt writable
+  wt=$(jq -r .worktree "$policy")
+  writable="$wt/cfg"
+  mkdir -p "$writable"
+  jq --arg c "$writable" '.config = $c' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    rm -rf "$dir/state/t1.devin-permission-pending"
+    hook "$policy" permission-request exec "$cmd"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] \
+      || fail "'$cmd' must not be approved when the config directory is writable, got rc=$RC out=$OUT"
+  done <<EOF
+$ROOT/bin/fm-fleet-ledger.sh appended '$writable' '$dir/state/t1.status'
+touch '$writable/fleet-ledger' && $ROOT/bin/fm-fleet-ledger.sh appended '$writable' '$dir/state/t1.status'
+EOF
   jq 'del(.config)' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
   mkdir -p "$dir/elsewhere/config" "$dir/other-config"
   : > "$dir/elsewhere/config/fleet-ledger"
@@ -527,6 +546,7 @@ EOF
   hook "$policy" permission-request exec "bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'"
   [ "$RC" = 0 ] && [ -z "$OUT" ] \
     || fail "a worktree copy of fm-fleet-ledger.sh must not be treated as this home's helper, got rc=$RC out=$OUT"
+  rm -rf "$cfg" "$override"
   pass "fm-devin-permission-policy: the scaffold status command's ledger clause is approved only while the flag is absent"
 }
 

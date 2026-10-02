@@ -2418,9 +2418,10 @@ approve_ensure_agents_md() {
 # ledger can record it. <config> must be the home config beside the status
 # file's state directory, and both paths must physically resolve there: a
 # lexical match through a symlink is not enough, because the helper opens the
-# path it was given. While that config's fleet-ledger flag is absent the
-# invocation writes nothing and is approved. A present flag, another
-# subcommand, or another status file stays judged.
+# path it was given. While that config's fleet-ledger flag is absent and the
+# config directory is outside every task write root, the invocation writes
+# nothing and is approved. A present flag, a writable config directory,
+# another subcommand, or another status file stays judged.
 approve_fleet_ledger() {
   local sub=${E[1]-} cfg='' status='' expected='' state_dir=''
   local cfg_phys='' expected_phys='' status_phys='' status_expected_phys=''
@@ -2449,6 +2450,13 @@ approve_fleet_ledger() {
   status_phys=$(physical_target "${E[3]}" "$CWD" 0) || { no_approve "fm-fleet-ledger.sh status path cannot be resolved"; return 0; }
   status_expected_phys=$(physical_target "$(norm_abs "$STATUS")" '' 0) || { no_approve "fm-fleet-ledger.sh status path cannot be resolved"; return 0; }
   [ "$status_phys" = "$status_expected_phys" ] || { no_approve "fm-fleet-ledger.sh status path does not resolve to this task's status file"; return 0; }
+  # A config directory inside a task write root lets the same command create
+  # the flag first (touch config/fleet-ledger && appended ...). The helper
+  # then writes the ledger. That configuration is not approved.
+  if write_dest_ok "$cfg/fleet-ledger" || write_dest_ok "$cfg_phys/fleet-ledger"; then
+    no_approve "fm-fleet-ledger.sh config directory is inside a task write root"
+    return 0
+  fi
   if [ -e "$cfg_phys/fleet-ledger" ] || [ -L "$cfg_phys/fleet-ledger" ]; then
     no_approve "fm-fleet-ledger.sh appended writes the fleet ledger"
     return 0
