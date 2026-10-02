@@ -145,6 +145,14 @@ printf 'claude,codex\n' > "$SCOPE_HOME/config/quota-providers"
 [ "$(read_args)" = $'<--provider>\n<claude,codex>' ] || fail 'TOON scope missing'
 [ "$(read_args --json)" = $'<--json>\n<--provider>\n<claude,codex>' ] || fail 'JSON scope missing'
 [ "$(read_args auth --json)" = $'<auth>\n<--json>\n<--provider>\n<claude,codex>' ] || fail 'auth scope missing'
+for option in --provider --provider=codex; do
+  : > "$LAB/argv"
+  if QUOTA_AXI_ARGV_LOG="$LAB/argv" read_args "$option" codex --json > "$LAB/out" 2> "$LAB/err"; then
+    fail 'caller-supplied provider widened configured scope'
+  fi
+  grep -Fq 'caller-supplied --provider conflicts' "$LAB/err" || fail 'scope conflict missing diagnostic'
+  [ ! -s "$LAB/argv" ] || fail 'scope conflict reached quota-axi'
+done
 for provider in claude codex cursor copilot grok kimi zai agy alibaba opencode-go commandcode minimax mimo deepseek openrouter elevenlabs devin muse; do
   printf '%s' "$provider" > "$SCOPE_HOME/config/quota-providers"
   [ "$(read_args)" = "$(printf '<--provider>\n<%s>' "$provider")" ] || fail "valid provider rejected: $provider"

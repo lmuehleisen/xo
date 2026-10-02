@@ -19,6 +19,11 @@ invalid() {
 
 args=()
 if [ -e "$FILE" ] || [ -L "$FILE" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      --provider|--provider=*) invalid 'caller-supplied --provider conflicts with the configured scope' ;;
+    esac
+  done
   [ -f "$FILE" ] && [ -r "$FILE" ] || invalid 'expected a readable regular file'
   list='' line='' lines=0
   while IFS= read -r line || [ -n "$line" ]; do

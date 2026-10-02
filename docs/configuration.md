@@ -1070,6 +1070,7 @@ Use lowercase ids without whitespace, empty entries, or duplicates; a trailing n
 Supported ids are `claude`, `codex`, `cursor`, `copilot`, `grok`, `kimi`, `zai`, `agy`, `alibaba`, `opencode-go`, `commandcode`, `minimax`, `mimo`, `deepseek`, `openrouter`, `elevenlabs`, `devin`, and `muse` (quota-axi 0.1.55).
 For example, `claude,codex` restricts reads to those two providers.
 [`bin/fm-quota-read.sh`](../bin/fm-quota-read.sh) validates the file and passes its value as `--provider`; an unreadable or malformed file refuses the read with a diagnostic instead of widening discovery.
+Caller-supplied `--provider` options are refused when a scope file exists, preventing quota-axi from unioning extra providers into the configured selection.
 The helper respects `FM_HOME` and `FM_CONFIG_OVERRIDE`, and compatibility `--version` checks remain unscoped.
 This file is not inherited into secondmate homes: each home selects the providers its own tools and credentials use, which can differ from the primary home.
 The inheritance allowlist remains owned by [`bin/fm-config-inherit-lib.sh`](../bin/fm-config-inherit-lib.sh).
