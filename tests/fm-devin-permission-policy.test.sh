@@ -477,6 +477,17 @@ $ROOT/bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'
 echo "done [at=1]: finished" >> '$dir/state/t1.status' && { [ ! -e '$cfg/fleet-ledger' ] || '$ROOT/bin/fm-fleet-ledger.sh' appended '$cfg' '$dir/state/t1.status' >/dev/null 2>&1 || true; }
 cd $ROOT && bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'
 EOF
+  # A recorded config that is not the sibling of state/ is the one the brief named.
+  mkdir -p "$dir/override-config"
+  jq --arg c "$dir/override-config" '.config = $c' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  hook "$policy" permission-request exec "$ROOT/bin/fm-fleet-ledger.sh appended '$dir/override-config' '$dir/state/t1.status'"
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision 2>/dev/null)" = approve ] \
+    || fail "the config recorded in the policy must approve, got rc=$RC out=$OUT"
+  rm -rf "$dir/state/t1.devin-permission-pending"
+  hook "$policy" permission-request exec "$ROOT/bin/fm-fleet-ledger.sh appended '$cfg' '$dir/state/t1.status'"
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "a sibling config must not approve once the policy records a different one, got rc=$RC out=$OUT"
+  jq 'del(.config)' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
   mkdir -p "$dir/elsewhere/config" "$dir/other-config"
   : > "$dir/elsewhere/config/fleet-ledger"
   ln -s "$dir/elsewhere/config" "$dir/hop"

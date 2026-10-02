@@ -49,6 +49,9 @@
 #       (all from the per-task policy file; empty means the check they feed
 #       degrades closed - an unset WORKTREE makes every recursive rm
 #       unresolvable and refused)
+#   CONFIG_DIR  the home config directory the brief's status command names.
+#       Empty on an older policy file, which falls back to the config sibling
+#       of a status file under state/.
 #   EVENT TOOL TOOL_USE_ID SESSION_ID CMD FILE_PATH INPUT_JSON INPUT_STRINGS
 #   CACHE_INPUT PENDING_DIR CACHE_DIR JUDGE_MODEL JUDGE_TIMEOUT
 #   FM_POLICY_ADAPTER (short adapter id; names the judge's scratch directory
@@ -2427,11 +2430,15 @@ approve_fleet_ledger() {
   cfg=$(resolve_path "${E[2]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
   status=$(resolve_path "${E[3]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
   [ "$status" = "$(norm_abs "$STATUS")" ] || { no_approve "fm-fleet-ledger.sh names another status file"; return 0; }
-  state_dir=$(dirname "$(norm_abs "$STATUS")")
-  case "$state_dir" in
-    */state) expected=$(norm_abs "$(dirname "$state_dir")/config") ;;
-    *) no_approve "fm-fleet-ledger.sh cannot derive the home config from the status file"; return 0 ;;
-  esac
+  if [ -n "${CONFIG_DIR-}" ]; then
+    expected=$(norm_abs "$CONFIG_DIR")
+  else
+    state_dir=$(dirname "$(norm_abs "$STATUS")")
+    case "$state_dir" in
+      */state) expected=$(norm_abs "$(dirname "$state_dir")/config") ;;
+      *) no_approve "fm-fleet-ledger.sh cannot derive the home config from the status file"; return 0 ;;
+    esac
+  fi
   [ "$cfg" = "$expected" ] || { no_approve "fm-fleet-ledger.sh names another config"; return 0; }
   cfg_phys=$(physical_target "${E[2]}" "$CWD" 1) || { no_approve "fm-fleet-ledger.sh config path cannot be resolved"; return 0; }
   expected_phys=$(physical_target "$expected" '' 1) || { no_approve "fm-fleet-ledger.sh config path cannot be resolved"; return 0; }
