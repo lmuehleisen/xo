@@ -1505,6 +1505,7 @@ SH
   assert_contains "$(cat "$TMP_ROOT/integration-prompts")" 'Tail review marker.' 'whole description reaches the judge'
   out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit https://github.com/acme/widgets/pull/3 --body-file '$body'" 2>&1) || fail "integration edit should pass: $out"
   out=$(cd "$repo" && "$GATE" ci-text --config "$CFG" --dest acme/widgets --pr 3 --pr-upstream acme/upstream "body:$body" 2>&1) || fail "CI integration should pass: $out"
+  out=$(cd "$repo" && FM_CI_PR_DEST=acme/widgets FM_CI_PR_NUMBER=3 FM_CI_PR_UPSTREAM=acme/upstream "$GATE" ci-text --config "$CFG" "body:$body" 2>&1) || fail "CI environment context should pass: $out"
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head feature "body:$body" 2>&1) && fail "non-integration body should refuse"
   assert_contains "$out" 'longer than 1500 characters' 'ordinary feature cap'
   cp "$FAKEBIN/gh" "$FAKEBIN/gh.good"

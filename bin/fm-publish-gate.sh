@@ -48,7 +48,9 @@
 #       messages with the generic patterns and, when installed, gitleaks.
 #   fm-publish-gate.sh ci-text [--dest <owner/repo> --pr <number> --pr-upstream <owner/repo>] <text>...
 #       The public CI check for PR text: generic patterns, emails, and the
-#       shape limits, with the same kind prefixes as check-text.
+#       shape limits, with the same kind prefixes as check-text. CI can also
+#       supply FM_CI_PR_DEST, FM_CI_PR_NUMBER, and FM_CI_PR_UPSTREAM; older base
+#       gates ignore this environment metadata and retain their normal caps.
 #   fm-publish-gate.sh install <hooks-dir> [--config <dir>]
 #       Write a pre-push and a commit-msg hook into <hooks-dir> (for example an
 #       installation's .git/hooks) that run this gate. Refuses to replace an
@@ -1448,7 +1450,9 @@ cmd_ci_commits() {
 }
 
 cmd_ci_text() {
-  local dest=""
+  local dest=${FM_CI_PR_DEST:-}
+  PR_NUMBER=${FM_CI_PR_NUMBER:-}
+  PR_UPSTREAM=${FM_CI_PR_UPSTREAM:-}
   PG_ANY_USER_NOREPLY=1
   if [ "${1:-}" = --dest ]; then
     dest=${2:-}
