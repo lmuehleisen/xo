@@ -542,13 +542,11 @@ SH
   assert_contains "$out" "spawned raw-agy-z16 harness=agy" "raw agy launch did not record the agy harness name"
   assert_meta_profile "$HOME_DIR/state/raw-agy-z16.meta" agy default default
   launch=$(cat "$LAUNCH_LOG")
-  # The verbatim contract pins the command tail: everything before it is
-  # firstmate's generic pane scaffolding (env exports and marker scrubs), which
-  # legitimately grows on main while CI tests the merge ref.
-  case "$launch" in
-  *"env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write") ;;
-  *) fail "raw agy launch command changed"$'\n'"actual: $launch" ;;
-  esac
+  # Byte-exact like the other raw-launch pins in this file: the generic fleet
+  # prefixes (private tmux server, compact-adviser switch, task inbox, AI-
+  # trailer hooks, identity-marker scrub) wrap the command but never touch it.
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(ai_trailer_hooks_prefix "$HOME_DIR" raw-agy-z16)env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
+    || fail "raw agy launch command changed"$'\n'"actual: $launch"
 
   # The claude case needs its own pane path: the first spawn's lease holds WT_DIR.
   wt2="$CASE_DIR/wt-claude"
@@ -560,10 +558,8 @@ SH
   assert_contains "$out" "spawned raw-claude-z17 harness=claude" "raw claude launch did not record the claude harness name"
   assert_meta_profile "$HOME_DIR/state/raw-claude-z17.meta" claude default default
   launch=$(cat "$LAUNCH_LOG")
-  case "$launch" in
-  *"env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions") ;;
-  *) fail "raw claude launch command changed"$'\n'"actual: $launch" ;;
-  esac
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(ai_trailer_hooks_prefix "$HOME_DIR" raw-claude-z17)env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
+    || fail "raw claude launch command changed"$'\n'"actual: $launch"
 
   [ ! -s "$probe_log" ] || fail "raw launches executed the adapter binaries they name: $(cat "$probe_log")"
   # A raw launch installs no firstmate wiring: no busy generation is armed for
