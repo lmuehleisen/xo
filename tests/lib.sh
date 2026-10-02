@@ -495,6 +495,11 @@ fi
   printf '%s agent-dir=%s session-dir=%s\n' "$name" "${PI_CODING_AGENT_DIR-<unset>}" \
     "${PI_CODING_AGENT_SESSION_DIR-<unset>}" >>"$FM_TEST_JUDGE_ENV"
 allow='{"verdict":"allow","reasons":[]}'
+material=$(printf '%s\n' "$prompt" | sed -n '/^BEGIN MATERIAL /,/^END MATERIAL /p')
+location=$(printf '%s\n' "$material" | sed -n 's/^=== //p' | head -n 1)
+refusal=$(jq -cn --arg loc "$location" --arg policy "$(printf '%s\n' "$prompt" | sed -n '/^6\. /p')" '
+  {verdict: "refuse", findings: [{location: $loc, category: 6, start_line: 1, end_line: 1,
+    policy_quote: $policy, why: "stub finding"}]}')
 case "$mode" in
   down) echo "stub judge: not signed in" >&2; exit 1 ;;
   hang) exec sleep 30 ;;
@@ -505,14 +510,21 @@ case "$mode" in
     ;;
   prose) answer='It looks fine to me.' ;;
   twoallow) answer=$(printf '%s\n%s' "$allow" "$allow") ;;
-  conflict) answer=$(printf '%s\n%s' "$allow" '{"verdict":"refuse","reasons":["text 1: stub finding"]}') ;;
+  conflict) answer=$(printf '%s\n%s' "$allow" "$refusal") ;;
+  sequence) answer=$(sed -n "$(wc -l <"$FM_TEST_JUDGE_CALLS" | tr -d ' ')p" "$FM_TEST_JUDGE_SEQUENCE") ;;
   *)
-    material=$(printf '%s\n' "$prompt" | sed -n '/^BEGIN MATERIAL /,/^END MATERIAL /p')
     if [ -n "${FM_TEST_JUDGE_REFUSE:-}" ] && printf '%s\n' "$material" | grep -qiE -- "$FM_TEST_JUDGE_REFUSE"; then
-      answer='Verdict: {"verdict":"refuse","reasons":["text 1: stub finding"]}'
+      answer="Verdict: $refusal"
     else
       answer='{"verdict":"allow","reasons":[]}'
     fi
+    ;;
+esac
+case "$answer" in
+  EXIT7 | HANG)
+    if [ -n "$out" ]; then printf '%s\n' "$refusal" >"$out"; else printf '%s\n' "$refusal"; fi
+    [ "$answer" = EXIT7 ] && exit 7
+    exec sleep 30
     ;;
 esac
 if [ -n "$out" ]; then printf '%s\n' "$answer" >"$out"; else printf '%s\n' "$answer"; fi

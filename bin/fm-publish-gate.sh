@@ -1476,7 +1476,7 @@ Sensitive evidence never goes into the PR. The code can.
 - No local paths, machine names, hardware details, device ids, account or
   service names, or remote-access tools.
 - No session or transcript links.
-- No incident evidence: process ids, pane ids, or clock times.
+- No incident evidence about private sessions, people, timings, or operations.
 - Use neutral fixtures (example.com, acme) that do not mirror a real business
   flow.
 - PR titles and descriptions are short and neutral: what changed and how it
@@ -1496,6 +1496,8 @@ incident evidence: a process id with its number (pid 4242), a tmux pane id
 (%12), or a clock time (14:05). Everyday words such as pid, pane, timeline, or
 incident are fine on their own.
 EOF
+  printf '\nSemantic review policy:\n'
+  "$(dirname "$SELF")/fm-publish-judge.sh" policy
 }
 
 # --- dispatch --------------------------------------------------------------------
