@@ -26,8 +26,14 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          FM_CI_PR_NUMBER: ${{ github.event.pull_request.number }}
+          FM_CI_PR_DEST: ${{ github.repository }}
+          FM_CI_PR_UPSTREAM: kunchenguid/firstmate # Public upstream: https://github.com/kunchenguid/firstmate
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           printf '%s\n' "$PR_TITLE" >"$RUNNER_TEMP/pr-title.txt"
           printf '%s\n' "${PR_BODY:-}" >"$RUNNER_TEMP/pr-body.txt"
+          # Context is optional environment metadata: older base gates ignore it
+          # and keep their normal caps while this interface update is reviewed.
           bin/fm-publish-gate.sh ci-text "title:$RUNNER_TEMP/pr-title.txt" "body:$RUNNER_TEMP/pr-body.txt"

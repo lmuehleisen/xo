@@ -17,7 +17,7 @@
 #       Commit-msg check for a repository that has a public or unlisted network
 #       remote: refuses a message carrying a non-allowlisted email address or a
 #       denylist or generic-pattern hit. Never rewrites the message.
-#   fm-publish-gate.sh check-text --dest <owner/repo|gist> [--unscannable <what>]... [--config <dir>] [<text>...]
+#   fm-publish-gate.sh check-text --dest <owner/repo|gist> [--pr-base <branch> --pr-head <branch> | --pr <number> | --pr-branch <branch>] [--unscannable <what>]... [--config <dir>] [<text>...]
 #       The scanner the gh publish guard (bin/fm-gh-publish-policy.mjs) calls
 #       for PR, issue, release, gist, repo, and API text. Each <text> is a
 #       file, optionally prefixed with its kind - title:<file>, body:<file> (a
@@ -46,9 +46,11 @@
 #       identity email (or, when none is given, any *@users.noreply.github.com
 #       address) and noreply@github.com, then scan added lines, paths, and
 #       messages with the generic patterns and, when installed, gitleaks.
-#   fm-publish-gate.sh ci-text <text>...
+#   fm-publish-gate.sh ci-text [--dest <owner/repo> --pr <number> --pr-upstream <owner/repo>] <text>...
 #       The public CI check for PR text: generic patterns, emails, and the
-#       shape limits, with the same kind prefixes as check-text.
+#       shape limits, with the same kind prefixes as check-text. CI can also
+#       supply FM_CI_PR_DEST, FM_CI_PR_NUMBER, and FM_CI_PR_UPSTREAM; older base
+#       gates ignore this environment metadata and retain their normal caps.
 #   fm-publish-gate.sh install <hooks-dir> [--config <dir>]
 #       Write a pre-push and a commit-msg hook into <hooks-dir> (for example an
 #       installation's .git/hooks) that run this gate. Refuses to replace an
@@ -166,8 +168,13 @@
 # this directory's private files, and when no judge answers it refuses.
 #
 # TEXT SHAPE (public PR text; the policy subcommand states the rule): a title
-# is at most 100 characters; a body is at most 20 lines and 1500 characters; a
-# reply is at most 5 lines and 750 characters; and a body or reply must not
+# is at most 100 characters; a body is at most 20 lines and 1500 characters.
+# A verified upstream-integration PR into its fork's main may use 80 lines and
+# 6000 characters, recording the full upstream source commit in the body.
+# Verification uses live GitHub ancestry and the configured upstream remote
+# (CI supplies --pr-upstream); failures retain the ordinary cap. The complete
+# body still passes every content check and the publish judge.
+# A reply is at most 5 lines and 750 characters; and a body or reply must not
 # carry what the operator asked or decided ("captain asked", "per <someone>'s
 # direction") or the shapes of incident evidence: a process id with its number
 # (pid 4242, pid=4242), a tmux pane id (%12), or a clock time (14:05). Everyday
@@ -849,10 +856,139 @@ NARRATIVE_RULE='(^|[^a-z])captain (asked|said|wants|wanted|requested|decided|app
 # its number, a tmux pane id, and a clock time. Shapes, not everyday words.
 EVIDENCE_RULE='(^|[^a-z0-9_])pid[ =:]?[0-9]+|(^|[^a-z0-9%])%[0-9]+([^0-9]|$)|(^|[^0-9:])([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?([^0-9:]|$)'
 
+# PR context is evidence to verify, never an override. Only PR create/edit and
+# ci-text supply it; issues, replies, and other text retain the ordinary cap.
+PR_BASE=""
+PR_HEAD=""
+PR_NUMBER=""
+PR_BRANCH=""
+PR_UPSTREAM=""
+INTEGRATION_SOURCES=""
+
+# Use the same trusted executable and environment isolation as privacy reads.
+integration_gh() {
+  env -u GH_HOST -u GH_REPO -u GH_CONFIG_DIR -u XDG_CONFIG_HOME \
+    -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
+    -u SSL_CERT_FILE -u SSL_CERT_DIR \
+    "$INTEGRATION_GH" "$@" 2>/dev/null
+}
+
+integration_api() {
+  local paging=()
+  [ "${3:-}" != paginate ] || paging=(--paginate)
+  integration_gh api --hostname github.com "$1" --jq "$2" ${paging[@]+"${paging[@]}"}
+}
+
+# A previous main tip must lie on main's first-parent history, rather than
+# merely being an upstream ancestor reached through a merge's second parent.
+# The comparison returns its complete paginated commit graph; missing edges
+# or failed reads cannot prove membership. Both endpoints are immutable SHAs.
+fork_mainline_contains() {
+  local dest=$1 tip=$2 ancestor=$3 rows
+  rows=$(integration_api "repos/$dest/compare/$ancestor...$tip?per_page=100" '.commits[] | [.sha, .parents[0].sha] | @tsv' paginate) || return 1
+  printf '%s\n' "$rows" | awk -F '\t' -v tip="$tip" -v ancestor="$ancestor" '
+    NF == 2 && length($1) == 40 && length($2) == 40 && $1 ~ /^[0-9a-f]+$/ && $2 ~ /^[0-9a-f]+$/ { parent[$1] = $2 }
+    END {
+      cursor = tip
+      steps = 0
+      while (cursor != ancestor && cursor in parent && steps++ <= NR) cursor = parent[cursor]
+      exit (cursor == ancestor ? 0 : 1)
+    }
+  '
+}
+
+# Prove a fork-local PR to main contains a two-parent merge since main, whose
+# first parent descends from main or belongs to its first-parent history,
+# and whose second parent adds upstream ancestry.
+# The destination must be this checkout's origin, and its upstream must be
+# configured in the owning home's publish guard (or CI's trusted base workflow).
+# GitHub supplies the graph; cached refs and caller-supplied SHAs prove nothing.
+# No fetch or repository mutation is needed. Any unavailable fact fails closed.
+verify_integration() {
+  local dest=$1 origin upstream metadata base head repo merges merge first source status main_context main_tip count=0
+  INTEGRATION_SOURCES=""
+  [ -n "$PR_NUMBER" ] || [ -n "$PR_BRANCH" ] || { [ -n "$PR_BASE" ] && [ -n "$PR_HEAD" ]; } || return 0
+  printf '%s' "$dest" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 0
+  INTEGRATION_GH=$(trusted_gh) || return 0
+  origin=$(git remote get-url origin 2>/dev/null) || return 0
+  [ "$(github_slug "$origin")" = "$(lower "$dest")" ] || return 0
+  upstream=$PR_UPSTREAM
+  if [ -z "$upstream" ]; then
+    upstream=$(git remote get-url upstream 2>/dev/null) || return 0
+    upstream=$(github_slug "$upstream")
+    [ -n "$upstream" ] || return 0
+    upstream_sources | grep -qxF "$upstream" || return 0
+  fi
+  printf '%s' "$upstream" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 0
+  [ "$(lower "$upstream")" != "$(lower "$dest")" ] || return 0
+  base=$PR_BASE head=$PR_HEAD
+  if [ -n "$PR_BRANCH" ] && [ -z "$PR_NUMBER" ]; then
+    printf '%s' "$PR_BRANCH" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' || return 0
+    PR_NUMBER=$(integration_gh pr view "$PR_BRANCH" --repo "github.com/$dest" --json number --jq .number) || return 0
+  fi
+  if [ -n "$PR_NUMBER" ]; then
+    printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$' || return 0
+    metadata=$(integration_api "repos/$dest/pulls/$PR_NUMBER" '[.base.ref, .head.sha, .head.repo.full_name] | @tsv') || return 0
+    IFS="$TAB" read -r base head repo <<<"$metadata"
+    [ "$(lower "$repo")" = "$(lower "$dest")" ] || return 0
+    [ -z "$PR_BASE" ] || base=$PR_BASE
+  fi
+  [ "$base" = main ] && [ -n "$head" ] || return 0
+  # A plain fork-local branch or full SHA only; owner:branch heads do not qualify.
+  printf '%s' "$head" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' || return 0
+  case "$head" in *..*) return 0 ;; esac
+  merges=$(integration_api "repos/$dest/compare/main...$head?per_page=100" '.commits[] | select((.parents | length) == 2) | [.sha, .parents[0].sha, .parents[1].sha] | @tsv' paginate) || return 0
+  # Comparison pages are chronological; consider the latest merges first so
+  # upstream's own older merges cannot crowd out the integration merge.
+  merges=$(printf '%s\n' "$merges" | awk '{ row[NR] = $0 } END { for (i = NR; i > 0; i--) print row[i] }')
+  while IFS="$TAB" read -r merge first source; do
+    [ -n "$merge" ] || continue
+    count=$((count + 1))
+    [ "$count" -le 8 ] || break
+    printf '%s\n' "$merge" "$first" "$source" | grep -Eqv '^[0-9a-f]{40}$' && continue
+    main_context=$(integration_api "repos/$dest/compare/main...$first" '[.status, .base_commit.sha] | @tsv') || continue
+    IFS="$TAB" read -r status main_tip <<<"$main_context"
+    printf '%s' "$main_tip" | grep -Eq '^[0-9a-f]{40}$' || continue
+    case "$status" in
+    ahead | identical) ;;
+    behind) fork_mainline_contains "$dest" "$main_tip" "$first" || continue ;;
+    *) continue ;;
+    esac
+    status=$(integration_api "repos/$upstream/compare/$source...main" .status) || continue
+    case "$status" in ahead | identical) ;; *) continue ;; esac
+    status=$(integration_api "repos/$dest/compare/$source...$main_tip" .status) || continue
+    case "$status" in behind | diverged) ;; *) continue ;; esac
+    INTEGRATION_SOURCES="${INTEGRATION_SOURCES:+$INTEGRATION_SOURCES
+}$source"
+  done <<<"$merges"
+}
+
+# Parse optional PR context before text paths. CI's upstream is fixed by its
+# trusted base workflow; check-text derives its upstream from this checkout.
+parse_text_context() {
+  TEXT_ARGS=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+    --pr-base | --pr-head | --pr | --pr-branch | --pr-upstream)
+      [ "$#" -gt 1 ] || usage
+      case "$1" in
+      --pr-base) PR_BASE=$2 ;;
+      --pr-head) PR_HEAD=$2 ;;
+      --pr) PR_NUMBER=$2 ;;
+      --pr-branch) PR_BRANCH=$2 ;;
+      --pr-upstream) [ "$CMD" = ci-text ] || usage; PR_UPSTREAM=$2 ;;
+      esac
+      shift 2
+      ;;
+    *) TEXT_ARGS+=("$1"); shift ;;
+    esac
+  done
+}
+
 # check_shape <kind> <file> <n>: the length and narrative limits of the public
 # text policy for a title, body, or reply.
 check_shape() {
-  local kind=$1 file=$2 n=$3 chars lines
+  local kind=$1 file=$2 n=$3 chars lines body_lines=20 body_chars=1500 source
   chars=$(tr -d '\n' <"$file" | wc -c | tr -d ' ')
   lines=$(grep -c . "$file" || true)
   case "$kind" in
@@ -860,8 +996,16 @@ check_shape() {
     [ "$chars" -le 100 ] || finding "shape: a title longer than 100 characters" "text $n"
     ;;
   body)
-    [ "$lines" -le 20 ] || finding "shape: a description longer than 20 lines" "text $n"
-    [ "$chars" -le 1500 ] || finding "shape: a description longer than 1500 characters" "text $n"
+    while IFS= read -r source; do
+      [ -n "$source" ] || continue
+      if grep -qE "(^|[^[:alnum:]])$source([^[:alnum:]]|$)" "$file"; then
+        body_lines=80 body_chars=6000
+        lines=$(awk 'END { print NR + 0 }' "$file")
+        break
+      fi
+    done <<<"$INTEGRATION_SOURCES"
+    [ "$lines" -le "$body_lines" ] || finding "shape: a description longer than $body_lines lines" "text $n"
+    [ "$chars" -le "$body_chars" ] || finding "shape: a description longer than $body_chars characters" "text $n"
     ;;
   reply)
     [ "$lines" -le 5 ] || finding "shape: a reply longer than 5 lines" "text $n"
@@ -1252,6 +1396,8 @@ cmd_pre_commit() {
 cmd_check_text() {
   local dest=$1 unscannable=""
   shift
+  parse_text_context "$@"
+  set -- ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   while [ "$#" -gt 0 ] && [ "$1" = --unscannable ]; do
     [ "$#" -gt 1 ] || usage
     unscannable="${unscannable:+$unscannable, }$2"
@@ -1270,13 +1416,15 @@ cmd_check_text() {
   require_public_config 0
   [ -z "$unscannable" ] ||
     refuse "$unscannable cannot be scanned, so it is refused for public destination $DEST_KEY" "publish that file only to a confirmed-private repository, or share it outside GitHub"
+  TEXT_ARGS=("$@")
+  verify_integration "$DEST_KEY"
   corpus_reset
-  add_texts "$@"
+  add_texts ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   scan_corpus 1
   scan_corpus_emails
   [ "$FINDINGS" -eq 0 ] ||
     refuse "$FINDINGS finding(s) in text for public destination $DEST_KEY (see '$(basename "$SELF") policy')" "rewrite the flagged text (the rule and line are named above) and run the gh command again"
-  judge_public text "$@"
+  judge_public text ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   exit 0
 }
 
@@ -1339,9 +1487,18 @@ cmd_ci_commits() {
 }
 
 cmd_ci_text() {
+  local dest=${FM_CI_PR_DEST:-}
+  PR_NUMBER=${FM_CI_PR_NUMBER:-}
+  PR_UPSTREAM=${FM_CI_PR_UPSTREAM:-}
   PG_ANY_USER_NOREPLY=1
+  if [ "${1:-}" = --dest ]; then
+    dest=${2:-}
+    shift 2 || usage
+  fi
+  parse_text_context "$@"
+  [ -z "$dest" ] || verify_integration "$dest"
   corpus_reset
-  add_texts "$@"
+  add_texts ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   scan_corpus 0
   scan_corpus_emails
   [ "$FINDINGS" -eq 0 ] ||
@@ -1490,11 +1647,17 @@ Sensitive evidence never goes into the PR. The code can.
 Incident evidence stays in private reports; a public PR carries only a
 sanitized reproduction.
 The gh publish guard and CI refuse a title over 100 characters, a description
-over 20 lines or 1500 characters, a reply over 5 lines or 750 characters, and,
+over 20 lines or 1500 characters (80 lines and 6000 characters for a verified
+upstream-integration PR to its fork's main, recording the full upstream source
+commit), a reply over 5 lines or 750 characters, and,
 in a description or reply, what the operator asked or decided or the shape of
 incident evidence: a process id with its number (pid 4242), a tmux pane id
 (%12), or a clock time (14:05). Everyday words such as pid, pane, timeline, or
 incident are fine on their own.
+Integration descriptions stay a technical record: no machine names, runner
+details, logs, or full hunk audit. Only the body length cap changes; the whole
+description still passes content checks and semantic review. Unverifiable
+integration ancestry retains the ordinary cap.
 EOF
   printf '\nSemantic review policy:\n'
   "$(dirname "$SELF")/fm-publish-judge.sh" policy
