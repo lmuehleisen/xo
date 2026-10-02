@@ -1001,6 +1001,10 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
       # seen: wget -o/-a and --output-file are logs, and marking them seen
       # would hide the download wget still writes into the output directory.
       if fetch_document_output; then fetch_out_seen=1; fi
+      # wget --warc-file=/dev/null writes /dev/null.warc.gz, not the null device.
+      if [ "$base" = wget ] && [ "$FETCH_OPT_NAME" = --warc-file ] && [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
+        v=/dev/null.warc.gz
+      fi
       if [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=0
