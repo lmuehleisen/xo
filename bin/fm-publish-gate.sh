@@ -879,15 +879,33 @@ integration_api() {
   integration_gh api --hostname github.com "$1" --jq "$2" ${paging[@]+"${paging[@]}"}
 }
 
+# A previous main tip must lie on main's first-parent history, rather than
+# merely being an upstream ancestor reached through a merge's second parent.
+# The comparison returns its complete paginated commit graph; missing edges
+# or failed reads cannot prove membership. Both endpoints are immutable SHAs.
+fork_mainline_contains() {
+  local dest=$1 tip=$2 ancestor=$3 rows
+  rows=$(integration_api "repos/$dest/compare/$ancestor...$tip?per_page=100" '.commits[] | [.sha, .parents[0].sha] | @tsv' paginate) || return 1
+  printf '%s\n' "$rows" | awk -F '\t' -v tip="$tip" -v ancestor="$ancestor" '
+    NF == 2 && length($1) == 40 && length($2) == 40 && $1 ~ /^[0-9a-f]+$/ && $2 ~ /^[0-9a-f]+$/ { parent[$1] = $2 }
+    END {
+      cursor = tip
+      steps = 0
+      while (cursor != ancestor && cursor in parent && steps++ <= NR) cursor = parent[cursor]
+      exit (cursor == ancestor ? 0 : 1)
+    }
+  '
+}
+
 # Prove a fork-local PR to main contains a two-parent merge since main, whose
-# first parent descends from the fork's published main and second parent adds
-# upstream ancestry.
+# first parent descends from main or belongs to its first-parent history,
+# and whose second parent adds upstream ancestry.
 # The destination must be this checkout's origin, and its upstream must be
 # configured in the owning home's publish guard (or CI's trusted base workflow).
 # GitHub supplies the graph; cached refs and caller-supplied SHAs prove nothing.
 # No fetch or repository mutation is needed. Any unavailable fact fails closed.
 verify_integration() {
-  local dest=$1 origin upstream metadata base head repo merges merge first source status count=0
+  local dest=$1 origin upstream metadata base head repo merges merge first source status main_context main_tip count=0
   INTEGRATION_SOURCES=""
   [ -n "$PR_NUMBER" ] || [ -n "$PR_BRANCH" ] || { [ -n "$PR_BASE" ] && [ -n "$PR_HEAD" ]; } || return 0
   printf '%s' "$dest" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 0
@@ -928,11 +946,17 @@ verify_integration() {
     count=$((count + 1))
     [ "$count" -le 8 ] || break
     printf '%s\n' "$merge" "$first" "$source" | grep -Eqv '^[0-9a-f]{40}$' && continue
-    status=$(integration_api "repos/$dest/compare/main...$first" .status) || continue
-    case "$status" in ahead | identical) ;; *) continue ;; esac
+    main_context=$(integration_api "repos/$dest/compare/main...$first" '[.status, .base_commit.sha] | @tsv') || continue
+    IFS="$TAB" read -r status main_tip <<<"$main_context"
+    printf '%s' "$main_tip" | grep -Eq '^[0-9a-f]{40}$' || continue
+    case "$status" in
+    ahead | identical) ;;
+    behind) fork_mainline_contains "$dest" "$main_tip" "$first" || continue ;;
+    *) continue ;;
+    esac
     status=$(integration_api "repos/$upstream/compare/$source...main" .status) || continue
     case "$status" in ahead | identical) ;; *) continue ;; esac
-    status=$(integration_api "repos/$dest/compare/$source...main" .status) || continue
+    status=$(integration_api "repos/$dest/compare/$source...$main_tip" .status) || continue
     case "$status" in behind | diverged) ;; *) continue ;; esac
     INTEGRATION_SOURCES="${INTEGRATION_SOURCES:+$INTEGRATION_SOURCES
 }$source"
