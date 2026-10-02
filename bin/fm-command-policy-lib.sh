@@ -776,6 +776,7 @@ note_remote_names() {
     fetch_out_words[${#fetch_out_words[@]}]=$bn
     fetch_out_ev[${#fetch_out_ev[@]}]=0
     fetch_out_doc[${#fetch_out_doc[@]}]=1
+    fetch_out_warc[${#fetch_out_warc[@]}]=0
     fetch_out_dirs[${#fetch_out_dirs[@]}]=$odir
     fetch_out_stamped[${#fetch_out_stamped[@]}]=1
   done <<<"$transfer_urls"
@@ -1004,20 +1005,23 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
       # seen: wget -o/-a and --output-file are logs, and marking them seen
       # would hide the download wget still writes into the output directory.
       if fetch_document_output; then fetch_out_seen=1; fi
-      # wget --warc-file=/dev/null writes /dev/null.warc.gz, not the null device.
-      if [ "$base" = wget ] && [ "$FETCH_OPT_NAME" = --warc-file ] && [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
-        v=/dev/null.warc.gz
-      fi
-      if [ "$v" = /dev/null ] && [ "$vev" = 0 ]; then
+      local doc=0 warc=0
+      fetch_document_output && doc=1
+      # wget appends .warc.gz (or .warc) to --warc-file. The name given is not
+      # the file written, so a /dev/null argument is not a discard.
+      [ "$base" = wget ] && [ "$FETCH_OPT_NAME" = --warc-file ] && warc=1
+      if [ "$v" = /dev/null ] && [ "$vev" = 0 ] && [ "$warc" = 0 ]; then
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=0
-        fetch_out_doc[${#fetch_out_doc[@]}]=$(fetch_document_output && echo 1 || echo 0)
+        fetch_out_doc[${#fetch_out_doc[@]}]=$doc
+        fetch_out_warc[${#fetch_out_warc[@]}]=0
         return 0
       fi
       [ "$v" = - ] || {
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=$vev
-        fetch_out_doc[${#fetch_out_doc[@]}]=$(fetch_document_output && echo 1 || echo 0)
+        fetch_out_doc[${#fetch_out_doc[@]}]=$doc
+        fetch_out_warc[${#fetch_out_warc[@]}]=$warc
       }
       return 0 ;;
   esac
@@ -2516,7 +2520,8 @@ approve_plain() {  # <base>
       # remainder is its glued value, and every non-option positional is a URL
       # both tools guess as http.
       local opts_done=0 fetch_cwd_out=0 fetch_out_seen=0 transfer_remote=0 transfer_urls=''
-      local -a fetch_out_words=() fetch_out_ev=() fetch_out_doc=() fetch_out_dirs=() fetch_out_stamped=()
+      local WARC_COMPRESS=1 WARC_CDX=0
+      local -a fetch_out_words=() fetch_out_ev=() fetch_out_doc=() fetch_out_warc=() fetch_out_dirs=() fetch_out_stamped=()
       FETCH_OUTDIR='' FETCH_URLS=''
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
@@ -2547,6 +2552,8 @@ approve_plain() {  # <base>
                     stamp_fetch_outdir
                     FETCH_OUTDIR=''
                   fi
+                  [ "$w" = --no-warc-compression ] && WARC_COMPRESS=0
+                  [ "$w" = --warc-cdx ] && WARC_CDX=1
                   ;;
                 cwdout) fetch_cwd_out=1; transfer_remote=1 ;;
                 unknown) never_approve "$base option $w is unknown to this policy"; return 0 ;;
@@ -2636,12 +2643,25 @@ approve_plain() {  # <base>
         # A document -o is placed under --output-dir, even when the name is
         # absolute. A dump-header or other auxiliary file is the path given.
         # wget -O /dev/null is a discard; a wget log is not the download.
-        if [ "${fetch_out_words[oi]}" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] \
+        odir2=$CWD
+        rel=${fetch_out_words[oi]}
+        if [ "${fetch_out_warc[oi]-0}" = 1 ]; then
+          if [ "$WARC_COMPRESS" = 0 ]; then rel=${rel}.warc; else rel=${rel}.warc.gz; fi
+        elif [ "$rel" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] \
           && { [ "${fetch_out_doc[oi]-0}" != 1 ] || [ "$base" = wget ] || [ -z "$word_dir" ]; }; then
           continue
         fi
-        odir2=$CWD
-        rel=${fetch_out_words[oi]}
+        if [ "${fetch_out_warc[oi]-0}" = 1 ]; then
+          if [ "$WARC_CDX" = 1 ]; then
+            local cdx=${fetch_out_words[oi]}.cdx cdx_abs=''
+            cdx_abs=$(resolve_maybe_tilde "$cdx" "${fetch_out_ev[oi]}" "$CWD" 2>/dev/null) || cdx_abs=''
+            if [ -z "$cdx_abs" ] || ! fetch_dest_ok "$cdx_abs"; then
+              never_approve "$base writes outside the task write roots ($cdx)"
+              return 0
+            fi
+            fetch_note_file "$cdx_abs"
+          fi
+        fi
         # Only a curl document (-o/-O) is placed under --output-dir. A log,
         # dump-header, or other auxiliary file is the path given, relative to
         # the command's directory, not the output directory.

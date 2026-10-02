@@ -1435,6 +1435,12 @@ EOF
     || fail "a wget log inside the task must not hide a download under -P outside the task, got rc=$RC out=$OUT"
 
   # curl places even an absolute -o name under --output-dir.
+  ln -s /etc/passwd "$dir/tmp/archive.warc.gz"
+  hook "$policy" permission-request exec "wget --warc-file '$dir/tmp/archive' https://archive.example/x"
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "a WARC suffix that is a symlink outside the task must escalate, got rc=$RC out=$OUT"
+  rm -f "$dir/tmp/archive.warc.gz"
+
   hook "$policy" permission-request exec "curl --create-dirs --output-dir /etc -o '$dir/tmp/safe' https://lookup.example/x"
   [ "$RC" = 0 ] && [ -z "$OUT" ] \
     || fail "an absolute -o under an outside --output-dir must escalate, got rc=$RC out=$OUT"
