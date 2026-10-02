@@ -20,7 +20,7 @@ invalid() {
 args=()
 if [ -e "$FILE" ] || [ -L "$FILE" ]; then
   [ -f "$FILE" ] && [ -r "$FILE" ] || invalid 'expected a readable regular file'
-  list= line= lines=0
+  list='' line='' lines=0
   while IFS= read -r line || [ -n "$line" ]; do
     lines=$((lines + 1))
     [ "$lines" -eq 1 ] || invalid 'expected exactly one nonempty comma-separated line'
