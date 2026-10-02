@@ -413,7 +413,12 @@ fm_agy_spawn_ready_gate() {
 # held and approved calls.
 fm_agy_meta_lines() {
   [ "$HARNESS" = agy ] || return 0
-  echo "agy_version=$("$AGY_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  local version=''
+  # Raw launch commands do not resolve a binary; keep its version unknown.
+  if [ -n "${AGY_BIN:-}" ]; then
+    version=$("$AGY_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  fi
+  echo "agy_version=$version"
   echo "agy_permission_mode=$CREW_PERMISSION_MODE"
   [ "$AGY_BYPASS" -eq 0 ] || echo "agy_bypass=on"
   [ "$AGY_BYPASS" -eq 0 ] || echo "agy_judge=$AGY_JUDGE_TIER:$AGY_JUDGE_MODEL"

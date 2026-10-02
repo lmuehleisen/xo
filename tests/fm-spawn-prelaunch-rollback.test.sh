@@ -200,6 +200,8 @@ EOF
   expect_code 0 "$status" "raw: a raw agy launch command should spawn"$'\n'"$out"
   window_present "fm-$id" || fail "raw: the spawned window is missing"
   [ -f "$home/state/$id.meta" ] || fail "raw: the spawn published no task record"
+  grep -qx 'agy_version=' "$home/state/$id.meta" || fail "raw: an unresolved launch binary must have an unknown version"
+  ! grep -qx 'agy_bypass=on' "$home/state/$id.meta" || fail "raw: an unpoliced launch must not claim bypass coverage"
   pass "fm-spawn.sh: a raw agy launch command spawns without resolving the agy executable"
 }
 
