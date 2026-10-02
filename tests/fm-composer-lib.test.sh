@@ -795,6 +795,7 @@ test_matrix_claude_titled_top_rule() {
   # is not that composer's top edge.
   short="${rule}${title}─"$'\n❯'"$NBSP"$'\n'"$bottom"
   assert_screen "mismatched titled rule width" unknown "$CAPS_STYLED_NOID" "$short"
+  assert_screen "mismatched titled rule width with cursor" unknown "$CAPS_TMUX" "$short" 1 probe-absent
   # A non-ASCII title leaves residue and refuses rather than guessing width.
   nonascii="${rule}─── ✳ Firstmate operational input 179054604 ─"$'\n❯'"$NBSP"$'\n'"$bottom"
   assert_screen "non-ASCII titled rule" unknown "$CAPS_STYLED_NOID" "$nonascii"
