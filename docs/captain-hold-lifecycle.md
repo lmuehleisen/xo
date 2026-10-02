@@ -62,12 +62,13 @@ A key that names no task, names a task that is not captain-held, or names a task
 
 The active captain-answer channel in this fork is chat.
 `bin/fm-send.sh --resolve-key` is the chat channel: its status-log close for a key the status log still owns is owned by that script's header, and a key the status log no longer owns is resolved to a still-open captain-held task - the key as a task id, then the legacy derived identity - and fed as one keyed line.
-The read-only Bearings board does not feed this intake, and any answer prompted by the board returns through chat.
+A Bearings board below the `answers` Lavish mode does not feed this intake, and any answer it prompts returns through chat; an `answers` board feeds it as the bound captured source described below.
 
 ## Evidence-backed reconciliation is not a board control
 
 A captain call can stop being a question without the captain ever answering it because the subject lands, the premise turns out to be false, or the choice becomes a matter of fact rather than the captain's to make.
-Reconciliation is an operator verification path, not an answer and not a third choice on the board.
+Reconciliation is an operator verification path, not an answer.
+On an `answers` board the Reconcile choice only files the durable re-check request below; it never performs the reconciliation, which stays the operator's.
 It resolves in exactly one of two ways after the latest state has actually been checked: close the call with the evidence that made it moot, or leave it open with a note recording that it is genuinely still active.
 Both outcomes require a pre-existing durable request and the operator input that supports the claim:
 
@@ -82,7 +83,7 @@ Both outcomes require a pre-existing durable request and the operator input that
 A successful normal answer also retires any pending request, because an answered call has no remaining re-check obligation.
 Every retirement is checked: if request removal fails after an answer, close, or note is already durable, the durable outcome stands but the command fails and leaves the pending request visible for retry.
 No path here closes a captain call without either the captain's words through `answer` or the evidence through `reconcile close`.
-The Bearings board creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation.
+A Bearings board below `answers` creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation; an `answers` board offers the reconcile choice on decision cards, and a selection files the same captured-source request above.
 
 ## Card hygiene: a landed subject is not a live call
 
@@ -101,8 +102,10 @@ Three checks run, all on exact identity and none on prose:
 Dropped cards are named on stderr as `dropped-landed-card:` lines so a rebuild states what it removed rather than quietly shrinking Captain's Call.
 The landing procedure requires one immediate board rebuild to remove already-stale merged-PR and superseded-version cards without a committed migration or change-worktree state mutation.
 A subject whose state cannot be established is kept, because a wrongly shown card is safer than a wrongly hidden call.
-The emitted HTML is a read-only projection, so this hygiene creates no answer, merge, dispatch, or reconciliation operation and mutates no task.
-The schema reserves the `reconcile` option value across all card types so input data cannot make the static board appear to offer a control it does not implement.
+This hygiene creates no answer, merge, dispatch, or reconciliation operation and mutates no task.
+The board is a read-only projection unless its effective Lavish mode is `answers` ([`config/lavish`](configuration.md#optional-lavish-configlavish)); only then does `build` add the standard `reconcile` choice to each decision card and bind the board as a captured source before arming it, so chosen decision options and reconcile selections reach the intakes above while merge, credential, and dispatch requests stay in chat.
+A card answer typed with no option chosen feeds neither intake, because it may defer or qualify the call; firstmate reads it from the wake and answers or re-holds it.
+The schema reserves the `reconcile` option value across all card types, so input data can never author that choice itself.
 Owner-aware landedness checks for remote-secondmate decision cards remain tracked separately and must query the authoritative secondmate home while honoring the remote and local consistency principle.
 
 ## Structured read surfaces
@@ -207,9 +210,9 @@ The markdown-to-beads migration family runs the same suite's beads fixture (bd-d
 One case in that family needs no beads install and always runs: a stubbed tasks-axi that fails any markdown file override proves the captain-hold hold, answer, and close mutations reach a beads-configured home without one.
 
 The lifecycle suite separately pins evidence-backed reconciliation against pre-existing durable requests, including idempotent close and note outcomes, without treating the evidence as the captain's words.
-Those cases exercise the lifecycle repair mechanism only; the read-only board originates no request and offers no reconciliation option.
-The board's half is pinned in `tests/fm-bearings-board.test.sh`: it validates and injects a local HTML payload, registers no answer source, refreshes the stable file in place, drops exactly identified landed subjects, keeps uncertain or remote subjects visible, and rejects the reserved `reconcile` value instead of presenting a nonfunctional control.
-`tests/fm-bearings-board-render.test.sh` verifies that decision and queued rows render without answer, merge, dispatch, or reconciliation controls.
+Those cases exercise the lifecycle repair mechanism only; a board below `answers` originates no request and offers no reconciliation option.
+The board's half is pinned in `tests/fm-bearings-board.test.sh`: it validates and injects a local HTML payload, binds no answer source below `answers`, refreshes the stable file in place, drops exactly identified landed subjects, keeps uncertain or remote subjects visible, and rejects the reserved `reconcile` value; in `answers` mode it binds before arming, adds reconcile to decision cards only, and retires that source when a later build drops below `answers`.
+`tests/fm-bearings-board-render.test.sh` verifies that decision and queued rows of a non-interactive board render without answer, merge, dispatch, or reconciliation controls.
 
 `tests/fm-classify-decision-key.test.sh` pins `status_key_closing_verb` itself: it separates a resolution from the durable-transfer close and from a still-open key, reports the last real transition across re-openings and both key positions, and treats a prose mention as no transition.
 

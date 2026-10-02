@@ -341,6 +341,8 @@
 #   This is an exec environment boundary, not a sandbox for the pane's startup
 #   shell, credential files, same-user processes, or later shell initialization.
 #   See docs/configuration.md for provider/Git setup and supported limits.
+#   Ship and scout agents then start with TMUX and TMUX_PANE unset and
+#   TMUX_TMPDIR on a private per-task directory (docs/tmux-backend.md).
 # Worker account pin (config/claude-account, config/pi-account):
 #   Opt-in. With no file, a Claude or Pi launch is unchanged: Claude still
 #   receives this process's own CLAUDE_CONFIG_DIR when it is set, and Pi the
@@ -665,6 +667,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
+# shellcheck source=bin/fm-private-tmux-lib.sh
+. "$SCRIPT_DIR/fm-private-tmux-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
@@ -1314,6 +1318,15 @@ spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
     "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
+    # With the record gone, the worker's private tmux servers and directory go
+    # too, unless a launched worker's endpoint is not proven gone: removing the
+    # directory under it would send its bare tmux back to the default server.
+    if [ -n "${WORKER_TMUX_DIR:-}" ] && [ "$SPAWN_LAUNCH_SENT" = 1 ] && ! spawn_endpoint_proven_absent; then
+      [ ! -e "$WORKER_TMUX_DIR" ] ||
+        echo "warning: task $ID's worker may still be running, so its private tmux directory $WORKER_TMUX_DIR is kept; once its endpoint is closed, stop any tmux server in it by its exact -S socket and remove the directory" >&2
+    elif ! fm_private_tmux_retire "${WORKER_TMUX_DIR:-}" && [ -e "${WORKER_TMUX_DIR:-}" ]; then
+      echo "warning: task $ID's private tmux directory $WORKER_TMUX_DIR could not be retired and a tmux server in it may still run; stop it by its exact -S socket and remove the directory before retrying" >&2
+    fi
     return 0
   fi
   echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
@@ -1582,6 +1595,8 @@ spawn_abort_cleanup() {
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
+            # A surviving private tmux directory stays reachable for teardown.
+            [ ! -d "${WORKER_TMUX_DIR:-}" ] || echo "worker_tmux_dir=$WORKER_TMUX_DIR"
           } >"$SPAWN_META_TMP" 2>/dev/null &&
             fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE" ||
             true
@@ -4819,6 +4834,44 @@ if ! (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
   fi
 fi
 mkdir -p "$TASK_TMP/gotmp"
+# A ship or scout worker's private tmux directory (docs/tmux-backend.md): short
+# because socket paths are capped, private for the same reason as TASK_TMP. A
+# relaunch keeps the directory its record names, so a task keeps one directory
+# for its lifetime even if the home's path changes.
+WORKER_TMUX_DIR=
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  if [ "$RELAUNCH" -eq 1 ]; then
+    WORKER_TMUX_DIR=$(fm_meta_get "${RELAUNCH_META:-}" worker_tmux_dir)
+    case "$WORKER_TMUX_DIR" in
+      /tmp/fmwt-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) WORKER_TMUX_DIR= ;;
+    esac
+  fi
+  if [ -z "$WORKER_TMUX_DIR" ]; then
+    WORKER_TMUX_DIR=$(printf '%s\n%s' "$(cd "$FM_HOME" && pwd -P)" "$ID" |
+      { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)
+    case "$WORKER_TMUX_DIR" in
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) echo "error: could not derive a private tmux directory for $ID (needs shasum or sha256sum)" >&2; exit 1 ;;
+    esac
+    WORKER_TMUX_DIR="/tmp/fmwt-$WORKER_TMUX_DIR"
+  fi
+  if ! (umask 077 && mkdir "$WORKER_TMUX_DIR") 2>/dev/null; then
+    if [ -L "$WORKER_TMUX_DIR" ] || [ ! -d "$WORKER_TMUX_DIR" ] || [ ! -O "$WORKER_TMUX_DIR" ] ||
+      [ -n "$(find "$WORKER_TMUX_DIR" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
+      ! chmod 700 "$WORKER_TMUX_DIR"; then
+      echo "error: private worker tmux directory $WORKER_TMUX_DIR already exists and is not a private directory owned by this user; refusing to launch a worker that could reach another tmux server; inspect and remove it, then retry" >&2
+      exit 1
+    fi
+    # A fresh spawn has no record owning a server here, so a socket left by an
+    # earlier run of this id, such as one whose rollback kept a launched
+    # worker's directory, is refused rather than handed to the new worker.
+    if [ "$RELAUNCH" -eq 0 ] && [ -n "$(find "$WORKER_TMUX_DIR" -type s -print 2>/dev/null | head -1)" ]; then
+      echo "error: private worker tmux directory $WORKER_TMUX_DIR still holds a tmux socket from an earlier run of task $ID; refusing to hand it to a fresh worker - stop any tmux server in it by its exact -S socket and remove the directory, then retry" >&2
+      exit 1
+    fi
+  fi
+fi
 
 # Per-harness turn-end hook where enabled: a file that touches
 # state/<id>.turn-ended when the agent finishes a turn. Worktree-resident hooks
@@ -5330,7 +5383,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -5366,6 +5419,7 @@ preserve_relaunch_meta() {
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   fm_agy_meta_lines
+  [ -z "$WORKER_TMUX_DIR" ] || echo "worker_tmux_dir=$WORKER_TMUX_DIR"
   # Default-off writes no traceparent= line.
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
@@ -5678,6 +5732,8 @@ fi
 # launch and the launch-env-allowlist `env -i` wrapper.
 LAUNCH="export FM_TASK_INBOX=$(shell_quote "$STATE_REAL/$ID.inbox"); $LAUNCH"
 LAUNCH="export COMPACT_ADVISER_DISABLE=1; $LAUNCH"
+# Statements, so they cover a compound raw launch and the allowlist's env -i.
+[ -z "$WORKER_TMUX_DIR" ] || LAUNCH="unset TMUX TMUX_PANE; export TMUX_TMPDIR='$WORKER_TMUX_DIR'; $LAUNCH"
 # When the live-harness gate has exported DISABLE_AUTOUPDATER into this spawn's
 # own environment, carry it into the launch command text so Claude Code's
 # auto-updater cannot rewrite the shared binary during a live run. Embedding the

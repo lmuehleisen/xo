@@ -3,8 +3,9 @@ name: bearings
 description: >-
   Generate a "pick up where I left off" fleet digest from firstmate's live fleet state.
   Use when the captain invokes /bearings or asks for a bearings report, morning brief, status report, catch-up, "where did I leave off", or "what's in the works".
-  Plain /bearings is chat-only by default, /bearings file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /bearings lavish additionally builds a local HTML fleet board; live PR enrichment remains opt-in and composes with the other modes.
+  Plain /bearings is chat-only by default, /bearings file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /bearings lavish additionally builds the fleet board, static unless the home's or the request's Lavish mode opens it in Lavish; live PR enrichment remains opt-in and composes with the other modes.
   Also use on a contributions check wake or when filing work linked to an upstream issue.
+  Also load this skill's board-wake handling when a procevent lavish wake's source id matches the source id of the stable bearings board path.
 user-invocable: true
 metadata:
   internal: true
@@ -15,16 +16,17 @@ metadata:
 Generate a complete current snapshot from the fleet's current state, so the captain can resume in one read after a break, a night, or a context reset.
 Plain `/bearings` returns only the concise four-section chat digest.
 Only `/bearings file` writes the dated markdown report artifact and then returns the concise four-section chat digest linked to that report.
-Only `/bearings lavish` builds the read-only fleet board beside that digest, through `bin/fm-bearings-board.sh` (its header owns every board mechanic and the fm-bearings-board.v1 payload contract).
-A digest/build invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, plus the explicit per-mode artifacts: the dated report in file mode, and in lavish mode the local HTML board file.
+Only `/bearings lavish` builds the fleet board beside that digest, through `bin/fm-bearings-board.sh` (its header owns every board mechanic, the Lavish modes it serves, and the fm-bearings-board.v1 payload contract).
+A digest/build invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, plus the explicit per-mode artifacts: the dated report in file mode, and in lavish mode the board file plus, in view and answers modes, the source registration, and only in answers mode the answer binding, that `build` records through their own owners.
 During that invocation it never tears down a task, merges a PR, dispatches new work, steers a worker, answers a decision, cleans up work, or mutates backlog or task state.
-Captain answers stay in chat.
+Chat stays the primary answer path; an answers-mode board only adds decision-card answers through the same keyed-answer intake.
 
 ## Invocation modes
 
 - Plain `/bearings` gathers a fresh bounded snapshot and renders the four-section chat digest without creating, deleting, reading, or replacing `data/status-report-<YYYY-MM-DD>.md`.
 - `/bearings file` gathers a fresh bounded snapshot, replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch, and renders the four-section chat digest with a link or path to that report.
-- `/bearings lavish` gathers a fresh bounded snapshot, rebuilds the local HTML fleet board (the "Lavish board mode" section below), and renders the four-section chat digest with the board path inside it.
+- `/bearings lavish` gathers a fresh bounded snapshot, rebuilds the fleet board (the "Lavish board mode" section below), and renders the four-section chat digest with the board's path or Lavish link inside it.
+- `/bearings lavish off`, `/bearings lavish view`, and `/bearings lavish answers` choose the Lavish mode for that one board over the home's `config/lavish`; so does the captain plainly asking for or declining Lavish, or board answers, in the same request.
 - Treat `file` and `lavish` only as explicit invocation options in the slash command.
 - Do not treat natural-language requests such as "write a report", "save this", "persist it", "make a file", or "make a board" as file or lavish mode unless the invocation explicitly includes the standalone option.
 - When the captain asks to include PRs, pass the snapshot command's live-PR opt-in.
@@ -92,19 +94,27 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
 
 ## Lavish board mode
 
-`/bearings lavish` adds one deliverable beside the unchanged chat digest: a local HTML fleet board the captain can open in a browser.
-The board is a read-only snapshot, not a live control panel; answers and dispatch requests stay in chat.
-This home does not run lavish-axi or arm a board poll.
-`bin/fm-bearings-board.sh` owns the stable board path, fm-bearings-board.v1 payload validation, stale-card cleanup, and template injection, so the per-invocation work is composing the payload and running its `build`.
+`/bearings lavish` adds one deliverable beside the unchanged chat digest: the fleet board.
+Its Lavish mode is the home's `config/lavish` unless the request chose one, and `bin/fm-bearings-board.sh` owns what each mode does:
+
+- `off`, the default: a static local HTML file the captain opens in a browser; every answer stays in chat.
+- `view`: the same read-only board, opened in Lavish so the captain can view and annotate it, including from another computer over ssh (`docs/lavish.md`); its source is armed unbound, so annotations arrive as ordinary review feedback.
+- `answers`: `view`, plus answer controls on the decision cards whose call this home's own backlog holds open; a secondmate's call, and merge, credential, and dispatch requests, stay in chat.
+
+The script also owns the stable board path, payload validation, stale-card cleanup, template injection, session checks, and the bind-before-arm order, so the per-invocation work is composing the payload and running `build`, with `--lavish <mode>` only when the request chose one.
 
 Compose the payload from the same snapshot with the same ranking judgment as the chat digest, plus these board rules:
 
 - A Captain's Call decision key is the captain-held TASK ID from `decisions_open` (legacy `<origin>-decision-<key>` rows are already task ids); a merge card's key is `merge.<task-id>`.
+- Copy each decision's `owner` from `decisions_open` into its card; `build` gives answer controls only to a card whose `owner` is `(main)`, so a secondmate's call stays display-only even when its task id matches one held here.
 - Before carding a hold, check that its SUBJECT has not already landed, and omit it when it has. `build` drops a card whose task or PR appears in the payload's own landed rows, and one whose task is no longer an open captain call. When a hold waits on one specific PR, put that PR in the card's `pr_url`. When it concerns a published version, put the artifact and numeric three-part version in the card's structured `subject`; landed rows for releases carry the same identity, and a matching or newer version drops the card. Identity matching is structured only, so verify any subject without one of these identities against current reality before carding it.
 - Compose exactly one decision card per captain-held task id. When one task carries multiple questions, consolidate all of them and their options into that card; never emit duplicate cards with the same task-id key.
 - Decision cards carry agent-authored copy: a short noun-phrase title, one-line `about` and `decide` context rows, and option labels with hints, with the recommended option marked.
 - Card `type` (decision, merge, credential) is your composing judgment from the row's content; no backlog field types a card for you.
-- Cards are display-only; any answer, release, or dispatch is handled in chat through the ordinary lifecycle commands.
+- Never author a `reconcile` option on any card; an answers-mode `build` adds the standard reconcile choice to every decision card itself.
+- Never author a deferral option such as "later": a board option resolves the call at answer time, so deferring is typed into the card or said in chat.
+- When a decision card's task is a captain-gated WORK item (the answer should free it to proceed rather than complete it), set the card's `close: "release"` so a board answer lifts the hold instead of closing the task.
+- Merge and credential cards, and Charted Next, are display-only in every mode; those answers, releases, and dispatches are handled in chat through the ordinary lifecycle commands.
 - A Charted Next row's optional `kind` separates work from alarms: omit it (or set `"queued"`) for real queued work, and set `"warning"` on every action-free fleet-integrity notice - the `(main-inventory)` gate, the `(return-catchup)` gate, an unavailable secondmate home, and an inventory-mismatch repair notice. The board badges a warning row `needs repair` instead of `waiting` and leaves it out of the Charted Next count, so those rows never read as dispatchable queued work.
 - `charted_more` counts omitted queued rows only, while `charted_warning_more` counts omitted warning rows only; keep both counts separate whenever the board payload truncates Charted Next.
 - Every Underway row copies the task-identifying `in_flight.name` from the snapshot into an explicit `name` field, which the board leads with while keeping the run status on its second line.
@@ -114,11 +124,22 @@ Compose the payload from the same snapshot with the same ranking judgment as the
   Omit it or pass null for a row with no durable filed date - the main-inventory or return-catchup warning, an unavailable secondmate home, or a queued row filed before dates were recorded - and the board keeps those rows in payload order after every dated row.
 - Every Captain's Call item and every Underway, Recently Landed, and Charted Next row carries an explicit `repo` field. Fill it from the snapshot and task records wherever known; use null or an empty string only as the deliberate genuinely-no-repo marker, in which case the template may show the internal id. Ids otherwise stay in the payload only as the routing channel, and composed reasons name blockers in plain words.
 
-Run `build` once after composing the payload.
-Use the `board:` / `open:` path it prints in the chat digest and tell the captain they can open that HTML file in a browser.
-Do not run lavish-axi, bind a process-event source, or arm a board poll.
+Run `build` once after composing the payload, and put the `open:` value it prints in the chat digest: the HTML file's path when the board is static, or its Lavish link, which opens unchanged from another computer through the ssh forward in `docs/lavish.md`.
+When it prints `lavish: off (<reason>)`, Lavish was wanted but is unavailable; give the captain that reason in one plain line.
+Never run `lavish-axi` directly, bind or arm the board yourself, or run `lavish-axi poll` for it: `build` and the armed source's supervised runner own those steps.
 
-Captain answers to board items arrive in chat; handle them through the ordinary decision and merge path.
+Captain answers in chat take the ordinary decision and merge path in every mode.
+
+### Handling a board wake
+
+A view board's wake carries only annotations or messages: read it under `process-event-sources` and act on it with judgment, because an unbound source never closes a task.
+A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake; identify it by comparing the wake's source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, then load `process-event-sources` and follow its contract for the result read, the classification, and the handled acknowledgement.
+A chosen card option needs no routing from you: the runner feeds the board's binding into `bin/fm-captain-hold.sh`'s one keyed-answer intake, which closes or releases each answered captain-held task at answer time.
+Reconcile any `skipped:` key yourself with a direct `answer`.
+A card answer typed with no option chosen resolves nothing on its own: read it from the wake with judgment, record it with a direct `answer`, or, when it defers the call, re-hold with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` instead of a closure.
+A Reconcile selection closes nothing; `captain-hold-lifecycle` owns the durable re-check request it creates and how to retire it.
+Anything else the captain typed into the conversation panel is instruction text to read with judgment, never a merge, dispatch, or credential grant.
+After handling, rebuild the board from a fresh snapshot so answered items leave Captain's Call, and echo every resulting change in chat so the board and chat never diverge silently.
 
 ## Chat-response contract
 
@@ -152,9 +173,9 @@ Rules that keep the contract unambiguous:
 - Include the required direct address to the captain inside one item or empty-state sentence.
 - Every PR appears as the full `https://...` URL; a shorthand `#number` is fine only as a back-reference after the full URL has already appeared in the same digest.
 - The chat follows `AGENTS.md` section 9 and carries one scannable line per item.
-- Detailed decisions, plans, full gate reasons, and evidence stay out of chat; file mode puts them in the report, while lavish mode puts payload-backed detail on the local HTML board.
+- Detailed decisions, plans, full gate reasons, and evidence stay out of chat; file mode puts them in the report, while lavish mode puts payload-backed detail on the board.
 - In file mode, include the report path or link inside the four-section digest without adding another heading.
-- In lavish mode, include the board path inside the four-section digest the same way.
+- In lavish mode, include the board's path or Lavish link inside the four-section digest the same way.
 
 ## Tone and content rules
 
@@ -186,6 +207,6 @@ For secondmate-owned contributions, handle and acknowledge in that home and use 
 
 ## Supervision discipline
 
-During a digest/build invocation, this skill changes no fleet state beyond observational remote-ledger cache refreshes, durable local per-target reconcile-notify requests, and explicit report or board artifacts.
+During a digest/build invocation, this skill changes no fleet state beyond observational remote-ledger cache refreshes, durable local per-target reconcile-notify requests, explicit report or board artifacts, a view or answers board's source registration, and an answers board's binding.
 Do not tear down a task, merge a PR, dispatch queued work, steer a worker, answer a queued decision, clean up work, or mutate any other `state/` or `data/` file during that invocation.
 If the state gathered for the digest suggests an action, name it in its section and leave it to the normal lifecycle and configured authority.
