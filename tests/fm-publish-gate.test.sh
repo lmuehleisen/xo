@@ -1493,6 +1493,7 @@ repos/acme/widgets/pulls/3) printf 'main\tintegration\tacme/widgets\n' ;;
 repos/acme/widgets/pulls/4) printf 'main\tintegration\tacme/another-fork\n' ;;
 repos/acme/widgets/compare/main...integration\?per_page=100) printf '%s\t%s\t%s\n' "$merge" "$first" "$source" ;;
 repos/acme/widgets/compare/main...feature\?per_page=100) exit 0 ;;
+repos/acme/widgets/compare/main..."$first") printf 'ahead\n' ;;
 repos/acme/upstream/compare/"$source"...main) printf 'ahead\n' ;;
 repos/acme/widgets/compare/"$source"...main) printf 'diverged\n' ;;
 *) exit 1 ;;
@@ -1515,6 +1516,10 @@ SH
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head feature "body:$body" 2>&1) && fail "non-integration body should refuse"
   assert_contains "$out" 'longer than 1500 characters' 'ordinary feature cap'
   cp "$FAKEBIN/gh" "$FAKEBIN/gh.good"
+  sed '/main.*first/s/ahead/diverged/' "$FAKEBIN/gh.good" >"$FAKEBIN/gh"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "copied upstream merge must retain ordinary cap"
+  assert_contains "$out" 'longer than 1500 characters' 'fork mainline ancestry required'
+  cp "$FAKEBIN/gh.good" "$FAKEBIN/gh"
   sed 's@repos/acme/upstream/compare/@repos/acme/unavailable/compare/@' "$FAKEBIN/gh.good" >"$FAKEBIN/gh"
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "unavailable ancestry should refuse"
   assert_contains "$out" 'longer than 1500 characters' 'unavailable ancestry cap'

@@ -880,7 +880,8 @@ integration_api() {
 }
 
 # Prove a fork-local PR to main contains a two-parent merge since main, whose
-# second parent adds upstream ancestry.
+# first parent descends from the fork's published main and second parent adds
+# upstream ancestry.
 # The destination must be this checkout's origin, and its upstream must be
 # configured in the owning home's publish guard (or CI's trusted base workflow).
 # GitHub supplies the graph; cached refs and caller-supplied SHAs prove nothing.
@@ -927,6 +928,8 @@ verify_integration() {
     count=$((count + 1))
     [ "$count" -le 8 ] || break
     printf '%s\n' "$merge" "$first" "$source" | grep -Eqv '^[0-9a-f]{40}$' && continue
+    status=$(integration_api "repos/$dest/compare/main...$first" .status) || continue
+    case "$status" in ahead | identical) ;; *) continue ;; esac
     status=$(integration_api "repos/$upstream/compare/$source...main" .status) || continue
     case "$status" in ahead | identical) ;; *) continue ;; esac
     status=$(integration_api "repos/$dest/compare/$source...main" .status) || continue
