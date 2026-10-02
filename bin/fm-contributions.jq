@@ -11,6 +11,10 @@ def valid_record:
     and all(.pending[]; (.token | type == "string" and length > 0))
     and all(.seen[]; type == "string")
     and ((.notified // []) | type == "array" and all(.[]; type == "string"))
+    and (.forgotten == null or (.forgotten |
+      (.at | fromdateiso8601 | type == "number")
+      and (.actor | type == "string" and length > 0)
+      and (.reason | type == "string" and test("\\S"))))
     and (.error == null or (.error | type == "string"))
     and (.checked_at == null or (.checked_at | fromdateiso8601 | type == "number"))
     and (.verdict == null or (.verdict | (.head | sha) and (.source | type == "string")
@@ -30,7 +34,9 @@ def known($input; $saved):
    + [($input.backlog.records // [])[] | select(.structured == true) as $task
       | ($task.links // [])[] | select(canonical_url) | {task:$task.id,url:.}]
    + [$saved[] | .task as $task | .records[] | {task:$task,url}])
-  | unique_by([.task,.url]);
+  | unique_by([.task,.url])
+  | map(. as $owner | select(any($saved[] | select(.task == $owner.task)
+      | .records[]; .url == $owner.url and .forgotten != null) | not));
 def latest_checks:
   group_by(.name) | map(sort_by([(.started_at // ""),(.id // 0)]) | last);
 def projected($input; $saved; $now; $max_age):

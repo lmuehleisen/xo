@@ -6,6 +6,7 @@
 #   fm-contributions.sh poll
 #   fm-contributions.sh pending
 #   fm-contributions.sh verdict <task> <url> <judged-head> <source-url> <actor> <summary>
+#   fm-contributions.sh forget <task> <url> --reason <text>
 #   fm-contributions.sh ack <task> <url> <event-token>
 #   fm-contributions.sh arm [--if-owned]
 #
@@ -73,6 +74,17 @@
 # cannot consume the pending signal. Source bodies are data, never commands.
 # All mutations serialize on this home's .contributions.lock. Writes refuse
 # symlinks and publish by rename. No forge writes are performed.
+#
+# forget retains the complete observed row with forgotten:{at,actor,reason};
+# actor is the invoking local account (id -un), never a forge identity.
+# It excludes that task/URL from ownership, polling, pending, and snapshot views,
+# including historical Done links. Other task owners remain independent.
+# It refuses unknown/unobserved pairs, unreadable records, a missing backlog,
+# any non-Done structured backlog link to the URL, or any recorded task pr= link
+# to it (metadata remains live until retired, regardless of endpoint liveness).
+# Remove those active links first. Repeated forget preserves the first audit.
+# Recovery is a deliberate local edit removing forgotten from the retained row;
+# no record, observation, verdict, or pending evidence is deleted.
 #
 # arm registers the existing authenticated custom-check path. Startup and PR
 # registration call it; when filing a linked upstream issue, call arm as well.
@@ -455,7 +467,32 @@ case "${1:-}" in
   pending)
     read_saved
     [ "$ERRORS" -eq 0 ] || fail "$ERRORS unreadable contribution record(s); pending signals are unverified"
-    jq '[.[] | .task as $task | .records[] | .url as $url | .pending[] | . + {task:$task,url:$url}]' "$TMP/saved.json"
+    jq '[.[] | .task as $task | .records[] | select(.forgotten == null) | .url as $url | .pending[] | . + {task:$task,url:$url}]' "$TMP/saved.json"
+    ;;
+  forget)
+    [ "$#" -eq 5 ] && [ "$4" = --reason ] || fail 'forget needs task, URL and --reason text'
+    task=$2; url=$3; reason=$5
+    fm_pr_task_id_valid "$task" || fail 'invalid contribution task'
+    jq -ne --arg reason "$reason" '$reason | test("\\S")' >/dev/null || fail 'a nonempty reason is required'
+    acquire; get_input; read_saved
+    [ "$ERRORS" -eq 0 ] || fail 'unreadable contribution records; removal refused'
+    jq -e '.backlog.present == true' "$TMP/input.json" >/dev/null || fail 'backlog unavailable; removal refused'
+    jq -e --arg task "$task" --arg url "$url" \
+      '.[] | select(.task == $task) | .records[] | select(.url == $url)' "$TMP/saved.json" > "$TMP/row.json" \
+      || fail 'unknown observed task/URL'
+    jq -e --arg url "$url" '
+      (any(.backlog.records[]?; .structured == true and .state != "done"
+        and ((.links // []) | index($url)) != null)
+       or any(.tasks[]?; .pr.url == $url)) | not' "$TMP/input.json" >/dev/null \
+      || fail 'URL still has an active backlog or recorded task PR link; remove that link first'
+    if jq -e '.forgotten != null' "$TMP/row.json" >/dev/null; then
+      exit 0
+    fi
+    actor=$(id -un) || fail 'local actor unavailable'
+    [ -n "$actor" ] || fail 'local actor unavailable'
+    jq --arg at "$NOW" --arg actor "$actor" --arg reason "$reason" \
+      '.forgotten={at:$at,actor:$actor,reason:$reason}' "$TMP/row.json" > "$TMP/update.json"
+    write_record "$task" "$TMP/update.json"
     ;;
   verdict|ack)
     action=$1; shift
