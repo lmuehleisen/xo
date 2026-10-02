@@ -2,10 +2,12 @@
 // shim and print what the renderer actually produced, so board behavior is
 // asserted through the real template rather than by reading its source.
 //
-// Usage: node board-render-harness.mjs <built-board.html>
+// Usage: node board-render-harness.mjs <built-board.html> [<key> <value> <note>]
+// With a card key, the harness picks <value> (empty for none) and types <note>
+// on that card's answer form, submits it, and reports what the page queued.
 // Prints one JSON document:
 //   { stats:[{n,label}], underway:[{title,sub,badges}],
-//     charted:[{title,sub,badges,pickable}], empty, more, error }
+//     charted:[{title,sub,badges,pickable}], empty, more, error, queued }
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -32,7 +34,11 @@ class Node {
         if (enabled) names.add(c); else names.delete(c);
         this.className = [...names].join(" ");
       },
+      remove: (c) => {
+        this.className = this.className.split(/\s+/).filter((n) => n && n !== c).join(" ");
+      },
     };
+    this.listeners = {};
   }
   get textContent() {
     return this.children.length
@@ -42,7 +48,7 @@ class Node {
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
   setAttribute(k, v) { this.attributes[k] = v; }
-  addEventListener() {}
+  addEventListener(type, fn) { this.listeners[type] = fn; }
   querySelectorAll(sel) {
     const want = sel.replace(/^\./, "").replace(/:checked$/, "");
     const checkedOnly = sel.endsWith(":checked");
@@ -85,6 +91,30 @@ globalThis.document = {
 };
 globalThis.window = {};
 globalThis.TextEncoder = TextEncoder;
+
+const [submitKey, submitValue = "", submitNote = ""] = process.argv.slice(3);
+const queued = [];
+if (submitKey !== undefined) {
+  globalThis.window.lavish = {
+    queuePrompt: (prompt, opts) => queued.push({ prompt, text: opts.text, data: opts.data }),
+  };
+  globalThis.setTimeout = () => 0;
+}
+const findAll = (node, test, out = []) => {
+  for (const c of node.children) {
+    if (test(c)) out.push(c);
+    findAll(c, test, out);
+  }
+  return out;
+};
+globalThis.FormData = class {
+  constructor(form) { this.form = form; }
+  get(name) {
+    const inputs = findAll(this.form, (n) => n.tagName === "input" && n.name === name);
+    const hit = inputs.find((n) => n.type !== "radio" || n.checked);
+    return hit ? hit.value : null;
+  }
+};
 
 const script = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
 new Function(script)();
@@ -136,5 +166,15 @@ function collectControls(node) {
 collectControls(callDeck);
 collectControls(ch);
 const calls = callDeck.children.map(c => c.textContent);
+if (submitKey !== undefined) {
+  const form = findAll(callDeck, (n) => n.tagName === "form"
+    && n.attributes["data-lavish-question"] === submitKey)[0];
+  if (!form) throw new Error("no answer form for card " + submitKey);
+  findAll(form, (n) => n.tagName === "input").forEach((n) => {
+    if (n.type === "radio") n.checked = n.value === submitValue;
+    else if (n.name === "note") n.value = submitNote;
+  });
+  form.listeners.submit({ preventDefault() {} });
+}
 process.stdout.write(
-  JSON.stringify({ stats, underway, charted, empty, more, calls, callControls, error: errorText }) + "\n");
+  JSON.stringify({ stats, underway, charted, empty, more, calls, callControls, error: errorText, queued }) + "\n");

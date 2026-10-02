@@ -21,10 +21,17 @@
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--forge <none|gerrit> [--shape squash]] [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--lavish <off|view|answers>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   It offers the crew-hosted Lavish review loop only when the effective Lavish
+#   mode is not off: the home toggle config/lavish, or --lavish, the per-brief
+#   override that wins over it in both directions (view and answers both
+#   enable the loop). bin/fm-lavish-lib.sh owns the modes and resolves a
+#   wanted mode whose pinned lavish-axi is unavailable to off. Otherwise the
+#   scout delivers a text report. --lavish is refused on ship and secondmate
+#   scaffolds.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -151,6 +158,8 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-lavish-lib.sh
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
@@ -200,6 +209,8 @@ FORGE=none
 FORGE_SET=0
 SHAPE=
 SHAPE_SET=0
+LAVISH_REQUEST=
+LAVISH_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -212,6 +223,7 @@ for a in "$@"; do
       branch-prefix) BRANCH_PREFIX=$a; BRANCH_PREFIX_SET=1 ;;
       forge) FORGE=$a; FORGE_SET=1 ;;
       shape) SHAPE=$a; SHAPE_SET=1 ;;
+      lavish) LAVISH_REQUEST=$a; LAVISH_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -230,6 +242,8 @@ for a in "$@"; do
     --forge=*) FORGE=${a#--forge=}; FORGE_SET=1 ;;
     --shape) want_value=shape ;;
     --shape=*) SHAPE=${a#--shape=}; SHAPE_SET=1 ;;
+    --lavish) want_value=lavish ;;
+    --lavish=*) LAVISH_REQUEST=${a#--lavish=}; LAVISH_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -287,6 +301,14 @@ if [ "$KIND" = ship ]; then
   fi
 elif [ "$FORGE_SET" -eq 1 ] || [ "$SHAPE_SET" -eq 1 ]; then
   echo "error: --forge and --shape apply only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
+  exit 1
+fi
+if [ "$LAVISH_SET" -eq 1 ] && [ "$KIND" != scout ]; then
+  echo "error: --lavish applies only to scout briefs, whose crew-hosted review loop it enables or declines" >&2
+  exit 1
+fi
+if [ "$LAVISH_SET" -eq 1 ] && [ -z "$LAVISH_REQUEST" ]; then
+  echo "error: --lavish must be off, view, or answers (got an empty value)" >&2
   exit 1
 fi
 ID=${POS[0]}
@@ -632,6 +654,15 @@ EOF
 PIPELINE_INFRA_RULE=${PIPELINE_INFRA_RULE%$'\n'}
 
 if [ "$KIND" = scout ]; then
+fm_lavish_resolve "$CONFIG" "$LAVISH_REQUEST" || exit 1
+SCOUT_INFRA_RULE=$SHARED_INFRA_RULE
+if [ "$FM_LAVISH_MODE" = off ]; then
+  LAVISH_LINE='Lavish is not enabled for this task, so if your deliverable is a visual artifact the captain will review, put it in the report (path or inline) and describe what to look at; do not start a Lavish review loop.'
+else
+  LAVISH_HOME="FM_HOME=$(shell_quote "$FM_HOME")"
+  SCOUT_INFRA_RULE=${SCOUT_INFRA_RULE/'Do not install or invoke no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi.'/'Do not install no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi, and do not invoke gh-axi or chrome-devtools-axi; invoke lavish-axi only as the Definition of done says.'}
+  LAVISH_LINE="If your deliverable is a visual artifact the captain will review and iterate on, you may host a Lavish review loop. Open the artifact only with \`$LAVISH_HOME $(shell_quote "$FM_ROOT/bin/fm-lavish.sh") run <artifact.html>\` - never call lavish-axi directly and never run its setup, update, or share - and put the session URL it prints in the report. Then arm your board with \`$LAVISH_HOME $(shell_quote "$FM_ROOT/bin/fm-procevent-lavish.sh") arm <artifact.html> --for $ID\` and never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round to acknowledge it, route the board feedback through your steering inbox, write needs-decision [key=board-review] with the live board URL when the captain owes a decision, and stop at session_ended or an empty End without re-arming - acknowledge that final round with \`$LAVISH_HOME $(shell_quote "$FM_ROOT/bin/fm-procevent.sh") handled <source-id> <sequence>\` to conclude and retire your board. The crew-hosted Lavish board contract in \`$FM_ROOT/docs/configuration.md\` owns this loop."
+fi
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -666,14 +697,14 @@ $CREWMATE_PAUSE_INSTRUCTIONS
    append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
-$SHARED_INFRA_RULE
+$SCOUT_INFRA_RULE
 
 $WAIT_BLOCK$INBOX_SECTION
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
-Lavish is not available to this fork's workers, so if your deliverable is a visual artifact the captain will review, put it in the report (path or inline) and describe what to look at; do not start a Lavish review loop.
+$LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.

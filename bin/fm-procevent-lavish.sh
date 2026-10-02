@@ -45,7 +45,8 @@
 #            it is about to publish. Exit 0 once Lavish accepts the staged reply,
 #            3 when the installed Lavish is a confirmed older release without
 #            synchronous reply so the listener keeps the legacy path, and any
-#            other status when the reply failed or the version is unknown.
+#            other status when the reply failed, the version is unknown, or the
+#            installed version is off this home's pin.
 # terminal   Exit 0 when the captured result means this Lavish source will never
 #            produce another result, so the runner may retire it; any other exit
 #            keeps it armed. This is the generic adapter contract bin/fm-procevent.sh
@@ -102,12 +103,14 @@
 #
 # Only rows tagged `choice` are read. A freeform captain message is prose that may
 # contain anything, and must never be able to forge a decision key.
+# A card answer typed with no option chosen is not reported either: it may defer
+# or qualify the call, so firstmate reads it from the wake with judgment.
 #
 # `read` is the presentation command summarized above; keyed intake remains
 # the separate `answers` contract described here.
-# The versioned `fm-bearings-answer.v1` parser remains only as compatibility for
-# separately supplied captured review artifacts. The static `/bearings lavish`
-# page emits no answers, binds no source, and never enters this adapter.
+# The versioned `fm-bearings-answer.v1` context is what an answers-mode
+# `/bearings lavish` board queues for each decision card (bin/fm-bearings-board.sh
+# owns when a board is interactive); a static or view-mode board emits none.
 #
 # It wraps the published `lavish-axi poll` and `lavish-axi reply` interfaces,
 # verified against 0.1.80. `poll` long-polls indefinitely; `reply` exits only
@@ -149,6 +152,15 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
+# shellcheck source=bin/fm-lavish-lib.sh
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
+
+# Every lavish-axi call below runs with telemetry and auto-open pinned off. A
+# malformed config/lavish-axi-host is not fatal here: a poll routes by the
+# board's own saved session (apply_session_host), never the configured host.
+# arm, every listener start (poll), and every poll retry refuse a lavish-axi
+# other than the pinned version, so an upgrade can never reach a board.
+fm_lavish_pin_env "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" 2>/dev/null || true
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2; }
@@ -222,7 +234,7 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real owner listening
+  local artifact='' task='' reply_file='' id real owner listening lavish_reason
   local -a listener=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -246,7 +258,7 @@ cmd_arm() {
   done
   [ -n "$artifact" ] || usage
   [ -z "$reply_file" ] || [ -n "$task" ] || usage
-  command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
+  lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
   poll_retry_delay >/dev/null
   id=$(cmd_source_id "$artifact") || exit 1
   real=$(perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$artifact" 2>/dev/null) \
@@ -290,7 +302,11 @@ cmd_arm() {
 }
 
 cmd_deliver_reply() {
+  local lavish_reason
   [ "$#" -eq 4 ] && [ "$1" = poll ] && [ "$3" = --agent-reply-file ] || usage
+  # Like every other lavish-axi invocation here, never post through a binary
+  # that is off this home's pin, even one upgraded since arm checked it.
+  lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
   lavish_reply_compatible || exit 3
   apply_session_host "$2"
   post_lavish_reply "$2" "$4"
@@ -394,7 +410,7 @@ poll_iteration_floor_wait() {
 }
 
 cmd_poll() {
-  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started
+  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started lavish_reason
   local pipeline_status reply_file=''
   local reply_text='' reply_pending=0
   [ -n "$artifact" ] || usage
@@ -403,7 +419,7 @@ cmd_poll() {
   elif [ "$#" -ne 1 ]; then
     usage
   fi
-  command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
+  lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
   delay=$(poll_retry_delay) || exit 1
   response=$(mktemp "${TMPDIR:-/tmp}/fm-lavish-poll.XXXXXX") || die "cannot stage the poll response"
   printf -v cleanup_command 'rm -f -- %q' "$response"
@@ -422,6 +438,9 @@ cmd_poll() {
     iteration_started=$(poll_iteration_started) || die "cannot start the poll rate governor"
     [ -f "$artifact" ] && [ ! -L "$artifact" ] && [ -r "$artifact" ] \
       || die "artifact is no longer a readable file: $artifact"
+    # Every attempt, not only the first: a retry must never run a binary that
+    # was upgraded off the pin after this listener started.
+    lavish_reason=$(fm_lavish_unavailable_reason "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || die "$lavish_reason"
     apply_session_host "$artifact"
     # Newer Lavish builds expose a one-shot reply command whose success is the
     # server's acceptance receipt. Consume the staged file only after that
@@ -690,6 +709,9 @@ cmd_choice_rows() {
         next;
       }
       next if $choice->{selection} eq "reconcile";
+      # Only a card option resolves a call here. Words typed with no option
+      # chosen may defer or qualify the call, so they wait for judgment.
+      next unless $choice->{legacy} || length $choice->{selection};
       print length $choice->{mode}
         ? "$choice->{key}\t$choice->{answer}\t$choice->{label}\t$choice->{mode}\n"
         : "$choice->{key}\t$choice->{answer}\t$choice->{label}\n";

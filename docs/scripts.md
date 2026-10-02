@@ -19,7 +19,8 @@ The retained compatibility gate lifecycle boundary for fleet lifecycle entrypoin
 | `fm-fleet-ledger.sh`     | Append the opt-in fleet activity ledger's records ([contract](fleet-ledger.md))      |
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
-| `fm-bearings-board.sh`   | Build the stable read-only local HTML `/bearings lavish` fleet board                 |
+| `fm-bearings-board.sh`   | Build the stable `/bearings lavish` fleet board, static or opened in Lavish by the home's Lavish mode |
+| `fm-lavish.sh`           | Resolve the optional Lavish mode and run lavish-axi under the pinned environment ([optional Lavish](lavish.md)) |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Guarded self-update of firstmate and local or remote secondmate homes, reconciling redundant divergence and classifying every live mate left on the target commit for restart or fallback nudge |
 | `fm-secondmate-restart.sh` | Persist open conversational work, then restart eligible second mates or report the fallback outcome |

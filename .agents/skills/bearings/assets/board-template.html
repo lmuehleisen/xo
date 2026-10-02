@@ -200,16 +200,40 @@ a { color: inherit; text-decoration: none; }
 .bb-ctx__v { font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.4; min-width: 0; }
 .bb-decision__link { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ocean-600); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .bb-decision__link:hover { text-decoration: underline; }
-/* Decision options are descriptive, not selectable controls. */
+/* Decision options are descriptive unless the build made the board
+   interactive (answers mode), when decision cards become answer forms. One
+   rhythm owner: the answer form is a flex column with the same 12px gap as the
+   card pad, and the foot rides margin-top:auto so every Queue answer button
+   sits on the same baseline. */
+.bb-decision form { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; }
 .bb-opts { display: flex; flex-direction: column; gap: 7px; }
-
+.bb-opt {
+  display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; cursor: pointer;
+  background: var(--surface-card-warm); border: 1.5px solid var(--border-default);
+  border-radius: var(--radius-sm); transition: border-color 120ms, background 120ms;
+}
+.bb-opt:hover { border-color: var(--ink-300); }
+.bb-opt input { accent-color: var(--rust-500); margin-top: 3px; flex: none; }
 .bb-opt__body { min-width: 0; flex: 1 1 auto; }
 .bb-opt__label { display: block; font-size: var(--fs-sm); font-weight: 700; color: var(--text-strong); line-height: 1.3; }
 .bb-opt__hint { display: block; font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.35; margin-top: 1px; }
 .bb-opt__rec { flex: none; align-self: center; font-size: var(--fs-2xs); font-weight: 800; text-transform: uppercase;
   letter-spacing: 0.07em; color: var(--navy-700); background: var(--gold-300);
   border: 1px solid var(--gold-600); border-radius: var(--radius-xs); padding: 3px 7px 2px; }
-
+.bb-opt:has(input:checked) { border-color: var(--rust-500); background: var(--rust-050); box-shadow: inset 0 0 0 1px var(--rust-500); }
+.bb-decision__foot { display: flex; align-items: center; gap: 10px; margin-top: auto; }
+.bb-queued {
+  display: none; align-items: center; gap: 6px;
+  font-size: var(--fs-2xs); font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--sea-700); background: var(--sea-050); border: 1.5px solid var(--sea-200);
+  border-radius: var(--radius-xs); padding: 5px 9px 4px;
+}
+.is-queued .bb-queued { display: inline-flex; }
+.bb-limit { display: none; font-size: var(--fs-xs); font-weight: 700; color: var(--status-danger); }
+.bb-limit.is-visible { display: inline; }
+.bb-freeform { width: 100%; font-family: var(--font-sans); font-size: var(--fs-sm); color: var(--text-strong);
+  background: var(--surface-card); border: 1.5px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 11px; }
+.bb-freeform:focus { outline: none; border-color: var(--rust-400); box-shadow: var(--focus-ring); }
 
 /* ---- compact rows (Underway / Landed / Charted) ---- */
 .bb-rows { display: flex; flex-direction: column; }
@@ -414,8 +438,14 @@ __FM_BEARINGS_BOARD_DATA__
   }
   var chartedMoreQueued = data.charted_more || 0;
   var chartedMoreWarnings = data.charted_warning_more || 0;
-
-
+  /* Only the build sets interactive (answers mode). Answers reach firstmate
+     through Lavish's queued prompts, never a page-owned channel. */
+  var interactive = data.interactive === true;
+  function utf8ByteLength(text) { return new TextEncoder().encode(text).length; }
+  var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+  if (interactive) {
+    document.getElementById("bb-readonly").textContent = "Answer decision cards here or in chat. Merge, credential, and dispatch requests stay in chat. Rebuild the board to refresh it.";
+  }
 
   document.getElementById("bb-provenance").textContent = data.schema + " · " + data.generated;
 
@@ -444,6 +474,80 @@ __FM_BEARINGS_BOARD_DATA__
     row.appendChild(el("span", "bb-ctx__k", k));
     row.appendChild(el("span", "bb-ctx__v", v));
     return row;
+  }
+
+  /* An answers-mode decision card: one radio per option, an optional freeform
+     note, and Queue answer. The versioned context keeps the selected option
+     separate from its note; close carries the composer-declared completion
+     mode. bin/fm-procevent-lavish.sh owns how this is read back. */
+  function answerForm(item, card) {
+    var form = document.createElement("form");
+    form.setAttribute("data-lavish-question", item.key);
+    var opts = el("div", "bb-opts");
+    item.options.forEach(function (o) {
+      var lab = el("label", "bb-opt");
+      var input = document.createElement("input");
+      input.type = "radio"; input.name = "answer"; input.value = o.value;
+      lab.appendChild(input);
+      var body = el("span", "bb-opt__body");
+      body.appendChild(el("span", "bb-opt__label", o.label));
+      if (o.hint) body.appendChild(el("span", "bb-opt__hint", o.hint));
+      lab.appendChild(body);
+      if (item.recommend_value && o.value === item.recommend_value) {
+        lab.appendChild(el("span", "bb-opt__rec", "rec"));
+      }
+      opts.appendChild(lab);
+    });
+    form.appendChild(opts);
+    if (item.allow_freeform) {
+      var ff = document.createElement("input");
+      ff.type = "text"; ff.name = "note"; ff.className = "bb-freeform";
+      ff.placeholder = item.freeform_hint || "or answer in your own words…";
+      form.appendChild(ff);
+    }
+    var foot = el("div", "bb-decision__foot");
+    var btn = el("button", "fm-btn fm-btn--sm fm-btn--primary", "Queue answer");
+    btn.type = "submit";
+    foot.appendChild(btn);
+    var q = el("span", "bb-queued");
+    q.innerHTML = CHECK_SVG + " queued";
+    foot.appendChild(q);
+    var answerLimit = el("span", "bb-limit");
+    answerLimit.setAttribute("role", "alert");
+    foot.appendChild(answerLimit);
+    form.appendChild(foot);
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      answerLimit.classList.remove("is-visible");
+      var fd = new FormData(form);
+      var value = fd.get("answer");
+      var note = (fd.get("note") || "").trim();
+      /* The record shows the label the captain picked; the value stays in selection. */
+      var picked = value;
+      item.options.forEach(function (o) { if (o.value === value && o.label) picked = o.label; });
+      var displayAnswer = value ? (note ? picked + " - " + note : picked) : note;
+      if (!displayAnswer) return;
+      if (utf8ByteLength(displayAnswer) > 512) {
+        answerLimit.textContent = "Answer is too long to queue (512 bytes maximum).";
+        answerLimit.classList.add("is-visible");
+        return;
+      }
+      if (!(window.lavish && window.lavish.queuePrompt)) {
+        answerLimit.textContent = "Open this board in Lavish to queue answers, or answer in chat.";
+        answerLimit.classList.add("is-visible");
+        return;
+      }
+      var ctxData = { schema: "fm-bearings-answer.v1", question: item.key, selection: value || "", note: note };
+      if (item.close) ctxData.close = item.close;
+      window.lavish.queuePrompt(
+        "Captain's Call answer - " + item.title + ": " + displayAnswer,
+        { tag: "choice", text: item.title + " -> " + displayAnswer, element: form, data: ctxData }
+      );
+      card.classList.add("is-queued");
+      /* deal the next card once this one is answered */
+      setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
+    });
+    return form;
   }
 
   data.captains_call.forEach(function (item) {
@@ -477,18 +581,22 @@ __FM_BEARINGS_BOARD_DATA__
       pad.appendChild(ctx);
     }
 
-    var opts = el("div", "bb-opts");
-    item.options.forEach(function (o) {
-      var body = el("div", "bb-opt__body");
-      body.appendChild(el("span", "bb-opt__label", o.label));
-      if (o.hint) body.appendChild(el("span", "bb-opt__hint", o.hint));
-      if (item.recommend_value && o.value === item.recommend_value) {
-        body.appendChild(el("span", "bb-opt__rec", "rec"));
-      }
-      opts.appendChild(body);
-    });
-    pad.appendChild(opts);
-    pad.appendChild(el("p", "bb-decision__detail", "Reply in chat about " + item.title + "."));
+    if (interactive && item.type === "decision" && item.answerable === true) {
+      pad.appendChild(answerForm(item, card));
+    } else {
+      var opts = el("div", "bb-opts");
+      item.options.forEach(function (o) {
+        var body = el("div", "bb-opt__body");
+        body.appendChild(el("span", "bb-opt__label", o.label));
+        if (o.hint) body.appendChild(el("span", "bb-opt__hint", o.hint));
+        if (item.recommend_value && o.value === item.recommend_value) {
+          body.appendChild(el("span", "bb-opt__rec", "rec"));
+        }
+        opts.appendChild(body);
+      });
+      pad.appendChild(opts);
+      pad.appendChild(el("p", "bb-decision__detail", "Reply in chat about " + item.title + "."));
+    }
     card.appendChild(pad);
     deck.appendChild(card);
   });
@@ -503,7 +611,9 @@ __FM_BEARINGS_BOARD_DATA__
   function showCard(i) {
     active = Math.max(0, Math.min(cards.length - 1, i));
     cards.forEach(function (c, j) { c.hidden = j !== active; });
-    stackCount.textContent = "card " + (active + 1) + " of " + cards.length;
+    var answered = deck.querySelectorAll(".is-queued").length;
+    stackCount.textContent = "card " + (active + 1) + " of " + cards.length +
+      (answered ? " · " + answered + " answered" : "");
     stackPrev.disabled = active === 0;
     stackNext.disabled = active === cards.length - 1;
     /* the pile thins as the deal approaches the bottom */
