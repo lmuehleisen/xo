@@ -119,6 +119,12 @@
 # Every selected script runs isolated from the host's global and system Git
 # configuration, including one that sources no test helper of its own;
 # tests/git-config-helpers.sh owns that contract and its limits.
+# Every selected script also runs with TMUX and TMUX_PANE unset and TMUX_TMPDIR
+# on its own short private /tmp directory (socket paths are capped), so a suite's
+# bare tmux never reaches the server the runner was started from or another
+# suite's; after each script the run stops each server socketed there and
+# removes the directory, failing that script when it cannot, and retries any
+# directory still left on exit.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
@@ -388,7 +394,9 @@ family_for_basename() {
     fm-calm-claude-mod-plugin.test.sh|fm-calm-claude-mod-live-e2e.test.sh|\
     fm-afk-claude-long-digest-live-e2e.test.sh|\
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
-    fm-herdr-submit-confirm-live-e2e.test.sh)
+    fm-pi-worker-publish-policy-live-e2e.test.sh|\
+    fm-herdr-submit-confirm-live-e2e.test.sh|\
+    fm-bearings-board-lavish-live-e2e.test.sh)
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
@@ -404,6 +412,7 @@ family_for_basename() {
     fm-spawn-prelaunch-rollback.test.sh|fm-spawn-prelaunch-lease-return.test.sh|\
     fm-spawn-compact-adviser-disable.test.sh|\
     fm-spawn-compact-adviser-disable-remote.test.sh|\
+    fm-worker-tmux-isolation.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
       ;;
@@ -928,6 +937,7 @@ tests/fm-watch-triage.test.sh 1074843
 tests/fm-watcher-lock.test.sh 72022
 tests/fm-worker-account-live-e2e.test.sh 3179
 tests/fm-worker-account.test.sh 37445
+tests/fm-worker-tmux-isolation.test.sh 15000
 EOF
 }
 
@@ -2457,7 +2467,10 @@ if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
   . "$ROOT/bin/fm-timeout-lib.sh"
 fi
 
+# shellcheck source=bin/fm-private-tmux-lib.sh
+. "$ROOT/bin/fm-private-tmux-lib.sh"
 RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run.XXXXXX")
+RUN_TMUX_DIRS="$RUN_TMP/tmux-dirs"
 RECORDS="$RUN_TMP/records.tsv"
 FAMILIES_TSV="$RUN_TMP/families.tsv"
 : >"$RECORDS"
@@ -2468,7 +2481,18 @@ declare -a WORKER_SCRIPTS=()
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_run() {
+  local rc=$? dir
+  # Every suite's private tmux directory is recorded before the suite starts, so
+  # one left behind by a failed retire or an interrupted run is retried here.
+  while IFS= read -r dir; do
+    [ -e "$dir" ] || continue
+    if ! fm_private_tmux_retire "$dir" && [ -e "$dir" ]; then
+      echo "fm-test-run: private tmux directory $dir could not be retired and a tmux server a suite left there may still run; stop it by its exact -S socket and remove the directory" >&2
+      [ "$rc" -ne 0 ] || rc=1
+    fi
+  done < <(cat "$RUN_TMUX_DIRS" 2>/dev/null)
   rm -rf "$RUN_TMP"
+  exit "$rc"
 }
 
 trap cleanup_run EXIT
@@ -2562,31 +2586,51 @@ run_script_bounded() {  # <script> <out> <stream> <id>
   local GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
   # shellcheck source=tests/git-config-helpers.sh
   . "$ROOT/tests/git-config-helpers.sh" || return
-  local rc
+  local rc tmux_dir
+  if ! tmux_dir=$(mktemp -d /tmp/fmtr.XXXXXXXX); then
+    printf 'not ok - %s could not get a private tmux directory\n' "$script" >>"$out"
+    [ "$stream" -eq 1 ] && tail -1 "$out"
+    return 1
+  fi
+  if ! printf '%s\n' "$tmux_dir" >>"$RUN_TMUX_DIRS"; then
+    rmdir "$tmux_dir" 2>/dev/null || true
+    printf 'not ok - %s could not record its private tmux directory for cleanup\n' "$script" >>"$out"
+    [ "$stream" -eq 1 ] && tail -1 "$out"
+    return 1
+  fi
+  local -a tmux_env=(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$tmux_dir")
   : "$id"
   set +e
   if [ "$stream" -eq 1 ]; then
     if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
       # Expansion is intentionally deferred to the child bash passed to -c.
       # shellcheck disable=SC2016
-      fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash -c \
+      fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" "${tmux_env[@]}" bash -c \
         'bash "$1" 2>&1 | tee "$2"; exit "${PIPESTATUS[0]}"' _ "$script" "$out"
       rc=$?
     else
-      bash "$script" 2>&1 | tee "$out"
+      "${tmux_env[@]}" bash "$script" 2>&1 | tee "$out"
       rc=${PIPESTATUS[0]}
     fi
   elif [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
-    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash "$script" >"$out" 2>&1
+    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" "${tmux_env[@]}" bash "$script" >"$out" 2>&1
     rc=$?
   else
-    bash "$script" >"$out" 2>&1
+    "${tmux_env[@]}" bash "$script" >"$out" 2>&1
     rc=$?
   fi
   if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ] && [ "$rc" -eq 124 ]; then
     printf 'not ok - %s exceeded the per-script bound of %ss and was terminated\n' \
       "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"
     [ "$stream" -eq 1 ] && tail -1 "$out"
+  fi
+  # A directory this cannot retire fails the suite, so the summary and timing
+  # artifact count it, and stays recorded for cleanup_run to retry.
+  if ! fm_private_tmux_retire "$tmux_dir" && [ -e "$tmux_dir" ]; then
+    printf 'not ok - %s left private tmux directory %s that could not be retired; a tmux server in it may still run\n' \
+      "$script" "$tmux_dir" >>"$out"
+    [ "$stream" -eq 1 ] && tail -1 "$out"
+    [ "$rc" -ne 0 ] || rc=1
   fi
   return "$rc"
 }

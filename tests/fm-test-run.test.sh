@@ -91,7 +91,7 @@ test_changed_file_selection_is_conservative() {
 init_changed_fixture_repo() {
   local repo=$1 script
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$RUNNER" "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
@@ -193,7 +193,7 @@ init_primary_and_linked_worktree() {
   git -C "$repo" worktree add --quiet -b linked-probe "$linked"
   for tree in "$repo" "$linked"; do
     mkdir -p "$tree/bin" "$tree/tests"
-    cp "$RUNNER" "$tree/bin/fm-test-run.sh"
+    cp "$RUNNER" "$ROOT/bin/fm-private-tmux-lib.sh" "$tree/bin/"
     cp "$ROOT/tests/git-config-helpers.sh" "$tree/tests/"
     chmod +x "$tree/bin/fm-test-run.sh"
     cat >"$tree/tests/probe.test.sh" <<PROBE
@@ -518,7 +518,7 @@ PY
   timeout_repo="$tmp/timeout-repo"
   timeout_script=tests/fm-calm-pi-extension.test.sh
   mkdir -p "$timeout_repo/bin" "$timeout_repo/tests"
-  cp "$RUNNER" "$timeout_repo/bin/fm-test-run.sh"
+  cp "$RUNNER" "$ROOT/bin/fm-private-tmux-lib.sh" "$timeout_repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$timeout_repo/tests/"
   cat >"$timeout_repo/bin/fm-timeout-lib.sh" <<'SH'
 fm_run_timed() {
@@ -670,7 +670,7 @@ test_family_proofs_run_in_separate_concurrent_phases() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-family-phases.XXXXXX")
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$RUNNER" "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
   chmod +x "$repo/bin/fm-test-run.sh"
@@ -1024,7 +1024,7 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
   tmp=$(fm_test_tmproot fm-test-run-non-lane-schedule)
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$RUNNER" "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   for script in "${scripts[@]}"; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
     chmod +x "$repo/$script"
@@ -1211,6 +1211,7 @@ test_portable_serial_packing_budget_boundary() {
 
   for weight in 1200000 1200001; do
     cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+    cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
     python3 - "$repo/bin/fm-test-run.sh" "$weight" <<'PY' \
       || fail "could not seed the fixture's measured timing input"
 from pathlib import Path
@@ -1348,7 +1349,7 @@ test_unmapped_new_test_never_inherits_family_concurrency() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-unmapped.XXXXXX")
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$RUNNER" "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   chmod +x "$repo/bin/fm-test-run.sh"
   # Two members of the proven residual family, plus a test basename the family
@@ -1482,6 +1483,7 @@ test_per_script_timeout_bounds_a_hang() {
   hang=tests/fm-hang-fixture.test.sh
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
   grandchild_pid="$tmp/grandchild.pid"
@@ -1549,6 +1551,7 @@ test_changed_bound_gives_slow_watcher_suites_headroom() {
   script=tests/fm-watch-triage.test.sh
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   cat >"$repo/bin/fm-timeout-lib.sh" <<'SH'
 fm_run_timed() {
@@ -1587,6 +1590,7 @@ test_max_wall_ms_is_a_result_not_advice() {
   fast=tests/fm-budget-fixture.test.sh
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   cat >"$repo/$fast" <<'SH'
 #!/usr/bin/env bash
@@ -1639,6 +1643,88 @@ SH
   pass "--max-wall-ms fails an over-budget run and refuses a malformed budget"
 }
 
+# Each suite gets its own private tmux directory, so one suite's bare tmux
+# kill-server cannot reach another's server, and the runner removes each one.
+test_each_suite_gets_its_own_private_tmux_directory() {
+  local tmp repo runner a=tests/fm-tmux-dir-a.test.sh b=tests/fm-tmux-dir-b.test.sh script rc dir_a dir_b
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-tmux-dirs.XXXXXX")
+  repo="$tmp/repo"
+  runner="$repo/bin/fm-test-run.sh"
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  for script in "$a" "$b"; do
+    cat >"$repo/$script" <<SH
+#!/usr/bin/env bash
+[ -z "\${TMUX-}" ] && [ -z "\${TMUX_PANE-}" ] || exit 1
+printf '%s\n' "\$TMUX_TMPDIR" >"$tmp/\$(basename "\$0").dir"
+echo "ok - tmux dir fixture"
+SH
+    chmod +x "$repo/$script"
+  done
+  chmod +x "$runner"
+
+  set +e
+  TMUX=/tmp/fm-test-run-fleet,1,0 TMUX_PANE=%0 "$runner" "$a" "$b" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  dir_a=$(cat "$tmp/$(basename "$a").dir" 2>/dev/null || true)
+  dir_b=$(cat "$tmp/$(basename "$b").dir" 2>/dev/null || true)
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "the tmux directory fixtures should pass, got $rc: $(cat "$tmp/out" "$tmp/err" 2>/dev/null)"; }
+  case "$dir_a" in /tmp/fmtr.*) ;; *) rm -rf "$tmp"; fail "suite a did not get a private tmux directory: $dir_a" ;; esac
+  case "$dir_b" in /tmp/fmtr.*) ;; *) rm -rf "$tmp"; fail "suite b did not get a private tmux directory: $dir_b" ;; esac
+  [ "$dir_a" != "$dir_b" ] || { rm -rf "$tmp"; fail "two suites shared one private tmux directory: $dir_a"; }
+  [ ! -e "$dir_a" ] && [ ! -e "$dir_b" ] || { rm -rf "$tmp"; fail "the runner left a suite's private tmux directory behind"; }
+  rm -rf "$tmp"
+  pass "each suite runs on its own private tmux directory, which the runner removes"
+}
+
+# A suite can leave a tmux server the runner's cleanup cannot stop in its
+# private tmux directory. The runner must keep that directory, say so, and fail
+# the otherwise green run rather than hide a leaked server.
+test_unretired_private_tmux_directory_fails_the_run() {
+  local tmp repo runner fixture fake_bin rc left
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-tmux-retire.XXXXXX")
+  repo="$tmp/repo"
+  runner="$repo/bin/fm-test-run.sh"
+  fixture=tests/fm-tmux-retire-fixture.test.sh
+  fake_bin="$tmp/fake-bin"
+  mkdir -p "$repo/bin" "$repo/tests" "$fake_bin"
+  cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  cat >"$repo/$fixture" <<SH
+#!/usr/bin/env bash
+python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "\$TMUX_TMPDIR/s" || exit 1
+printf '%s\n' "\$TMUX_TMPDIR" >"$tmp/tmux-dir"
+echo "ok - tmux retire fixture"
+SH
+  # The planted socket answers like one whose permissions a worker revoked.
+  cat >"$fake_bin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in *" display-message "*) echo "error connecting to $2 (Permission denied)" >&2; exit 1 ;; esac
+exit 0
+SH
+  chmod +x "$runner" "$repo/$fixture" "$fake_bin/tmux"
+
+  set +e
+  PATH="$fake_bin:$PATH" "$runner" "$fixture" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  left=$(cat "$tmp/tmux-dir" 2>/dev/null || true)
+  case "$left" in /tmp/fmtr.*) ;; *) rm -rf "$tmp"; fail "the fixture did not record the run's private tmux directory" ;; esac
+  [ -S "$left/s" ] || { rm -rf "$left" "$tmp"; fail "the runner removed a private tmux directory it could not retire"; }
+  rm -rf "$left"
+  [ "$rc" -eq 1 ] || { rm -rf "$tmp"; fail "an unretired private tmux directory must fail the run, got $rc"; }
+  grep -qF "private tmux directory $left could not be retired" "$tmp/err" ||
+    { rm -rf "$tmp"; fail "the runner did not name the directory it could not retire: $(cat "$tmp/err")"; }
+  grep -qF "FM_TEST_SUMMARY total=1 failed=1 " "$tmp/out" ||
+    { rm -rf "$tmp"; fail "the summary must count the suite whose tmux directory could not be retired: $(cat "$tmp/out")"; }
+  rm -rf "$tmp"
+  pass "an unretired private tmux directory is reported and fails the run"
+}
+
 test_jobs_parallel_scheduler_and_failure_propagation() {
   local tmp repo runner evidence fake_bin a b c d rc begin_n end_n
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-jobs-sched.XXXXXX")
@@ -1652,6 +1738,7 @@ test_jobs_parallel_scheduler_and_failure_propagation() {
   d=tests/fm-supervision-instructions.test.sh
   mkdir -p "$repo/bin" "$repo/tests" "$evidence" "$fake_bin"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-private-tmux-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
   cat >"$fake_bin/stat" <<'SH'
 #!/usr/bin/env bash
@@ -1887,6 +1974,8 @@ test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
 test_changed_bound_gives_slow_watcher_suites_headroom
 test_max_wall_ms_is_a_result_not_advice
+test_each_suite_gets_its_own_private_tmux_directory
+test_unretired_private_tmux_directory_fails_the_run
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
 test_aggregate_json

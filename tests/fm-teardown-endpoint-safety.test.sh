@@ -908,14 +908,23 @@ assert_stale_claim_preserved() {
 }
 
 test_stopped_landed_stale_claim_retires_without_touching_the_slot() {
-  local dir before old_ref current_ref out
+  local dir before old_ref current_ref out tmux_dir
   dir=$(make_stale_claim_case stale-landed yes yes)
   before=$(git -C "$dir/worktree" rev-parse HEAD)
   old_ref=$(git -C "$dir/worktree" rev-parse refs/heads/fm/claim-old)
   current_ref=$(git -C "$dir/worktree" symbolic-ref HEAD)
   printf '%s\n' "$dir/worktree" > "$dir/home/state/claim-old.treehouse-lease"
   printf '%s\n' "$dir/worktree" > "$dir/home/state/claim-current.treehouse-lease"
-  out=$(run_stale_claim_case "$dir" 2>&1) || fail "landed stale claim refused: $out"
+  # The stale claimant's private tmux directory is an endpoint resource too.
+  tmux_dir="/tmp/fmwt-$(printf '%s\n%s' "$(cd "$dir/home" && pwd -P)" claim-old |
+    { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+  (umask 077 && mkdir "$tmux_dir") || fail "could not create the stale claimant's private tmux directory"
+  printf 'worker_tmux_dir=%s\n' "$tmux_dir" >> "$dir/home/state/claim-old.meta"
+  out=$(run_stale_claim_case "$dir" 2>&1) || { rm -rf "$tmux_dir"; fail "landed stale claim refused: $out"; }
+  [ -d "$tmux_dir" ] || fail "record-only retirement removed the stale claimant's private tmux directory"
+  rm -rf "$tmux_dir"
+  assert_contains "$out" "leaves task claim-old's private tmux directory $tmux_dir" \
+    "record-only retirement did not name the private tmux directory it left"
   assert_absent "$dir/home/state/claim-old.meta" "stale claim was not retired"
   assert_absent "$dir/home/state/claim-old.treehouse-lease" "stale claim retained its receipt"
   assert_present "$dir/home/state/claim-current.treehouse-lease" "retirement removed the owner's receipt"

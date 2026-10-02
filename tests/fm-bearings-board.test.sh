@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-bearings-board.sh: fail-closed payload validation,
 # stale-card filtering, effective-payload round-trip through the built page,
-# and idempotent rebuild of the stable local HTML file.
+# idempotent rebuild of the stable local HTML file, and the optional Lavish
+# modes: the home toggle, the per-request override, view, and answers with
+# bind-before-arm.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -13,6 +15,14 @@ TMP_ROOT=$(fm_test_tmproot fm-bearings-board)
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
+# A real lavish-axi on the host must never answer for a stub, so every run
+# below searches only the fixture's fakebin plus PATH without any directory
+# that holds one.
+TEST_PATH=$(printf '%s' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
+  [ -n "$dir" ] && [ ! -e "$dir/lavish-axi" ] && printf '%s:' "$dir"
+done)
+TEST_PATH=${TEST_PATH%:}
+
 make_home() {  # <name>
   local home="$TMP_ROOT/$1"
   mkdir -p "$home/state" "$home/data"
@@ -20,13 +30,129 @@ make_home() {  # <name>
   printf '%s\n' "$home"
 }
 
+# A home with a lavish-axi stub at the pinned version, reproducing the shapes
+# the real lavish-axi 0.1.80 prints: `status: opened` with the session URL,
+# and a captain-ended session that a plain open refuses while EXITING 0 with
+# `status: user-ended`; `--reopen` restores it. The stub records the
+# environment each open ran with. Markers under lavish-state drive it:
+# `user-ended` makes the next plain open refuse, and `refuse-reopen` makes even
+# --reopen leave it ended. `poll` is a real blocking listener released by
+# `poll-trigger`. `off-pin-once-open` makes --version report an off-pin version
+# once a session exists, so the pin check at arm refuses after the page served.
+make_lavish_home() {  # <name> [config/lavish mode]
+  local home="$TMP_ROOT/$1" fakebin
+  fm_test_track_procevent_home "$home" "$home/procevent-claims"
+  mkdir -p "$home/state" "$home/data" "$home/lavish-state" "$home/config"
+  [ -z "${2-}" ] || printf '%s\n' "$2" > "$home/config/lavish"
+  # The sample decision card's call is held open in this home's own backlog.
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] sample-instruction-layer-refinement-review-decision-perishable-first-admission-choice - Perishable-first admission (repo: sample) (kind: captain) (hold: Adopt it?) (hold-kind: captain)
+  Captain hold set: 2026-08-19T00:00:00Z
+
+## Done
+EOF
+  fakebin=$(fm_fakebin "$home")
+  cat > "$fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+state=${LAVISH_FAKE_STATE:?}
+emit() {  # <canonical-file> <status>
+  printf 'session:\n'
+  printf '  file: %s\n' "$1"
+  printf '  url: "http://127.0.0.1:4387/session/0123456789abcdef"\n'
+  printf '  status: %s\n' "$2"
+  printf 'next_step: "Now you must run lavish-axi poll"\n'
+}
+case "${1-}" in
+  --version)
+    if [ -e "$state/off-pin-once-open" ] && [ -e "$state/state.json" ]; then
+      printf '0.1.81\n'
+    else
+      printf '%s\n' "${LAVISH_FAKE_VERSION:-0.1.80}"
+    fi
+    exit 0
+    ;;
+  poll)
+    limit=${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}
+    while [ ! -e "$state/poll-trigger" ]; do
+      [ "$SECONDS" -lt "$limit" ] || exit 75
+      sleep 0.05
+    done
+    printf 'session:\n  status: ended\n'
+    exit 0
+    ;;
+  end) : > "$state/ended"; printf 'session:\n  status: ended\n'; exit 0 ;;
+esac
+printf 'TELEMETRY=%s NO_OPEN=%s HOST=%s\n' "${LAVISH_AXI_TELEMETRY-unset}" \
+  "${LAVISH_AXI_NO_OPEN-unset}" "${LAVISH_AXI_HOST-unset}" >> "$state/env"
+file=$1
+shift
+reopen=0
+for arg in "$@"; do [ "$arg" != --reopen ] || reopen=1; done
+real=$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")
+if [ -e "$state/refuse-reopen" ] || { [ -e "$state/user-ended" ] && [ "$reopen" = 0 ]; }; then
+  emit "$real" user-ended
+  exit 0
+fi
+rm -f -- "$state/user-ended"
+jq -n --arg file "$real" \
+  '{sessions:{"0123456789abcdef":{file:$file,url:"http://127.0.0.1:4387/session/0123456789abcdef"}}}' \
+  > "$state/state.json"
+emit "$real" opened
+exit 0
+SH
+  chmod +x "$fakebin/lavish-axi"
+  printf '%s\n' "$home"
+}
+
 run_board() {  # <home> <args...>
   local home=$1
   shift
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+  PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    LAVISH_FAKE_STATE="$home/lavish-state" LAVISH_AXI_STATE_DIR="$home/lavish-state" \
     "$BOARD" "$@"
+}
+
+run_procevent() {  # <home> <command args...>
+  local home=$1
+  shift
+  PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    LAVISH_AXI_STATE_DIR="$home/lavish-state" \
+    "$ROOT/bin/fm-procevent.sh" "$@"
+}
+
+run_hold() {  # <home> <command args...>
+  local home=$1
+  shift
+  PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-captain-hold.sh" "$@"
+}
+
+board_source_id() {  # <home>
+  local home=$1
+  PATH="$home/fakebin:$TEST_PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-procevent-lavish.sh" source-id "$home/.lavish/bearings-board.html"
+}
+
+# Whether this host can read the held call at all; without a compatible
+# tasks-axi the build keeps every card display-only, the safe direction.
+held_call_readable() {  # <home>
+  run_hold "$1" open sample-instruction-layer-refinement-review-decision-perishable-first-admission-choice \
+    --distinguish-absent >/dev/null 2>&1
+}
+
+source_registered() {  # <home> <source-id>
+  run_procevent "$1" list | awk 'NR > 1 { print $1 }' | grep -Fxq "$2"
 }
 
 # A realistic payload: a cross-origin full-identity decision key past the old
@@ -47,6 +173,7 @@ write_valid_payload() {  # <path>
       "title": "Perishable-first admission",
       "about": "A payload string that tries to break out: </script><b>x</b>",
       "decide": "Adopt it?",
+      "owner": "(main)",
       "options": [
         { "value": "yes", "label": "Adopt", "hint": "recommended" },
         { "value": "no", "label": "Keep current" }
@@ -436,6 +563,307 @@ test_build_refuses_a_nondecision_reconcile_value() {
   pass "build reserves reconcile across non-decision cards"
 }
 
+test_view_mode_opens_the_read_only_board_in_lavish() {
+  local home data board out sid
+  home=$(make_lavish_home view view)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+
+  out=$(run_board "$home" build "$data") || fail "a view-mode build failed: $out"
+  assert_contains "$out" "session: live" "view mode did not establish a Lavish session: $out"
+  assert_contains "$out" "url: http://127.0.0.1:4387/session/0123456789abcdef" "view mode did not print the session URL: $out"
+  assert_contains "$out" "open: http://127.0.0.1:4387/session/0123456789abcdef" "view mode did not open the session URL: $out"
+  assert_not_contains "$out" "next_step" "build echoed lavish-axi's agent instructions: $out"
+  sid=$(board_source_id "$home")
+  assert_not_contains "$out" "bound: " "view mode bound an answer source: $out"
+  assert_contains "$out" "armed: $sid" "view mode did not arm the board so its feedback reaches firstmate: $out"
+  ! run_hold "$home" binding "$sid" >/dev/null 2>&1 || fail "view mode bound the board to the answer intake"
+  extract_payload "$board" | jq -e 'has("interactive") | not' >/dev/null \
+    || fail "a view-mode board was made interactive"
+  extract_payload "$board" | jq -e '[.captains_call[].options[].value] | index("reconcile") == null' >/dev/null \
+    || fail "a view-mode board carries the answers-only reconcile choice"
+  [ "$(cat "$home/lavish-state/env")" = "TELEMETRY=0 NO_OPEN=1 HOST=127.0.0.1" ] \
+    || fail "lavish-axi did not run under the pinned environment: $(cat "$home/lavish-state/env")"
+  pass "view mode opens the read-only board in Lavish, armed but unbound, under the pinned environment"
+}
+
+test_per_request_override_wins_over_the_home_toggle() {
+  local home data out
+  home=$(make_lavish_home decline view)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  out=$(run_board "$home" build "$data" --lavish off) || fail "a declined build failed: $out"
+  assert_contains "$out" "open: $home/.lavish/bearings-board.html" "--lavish off did not keep the static board: $out"
+  assert_absent "$home/lavish-state/env" "--lavish off still invoked lavish-axi"
+
+  home=$(make_lavish_home ask)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  out=$(run_board "$home" build "$data" --lavish view) || fail "a requested build failed: $out"
+  assert_contains "$out" "session: live" "--lavish view on an off home did not open Lavish: $out"
+  pass "a per-request --lavish override wins over the home toggle in both directions"
+}
+
+test_unavailable_lavish_falls_back_to_the_static_board() {
+  local home data out
+  home=$(make_lavish_home missing view)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  rm -f "$home/fakebin/lavish-axi"
+  out=$(run_board "$home" build "$data") || fail "a build without lavish-axi failed: $out"
+  assert_contains "$out" "lavish: off (lavish-axi is not installed; install: npm install -g --ignore-scripts lavish-axi@0.1.80)" \
+    "a missing lavish-axi was not reported with the hook-free install: $out"
+  assert_contains "$out" "open: $home/.lavish/bearings-board.html" "a missing lavish-axi did not keep the static board: $out"
+
+  home=$(make_lavish_home off-pin answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  out=$(LAVISH_FAKE_VERSION=0.1.81 run_board "$home" build "$data") || fail "an off-pin build failed: $out"
+  assert_contains "$out" "lavish: off (lavish-axi 0.1.81 is installed but this home is pinned to 0.1.80" \
+    "an off-pin lavish-axi was not refused: $out"
+  assert_not_contains "$out" "bound: " "an off-pin lavish-axi still bound answers: $out"
+  pass "an unavailable or off-pin lavish-axi keeps the static board and says why"
+}
+
+test_malformed_toggle_counts_as_off_and_a_malformed_request_refuses() {
+  local home data out
+  home=$(make_lavish_home malformed sometimes)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "a malformed config/lavish refused the board: $out"
+  assert_contains "$out" "lavish: off (config/lavish must be off, view, or answers (got sometimes))" \
+    "the malformed toggle was not reported as off: $out"
+  assert_contains "$out" "open: $home/.lavish/bearings-board.html" "a malformed toggle did not build the static board: $out"
+  assert_absent "$home/lavish-state/env" "a malformed toggle still invoked lavish-axi"
+  home=$(make_lavish_home malformed-request)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  if out=$(run_board "$home" build "$data" --lavish maybe 2>&1); then
+    fail "a malformed request built a board: $out"
+  fi
+  assert_absent "$home/.lavish/bearings-board.html" "a malformed request still produced a board"
+  home=$(make_lavish_home empty-request answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  if out=$(run_board "$home" build "$data" --lavish= 2>&1); then
+    fail "an empty request built a board: $out"
+  fi
+  assert_contains "$out" "got an empty value" "the empty request was not named: $out"
+  assert_absent "$home/.lavish/bearings-board.html" "an empty request still produced a board"
+  pass "a malformed toggle builds the static board and says why, and a malformed request refuses"
+}
+
+test_answers_mode_binds_then_arms() {
+  local home data board out sid
+  home=$(make_lavish_home answers answers)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+
+  out=$(run_board "$home" build "$data") || fail "an answers-mode build failed: $out"
+  sid=$(board_source_id "$home")
+  assert_contains "$out" "bound: $sid" "answers mode did not bind the board source: $out"
+  assert_contains "$out" "armed: $sid" "answers mode did not arm the board source: $out"
+  [ "$(run_hold "$home" binding "$sid")" = "(any)" ] || fail "the board source is not bound any-origin"
+  source_registered "$home" "$sid" || fail "the board source is not registered after build"
+  extract_payload "$board" | jq -e '.interactive == true' >/dev/null \
+    || fail "an answers-mode board is not interactive"
+  if held_call_readable "$home"; then
+    extract_payload "$board" | jq -e '
+      [.captains_call[] | select(.type == "decision") | .answerable == true and .options[-1].value == "reconcile"] | all' >/dev/null \
+      || fail "a decision card held in this home is not answerable with the reconcile choice"
+  else
+    extract_payload "$board" | jq -e '
+      [.captains_call[] | select(.type == "decision") | (has("answerable") | not) and ([.options[].value] | index("reconcile") == null)] | all' >/dev/null \
+      || fail "a decision card whose call cannot be read was made answerable"
+  fi
+  extract_payload "$board" | jq -e '
+    [.captains_call[] | select(.type != "decision") | .options[].value] | index("reconcile") == null' >/dev/null \
+    || fail "a non-decision card received the reconcile choice"
+
+  assert_contains "$out" "answers: open" "the answer controls were not reported published: $out"
+  out=$(run_board "$home" build "$data") || fail "an answers-mode rebuild failed: $out"
+  assert_contains "$out" "already-armed: $sid" "a rebuild re-armed an already registered source: $out"
+  pass "answers mode makes decision cards answerable, binds, then arms once"
+}
+
+test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended() {
+  local home data sid
+  home=$(make_lavish_home ended answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  : > "$home/lavish-state/refuse-reopen"
+  if run_board "$home" build "$data" >/dev/null 2>&1; then
+    fail "build served a board whose session stayed ended"
+  fi
+  sid=$(board_source_id "$home")
+  ! run_hold "$home" binding "$sid" >/dev/null 2>&1 \
+    || fail "build bound the board while its session was ended"
+  ! source_registered "$home" "$sid" || fail "build armed the board while its session was ended"
+  pass "answers mode never binds or arms a board whose session stays ended"
+}
+
+test_answers_mode_keeps_other_homes_calls_display_only() {
+  local home data board out
+  home=$(make_lavish_home remote-call answers)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  jq '.captains_call += [{
+        "key":"remote-mate-call","type":"decision","repo":"sample","owner":"mate-one",
+        "title":"Secondmate decision","options":[{"value":"yes","label":"Yes"}]
+      }]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data") || fail "the answers build failed: $out"
+  extract_payload "$board" | jq -e '
+    [.captains_call[] | select(.key == "remote-mate-call")]
+    | length == 1 and (.[0] | (has("answerable") | not) and ([.options[].value] | index("reconcile") == null))' >/dev/null \
+    || fail "a call this home does not hold was made answerable"
+  if held_call_readable "$home"; then
+    # A secondmate card whose task id collides with a call this home holds, and
+    # a card that does not say whose call it is, both stay display-only.
+    jq '.captains_call = [(.captains_call[0] | .owner = "mate-one")]' "$data" > "$data.remote"
+    out=$(run_board "$home" build "$data.remote") || fail "the colliding-id answers build failed: $out"
+    extract_payload "$board" | jq -e '[.captains_call[] | select(has("answerable"))] | length == 0' >/dev/null \
+      || fail "a secondmate card sharing a local task id was made answerable"
+    jq '.captains_call[0] |= del(.owner)' "$data" > "$data.unowned"
+    out=$(run_board "$home" build "$data.unowned") || fail "the ownerless answers build failed: $out"
+    extract_payload "$board" | jq -e '[.captains_call[] | select(has("answerable"))] | length == 0' >/dev/null \
+      || fail "a card with no owner was made answerable"
+    jq '.captains_call = [(.captains_call[0] | .owner = "mate-one"), .captains_call[0]]' "$data" > "$data.both"
+    out=$(run_board "$home" build "$data.both") || fail "the shared-id answers build failed: $out"
+    extract_payload "$board" | jq -e '
+      [.captains_call[] | select(.type == "decision") | {owner, answerable}]
+      == [{"owner":"mate-one","answerable":null},{"owner":"(main)","answerable":true}]' >/dev/null \
+      || fail "a shared task id did not keep only this home's card answerable"
+  fi
+  pass "answers mode keeps a call another home holds display-only, even when its task id matches a local call"
+}
+
+test_answers_mode_keeps_controls_hidden_until_listening() {
+  local home data board out
+  home=$(make_lavish_home no-listener answers)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  : > "$home/lavish-state/off-pin-once-open"
+  if out=$(run_board "$home" build "$data" 2>&1); then
+    fail "an answers build succeeded without a listener: $out"
+  fi
+  assert_contains "$out" "cannot arm the board" "the build did not fail at arming: $out"
+  assert_not_contains "$out" "answers: open" "answer controls were reported published without a listener: $out"
+  assert_present "$board" "the read-only page was not served while answers were pending"
+  extract_payload "$board" | jq -e 'has("interactive") | not' >/dev/null \
+    || fail "the board exposed answer controls before its listener was confirmed"
+  extract_payload "$board" | jq -e '[.captains_call[].options[].value] | index("reconcile") == null' >/dev/null \
+    || fail "the read-only page carried the reconcile choice"
+  grep -qF '</script><b>' "$board" \
+    && fail "the read-only page embedded a live closing script tag"
+  [ -z "$(find "$home/.lavish" -name '.board.*')" ] || fail "a failed answers build left a staged page behind"
+  pass "answers mode serves the board read-only until its source is bound and listening"
+}
+
+test_view_mode_ends_the_session_when_it_cannot_listen() {
+  local home data out
+  home=$(make_lavish_home view-no-listener view)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  if out=$(FM_LAVISH_POLL_RETRY_DELAY=0 run_board "$home" build "$data" 2>&1); then
+    fail "a view build succeeded without a listener: $out"
+  fi
+  assert_contains "$out" "cannot arm the board" "the view build did not fail at arming: $out"
+  assert_contains "$out" "ended the board session" "the failed view build did not say it ended the session: $out"
+  assert_present "$home/lavish-state/ended" "a view board that cannot listen kept its session open for feedback"
+  pass "a view build that cannot arm its listener ends the session instead of taking feedback nobody collects"
+}
+
+test_build_refuses_a_symlinked_board_path() {
+  local home data out
+  home=$(make_lavish_home symlinked answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the answers build failed"
+  printf '<html></html>\n' > "$home/elsewhere.html"
+  rm -f "$home/.lavish/bearings-board.html"
+  ln -s "$home/elsewhere.html" "$home/.lavish/bearings-board.html"
+  if out=$(run_board "$home" build "$data" --lavish off 2>&1); then
+    fail "a build replaced a symlinked board path: $out"
+  fi
+  assert_contains "$out" "is a symlink" "the symlink refusal was not named: $out"
+  [ -L "$home/.lavish/bearings-board.html" ] || fail "the refused build touched the symlinked board path"
+  rm -f "$home/.lavish/bearings-board.html"
+  mv "$home/.lavish" "$home/real-lavish"
+  ln -s "$home/real-lavish" "$home/.lavish"
+  if out=$(run_board "$home" build "$data" --lavish off 2>&1); then
+    fail "a build used a symlinked .lavish directory: $out"
+  fi
+  assert_contains "$out" "is a symlink" "the directory symlink refusal was not named: $out"
+  pass "a build refuses a board path replaced by a symlink"
+}
+
+test_answers_mode_reopens_a_session_the_captain_ended() {
+  local home data out
+  home=$(make_lavish_home reopen answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  : > "$home/lavish-state/user-ended"
+  out=$(run_board "$home" build "$data") || fail "the build refused a recoverable ended session: $out"
+  assert_contains "$out" "session: reopened" "the build did not reopen the ended session: $out"
+  assert_contains "$out" "armed: " "the reopened board was not armed: $out"
+  pass "answers mode reopens a session the captain ended once, then arms it"
+}
+
+test_dropping_below_answers_retires_the_answer_source() {
+  local home data out sid
+  home=$(make_lavish_home downgrade answers)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the answers build failed"
+  sid=$(board_source_id "$home")
+  source_registered "$home" "$sid" || fail "the answers build did not register its source"
+
+  out=$(run_board "$home" build "$data" --lavish view) || fail "the view rebuild failed: $out"
+  assert_contains "$out" "unbound: $sid" "declining answers did not unbind the source: $out"
+  ! run_hold "$home" binding "$sid" >/dev/null 2>&1 || fail "declining answers left the binding"
+  source_registered "$home" "$sid" || fail "a view board lost the listener that carries its feedback"
+  out=$(run_board "$home" build "$data" --lavish view) || fail "a second view rebuild failed: $out"
+  assert_not_contains "$out" "unbound: " "a view rebuild with nothing bound reported an unbind: $out"
+
+  out=$(run_board "$home" build "$data" --lavish off) || fail "the off rebuild failed: $out"
+  assert_contains "$out" "retired: $sid" "an off build did not retire the board listener: $out"
+  ! source_registered "$home" "$sid" || fail "an off build left the board listener registered"
+
+  # A deleted board still has its answer source found and retired.
+  run_board "$home" build "$data" >/dev/null || fail "the answers build before deletion failed"
+  rm -f "$home/.lavish/bearings-board.html"
+  out=$(run_board "$home" build "$data" --lavish off) || fail "an off rebuild of a deleted board failed: $out"
+  assert_contains "$out" "unbound: $sid" "a deleted board's answer source was not unbound: $out"
+  assert_contains "$out" "retired: $sid" "a deleted board's answer source was not retired: $out"
+  ! run_hold "$home" binding "$sid" >/dev/null 2>&1 || fail "a deleted board kept its answer binding"
+  ! source_registered "$home" "$sid" || fail "a deleted board kept its answer source registered"
+
+  # A binding that cannot be removed refuses the downgrade and keeps the
+  # earlier board, because that binding is what lets an open page change tasks.
+  # A read-only directory cannot stop root, so root skips only this case.
+  if [ "$(id -u)" = 0 ]; then
+    pass "a build below answers unbinds an earlier answer source, and off retires its listener"
+    return 0
+  fi
+  run_board "$home" build "$data" >/dev/null || fail "the second answers build failed"
+  [ "$(run_hold "$home" binding "$sid")" = "(any)" ] || fail "the second answers build did not bind"
+  chmod a-w "$home/state/decision-bindings"
+  if out=$(run_board "$home" build "$data" --lavish off 2>&1); then
+    chmod u+w "$home/state/decision-bindings"
+    fail "a downgrade succeeded while its binding could not be removed: $out"
+  fi
+  chmod u+w "$home/state/decision-bindings"
+  assert_contains "$out" "refusing to drop below answers" "the refused downgrade was not explained: $out"
+  [ "$(run_hold "$home" binding "$sid")" = "(any)" ] || fail "the refused downgrade lost the binding"
+  extract_payload "$home/.lavish/bearings-board.html" | jq -e '.interactive == true' >/dev/null \
+    || fail "the refused downgrade replaced the earlier board"
+  pass "a build below answers unbinds an earlier answer source, and off retires its listener"
+}
+
 test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
@@ -448,3 +876,15 @@ test_build_drops_decision_cards_whose_subject_already_landed
 test_build_keeps_a_decision_absent_from_the_main_backlog
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
+test_view_mode_opens_the_read_only_board_in_lavish
+test_per_request_override_wins_over_the_home_toggle
+test_unavailable_lavish_falls_back_to_the_static_board
+test_malformed_toggle_counts_as_off_and_a_malformed_request_refuses
+test_answers_mode_binds_then_arms
+test_answers_mode_does_not_bind_or_arm_when_the_session_stays_ended
+test_answers_mode_keeps_other_homes_calls_display_only
+test_answers_mode_keeps_controls_hidden_until_listening
+test_view_mode_ends_the_session_when_it_cannot_listen
+test_build_refuses_a_symlinked_board_path
+test_answers_mode_reopens_a_session_the_captain_ended
+test_dropping_below_answers_retires_the_answer_source

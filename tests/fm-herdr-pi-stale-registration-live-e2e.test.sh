@@ -98,10 +98,12 @@ registered_status() {
 }
 
 # The crew shape: a nested interactive shell under the pane's top shell, then
-# the real Pi TUI with no prompt.
+# the real Pi TUI with no prompt. Pi records a session for every launch, so
+# its session directory stays in the scratch directory.
 lab pane run "$PANE_ID" zsh >/dev/null 2>&1 || fail "could not start the nested shell in the pane"
 sleep 1
-lab pane run "$PANE_ID" pi >/dev/null 2>&1 || fail "could not start pi in the pane"
+lab pane run "$PANE_ID" "PI_CODING_AGENT_SESSION_DIR='$SCRATCH/pi-sessions' pi" >/dev/null 2>&1 \
+  || fail "could not start pi in the pane"
 
 # Herdr creates the record with its own placeholder status (`unknown`, verified
 # 0.9.0) the moment it notices Pi, before Pi's extension reports a lifecycle

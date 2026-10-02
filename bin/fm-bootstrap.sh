@@ -60,6 +60,16 @@
 #          This home does not require no-mistakes, gh-axi, chrome-devtools-axi,
 #          or lavish-axi. GitHub operations use gh. tasks-axi feature probes
 #          remain a separate defense-in-depth check.
+#          With the optional config/lavish toggle set to view or answers and the
+#          pinned lavish-axi unavailable, one non-blocking line is printed:
+#          "BOOTSTRAP_INFO: Lavish unavailable (config/lavish is <mode>;
+#          <reason>; install: <command>) - boards stay static local files and
+#          answers stay in chat until it is installed". A malformed toggle
+#          prints "BOOTSTRAP_INFO: Lavish off (<reason>)". Without the toggle,
+#          bootstrap stays silent about Lavish. A malformed toggle counts as
+#          off everywhere, so that line describes how the home behaves. The
+#          install command is the pinned, hook-free one bin/fm-lavish-lib.sh
+#          owns.
 #          With the optional config/no-mistakes opt-in present and no
 #          no-mistakes binary on PATH, one non-blocking line is printed:
 #          "BOOTSTRAP_INFO: no-mistakes pipeline unavailable (config/no-mistakes
@@ -187,6 +197,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-lavish-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
 # shellcheck source=bin/fm-ff-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-cursor-lib.sh disable=SC1091
@@ -805,7 +817,8 @@ install_cmd() {
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
-    gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
+    gh-axi|chrome-devtools-axi) echo "npm install -g $1 && $1 setup hooks" ;;
+    lavish-axi) fm_lavish_install_command ;;
     devin) echo "brew install --cask devin-cli  # or see https://docs.devin.ai/cli" ;;
     tasks-axi|quota-axi) echo "npm install -g $1" ;;
     gitleaks) echo "'$SCRIPT_DIR/fm-install-gitleaks.sh' '$(gitleaks_install_dir)'  # the pinned, checksum-verified build" ;;
@@ -858,7 +871,8 @@ fi
 TOOLS="$BACKEND_TOOLS $COMMON_TOOLS"
 
 # Lavish floors for the lavish-reply-compatible probe only; this home never
-# requires lavish-axi, so bootstrap reports nothing about it.
+# requires lavish-axi, and its optional toggle line checks the exact pin in
+# bin/fm-lavish-lib.sh instead.
 LAVISH_AXI_MIN=0.1.80
 LAVISH_AXI_BOARD_MIN=0.1.77
 
@@ -1468,6 +1482,12 @@ detect_local_config() {
   # CLI is one non-blocking fact, and bin/fm-spawn.sh refuses the pipeline ship.
   if [ "$(fm_no_mistakes_pipeline_state "$CONFIG")" = unavailable ]; then
     echo "BOOTSTRAP_INFO: no-mistakes pipeline unavailable (config/no-mistakes is set; install: $(install_cmd no-mistakes)) - direct-PR and local-only work may proceed; pipeline ships are refused until it is installed"
+  fi
+  # config/lavish is the same kind of optional toggle: silent when off.
+  if ! lavish_mode=$(fm_lavish_home_mode "$CONFIG" 2>&1); then
+    echo "BOOTSTRAP_INFO: Lavish off ($lavish_mode)"
+  elif [ "$lavish_mode" != off ] && ! lavish_reason=$(fm_lavish_unavailable_reason "$CONFIG"); then
+    echo "BOOTSTRAP_INFO: Lavish unavailable (config/lavish is $lavish_mode; $lavish_reason; install: $(install_cmd lavish-axi)) - boards stay static local files and answers stay in chat until it is installed"
   fi
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
     && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then

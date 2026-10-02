@@ -40,6 +40,7 @@ The decision persists per path in `~/.pi/agent/trust.json`, or in the pinned roo
 `../../../bin/fm-spawn.sh` keeps the worker turn-end extension in `state/`, outside the worktree, because project-local extension files worsen the trust gate and pollute the project.
 The extension listens for Pi's `turn_end` event, not `agent_end`, so supervision is notified after each completed turn rather than only when the whole run exits.
 Native-harness progress uses the separate generation-bound marker owned by `../../../bin/fm-busy-event.sh`; it never fabricates Pi turn completion.
+Its `tool_call` handler blocks a `bash` command the publish policy denies (`../../../docs/arm-pretool-check.md`), the same check Claude workers run as a PreToolUse hook.
 Pi sets `PI_CODING_AGENT=true` for its children as its harness-detection marker.
 
 ## Primary integration

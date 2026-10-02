@@ -1,28 +1,81 @@
 #!/usr/bin/env bash
-# fm-bearings-board.sh - build the /bearings local HTML fleet board.
+# fm-bearings-board.sh - build the /bearings lavish fleet board.
 #
-# The board is the captain-facing read-only surface of /bearings lavish: the
-# shipped template (.agents/skills/bearings/assets/board-template.html) plus one
+# The board is the captain-facing surface of /bearings lavish: the shipped
+# template (.agents/skills/bearings/assets/board-template.html) plus one
 # injected fm-bearings-board.v1 JSON payload. This script owns the mechanics so
 # the invoking agent's per-run work stays "compose the JSON, run build" - the
 # agent never authors board UI at invocation time.
 #
 # Usage:
-#   fm-bearings-board.sh build <data.json>
+#   fm-bearings-board.sh build <data.json> [--lavish <off|view|answers>]
 #   fm-bearings-board.sh path
 #
 # build      Validate the payload, drop the Captain's Call cards whose subject
 #            already landed, and inject the effective payload into a fresh copy
-#            of the shipped template at the stable board path. This home does
-#            not run lavish-axi or register an answer source; the captain opens
-#            the HTML file in a browser and answers in chat. Output starts with
-#            `board: <path>`, then:
+#            of the shipped template at the stable board path. What happens
+#            next follows the effective Lavish mode that bin/fm-lavish-lib.sh
+#            resolves from config/lavish, or from --lavish, the per-request
+#            override that wins over the home toggle for this one board:
+#
+#            off      The static read-only board, exactly as without Lavish:
+#                     the captain opens the HTML file and answers in chat.
+#            view     The same read-only board, opened in Lavish so it can be
+#                     viewed and annotated through a browser, including over
+#                     an ssh port forward (docs/lavish.md). Its source is armed
+#                     unbound, so annotations reach firstmate as ordinary
+#                     review feedback and never feed the keyed-answer intake.
+#            answers  view, plus answer controls and the standard reconcile
+#                     choice on every decision card whose call this home's own
+#                     backlog holds open (bin/fm-captain-hold.sh open); a
+#                     secondmate's call, or one whose state cannot be read,
+#                     stays display-only and is answered in chat. The source is bound to the
+#                     keyed-answer intake (bin/fm-captain-hold.sh bind) BEFORE
+#                     it is armed (bin/fm-procevent-lavish.sh arm), and the
+#                     board is served without its answer controls until both
+#                     succeed, so it can never take an answer that has nowhere
+#                     to go; a failure leaves that read-only page. Merge and
+#                     credential cards and Charted Next stay display-only;
+#                     those answers stay in chat.
+#
+#            In view and answers, a failure to bind or arm ends the board's
+#            Lavish session before the build fails, so the page never takes
+#            feedback while nothing listens; a later build reopens it.
+#
+#            A wanted mode whose pinned lavish-axi is unavailable resolves to
+#            off and says why. A mode below answers first unbinds an earlier
+#            answers build's source, refusing the build when it cannot, so a
+#            still-open answers page can no longer change a held task; an off
+#            build then retires the board's listener, refusing when it cannot.
+#            Output, in order (the first two only below answers, before the
+#            new board is published):
+#              unbound: <source-id>         (an earlier answer binding removed)
+#              retired: <source-id>         (off: the board listener stopped)
+#              board: <path>
+#              lavish: off (<reason>)       (a wanted mode fell back to off)
+#              session: live | reopened     (view and answers)
 #              served: <path>
-#              open: <path>
+#              url: <session URL>           (view and answers)
+#              open: <path or session URL>
+#              bound: <source-id>           (answers)
+#              armed: <source-id>           (view and answers, first registration)
+#              already-armed: <source-id>   (view and answers, registration present)
+#              still-listening: <source-id> (view and answers, an earlier listener holds it)
+#              answers: open                (answers, controls now published)
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
 # path       Print the stable board path for this home.
+#
+# A LIVE SESSION IS PROVED, NEVER ASSUMED. `lavish-axi <file>` exits 0 even
+# when it refuses to reopen a session the captain ended from the browser,
+# reporting `status: user-ended` with the same session id. build reads the
+# status it reports and reopens such a session once - the captain asked for
+# this board - and refuses rather than serving or arming one that stays ended.
+# The session listing is not liveness evidence: it lists a session `open` even
+# while the server is stopped, and re-running `lavish-axi <file>` is what
+# restarts the server. lavish-axi's own instructions are not echoed, because
+# they tell an agent to poll, which the armed source owns.
 #
 # CAPTAIN'S CALL HYGIENE. A decision card is dropped when its work item, PR, or
 # structured artifact/version subject appears among the payload's own landed
@@ -49,8 +102,8 @@
 # row. Anything else in that field refuses rather than sorting on garbage.
 #
 # The board path is stable - $FM_HOME/.lavish/bearings-board.html - so a
-# re-invocation rebuilds the same file in place. The directory name is retained
-# for path compatibility only; there is no Lavish session or polling.
+# re-invocation rebuilds the same file in place, which keeps the same Lavish
+# session URL and the same canonical process-event source id.
 # Injection escapes every `<` in the compact JSON as the \u003c string escape,
 # so a payload string containing "</script>" can never terminate the data block
 # early.
@@ -62,6 +115,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SCHEMA=fm-bearings-board.v1
@@ -80,6 +134,9 @@ fail() {
 }
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
+
+# shellcheck source=bin/fm-lavish-lib.sh
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
 
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" '
@@ -131,6 +188,7 @@ validate_payload() {  # <data.json>
       and optional_subject
       and (if has("subject") then .type == "decision" else true end)
       and (optional_string("freeform_hint"))
+      and (optional_string("owner"))
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
       and ((has("recommend_value") | not)
@@ -174,6 +232,160 @@ validate_payload() {  # <data.json>
   ' "$1" >/dev/null
 }
 
+# --- Lavish session -----------------------------------------------------------
+# Every lavish-axi call goes through bin/fm-lavish.sh run, which pins the
+# environment and refuses an off-pin binary.
+
+lavish() { FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-lavish.sh" run "$@"; }
+
+lavish_field() {  # <name> <lavish-axi output>
+  printf '%s\n' "$2" | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1 | tr -d '"'
+}
+
+# Establish the board session and set BOARD_URL and BOARD_SESSION_REOPENED. A
+# session the captain ended is reopened once; one that is still not opened
+# after that refuses the build.
+establish_board_session() {  # <board>
+  local board=$1 out status
+  BOARD_SESSION_REOPENED=0
+  out=$(lavish "$board") || fail "cannot establish the board Lavish session"
+  status=$(lavish_field status "$out")
+  if [ "$status" = user-ended ]; then
+    out=$(lavish "$board" --reopen) || fail "cannot reopen the ended board Lavish session"
+    status=$(lavish_field status "$out")
+    BOARD_SESSION_REOPENED=1
+  fi
+  case "$status" in
+    opened|open) ;;
+    *) fail "the board Lavish session is not open (lavish-axi reported status ${status:-none}); refusing to serve or arm it" ;;
+  esac
+  BOARD_URL=$(lavish_field url "$out")
+  case "$BOARD_URL" in
+    http://*/session/*) ;;
+    *) fail "lavish-axi did not report a session URL for the board" ;;
+  esac
+  if [ "$BOARD_SESSION_REOPENED" = 1 ]; then
+    printf 'session: reopened\n'
+  else
+    printf 'session: live\n'
+  fi
+}
+
+# The OWNER column bin/fm-procevent.sh publishes; empty means not registered.
+# A listing that fails returns nonzero, so no caller mistakes an unreadable
+# registry for an absent source.
+source_owner() {  # <source-id>
+  local listing
+  listing=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" list 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | awk -v id="$1" 'NR > 1 && $1 == id { print $3; exit }'
+}
+
+# Before a build below answers publishes, an earlier answers build's binding is
+# removed. Unbinding is what stops a still-open answers page from changing a
+# held task, so a failed unbind refuses the build and leaves the earlier board
+# in place. An off build then retires the board's listener and likewise refuses
+# when it cannot, so off really means nothing collects from the page. The source
+# id is derived from the board file's real path, so a deleted board is recreated
+# empty for the derivation; the build publishes over it at once, and a refused
+# unbind removes it again.
+disarm_board_below_answers() {  # <board> <mode>
+  local board=$1 mode=$2 sid owner placeholder=0
+  if [ ! -e "$board" ] && [ ! -L "$board" ]; then
+    (umask 077; : > "$board") || fail "cannot recreate the missing board to find its source"
+    placeholder=1
+  fi
+  sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board" 2>/dev/null) \
+    || fail "cannot derive the board source id to check for an earlier answer source"
+  if "$SCRIPT_DIR/fm-captain-hold.sh" binding "$sid" >/dev/null 2>&1; then
+    if ! "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$sid" >/dev/null 2>&1; then
+      [ "$placeholder" = 0 ] || rm -f -- "$board"
+      fail "cannot unbind the earlier answer source $sid; refusing to drop below answers while it can still change held tasks"
+    fi
+    printf 'unbound: %s\n' "$sid"
+  fi
+  [ "$mode" = off ] || return 0
+  if ! owner=$(source_owner "$sid"); then
+    [ "$placeholder" = 0 ] || rm -f -- "$board"
+    fail "cannot list process-event sources to check the board listener $sid; refusing an off build that could leave it collecting"
+  fi
+  [ -n "$owner" ] || return 0
+  if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null 2>&1; then
+    [ "$placeholder" = 0 ] || rm -f -- "$board"
+    fail "cannot retire the board listener $sid; refusing an off build while it can still collect feedback"
+  fi
+  printf 'retired: %s\n' "$sid"
+}
+
+# Stage one page from the template and a compact payload, verified to carry a
+# readable payload, and print its staged path. publish_page makes it the board.
+stage_page() {  # <board> <compact-json>
+  local board=$1 json=$2 tmp extracted
+  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot inject the board data"
+  fi
+  if grep -qxF "$PLACEHOLDER" "$tmp"; then
+    rm -f -- "$tmp"
+    fail "the board data slot survived injection"
+  fi
+  # Round-trip the injected payload back out of the built page, so a board that
+  # would fail to parse in the browser fails here instead.
+  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" \
+    | sed '1d;$d')
+  if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
+    rm -f -- "$tmp"
+    fail "the built board does not carry a readable $BOARD_SCHEMA payload"
+  fi
+  chmod 0600 "$tmp" || { rm -f -- "$tmp"; fail "cannot stage the board"; }
+  printf '%s\n' "$tmp"
+}
+
+publish_page() {  # <staged-page> <board>
+  mv -f -- "$1" "$2" || { rm -f -- "$1"; fail "cannot publish the board"; }
+}
+
+# Arm the board so whatever the captain sends from the page reaches firstmate,
+# binding it to the keyed-answer intake first only in answers mode, then make
+# sure this generation is listening. A view board stays unbound, so its
+# annotations arrive as ordinary review feedback and can never close a task.
+# The session is already open by now, so any failure here ends it before the
+# build fails: the page must not take feedback while nothing listens. A later
+# build reopens an agent-ended session without asking.
+arm_board_source() {  # <board> <bind: 0|1>
+  local board=$1 bind=$2 sid out rc=0
+  sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board") \
+    || arm_fail "$board" "cannot derive the board source id"
+  if [ "$BOARD_SESSION_REOPENED" = 1 ] && [ -n "$(source_owner "$sid")" ]; then
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" retire "$sid" >/dev/null \
+      || arm_fail "$board" "cannot retire the pre-reopen board source $sid"
+  fi
+  if [ "$bind" = 1 ]; then
+    "$SCRIPT_DIR/fm-captain-hold.sh" bind "$sid" >/dev/null \
+      || arm_fail "$board" "cannot bind the board source to the keyed-answer intake"
+    printf 'bound: %s\n' "$sid"
+  fi
+  if [ -z "$(source_owner "$sid")" ]; then
+    out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent-lavish.sh" arm "$board") \
+      || arm_fail "$board" "cannot arm the board as a process-event source"
+    printf '%s\n' "$out" | grep -E '^(armed|still-listening): ' || true
+    return 0
+  fi
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" ensure-listening "$sid" >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    0) printf 'already-armed: %s\n' "$sid" ;;
+    3) printf 'still-listening: %s\n' "$sid" ;;
+    *) arm_fail "$board" "board source $sid is registered but not listening (observed owner: $(source_owner "$sid"))" ;;
+  esac
+}
+
+arm_fail() {  # <board> <message>
+  if lavish end "$1" >/dev/null 2>&1; then
+    fail "$2; ended the board session so it takes no feedback while nothing listens"
+  fi
+  fail "$2; could not end the board session either, so feedback sent from it waits until a later build arms it"
+}
+
 # --- Captain's Call hygiene ---------------------------------------------------
 # A held decision whose subject already shipped is not a live call, so it is
 # dropped here instead of being carded again. All checks use exact structured
@@ -197,10 +409,14 @@ decision_card_is_stale() {  # <task-id> <landed-0-or-1>
 }
 
 # Drop every stale decision card while preserving every surviving input field.
-# The resulting JSON is the exact effective payload embedded in the read-only
-# board; no answer, reconcile, merge, or dispatch control is synthesized here.
-effective_payload() {  # <data.json> <dest.json>
-  local data=$1 dest=$2 landed_keys key reason drop='' tmp landed=0
+# The build alone decides `interactive` and each card's `answerable`: set true
+# only in answers mode, for decision cards owned by this home (`owner` is the
+# snapshot's "(main)") whose call this home holds open, and removed otherwise, so an off board embeds the input payload unchanged. Only
+# those answerable cards get the standard reconcile choice. The validator
+# reserves that value, so no composer can author it;
+# docs/captain-hold-lifecycle.md owns what it means.
+effective_payload() {  # <data.json> <dest.json> <lavish-mode>
+  local data=$1 dest=$2 mode=$3 landed_keys key reason drop='' tmp landed=0 here='' here_json
   landed_keys=$(jq -c '
     def version_parts: split(".") | map(tonumber);
     . as $payload
@@ -223,22 +439,54 @@ effective_payload() {  # <data.json> <dest.json>
     if jq -e --arg key "$key" 'index($key) != null' <<< "$landed_keys" >/dev/null; then
       landed=1
     fi
-    reason=$(decision_card_is_stale "$key" "$landed") || continue
-    printf 'dropped-landed-card: %s (%s)\n' "$key" "$reason" >&2
-    drop=$drop$key$'\n'
+    if reason=$(decision_card_is_stale "$key" "$landed"); then
+      printf 'dropped-landed-card: %s (%s)\n' "$key" "$reason" >&2
+      drop=$drop$key$'\n'
+      continue
+    fi
+    # Only a call this home's own backlog holds open can take a board answer:
+    # the binding feeds this home's intake, so a secondmate's call, or one whose
+    # state cannot be read, stays display-only and is answered in chat. The
+    # owner check below keeps a secondmate card that shares a local task id
+    # display-only too.
+    if [ "$mode" = answers ] \
+      && "$SCRIPT_DIR/fm-captain-hold.sh" open "$key" --distinguish-absent >/dev/null 2>&1; then
+      here=$here$key$'\n'
+    fi
   done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$data")
   tmp=$(printf '%s' "$drop" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
-  jq --argjson dropped "$tmp" '
-    .captains_call = [
+  here_json=$(printf '%s' "$here" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
+  jq --argjson dropped "$tmp" --argjson here "$here_json" --arg mode "$mode" '
+    (if $mode == "answers" then .interactive = true else del(.interactive) end)
+    | .captains_call = [
       .captains_call[]
       | . as $card
       | select($card.type != "decision" or (($dropped | index($card.key)) == null))
+      | del(.answerable)
+      | if $mode == "answers" and .type == "decision" and .owner? == "(main)"
+          and (($here | index($card.key)) != null)
+        then .answerable = true
+          | .options += [{
+            value: "reconcile",
+            label: "Reconcile",
+            hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
+          }]
+        else . end
     ]' "$data" > "$dest" || return 1
 }
 
 command_build() {
-  local data=${1-} board json tmp extracted effective
-  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  local data='' request='' request_set=0 board json static_json page static_page='' effective
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --lavish) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; request=$2; request_set=1; shift 2 ;;
+      --lavish=*) request=${1#--lavish=}; request_set=1; shift ;;
+      -*) usage >&2; exit 2 ;;
+      *) [ -z "$data" ] || { usage >&2; exit 2; }; data=$1; shift ;;
+    esac
+  done
+  [ -n "$data" ] || { usage >&2; exit 2; }
+  [ "$request_set" = 0 ] || [ -n "$request" ] || fail "--lavish must be off, view, or answers (got an empty value)"
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
@@ -246,10 +494,11 @@ command_build() {
   [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "board template is missing: $TEMPLATE"
   [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
     || fail "board template does not carry exactly one data slot: $TEMPLATE"
+  fm_lavish_resolve "$CONFIG" "$request" || fail "cannot resolve the board's Lavish mode"
 
   effective=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-payload.XXXXXX") \
     || fail "cannot stage the board payload"
-  if ! effective_payload "$data" "$effective"; then
+  if ! effective_payload "$data" "$effective" "$FM_LAVISH_MODE"; then
     rm -f -- "$effective"
     fail "cannot reconcile the board payload against landed work"
   fi
@@ -261,32 +510,48 @@ command_build() {
 
   board=$(board_path)
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
-  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
-  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
-    rm -f -- "$tmp"
-    fail "cannot inject the board data"
+  # The board's source id is its real path, so a board replaced by a symlink
+  # would name some other source; refuse it rather than lose track of a listener.
+  [ ! -L "$board" ] && [ ! -L "${board%/*}" ] \
+    || fail "the board path or its .lavish directory is a symlink, which is never built: $board"
+  [ "$FM_LAVISH_MODE" = answers ] || disarm_board_below_answers "$board" "$FM_LAVISH_MODE"
+  page=$(stage_page "$board" "$json")
+  if [ "$FM_LAVISH_MODE" = answers ]; then
+    # Until the source is bound and listening, serve the same board without
+    # its answer controls, so no answer can be queued with nothing consuming it.
+    static_json=$(jq -c 'del(.interactive)
+      | .captains_call |= map(del(.answerable) | .options |= map(select(.value != "reconcile")))' <<< "$json") \
+      || { rm -f -- "$page"; fail "cannot stage the read-only board"; }
+    static_json=${static_json//</\\u003c}
+    static_page=$(stage_page "$board" "$static_json") || { rm -f -- "$page"; exit 1; }
   fi
-  if grep -qxF "$PLACEHOLDER" "$tmp"; then
-    rm -f -- "$tmp"
-    fail "the board data slot survived injection"
-  fi
-  # Round-trip the injected payload back out of the built page, so a board that
-  # would fail to parse in the browser fails here instead.
-  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" \
-    | sed '1d;$d')
-  if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
-    rm -f -- "$tmp"
-    fail "the built board does not carry a readable $BOARD_SCHEMA payload"
-  fi
-  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$board"; }; then
-    rm -f -- "$tmp"
-    fail "cannot publish the board"
+  if [ -n "$static_page" ]; then
+    publish_page "$static_page" "$board"
+  else
+    publish_page "$page" "$board"
   fi
   printf 'board: %s\n' "$board"
-  # This home does not use lavish-axi. The board is a local HTML file the
-  # captain opens in a browser; answers stay in chat.
+  [ -z "$FM_LAVISH_REASON" ] || printf 'lavish: off (%s)\n' "$FM_LAVISH_REASON"
+  if [ "$FM_LAVISH_MODE" = off ]; then
+    printf 'served: %s\n' "$board"
+    printf 'open: %s\n' "$board"
+    return 0
+  fi
+  if [ -n "$static_page" ]; then
+    trap 'rm -f -- "$page"' EXIT
+  fi
+  establish_board_session "$board"
   printf 'served: %s\n' "$board"
-  printf 'open: %s\n' "$board"
+  printf 'url: %s\n' "$BOARD_URL"
+  printf 'open: %s\n' "$BOARD_URL"
+  if [ "$FM_LAVISH_MODE" = view ]; then
+    arm_board_source "$board" 0
+  else
+    arm_board_source "$board" 1
+    publish_page "$page" "$board"
+    trap - EXIT
+    printf 'answers: open\n'
+  fi
 }
 
 case "${1-}" in
