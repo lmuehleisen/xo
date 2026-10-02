@@ -2992,14 +2992,15 @@ brief_section() {  # <awk-start-regex> <max-bytes>
 brief_intent() { brief_section '^## Captain.s intent' 4000; }
 brief_spec() { brief_section '^## Firstmate spec' 4000; }
 
-# Read restrictions affect approval, not just writes. Include matching lines
-# and their neighbors even when a long spec crowds them out of its excerpt.
+# Read restrictions affect approval, not just writes. Retain the complete
+# originating subsection, including lists and continuation lines, even when
+# a long spec crowds the restriction out of its bounded excerpt.
 brief_read_constraints() {
   [ -n "$BRIEF" ] && [ -r "$BRIEF" ] || return 0
   awk '
-    /^## (Captain.s intent|Firstmate spec)/ {on=1; next}
+    /^## (Captain.s intent|Firstmate spec)/ {on=1; section++; next}
     /^##? / {on=0}
-    on {line[++n]=$0}
+    on {line[++n]=$0; origin[n]=section}
     END {
       for (i=1; i<=n; i++) {
         text=tolower(line[i])
@@ -3008,13 +3009,12 @@ brief_read_constraints() {
         limited=(text ~ "(only|exclusively|limit|restrict|confine).*" reads || text ~ reads ".*(only|exclusively|limit|restrict|confine)")
         sources=(text ~ /(source|input|research|data|document|file)/)
         use_limit=(sources && text ~ /(only|exclusively).*use|use.*(only|exclusively)/)
+        use_negative=(sources && text ~ /(not|never|prohibit|forbid|avoid).*us(e|ing)|us(e|ing).*(prohibit|forbid)/)
         excluded=(sources && text ~ /exclud/ && text !~ /(diff|output|format|render)/)
         independent=(sources && text ~ /independen/)
-        if (negative || limited || use_limit || excluded || independent) {
-          for (j=i-1; j<=i+1; j++) if (j>0 && j<=n) selected[j]=1
-        }
+        if (negative || limited || use_limit || use_negative || excluded || independent) selected[origin[i]]=1
       }
-      for (i=1; i<=n; i++) if (selected[i]) print line[i]
+      for (i=1; i<=n; i++) if (selected[origin[i]]) print line[i]
     }' "$BRIEF"
 }
 

@@ -1,16 +1,15 @@
-#!/usr/bin/env python3
-"""Archive a small agy task summary before teardown removes runtime records.
-
-Usage: python3 bin/fm-agy-audit.py <state-dir> <task-id>
-Appends to state/agy-permission-audit.jsonl, once per task/metadata digest.
-Keeps task kind/mode, version, posture, armed generations, judge identity,
-terminal state, permission decisions/resolution timing and judge metrics.
-No command input, output, credentials or status prose is copied. Missing
-historical timing/identity remains null, never inferred as a successful run.
-Manual and observer-only tasks are explicitly outside confirmed judge coverage.
-Malformed source records fail cleanup so the original evidence survives.
-"""
-
+#!/usr/bin/env bash
+# fm-agy-audit.sh - archive a small agy task summary before runtime cleanup.
+# Usage: bash bin/fm-agy-audit.sh <state-dir> <task-id>
+# Appends to state/agy-permission-audit.jsonl, once per task/metadata digest.
+# Keeps task kind/mode, version, posture, armed generations, judge identity,
+# terminal state, permission resolution timing and judge metrics. No command
+# input, output, credentials or status prose is copied. Missing historical
+# timing/identity remains null. Manual and observer-only tasks never count
+# as confirmed judge coverage. Malformed records fail cleanup, preserving
+# the original evidence. Python 3 handles JSON and timestamp parsing.
+set -eu
+python3 - "$@" <<'PYTHON'
 import datetime as dt
 import hashlib
 import json
@@ -117,8 +116,9 @@ def archive(state, task):
 if __name__ == "__main__":
     try:
         if len(sys.argv) != 3:
-            raise ValueError("usage: fm-agy-audit.py <state-dir> <task-id>")
+            raise ValueError("usage: fm-agy-audit.sh <state-dir> <task-id>")
         archive(Path(sys.argv[1]), sys.argv[2])
     except (OSError, ValueError, TypeError, KeyError) as error:
         print(f"fm-agy-audit: archive failed: {error}", file=sys.stderr)
         sys.exit(1)
+PYTHON

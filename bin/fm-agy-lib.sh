@@ -80,7 +80,7 @@
 #   fm_agy_teardown_remove_state <state-dir> <id>
 #       teardown's retire of the bypass layer and worker hooks, and its removal
 #       of the per-task policy state. Retire archives an agy task with
-#       bin/fm-agy-audit.py after permission resolution and before deletion;
+#       bin/fm-agy-audit.sh after permission resolution and before deletion;
 #       an archive failure stops cleanup without deleting the task records.
 #
 # The spawn-side functions read bin/fm-spawn.sh's globals rather than taking
@@ -444,7 +444,7 @@ fm_agy_teardown_retire() {  # <state-dir> <id>
   # Archive before metadata/status removal; an archival failure keeps them
   # available for recovery rather than silently losing judge coverage proof.
   if [ -f "$state/$id.meta" ] && grep -q '^harness=agy$' "$state/$id.meta"; then
-    python3 "$SCRIPT_DIR/fm-agy-audit.py" "$state" "$id" || return 1
+    bash "$SCRIPT_DIR/fm-agy-audit.sh" "$state" "$id" || return 1
   fi
   if [ -e "$state/$id.agy-hooks" ] || [ -L "$state/$id.agy-hooks" ]; then
     "$SCRIPT_DIR/fm-agy-hook.sh" retire-worker "$state" "$id" || return 1

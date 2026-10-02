@@ -1417,22 +1417,32 @@ input=${prompt##*Tool input:}
 constraints=${prompt##*Explicit read constraints}
 constraints=${constraints%%Static policy note:*}
 case "$constraints" in
-  *"only inspect permitted.csv"*|*"limit access to the permitted directory"*)
-    case "$input" in *permitted.csv*) echo "APPROVE: permitted source" ;; *) echo "DECLINE: limited read scope" ;; esac ;;
+  *"only inspect permitted.csv"*)
+    case "$input" in *"cat permitted.csv"*) echo "APPROVE: permitted source" ;; *) echo "DECLINE: limited read scope" ;; esac ;;
+  *"limit access to permitted/"*)
+    case "$input" in *"cat permitted/permitted.csv"*) echo "APPROVE: permitted directory" ;; *) echo "DECLINE: limited directory scope" ;; esac ;;
   *) echo "APPROVE: unrestricted read" ;;
 esac')
   dir=$(case_dir "$policy")
-  local boundary
-  for boundary in 'only inspect permitted.csv' 'limit access to the permitted directory'; do
+  local boundary allowed forbidden
+  mkdir -p "$dir/wt/permitted" "$dir/wt/outside"
+  touch "$dir/wt/permitted.csv" "$dir/wt/permitted/permitted.csv" "$dir/wt/outside/permitted.csv"
+  for boundary in 'only inspect permitted.csv' 'limit access to permitted/'; do
+    allowed='cat permitted.csv'
+    forbidden='cat broad-source.csv'
+    if [ "$boundary" = 'limit access to permitted/' ]; then
+      allowed='cat permitted/permitted.csv'
+      forbidden='cat outside/permitted.csv'
+    fi
     python3 - "$dir/data/t1/brief.md" "$boundary" <<'PY'
 import sys
 from pathlib import Path
 Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect the source.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + sys.argv[2] + "\n# Setup\n")
 PY
-    hook "$policy" pre-tool-use run_command 'cat broad-source.csv' 2
+    hook "$policy" pre-tool-use run_command "$forbidden" 2
     denied "$OUT" || fail "positive read restriction must hold a broad read: $boundary => $OUT"
     "$POLICY_SH" decline "$policy" agy-permission-c1-s2 </dev/null >/dev/null 2>&1 || fail "close the fixture hold before changing its boundary"
-    hook "$policy" pre-tool-use run_command 'cat permitted.csv' 3
+    hook "$policy" pre-tool-use run_command "$allowed" 3
     abstained "$OUT" || fail "positive restrictions must permit a named source: $boundary => $OUT"
   done
   # A judge that would approve any input must not authorize an unproved kill.
@@ -1440,6 +1450,52 @@ PY
   hook "$policy" pre-tool-use manage_task '' 4 '{"Action":"kill","TaskId":"other-session/task-40","toolSummary":"stop my own task"}'
   denied "$OUT" "verified ownership" || fail "unproved native cancellation must not depend on model labels: $OUT"
   pass "fm-agy-permission-policy: web/positive read boundaries hold, diff exclusions remain routine and native cancellation needs proof"
+}
+
+test_complete_lists_and_source_use_prohibitions() {
+  local policy dir restriction source step
+  # This fixture approves unless the prompt carries the matching exclusion.
+  # Missing entries therefore fail through the public decision interface.
+  # shellcheck disable=SC2016
+  policy=$(new_case review-complete-constraints '
+while [ $# -gt 0 ]; do case "$1" in -p) prompt=$2; shift 2 ;; *) shift ;; esac; done
+input=${prompt##*Tool input:}
+constraints=${prompt##*Explicit read constraints}
+constraints=${constraints%%Static policy note:*}
+for source in blocked-one/ blocked-two/ blocked-three/ source-use/; do
+  case "$input" in *"cat $source"*)
+    case "$constraints" in *"$source"*) echo "DECLINE: excluded source"; exit ;; esac ;;
+  esac
+done
+echo "APPROVE: permitted source"')
+  dir=$(case_dir "$policy")
+  step=2
+  for restriction in list source-use; do
+    python3 - "$dir/data/t1/brief.md" "$restriction" <<'PY'
+import sys
+from pathlib import Path
+boundary = ("Do not read any of these directories:\n- blocked-one/\n- blocked-two/\n- blocked-three/\n"
+            if sys.argv[2] == "list" else "Do not use internal research data from source-use/.\n")
+Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect the permitted source.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + boundary + "# Setup\n")
+PY
+    if [ "$restriction" = list ]; then
+      for source in blocked-one blocked-two blocked-three; do
+        hook "$policy" pre-tool-use run_command "cat $source/records.csv" "$step"
+        denied "$OUT" || fail "every excluded list entry must be held: $source => $OUT"
+        "$POLICY_SH" decline "$policy" "agy-permission-c1-s$step" </dev/null >/dev/null 2>&1 || fail "close the list fixture hold"
+        step=$((step + 1))
+      done
+    else
+      hook "$policy" pre-tool-use run_command 'cat source-use/records.csv' "$step"
+      denied "$OUT" || fail "source-use prohibitions must reach the judge: $OUT"
+      "$POLICY_SH" decline "$policy" "agy-permission-c1-s$step" </dev/null >/dev/null 2>&1 || fail "close the source-use fixture hold"
+      step=$((step + 1))
+    fi
+    hook "$policy" pre-tool-use run_command 'cat permitted.csv' "$step"
+    abstained "$OUT" || fail "a complete exclusion must still permit other sources: $OUT"
+    step=$((step + 1))
+  done
+  pass "fm-agy-permission-policy: complete exclusion lists and source-use prohibitions survive bounded brief excerpts"
 }
 
 test_audit_counts_terminal_metrics_once() {
@@ -1452,7 +1508,7 @@ test_audit_counts_terminal_metrics_once() {
 {"task":"t1","event":"pre-tool-use","decision":"judge-timeout-verdict","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":4,"judge_timeouts":2}
 {"task":"t1","event":"pre-tool-use","decision":"approve","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":12,"judge_timeouts":2}
 ROWS
-  python3 "$ROOT/bin/fm-agy-audit.py" "$dir/state" t1 || fail "metrics fixture archive failed"
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "metrics fixture archive failed"
   archive="$dir/state/agy-permission-audit.jsonl"
   jq -e '.judge_attempts == 2 and .judge_retries == 1 and .judge_timeouts == 2 and .judge_elapsed_seconds == 12 and .decisions.approve == 1' "$archive" >/dev/null \
     || fail "cumulative diagnostics must not inflate terminal metrics: $(cat "$archive")"
@@ -1499,4 +1555,5 @@ test_exact_template_batch_retry
 test_audit_survives_runtime_cleanup
 
 test_review_read_boundaries_and_nonread_exclusions
+test_complete_lists_and_source_use_prohibitions
 test_audit_counts_terminal_metrics_once
