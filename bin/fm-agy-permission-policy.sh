@@ -203,11 +203,14 @@ fi
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
-# post-tool-use and stop stay cheap when nothing is pending.
+# Post-tool-use also retires spent invocation proofs after approval closed
+# the hold. Otherwise post-tool-use and stop stay cheap with no pending work.
 if [ "$EVENT" = post-tool-use ] || [ "$EVENT" = stop ]; then
-  [ -n "$PENDING_DIR" ] && [ -d "$PENDING_DIR" ] || { cat >/dev/null; exit 0; }
+  [ -n "$PENDING_DIR" ] || { cat >/dev/null; exit 0; }
   set -- "$PENDING_DIR"/*.pending
-  [ -e "${1-}" ] || { cat >/dev/null; exit 0; }
+  [ "$EVENT" != post-tool-use ] || set -- "$@" "$CACHE_DIR"/*.once-spent
+  for m in "$@"; do [ ! -f "$m" ] || break; done
+  [ -f "$m" ] || { cat >/dev/null; exit 0; }
 fi
 if [ "$EVENT" = retire ]; then
   [ -n "$PENDING_DIR" ] && [ -d "$PENDING_DIR" ] || { rm -rf "$PENDING_DIR" 2>/dev/null; exit 0; }
@@ -501,7 +504,7 @@ case "$EVENT" in
       && [ -f "$CACHE_DIR/$once_key.once" ]; then
       # Firstmate's one-shot approval of a never-approve call: the token is
       # consumed by this retry, so a further retry escalates again. It is
-      # Bound to this invocation so a later denied retry cannot borrow proof
+      # bound to this invocation so a later denied retry cannot borrow proof
       # from an earlier authorized run, even if its post hook never arrived.
       if mv -f "$CACHE_DIR/$once_key.once" "$CACHE_DIR/$once_key.once-spent" 2>/dev/null \
         && tool_slug > "$CACHE_DIR/$once_key.once-spent"; then
@@ -570,11 +573,10 @@ case "$EVENT" in
       fi
     done
     # A completed invocation no longer needs its consumed approval proof.
-    if once_key=$(cache_key 2>/dev/null) && [ -n "$once_key" ] \
-      && [ -f "$CACHE_DIR/$once_key.once-spent" ] \
-      && [ "$(cat "$CACHE_DIR/$once_key.once-spent")" = "$(tool_slug)" ]; then
-      rm -f "$CACHE_DIR/$once_key.once-spent"
-    fi
+    for spent in "$CACHE_DIR"/*.once-spent; do
+      [ -f "$spent" ] || continue
+      [ "$(cat "$spent")" != "$(tool_slug)" ] || rm -f "$spent"
+    done
     exit 0
     ;;
   stop)
