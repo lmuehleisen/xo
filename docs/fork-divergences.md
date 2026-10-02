@@ -354,6 +354,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-tmux-submit-busy.test.sh`; `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-control-relaunch.test.sh`.
 - Upstream: does not prove these shell submissions or complete the same late-start transaction; drop once equivalent.
 
+### remote-job-recovery-latency
+
+- Intent: preserve prompt remote recovery across sequential inheritance jobs without increasing the lifecycle guard's recovery bound.
+- Class: carried.
+- Seam: the 0.05-second active/result default in `bin/fm-remote-job-lib.sh` and the 20-pass post-activity dispatcher burst in `bin/fm-remote-job-worker.sh`.
+- Guard: `tests/fm-remote-job.test.sh` default/override cadence and idle-worker cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` watcher recovery case with its unchanged bound.
+- Upstream: uses 0.25-second active/result sampling and a four-pass burst; retain the fork's prior defaults at the cost of more sampling during activity, while taking upstream's bounded builtin reads and other polling reductions, until an equivalent preserves the recovery guard.
+
 ### isolated-test-cleanup
 
 - Intent: fixture cleanup and lab commands remain confined to their owned temporary roots and explicit tmux sockets.
