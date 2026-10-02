@@ -122,9 +122,9 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: completed ship work awaiting merge stays tracked, visible in Bearings, and quietly supervised after its worker is verified stopped; README "Durable approval waits".
 - Class: intended.
-- Seam: `bin/fm-captain-hold.sh`, `bin/fm-busy-lib.sh`, and the watcher (shared).
+- Seam: `bin/fm-captain-hold.sh`, including the completed-ship exception to self-inventory rejection, `bin/fm-busy-lib.sh`, and the watcher (shared).
 - Guard: fork-only `tests/fm-captain-hold-completed-ship.test.sh`, `tests/fm-watch-completed-ship-hold.test.sh`, and `tests/fm-fleet-snapshot-captain-hold.test.sh`.
-- Upstream: no completed-ship hold.
+- Upstream: no completed-ship hold; its origin-bound inventory validation is retained, with a narrow exception for a completed ship inventorying its own durable approval hold.
 
 ### upstream-integration-tooling
 
@@ -230,7 +230,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: `bin/fm-captain-hold.sh` (shared).
 - Guard: fork-only `tests/fm-captain-hold-rehold.test.sh`.
-- Upstream: not upstream; a candidate first contribution.
+- Upstream: encodes hold reasons so punctuation and line breaks survive and validates their origin, but does not archive superseded reasons; the fork keeps archival preservation around those upstream operations.
 
 ### stow-audit
 
@@ -255,6 +255,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: `fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`; the titled-rule reader and the shared owned-input submit and clear loops in `bin/fm-composer-lib.sh`; `fm_backend_herdr_composer_owned_input` in `bin/backends/herdr.sh`; the tmux and herdr submit, owned-record, and exit-cleanup hunks in `bin/fm-supervise-daemon.sh`; the opened marker in `bin/fm-operational-input.sh`; the owned-text cleanup and wedge tail in `bin/fm-afk-return.sh`; the afk skill's return and submit-model text; the family registration in `bin/fm-test-run.sh`; and the turn footer in `tests/wake-helpers.sh`'s fake tmux (shared).
 - Guard: fork-only `tests/fm-afk-inject-delivery-proof.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; `tests/fm-afk-inject-titled-composer.test.sh`; `tests/fm-afk-inject-e2e.test.sh`; `tests/fm-afk-return.test.sh`; the named-session checks in `tests/fm-composer-matrix-live-e2e.test.sh`.
 - Upstream: counts a composer that reads empty after Enter as delivered and has no owned-text recovery; drop once upstream fixes issue 6034 equivalently.
+  Its titled-rule fallback requires an eight-dash prefix and an ASCII title, so the fork retains its broader named-session reader and takes the grey slash-command fix while preserving the optional row separator used by owned-input recovery.
 
 ### markless-op-header
 
@@ -287,6 +288,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-claude-lib.sh` and `tests/fm-claude-desktop-identity-live-e2e.test.sh`, plus its call sites in `fm_harness_process_matches` in `bin/fm-session-lock-lib.sh` and `harness_process_verdict` in `bin/fm-harness.sh`, its sibling entries in `bin/fm-backend.sh`, its family and weight entries in `bin/fm-test-run.sh`, its evidence in `docs/verification/runtime-backends.md`, and the fixture copies in suites that source those scripts (shared).
 - Guard: `tests/fm-session-lock-ancestry.test.sh` desktop cases; `tests/fm-harness-precedence.test.sh` `test_desktop_app_session_resolves_claude`; the default-on live guard `tests/fm-claude-desktop-identity-live-e2e.test.sh`.
 - Upstream: does not recognize the desktop app's version-named session executable, so a desktop-app session starts read-only; drop once upstream identifies it equivalently.
+  The shared backend loader now uses upstream's positional-parameter iteration for zsh compatibility, retaining only the fork's additional Claude helper in that list.
 
 ## Incidental
 
