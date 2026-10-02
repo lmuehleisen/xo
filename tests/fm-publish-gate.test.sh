@@ -803,7 +803,10 @@ test_disable_push_helper() {
   local repo out
   repo="$TMP_ROOT/disable"
   fm_git_init_commit "$repo" >/dev/null
+  git -C "$repo" remote add origin https://github.com/acme/widgets.git
   git -C "$repo" remote add upstream https://github.com/acme/upstream.git
+  cp "$CFG/upstream" "$TMP_ROOT/upstream.saved" 2>/dev/null || : >"$TMP_ROOT/upstream.saved"
+  printf 'acme/upstream\n' >"$CFG/upstream"
   out=$("$GATE" disable-push "$repo") || fail "disable-push failed"
   assert_contains "$out" "upstream push after: DISABLED" "disable-push output"
   assert_equals DISABLED "$(git -C "$repo" remote get-url --push upstream)" "upstream push url"
@@ -1435,6 +1438,7 @@ EOT"
 
 test_pr_text_shape_rules() {
   local long_body reply
+  "$GATE" check-text --config "$CFG" --dest acme/widgets >/dev/null 2>&1 || fail "destination-only text check should pass"
   printf 'Adds a retry to the fetcher.\n\nTested with the fetcher suite.\n' >"$TMP_ROOT/short.md"
   policy 'gh pr create --repo acme/widgets --title "Add fetcher retry" --body-file short.md' \
     || fail "a short neutral PR should pass: $POLICY_OUT"
@@ -1463,6 +1467,141 @@ Also reworked the loop so the retry stops after three attempts.'
   "$GATE" ci-text "title:$TMP_ROOT/t.txt" "body:$TMP_ROOT/b.txt" >/dev/null 2>&1 || fail "CI should pass short PR text"
   "$GATE" ci-text "body:$TMP_ROOT/story.md" >/dev/null 2>&1 && fail "CI should refuse incident evidence in PR text"
   pass "PR titles, descriptions, and replies must be short and neutral, in the guard and in CI"
+}
+
+# Live GitHub reads are the public graph interface; synthetic responses model
+# a fork merge, a feature branch, and unavailable ancestry without networking.
+test_integration_pr_body_limits() {
+  local repo="$TMP_ROOT/integration-text" source side genuine out body="$TMP_ROOT/integration.md"
+  git init -q -b integration "$repo"
+  commit_file "$repo" root.txt root 'Initial fixture'
+  git -C "$repo" checkout -q -b upstream-base
+  commit_file "$repo" upstream.txt previous 'Previous upstream fixture'
+  git -C "$repo" checkout -q -b upstream-side
+  commit_file "$repo" side.txt new 'New upstream fixture'
+  side=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q -b upstream-source upstream-base
+  pinned git -C "$repo" merge -q --no-ff upstream-side -m 'Merge upstream fixture'
+  source=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q integration
+  commit_file "$repo" fork.txt fork 'Fork fixture'
+  pinned git -C "$repo" merge -q --no-ff upstream-base -m 'Previous integration fixture'
+  git -C "$repo" branch main
+  pinned git -C "$repo" merge -q --no-ff upstream-source -m 'Integration fixture'
+  genuine=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" branch feature main
+  git -C "$repo" remote add origin https://github.com/acme/widgets.git
+  git -C "$repo" remote add upstream https://github.com/acme/upstream.git
+  cp "$CFG/upstream" "$TMP_ROOT/upstream.saved" 2>/dev/null || : >"$TMP_ROOT/upstream.saved"
+  printf 'acme/upstream\n' >"$CFG/upstream"
+  export FM_TEST_INTEGRATION_REPO="$repo"
+  # This API fixture derives every ancestry response from the real Git graph,
+  # independently of the gate's eligibility decision. No network is used.
+  cat >"$FAKEBIN/gh" <<'SH'
+#!/usr/bin/env bash
+repo=$FM_TEST_INTEGRATION_REPO
+if [ "$1 $2 $3 $4 $5 $6 $7 $8 $9" = 'pr view integration --repo github.com/acme/widgets --json number --jq .number' ]; then
+  printf '3\n'
+  exit 0
+fi
+[ "$1 $2 $3" = 'api --hostname github.com' ] || exit 1
+case "$4" in
+repos/acme/widgets/pulls/3) printf 'main\t%s\tacme/widgets\n' "$(git -C "$repo" rev-parse integration)"; exit ;;
+repos/acme/widgets/pulls/4) printf 'main\t%s\tacme/another-fork\n' "$(git -C "$repo" rev-parse integration)"; exit ;;
+repos/acme/widgets/compare/*) range=${4#repos/acme/widgets/compare/} ;;
+repos/acme/upstream/compare/*) range=${4#repos/acme/upstream/compare/} ;;
+*) exit 1 ;;
+esac
+range=${range%%\?*}
+base=${range%%...*}
+head=${range#*...}
+case "$4" in repos/acme/upstream/*) [ "$head" != main ] || head=upstream-source ;; esac
+base=$(git -C "$repo" rev-parse --verify "$base^{commit}" 2>/dev/null) || exit 1
+head=$(git -C "$repo" rev-parse --verify "$head^{commit}" 2>/dev/null) || exit 1
+if [ "$base" = "$head" ]; then status=identical
+elif git -C "$repo" merge-base --is-ancestor "$base" "$head"; then status=ahead
+elif git -C "$repo" merge-base --is-ancestor "$head" "$base"; then status=behind
+else status=diverged
+fi
+case "$6" in
+.status) printf '%s\n' "$status" ;;
+*base_commit.sha*) printf '%s\t%s\n' "$status" "$base" ;;
+*select*)
+  for commit in $(git -C "$repo" rev-list --reverse --merges "$head" --not "$base"); do
+    git -C "$repo" show -s --format='%H %P' "$commit" | awk 'NF == 3 { print $1 "\t" $2 "\t" $3 }'
+  done
+  ;;
+*)
+  for commit in $(git -C "$repo" rev-list --reverse "$head" --not "$base"); do
+    git -C "$repo" show -s --format='%H %P' "$commit" | awk 'NF >= 2 { print $1 "\t" $2 }'
+  done
+  ;;
+esac
+SH
+  chmod +x "$FAKEBIN/gh"
+  printf '%s\n' "$FAKEBIN/gh" >"$CFG/gh"
+  # About 5000 characters, with the full recorded parent SHA and a tail marker
+  # proving the semantic judge receives the entire expanded description.
+  printf 'Upstream source %s\n' "$source" >"$body"
+  printf '%*s\n' 4944 '' | tr ' ' x >>"$body"
+  printf 'Tail review marker.\n' >>"$body"
+  out=$(cd "$repo" && FM_TEST_JUDGE_PROMPTS="$TMP_ROOT/integration-prompts" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr create --repo acme/widgets --base main --head integration --title Integration --body-file '$body'" 2>&1) || fail "integration create should pass: $out"
+  assert_contains "$(cat "$TMP_ROOT/integration-prompts")" 'Tail review marker.' 'whole description reaches the judge'
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit https://github.com/acme/widgets/pull/3 --body-file '$body'" 2>&1) || fail "integration edit should pass: $out"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit integration --repo acme/widgets --body-file '$body'" 2>&1) || fail "branch-selected integration edit should pass: $out"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit --repo acme/widgets --body-file '$body'" 2>&1) || fail "current-branch integration edit should pass: $out"
+  out=$(cd "$repo" && "$GATE" ci-text --config "$CFG" --dest acme/widgets --pr 3 --pr-upstream acme/upstream "body:$body" 2>&1) || fail "CI integration should pass: $out"
+  out=$(cd "$repo" && FM_CI_PR_DEST=acme/widgets FM_CI_PR_NUMBER=3 FM_CI_PR_UPSTREAM=acme/upstream "$GATE" ci-text --config "$CFG" "body:$body" 2>&1) || fail "CI environment context should pass: $out"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head feature "body:$body" 2>&1) && fail "non-integration body should refuse"
+  assert_contains "$out" 'longer than 1500 characters' 'ordinary feature cap'
+  # Advance real main after the merge. Its old tip remains on first-parent
+  # history, and the original integration must remain eligible.
+  git -C "$repo" checkout -q main
+  commit_file "$repo" fork-next.txt next 'Advance fork fixture'
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) || fail "integration should remain eligible after main advances: $out"
+  # A copied upstream-internal merge has an ancestor on main's second-parent
+  # history, but its first parent is outside the fork's first-parent chain.
+  git -C "$repo" branch -f integration upstream-source >/dev/null
+  cp "$body" "$TMP_ROOT/genuine-body.md"
+  sed "s/$source/$side/" "$TMP_ROOT/genuine-body.md" >"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "copied upstream merge must retain ordinary cap"
+  assert_contains "$out" 'longer than 1500 characters' 'fork mainline ancestry required'
+  git -C "$repo" branch -f integration "$genuine" >/dev/null
+  cp "$TMP_ROOT/genuine-body.md" "$body"
+  cp "$FAKEBIN/gh" "$FAKEBIN/gh.good"
+  sed 's@repos/acme/upstream/compare/@repos/acme/unavailable/compare/@' "$FAKEBIN/gh.good" >"$FAKEBIN/gh"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "unavailable ancestry should refuse"
+  assert_contains "$out" 'longer than 1500 characters' 'unavailable ancestry cap'
+  cp "$FAKEBIN/gh.good" "$FAKEBIN/gh"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit https://github.com/acme/widgets/pull/3 --base \"\$TARGET_BASE\" --body-file '$body'" 2>&1) && fail "unreadable base must not qualify"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head missing "body:$body" 2>&1) && fail "unverifiable head should refuse"
+  assert_contains "$out" 'longer than 1500 characters' 'unverifiable cap'
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base develop --pr-head integration "body:$body" 2>&1) && fail "non-main base should refuse"
+  out=$(cd "$repo" && "$GATE" ci-text --config "$CFG" --dest acme/widgets --pr 4 --pr-upstream acme/upstream "body:$body" 2>&1) && fail "cross-fork head should refuse"
+  printf '%*s\n' 5000 '' | tr ' ' x >"$TMP_ROOT/unrecorded.md"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$TMP_ROOT/unrecorded.md" 2>&1) && fail "unrecorded source should refuse"
+  printf 'Upstream source %s\n' "$source" >"$body"
+  printf '%*s\n' 5945 '' | tr ' ' x >>"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "6001 characters should refuse"
+  assert_contains "$out" 'longer than 6000 characters' 'integration character cap'
+  printf 'Upstream source %s\n' "$source" >"$body"
+  for _ in $(seq 1 80); do printf '\n'; done >>"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "81 physical lines should refuse"
+  assert_contains "$out" 'longer than 80 lines' 'integration line cap'
+  # Both inclusive boundaries pass: 6000 non-newline characters in 80 lines.
+  printf 'Upstream source %s\n' "$source" >"$body"
+  printf '%*s\n' 5866 '' | tr ' ' x >>"$body"
+  for _ in $(seq 1 78); do printf 'x\n'; done >>"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) || fail "inclusive integration limits should pass: $out"
+  printf 'Upstream source %s\n%s\n' "$source" "$PRIVATE_TERM" >"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "integration denylist should refuse"
+  assert_contains "$out" 'denylist rule' 'integration content scan'
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "reply:$TMP_ROOT/unrecorded.md" 2>&1) && fail "integration context must not expand reply cap"
+  assert_contains "$out" 'longer than 750 characters' 'reply cap retained'
+  cp "$TMP_ROOT/upstream.saved" "$CFG/upstream"
+  unset FM_TEST_INTEGRATION_REPO
+  reset_trusted_gh
+  pass "only verified fork-local integrations get the larger body cap, including after main advances"
 }
 
 # Replies may run to 5 lines and 750 characters, and the narrative rule
@@ -1610,6 +1749,7 @@ test_gh_guard_refuses_visibility_changes
 test_gh_guard_refuses_api_write_queries
 test_judge_override_is_captain_only
 test_pr_text_shape_rules
+test_integration_pr_body_limits
 test_reply_limits_and_evidence_shapes
 test_git_refusals
 test_ci_commits_and_text

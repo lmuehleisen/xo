@@ -114,6 +114,7 @@ run_spawn() {
     FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
+    CODEX_HOME="${FM_TEST_CODEX_HOME:-$home/codex-home}" \
     GROK_HOME="$home/grok-home" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" "$@"
 }
@@ -516,6 +517,96 @@ test_chained_raw_launch_strips_ai_trailer_in_every_step() {
   pass "a chained raw launch commits through the AI-trailer strip in every step"
 }
 
+# A raw launch command whose first word is a verified adapter binary (agy,
+# claude, ...) records that basename as the task's harness but must otherwise
+# run verbatim: no executable resolution, no CLI probe, no catalog check, no
+# template substitution, and no adapter wiring - all of which exist only to
+# serve the launch templates a raw command never carries. The marker binaries
+# below prove the raw path never even executes the adapter it names, which the
+# exit status alone cannot pin on a host where the real binary is installed.
+test_raw_launch_naming_a_verified_adapter_runs_verbatim() {
+  local rec out status launch probe_log tool wt2
+  rec=$(make_spawn_case raw-verified-adapter claude raw-agy-z16 raw-claude-z17)
+  read_case_record "$rec"
+  probe_log="$CASE_DIR/probe.log"
+  for tool in agy claude; do
+    cat > "$FAKEBIN_DIR/$tool" <<'SH'
+#!/usr/bin/env bash
+printf '%s %s\n' "$(basename "$0")" "$*" >> "${FM_FAKE_PROBE_LOG:-/dev/null}"
+exit 0
+SH
+    chmod +x "$FAKEBIN_DIR/$tool"
+  done
+
+  out=$(FM_FAKE_PROBE_LOG="$probe_log" run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    raw-agy-z16 "$PROJ_DIR" 'agy --dangerously-skip-permissions --sandbox workspace-write')
+  status=$?
+  expect_code 0 "$status" "raw launch naming agy should spawn: $out"
+  assert_contains "$out" "spawned raw-agy-z16 harness=agy" "raw agy launch did not record the agy harness name"
+  assert_meta_profile "$HOME_DIR/state/raw-agy-z16.meta" agy default default
+  launch=$(cat "$LAUNCH_LOG")
+  # Byte-exact like the other raw-launch pins in this file: the generic fleet
+  # prefixes (private tmux server, compact-adviser switch, task inbox, AI-
+  # trailer hooks, identity-marker scrub) wrap the command but never touch it.
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(ai_trailer_hooks_prefix "$HOME_DIR" raw-agy-z16)env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
+    || fail "raw agy launch command changed"$'\n'"actual: $launch"
+
+  # The claude case needs its own pane path: the first spawn's lease holds WT_DIR.
+  wt2="$CASE_DIR/wt-claude"
+  git -C "$PROJ_DIR" worktree add --quiet --detach "$wt2"
+  out=$(FM_FAKE_PROBE_LOG="$probe_log" run_ship_spawn "$HOME_DIR" "$wt2" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    raw-claude-z17 "$PROJ_DIR" 'claude --dangerously-skip-permissions')
+  status=$?
+  expect_code 0 "$status" "raw launch naming claude should spawn: $out"
+  assert_contains "$out" "spawned raw-claude-z17 harness=claude" "raw claude launch did not record the claude harness name"
+  assert_meta_profile "$HOME_DIR/state/raw-claude-z17.meta" claude default default
+  launch=$(cat "$LAUNCH_LOG")
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(ai_trailer_hooks_prefix "$HOME_DIR" raw-claude-z17)env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
+    || fail "raw claude launch command changed"$'\n'"actual: $launch"
+
+  [ ! -s "$probe_log" ] || fail "raw launches executed the adapter binaries they name: $(cat "$probe_log")"
+  # A raw launch installs no firstmate wiring: no busy generation is armed for
+  # a record nothing could clear, and no adapter hook or plugin file is written
+  # into the operator's worktree.
+  grep -q '^busy_gen=' "$HOME_DIR/state/raw-agy-z16.meta" \
+    && fail "raw agy launch armed a busy record with no wiring to clear it"
+  grep -q '^busy_gen=' "$HOME_DIR/state/raw-claude-z17.meta" \
+    && fail "raw claude launch armed a busy record with no wiring to clear it"
+  [ ! -e "$wt2/.claude/settings.local.json" ] \
+    || fail "raw claude launch wrote adapter hooks into the worktree"
+  pass "raw launches naming verified adapters record the harness but run verbatim"
+}
+
+# An adapter placeholder embedded in a raw command is the operator's own text:
+# the template substitutions must leave it untouched rather than resolving a
+# binary, expanding a flag, or dropping the token entirely when the expansion
+# is empty. Path tokens that name task-owned files still expand - they are the
+# one channel a raw command has to reference the brief or worktree.
+test_raw_launch_leaves_adapter_placeholders_untouched() {
+  local rec id out status launch brief_path
+  id=raw-placeholders-z18
+  rec=$(make_spawn_case raw-placeholders claude "$id")
+  read_case_record "$rec"
+  # __BRIEF__ expands to the launch-brief overlay the worker is shown, spelled
+  # exactly as the home overrides gave it (no physical-path resolution).
+  brief_path="$HOME_DIR/data/$id/launch-brief.md"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" 'agy __AGYBIN__ --dirs __PERMISSIONDIRS__ __MODELFLAG__ __EFFORTFLAG__ __CLAUDEATTRIBUTION__ __BRIEFDOORBELL__ __CLAUDEADDDIRS__ --brief __BRIEF__')
+  status=$?
+  expect_code 0 "$status" "raw launch carrying adapter placeholders should spawn: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "agy __AGYBIN__ --dirs __PERMISSIONDIRS__ __MODELFLAG__ __EFFORTFLAG__ __CLAUDEATTRIBUTION__ __BRIEFDOORBELL__ __CLAUDEADDDIRS__" \
+    "raw launch rewrote adapter placeholders the operator typed"
+  assert_not_contains "$launch" "--add-dir" \
+    "raw launch substituted __PERMISSIONDIRS__ or __CLAUDEADDDIRS__ into a verbatim command"
+  assert_not_contains "$launch" "--model" \
+    "raw launch substituted __MODELFLAG__ into a verbatim command"
+  assert_contains "$launch" "--brief '$brief_path'" \
+    "raw launch left the task-path __BRIEF__ token unexpanded"
+  pass "a raw launch keeps adapter tokens literal but expands task-path tokens"
+}
+
 test_claude_threads_model_and_effort() {
   local rec id out status launch
   id=profile-claude-z2
@@ -549,11 +640,68 @@ test_codex_threads_model_and_effort() {
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
+write_codex_catalog() {
+  mkdir -p "$HOME_DIR/codex-home"
+  cat > "$HOME_DIR/codex-home/models_cache.json" <<'JSON'
+{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"example-model","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-5.6-luna","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-5","supported_reasoning_levels":[{"effort":"high"}]}]}
+JSON
+}
+
+test_codex_catalog_max_effort() {
+  local model rec id out status launch
+  for model in gpt-6-astra example-model; do
+    id="catalog-$model"
+    rec=$(make_spawn_case "$id" codex "$id")
+    read_case_record "$rec"
+    write_codex_catalog
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model "$model" --effort max 2>&1)
+    status=$?
+    expect_code 0 "$status" "catalog-supported max spawn should succeed"
+    assert_meta_profile "$HOME_DIR/state/$id.meta" codex "$model" max
+    launch=$(cat "$LAUNCH_LOG")
+    assert_contains "$launch" "model_reasoning_effort=\"max\"" "catalog-supported max missing from launch"
+    assert_not_contains "$out" "omitting effort flag" "supported max incorrectly warned"
+  done
+  pass "codex passes max for any catalog-supported model"
+}
+
+test_codex_unavailable_catalog_max_effort() {
+  local kind model rec id out status launch
+  for kind in missing malformed invalid-schema missing-levels invalid-levels unreadable; do
+    for model in gpt-6-astra gpt-5.6-luna; do
+      id="catalog-$kind-$model"
+      rec=$(make_spawn_case "$id" codex "$id")
+      read_case_record "$rec"
+      mkdir -p "$HOME_DIR/codex-home"
+      case "$kind" in
+        malformed) printf '{broken' > "$HOME_DIR/codex-home/models_cache.json" ;;
+        invalid-schema) printf '{"models":{}}' > "$HOME_DIR/codex-home/models_cache.json" ;;
+        missing-levels) printf '{"models":[{"slug":"%s"}]}' "$model" > "$HOME_DIR/codex-home/models_cache.json" ;;
+        invalid-levels) printf '{"models":[{"slug":"%s","supported_reasoning_levels":{}}]}' "$model" > "$HOME_DIR/codex-home/models_cache.json" ;;
+        unreadable) mkdir "$HOME_DIR/codex-home/models_cache.json" ;;
+      esac
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model "$model" --effort max 2>&1)
+      status=$?
+      expect_code 0 "$status" "unavailable catalog should preserve spawn behavior"
+      assert_meta_profile "$HOME_DIR/state/$id.meta" codex "$model" max
+      launch=$(cat "$LAUNCH_LOG")
+      if [ "$model" = gpt-5.6-luna ]; then
+        assert_contains "$launch" "model_reasoning_effort=\"max\"" "Luna fallback lost max"
+      else
+        assert_not_contains "$launch" "model_reasoning_effort" "unavailable catalog enabled unsupported max"
+        assert_contains "$out" "warning: Codex model $model requested effort max" "missing fallback warning"
+      fi
+    done
+  done
+  pass "codex preserves historical max behavior with unavailable catalogs"
+}
+
 test_codex_threads_model_and_max_effort() {
   local rec id out status launch
   id=profile-codex-max-z4
   rec=$(make_spawn_case profile-codex-max codex "$id")
   read_case_record "$rec"
+  write_codex_catalog
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5.6-luna --effort max)
   status=$?
@@ -570,8 +718,9 @@ test_codex_omits_max_effort_for_unsupported_model() {
   id=profile-codex-max-unsupported-z4b
   rec=$(make_spawn_case profile-codex-max-unsupported codex "$id")
   read_case_record "$rec"
+  write_codex_catalog
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort max)
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort max 2>&1)
   status=$?
   expect_code 0 "$status" "codex spawn with an unsupported model max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
@@ -579,6 +728,7 @@ test_codex_omits_max_effort_for_unsupported_model() {
   assert_contains "$launch" "codex --model 'gpt-5' --add-dir" \
     "codex launch did not preserve the model flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported model max reasoning effort"
+  assert_contains "$out" "warning: Codex model gpt-5 requested effort max" "missing unsupported effort warning"
   pass "codex omits max for models without the catalog capability"
 }
 
@@ -2062,8 +2212,12 @@ test_active_dispatch_profile_allows_explicit_harness
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_chained_raw_launch_strips_ai_trailer_in_every_step
+test_raw_launch_naming_a_verified_adapter_runs_verbatim
+test_raw_launch_leaves_adapter_placeholders_untouched
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
+test_codex_catalog_max_effort
+test_codex_unavailable_catalog_max_effort
 test_codex_threads_model_and_max_effort
 test_codex_omits_max_effort_for_unsupported_model
 test_codex_crewmate_launch_disables_the_hook_layer

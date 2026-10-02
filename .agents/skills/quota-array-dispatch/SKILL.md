@@ -38,7 +38,9 @@ It never removes this skill's authority, and its `ambiguous`, `escalate`, and `e
 
 ## Read the default TOON
 
-Start each intake by running `quota-axi` once with no `--json`, and reuse that TOON for every candidate.
+Use `bin/fm-quota-read.sh` for every quota or auth read; it applies the [home provider scope](../../../docs/configuration.md#quota-provider-scope-configquota-providers) and refuses malformed configuration.
+
+Start each intake by running `bin/fm-quota-read.sh` once with no `--json`, and reuse that TOON for every candidate.
 Post-consolidation quota-axi (the floor owned by `bin/fm-quota-axi-lib.sh`) puts `spendPriority` in the default `quota[]` block beside `effectivePercentRemaining`, `runway`, `confidence`, `limitedBy`, and `resetsAt`.
 Sparse `exhaustion[]` carries finite-runway seconds only for `projected_exhaustion` and `exhausted_now`.
 Sparse `attention[]` names auth, stale, and unmeasurable facts.
@@ -46,12 +48,12 @@ Sparse `attention[]` names auth, stale, and unmeasurable facts.
 It already computes the economics that older instructions reconstructed by hand from headroom, pace, reserve, and window-id lists; do not recompute those.
 Do not read `--json` on the normal path, and do not reach for `--full` to rebuild that economics.
 
-After reading the TOON, fall back to one `quota-axi --json` call only when that TOON is genuinely ambiguous for the decision, or when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`.
+After reading the TOON, fall back to one `bin/fm-quota-read.sh --json` call only when that TOON is genuinely ambiguous for the decision, or when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`.
 Ambiguous means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, a real tie still needs extra evidence, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
 The fallback therefore has an explicit TOON-then-JSON call sequence; reuse its JSON result and do not take any further quota snapshots.
 Below-floor is rare: bootstrap enforces `FM_QUOTA_AXI_MIN` and normally reports `MISSING` before dispatch; if an intake somehow reaches an older build whose TOON lacks `spendPriority`, use the defensive `--json` fallback rather than treating the missing scalar as healthy.
 `--json` is a defensive belt, not a habit; never reach for it because it feels more complete.
-Read `quota-axi auth --json` only when a candidate's credential surface is in question.
+Read `bin/fm-quota-read.sh auth --json` only when a candidate's credential surface is in question.
 
 For each candidate, preserve explicit `harness`, `model`, and `provider`; `harness-adapters` owns identity, and model/provider never infer harness.
 
@@ -74,7 +76,7 @@ A named-model or named-product scope is an additional bound for that model alone
 Match the candidate to its `quota[]` row by that established provider, its `accountKey` when the snapshot is schema 6 (a Pi lane's auth provider id such as `openai-codex-work`, or `codex-home` for native Codex including Pi's `codex-native/` adapter, then the `default` row, else unmeasured; never a row picked by position, never rows summed across accounts), and scope; a stale, auth-required, or unmeasurable scope is named in `attention[]` instead of a fabricated number.
 
 A candidate authenticates through its own tuple's surface; another harness's CLI can never gate it, and `harness=pi` with `model=xai/grok-*` is Pi using xAI rather than the standalone Grok CLI.
-`quota-axi auth --json` lists each provider's credential sources independently, so read the one source the candidate actually uses rather than collapsing a provider to a single status.
+`bin/fm-quota-read.sh auth --json` lists each provider's credential sources independently, so read the one source the candidate actually uses rather than collapsing a provider to a single status.
 A provider can carry a healthy source beside a missing or expired one; the unused source's state is not the candidate's state.
 A Pi-hosted family may authenticate through the vendor's own store with no `pi:`-prefixed source at all, which is normal and never evidence against the candidate.
 

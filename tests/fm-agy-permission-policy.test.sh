@@ -12,7 +12,7 @@
 # statically visible out-of-root exec write refusals under bypass, the
 # credential-material holds, every judge outcome denied rather than
 # abstained, the firstmate approve/decline resolution including the
-# never-approve one-shot token, declined-retry suppression, held-call retry
+# never-approve and credential one-shot tokens, declined-retry suppression, held-call retry
 # dedup and the marker binding that runs before the cache and the judge,
 # pending closure on post-tool-use - approved or anomaly - and retire but
 # NOT on Stop, the grants digest pin, and the fail-closed guards on foreign
@@ -608,7 +608,7 @@ test_never_approve_uses_a_one_shot_token() {
   pass "fm-agy-permission-policy: a never-approve approval is a one-shot token one retry consumes"
 }
 
-test_sensitive_paths_hold_for_firstmate_then_cache() {
+test_sensitive_paths_hold_for_firstmate_once() {
   local policy dir held arg
   policy=$(new_case sensitive)
   dir=$(case_dir "$policy")
@@ -631,8 +631,8 @@ EOF
   hook "$policy" pre-tool-use run_command "cat ~/.gemini/oauth_creds.json"
   denied "$OUT" "held for firstmate" \
     || fail "an exec read of agy OAuth material must hold for firstmate, got: $OUT"
-  # Firstmate's approval of a held credential read must take effect: the
-  # retry hits the verdict cache rather than re-escalating forever.
+  # Firstmate's approval of a held credential read must take effect for
+  # exactly one identical retry, including template-sensitive reads.
   hook "$policy" pre-tool-use view_file "$HOME/.ssh/id_rsa" 20
   denied "$OUT" "held for firstmate" || fail "the credential read must first be held, got: $OUT"
   held="agy-permission-c1-s20"
@@ -641,7 +641,55 @@ EOF
   hook "$policy" pre-tool-use view_file "$HOME/.ssh/id_rsa" 21
   abstained "$OUT" \
     || fail "a firstmate-approved credential read must abstain on retry, got: $OUT"
-  pass "fm-agy-permission-policy: credential paths hold for firstmate and its approval caches normally"
+  hook "$policy" pre-tool-use view_file "$HOME/.ssh/id_rsa" 22
+  denied "$OUT" || fail "credential approval must be consumed by one retry"
+  pass "fm-agy-permission-policy: credential paths hold for firstmate and approval authorizes one retry"
+}
+
+test_spent_credential_token_binds_to_invocation() {
+  local policy dir command spent ckey
+  policy=$(new_case spent-credential)
+  dir=$(case_dir "$policy")
+  command='cat .env'
+  hook "$policy" pre-tool-use run_command "$command" 5
+  denied "$OUT" || fail "credential read must initially hold"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s5 </dev/null >/dev/null 2>&1 || fail "approve credential read"
+  hook "$policy" pre-tool-use run_command "$command" 8
+  abstained "$OUT" || fail "authorized credential retry must run"
+  spent=$(find "$dir/state/t1.agy-permission-cache" -name '*.once-spent')
+  [ -f "$spent" ] || fail "authorized invocation needs its spent proof"
+  # Keep the earlier post hook missing: its stale proof must not bless a
+  # later retry that bypasses a fresh denial, including an old reusable cache.
+  hook "$policy" pre-tool-use run_command "$command" 9
+  denied "$OUT" || fail "later credential retry must hold"
+  ckey=$(sed -n '3p' "$dir/state/t1.agy-permission-pending/c1-s9.pending")
+  printf 'legacy reusable verdict\n' > "$dir/state/t1.agy-permission-cache/$ckey"
+  hook "$policy" post-tool-use run_command "$command" 9
+  jq -e 'select(.event == "post-tool-use" and .decision == "anomaly" and .reason == "escalation agy-permission-c1-s9")' "$dir/state/agy-permission-log.jsonl" >/dev/null \
+    || fail "stale spent proof must not hide the later deny-bypass anomaly"
+  [ -f "$spent" ] || fail "a different invocation must not remove the earlier run's proof"
+  hook "$policy" post-tool-use run_command "$command" 8
+  [ ! -e "$spent" ] || fail "authorized invocation completion must retire its proof"
+  hook "$policy" pre-tool-use run_command "$command" 10
+  denied "$OUT" || fail "completed one-shot cannot approve another attempt"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s10 </dev/null >/dev/null 2>&1 || fail "approve next exact attempt"
+  hook "$policy" pre-tool-use run_command "$command" 12
+  abstained "$OUT" || fail "a fresh approval must authorize its next pre hook"
+  hook "$policy" post-tool-use run_command "$command" 12
+  [ -z "$(find "$dir/state/t1.agy-permission-cache" -name '*.once-spent')" ] || fail "completed credential proof must be removed"
+  hook "$policy" pre-tool-use run_command "$command" 15
+  denied "$OUT" || fail "new credential hold must open"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s15 </dev/null >/dev/null 2>&1 || fail "approve overlapping invocation"
+  hook "$policy" pre-tool-use run_command "$command" 18
+  abstained "$OUT" || fail "overlapping authorized invocation must run"
+  hook "$policy" pre-tool-use run_command "$command" 19
+  denied "$OUT" || fail "later overlapping invocation must hold"
+  hook "$policy" post-tool-use run_command "$command" 18
+  [ -f "$dir/state/t1.agy-permission-pending/c1-s19.pending" ] || fail "earlier completion must not resolve the later held invocation"
+  hook "$policy" post-tool-use run_command "$command" 19
+  jq -e 'select(.event == "post-tool-use" and .decision == "anomaly" and .reason == "escalation agy-permission-c1-s19")' "$dir/state/agy-permission-log.jsonl" >/dev/null \
+    || fail "later overlapping deny-bypass must record its own anomaly"
+  pass "fm-agy-permission-policy: spent credential approval proves only its invocation and retires on completion"
 }
 
 test_held_marker_binds_before_the_judge() {
@@ -741,6 +789,8 @@ exit 0')
     || fail "a hung judge must be bounded and escalate: $(cat "$dir/state/t1.status")"
   [ -z "$(find "$dir/tmp/agy-permission-judge" -name 'prompt.*' 2>/dev/null)" ] \
     || fail "judge prompt files must be removed after each call"
+  tail -1 "$dir/state/agy-permission-log.jsonl" | jq -e '.judge_attempts == 2 and .judge_timeouts == 2 and .judge_elapsed_seconds >= 2' >/dev/null \
+    || fail "timeout metrics must preserve both bounded attempts"
   pass "fm-agy-permission-policy: every judge failure mode denies rather than abstains"
 }
 
@@ -1225,6 +1275,375 @@ EOF
   pass "fm-agy-permission-policy: git remote and branch-creation forms that change state are never read-and-build"
 }
 
+test_exact_shell_inbox_acknowledgements() {
+  local policy dir wt inbox cmd
+  policy=$(new_case inbox-ack)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  inbox="$dir/state/t1.inbox"
+  printf 'one\n' > "$inbox/001.msg"
+  printf 'two\n' > "$inbox/002.msg"
+  cmd="mkdir -p '$dir/data/t1' '$inbox/handled' && mv '$inbox'/001.msg '$inbox'/002.msg '$inbox'/handled/"
+  hook "$policy" pre-tool-use run_command "$cmd"
+  abstained "$OUT" || fail "compound multi-source inbox setup/ack must pass: $OUT"
+  bash -c "$cmd" || fail "approved inbox acknowledgement must execute"
+  [ -f "$inbox/handled/001.msg" ] && [ -f "$inbox/handled/002.msg" ] \
+    || fail "both messages must actually be acknowledged"
+  hook "$policy" pre-tool-use run_command "mkdir -p '$inbox/handled'; mv '$inbox/003.msg' '$inbox/handled/' 2>&1"
+  abstained "$OUT" || fail "normal compound shell ack must pass: $OUT"
+  mkdir -p "$dir/state/sibling.inbox/handled" "$dir/escape"
+  while IFS= read -r cmd; do
+    hook "$policy" pre-tool-use run_command "$cmd"
+    denied "$OUT" || fail "non-ack inbox operation must be denied: $cmd => $OUT"
+  done <<CASES
+mv '$dir/state/sibling.inbox/001.msg' '$dir/state/sibling.inbox/handled/'
+mkdir -p '$dir/state/sibling.inbox/handled'
+mv '$inbox/003.msg' '$inbox/../sibling.inbox/handled/'
+mv '$inbox/not-numeric.msg' '$inbox/handled/'
+mv '$inbox/'*.msg '$inbox/handled/'
+mv '$inbox/003.msg' '$inbox/handled/renamed.msg'
+mv '$inbox/001.msg' '$inbox/handled/002.msg'
+touch '$inbox/handled'
+CASES
+  ln -s "$dir/escape" "$inbox/003.msg"
+  hook "$policy" pre-tool-use run_command "mv '$inbox/003.msg' '$inbox/handled/'"
+  denied "$OUT" || fail "message symlink must be refused: $OUT"
+  rm "$inbox/003.msg"
+  rm -r "$inbox/handled"
+  ln -s "$dir/escape" "$inbox/handled"
+  hook "$policy" pre-tool-use run_command "mkdir -p '$inbox/handled' && mv '$inbox/004.msg' '$inbox/handled/'"
+  denied "$OUT" || fail "handled symlink escape must be refused: $OUT"
+  pass "fm-agy-permission-policy: exact shell inbox acknowledgements pass; siblings, globs and symlinks refuse"
+}
+
+test_read_constraints_and_interpreter_routing() {
+  local policy dir wt cmd
+  # This fixture judge consumes the public prompt, not implementation bytes.
+  # It tests routing/context transport; model agreement requires a live probe.
+  # shellcheck disable=SC2016
+  policy=$(new_case read-scope '
+while [ $# -gt 0 ]; do case "$1" in -p) prompt=$2; shift 2 ;; *) shift ;; esac; done
+printf "%s" "$prompt" > "$PROMPT_CAPTURE"
+case "$prompt" in
+  *"NOT a prohibition"*"credential file"*"DO NOT READ sibling"*"data/**/"*) echo "DECLINE: excluded glob" ;;
+  *"NOT a prohibition"*"DO NOT READ sibling"*"permitted.csv"*) echo "APPROVE: permitted source" ;;
+  *"NOT a prohibition"*"readdirSync/statSync"*"readdirSync"*) echo "APPROVE: authorized Node listing" ;;
+  *) echo "DECLINE: missing authority or context" ;;
+esac')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  export PROMPT_CAPTURE="$dir/prompt-capture"
+  hook "$policy" pre-tool-use run_command 'node -v'
+  abstained "$OUT" || fail "node -v must be static: $OUT"
+  [ ! -e "$PROMPT_CAPTURE" ] || fail "node -v must not spend a judge call"
+  hook "$policy" pre-tool-use run_command 'node -v extra' 2
+  denied "$OUT" || fail "extra node argv must not be statically approved"
+  hook "$policy" pre-tool-use run_command 'node -e '\''console.log(require("fs").readdirSync("notes"))'\''' 3
+  abstained "$OUT" || fail "read-only Node must reach effect review: $OUT"
+  hook "$policy" pre-tool-use run_command 'node -e '\''console.log(require("fs").readFileSync(".env","utf8"))'\''' 4
+  denied "$OUT" || fail "credential-printing interpreter must hold"
+  # Put the independence constraint beyond the normal spec excerpt.
+  python3 - "$dir/data/t1/brief.md" <<'PY'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect permitted.csv.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + "DO NOT READ sibling data directories.\n# Setup\n")
+PY
+  mkdir -p "$dir/data/excluded"
+  printf 'prohibited\n' > "$dir/data/excluded/records.csv"
+  cmd="python3 -c 'import glob; [open(p).read() for p in glob.glob(\"$dir/data/**/records.csv\",recursive=True)]'"
+  hook "$policy" pre-tool-use run_command "$cmd" 5
+  denied "$OUT" || fail "broad excluded-directory glob must be held: $OUT"
+  # Model an enforcing caller: only an abstention executes the read.
+  # The fixture records file reads separately from the policy's logs.
+  if abstained "$OUT"; then
+    bash -c "$cmd" > "$dir/excluded-read-observed"
+  fi
+  [ ! -e "$dir/excluded-read-observed" ] || fail "prohibited matching fixture must not be read"
+  hook "$policy" pre-tool-use run_command 'cat permitted.csv' 6
+  abstained "$OUT" || fail "named permitted read must pass reviewed constraints: $OUT"
+  hook "$policy" pre-tool-use view_file "$wt/permitted.csv" 7
+  abstained "$OUT" || fail "file-tool reads must receive the same constraints: $OUT"
+  hook "$policy" pre-tool-use manage_task '' 8 '{"Action":"kill","TaskId":"other-session/task-40"}'
+  denied "$OUT" || fail "unproved foreign native task kill must stay held"
+  unset PROMPT_CAPTURE
+  pass "fm-agy-permission-policy: Node effects and long-brief read exclusions reach judgment; unproved task kills stay held"
+}
+
+test_exact_template_batch_retry() {
+  local policy dir batch
+  policy=$(new_case template-batch)
+  dir=$(case_dir "$policy")
+  batch='cat .env.example && cat app/.env.example'
+  hook "$policy" pre-tool-use run_command "$batch" 30
+  denied "$OUT" || fail "template batch must hold before approval"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s30 </dev/null >/dev/null 2>&1 || fail "batch approval failed"
+  grep -q 'retry the identical command or batch' "$dir/state/t1.status" || fail "resolution must request identical retry"
+  hook "$policy" pre-tool-use run_command "$batch" 31
+  abstained "$OUT" || fail "identical approved template batch must run once: $OUT"
+  hook "$policy" pre-tool-use run_command "$batch" 32
+  denied "$OUT" || fail "credential-sensitive approval must remain one-shot"
+  hook "$policy" pre-tool-use run_command 'cat .env.other' 33
+  denied "$OUT" || fail "batch authority must not exempt .env wildcards"
+  pass "fm-agy-permission-policy: exact template batch retry is explained, bound and one-shot"
+}
+
+test_audit_survives_runtime_cleanup() {
+  local policy dir archive
+  policy=$(new_case audit 'echo "APPROVE: routine judged call"')
+  dir=$(case_dir "$policy")
+  printf 'harness=agy\nkind=scout\nmode=direct-PR\nagy_bypass=on\nagy_version=1.2.11\nagy_permission_mode=auto\nagy_judge=agy:fixture\n' > "$dir/state/t1.meta"
+  hook "$policy" pre-tool-use run_command 'node -e "console.log(1)"' 1
+  abstained "$OUT" || fail "judge fixture must approve"
+  hook "$policy" pre-tool-use run_command 'cat .env.example' 2
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s2 </dev/null >/dev/null 2>&1 || fail "audit fixture approval failed"
+  printf 'done [at=1700000000]: report delivered\n' >> "$dir/state/t1.status"
+  # Exercise the teardown's public retire function without an endpoint.
+  # shellcheck source=bin/fm-agy-lib.sh
+  . "$ROOT/bin/fm-agy-lib.sh"
+  local SCRIPT_DIR="$ROOT/bin"
+  fm_agy_teardown_retire "$dir/state" t1 || fail "retire must archive successfully"
+  archive="$dir/state/agy-permission-audit.jsonl"
+  jq -e '.kind == "scout" and .mode == "direct-PR" and .agy_version == "1.2.11" and .confirmed_judge_coverage and .result == "done" and .judge_attempts == 1 and .judge_timeouts == 0 and (.resolution_timing | length) == 1 and .resolution_timing[0].elapsed_seconds >= 0 and (.armed_generations | length) == 1 and .judge_tier == null' "$archive" >/dev/null \
+    || fail "archive must preserve outcome, coverage and metrics: $(cat "$archive")"
+  fm_agy_teardown_retire "$dir/state" t1 || fail "repeat retire must converge"
+  [ "$(wc -l < "$archive" | tr -d ' ')" = 1 ] || fail "archive must be idempotent"
+  rm "$dir/state/t1.meta" "$dir/state/t1.status" "$policy" "$dir/state/agy-permission-log.jsonl"
+  jq -e '.judge_attempts == 1 and .captain_timing_complete == false and (has("input") | not)' "$archive" >/dev/null || fail "summary must remain after runtime removal"
+  policy=$(new_case manual-audit)
+  dir=$(case_dir "$policy")
+  printf 'harness=agy\nkind=ship\nagy_permission_mode=manual\n' > "$dir/state/t1.meta"
+  fm_agy_teardown_retire "$dir/state" t1 || fail "manual task archive failed"
+  jq -e '.confirmed_judge_coverage == false and .permission_mode == "manual"' "$dir/state/agy-permission-audit.jsonl" >/dev/null || fail "manual task must not count as judge coverage"
+  # A historical armed line must not prove coverage for a new generation.
+  printf 'harness=agy\nkind=ship\nagy_bypass=on\n' > "$dir/state/t1.meta"
+  jq '.gen="g2"' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  hook "$policy" pre-tool-use run_command 'cat README.md' 9
+  jq '.gen="g3"' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  jq -c 'if .event == "armed" then .gen="g3" else . end' "$dir/state/agy-permission-log.jsonl" > "$dir/log.new" && mv "$dir/log.new" "$dir/state/agy-permission-log.jsonl"
+  fm_agy_teardown_retire "$dir/state" t1 || fail "stale generation archive failed"
+  tail -1 "$dir/state/agy-permission-audit.jsonl" | jq -e '.confirmed_judge_coverage == false' >/dev/null || fail "stale armed evidence cannot prove this generation"
+  policy=$(new_case corrupt-audit)
+  dir=$(case_dir "$policy")
+  printf 'harness=agy\nkind=scout\n' > "$dir/state/t1.meta"
+  printf 'broken-json\n' > "$dir/state/agy-permission-log.jsonl"
+  if fm_agy_teardown_retire "$dir/state" t1 >/dev/null 2>&1; then fail "corrupt audit input must stop cleanup"; fi
+  [ -f "$dir/state/t1.meta" ] && [ -f "$policy" ] || fail "archive failure must preserve runtime evidence"
+  pass "fm-agy-permission-policy: teardown archives coverage, timing and metrics before deleting runtime evidence"
+}
+
+
+test_review_read_boundaries_and_nonread_exclusions() {
+  local policy dir cmd tool
+  policy=$(new_case review-web)
+  dir=$(case_dir "$policy")
+  printf '# Task\n## Captain\047s intent\nInspect permitted.csv.\n## Firstmate spec\nDo not read external web sources.\n# Setup\n' > "$dir/data/t1/brief.md"
+  for tool in search_web read_url_content; do
+    hook "$policy" pre-tool-use "$tool" 'https://example.com/source'
+    denied "$OUT" || fail "web read restrictions must reach scope review: $tool => $OUT"
+  done
+  # The identical web inputs normally pass when no restriction applies.
+  policy=$(new_case review-unrestricted)
+  for tool in search_web read_url_content; do
+    hook "$policy" pre-tool-use "$tool" 'https://example.com/source'
+    abstained "$OUT" || fail "unrestricted web reads should remain routine: $OUT"
+  done
+  policy=$(new_case review-diff-exclusions)
+  dir=$(case_dir "$policy")
+  printf '# Task\n## Captain\047s intent\nFix the build.\n## Firstmate spec\nExclude generated files from the diff output.\n# Setup\n' > "$dir/data/t1/brief.md"
+  for cmd in 'git status' 'npm test' 'node -v'; do
+    hook "$policy" pre-tool-use run_command "$cmd"
+    abstained "$OUT" || fail "diff-only exclusions must not force a judge: $cmd => $OUT"
+  done
+  # Positive restrictions beyond the bounded excerpt must still reach a
+  # judge, which can approve precisely named sources and hold broader reads.
+  # shellcheck disable=SC2016
+  policy=$(new_case review-positive '
+while [ $# -gt 0 ]; do case "$1" in -p) prompt=$2; shift 2 ;; *) shift ;; esac; done
+input=${prompt##*Tool input:}
+constraints=${prompt##*Explicit read constraints}
+constraints=${constraints%%Static policy note:*}
+case "$constraints" in
+  *"only inspect permitted.csv"*)
+    case "$input" in *"cat permitted.csv"*) echo "APPROVE: permitted source" ;; *) echo "DECLINE: limited read scope" ;; esac ;;
+  *"limit access to permitted/"*)
+    case "$input" in *"cat permitted/permitted.csv"*) echo "APPROVE: permitted directory" ;; *) echo "DECLINE: limited directory scope" ;; esac ;;
+  *) echo "APPROVE: unrestricted read" ;;
+esac')
+  dir=$(case_dir "$policy")
+  local boundary allowed forbidden
+  mkdir -p "$dir/wt/permitted" "$dir/wt/outside"
+  touch "$dir/wt/permitted.csv" "$dir/wt/permitted/permitted.csv" "$dir/wt/outside/permitted.csv"
+  for boundary in 'only inspect permitted.csv' 'limit access to permitted/'; do
+    allowed='cat permitted.csv'
+    forbidden='cat broad-source.csv'
+    if [ "$boundary" = 'limit access to permitted/' ]; then
+      allowed='cat permitted/permitted.csv'
+      forbidden='cat outside/permitted.csv'
+    fi
+    python3 - "$dir/data/t1/brief.md" "$boundary" <<'PY'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect the source.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + sys.argv[2] + "\n# Setup\n")
+PY
+    hook "$policy" pre-tool-use run_command "$forbidden" 2
+    denied "$OUT" || fail "positive read restriction must hold a broad read: $boundary => $OUT"
+    "$POLICY_SH" decline "$policy" agy-permission-c1-s2 </dev/null >/dev/null 2>&1 || fail "close the fixture hold before changing its boundary"
+    hook "$policy" pre-tool-use run_command "$allowed" 3
+    abstained "$OUT" || fail "positive restrictions must permit a named source: $boundary => $OUT"
+  done
+  # A judge that would approve any input must not authorize an unproved kill.
+  policy=$(new_case review-unproved-kill 'echo "APPROVE: model assumes ownership"')
+  hook "$policy" pre-tool-use manage_task '' 4 '{"Action":"kill","TaskId":"other-session/task-40","toolSummary":"stop my own task"}'
+  denied "$OUT" "verified ownership" || fail "unproved native cancellation must not depend on model labels: $OUT"
+  pass "fm-agy-permission-policy: web/positive read boundaries hold, diff exclusions remain routine and native cancellation needs proof"
+}
+
+test_complete_lists_and_source_use_prohibitions() {
+  local policy dir restriction source step
+  # This fixture approves unless the prompt carries the matching exclusion.
+  # Missing entries therefore fail through the public decision interface.
+  # shellcheck disable=SC2016
+  policy=$(new_case review-complete-constraints '
+while [ $# -gt 0 ]; do case "$1" in -p) prompt=$2; shift 2 ;; *) shift ;; esac; done
+input=${prompt##*Tool input:}
+constraints=${prompt##*Explicit read constraints}
+constraints=${constraints%%Static policy note:*}
+for source in blocked-one/ blocked-two/ blocked-three/ source-use/; do
+  case "$input" in *"cat $source"*)
+    case "$constraints" in *"$source"*) echo "DECLINE: excluded source"; exit ;; esac ;;
+  esac
+done
+echo "APPROVE: permitted source"')
+  dir=$(case_dir "$policy")
+  step=2
+  for restriction in list source-use; do
+    python3 - "$dir/data/t1/brief.md" "$restriction" <<'PY'
+import sys
+from pathlib import Path
+boundary = ("Do not read any of these directories:\n- blocked-one/\n- blocked-two/\n- blocked-three/\n"
+            if sys.argv[2] == "list" else "Do not use internal research data from source-use/.\n")
+Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect the permitted source.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + boundary + "# Setup\n")
+PY
+    if [ "$restriction" = list ]; then
+      for source in blocked-one blocked-two blocked-three; do
+        hook "$policy" pre-tool-use run_command "cat $source/records.csv" "$step"
+        denied "$OUT" || fail "every excluded list entry must be held: $source => $OUT"
+        "$POLICY_SH" decline "$policy" "agy-permission-c1-s$step" </dev/null >/dev/null 2>&1 || fail "close the list fixture hold"
+        step=$((step + 1))
+      done
+    else
+      hook "$policy" pre-tool-use run_command 'cat source-use/records.csv' "$step"
+      denied "$OUT" || fail "source-use prohibitions must reach the judge: $OUT"
+      "$POLICY_SH" decline "$policy" "agy-permission-c1-s$step" </dev/null >/dev/null 2>&1 || fail "close the source-use fixture hold"
+      step=$((step + 1))
+    fi
+    hook "$policy" pre-tool-use run_command 'cat permitted.csv' "$step"
+    abstained "$OUT" || fail "a complete exclusion must still permit other sources: $OUT"
+    step=$((step + 1))
+  done
+  pass "fm-agy-permission-policy: complete exclusion lists and source-use prohibitions survive bounded brief excerpts"
+}
+
+test_common_negative_read_boundaries() {
+  local policy dir boundary tool arg i=0
+  export READ_BOUNDARY=''
+  while IFS= read -r boundary; do
+    i=$((i + 1))
+    READ_BOUNDARY=$boundary
+    # Missing constraints deliberately approve, exposing static/context gaps.
+    # shellcheck disable=SC2016
+    policy=$(new_case "negative-form-$i" '
+while [ $# -gt 0 ]; do case "$1" in -p) prompt=$2; shift 2 ;; *) shift ;; esac; done
+input=${prompt##*Tool input:}
+constraints=${prompt##*Explicit read constraints}
+constraints=${constraints%%Static policy note:*}
+case "$input" in *"cat permitted.csv"*) echo "APPROVE: permitted local source"; exit ;; esac
+case "$constraints" in *"$READ_BOUNDARY"*) echo "DECLINE: excluded source" ;; *) echo "APPROVE: missing restriction" ;; esac')
+    dir=$(case_dir "$policy")
+    python3 - "$dir/data/t1/brief.md" "$boundary" <<'PY'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect the permitted source.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + sys.argv[2] + "\n# Setup\n")
+PY
+    tool=run_command
+    arg='cat sibling/records.csv'
+    case "$boundary" in *browse*|*browsing*) tool=search_web; arg='external research sources' ;; esac
+    hook "$policy" pre-tool-use "$tool" "$arg" 2
+    denied "$OUT" || fail "common negative boundary must hold a broad read: $boundary => $OUT"
+    "$POLICY_SH" decline "$policy" agy-permission-c1-s2 </dev/null >/dev/null 2>&1 || fail "close the negative-boundary hold"
+    hook "$policy" pre-tool-use run_command 'cat permitted.csv' 3
+    abstained "$OUT" || fail "negative read boundaries must still permit scoped reads: $OUT"
+  done <<'BOUNDARIES'
+Don't read sibling data.
+Don’t read sibling data.
+No access to external sources.
+Do not browse the web.
+Without consulting external sources, inspect the local source.
+Avoid browsing external sources.
+BOUNDARIES
+  unset READ_BOUNDARY
+  policy=$(new_case negative-word-boundaries 'echo "DECLINE: unexpected review"')
+  dir=$(case_dir "$policy")
+  printf '# Task\n## Captain\047s intent\nInspect local sources.\n## Firstmate spec\nNotes: read permitted.csv.\nNormal access to local data is allowed.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use run_command 'cat permitted.csv'
+  abstained "$OUT" || fail "negative words must not match inside notes or normal: $OUT"
+  pass "fm-agy-permission-policy: common negative read forms reach review without matching unrelated word prefixes"
+}
+
+test_archive_scopes_reused_task_ids() {
+  local policy dir archive
+  policy=$(new_case reused-task-audit)
+  dir=$(case_dir "$policy")
+  printf 'harness=agy\nkind=scout\nagy_bypass=on\nbusy_gen=g1\n' > "$dir/state/t1.meta"
+  cat > "$dir/state/agy-permission-log.jsonl" <<'OLD'
+{"task":"t1","gen":"g1","event":"armed","session_id":"c1"}
+{"task":"t1","gen":"g1","event":"pre-tool-use","session_id":"c1","decision":"approve","decider":"judge","judge_attempts":9,"judge_elapsed_seconds":90,"judge_timeouts":8}
+OLD
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "old incarnation archive failed"
+  printf 'harness=agy\nkind=ship\nagy_bypass=on\nbusy_gen=g2\n' > "$dir/state/t1.meta"
+  jq '.gen="g2"' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  cat >> "$dir/state/agy-permission-log.jsonl" <<'NEW'
+{"task":"t1","gen":"g2","event":"armed","session_id":"c1"}
+{"task":"t1","gen":"g2","event":"pre-tool-use","session_id":"c1","decision":"approve","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":12,"judge_timeouts":1}
+{"task":"t1","gen":"g1","event":"pre-tool-use","session_id":"c1","decision":"escalate","tool_use_id":"c1-s3","ts":"2026-10-02T12:00:00Z"}
+{"task":"t1","gen":"g1","event":"decline","reason":"escalation agy-permission-c1-s3","ts":"2026-10-02T12:00:05Z"}
+NEW
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "new incarnation archive failed"
+  archive="$dir/state/agy-permission-audit.jsonl"
+  [ "$(wc -l < "$archive" | tr -d ' ')" = 2 ] || fail "each metadata incarnation needs its own archive"
+  tail -1 "$archive" | jq -e '.generation == "g2" and .log_scope_complete and .kind == "ship" and .confirmed_judge_coverage and .judge_attempts == 2 and .judge_elapsed_seconds == 12 and .judge_timeouts == 1 and .decisions.approve == 1 and .decisions.escalate == 0 and (.resolution_timing | length) == 0 and (.armed_generations | length) == 1 and .armed_generations[0].gen == "g2"' >/dev/null \
+    || fail "reused task ids must not combine earlier generations: $(tail -1 "$archive")"
+  printf 'harness=agy\nkind=scout\nbusy_gen=g2\n' > "$dir/state/t1.meta"
+  printf '{"task":"t1","event":"pre-tool-use","decision":"approve","decider":"judge"}\n' >> "$dir/state/agy-permission-log.jsonl"
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "legacy row archive failed"
+  tail -1 "$archive" | jq -e '.generation == "g2" and .log_scope_complete == false and .judge_metrics_complete == false and .judge_attempts == null' >/dev/null \
+    || fail "unattributed historical rows must keep timing incomplete even with a known generation"
+  printf 'harness=agy\nkind=scout\n' > "$dir/state/t1.meta"
+  rm "$policy"
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "unscoped legacy archive failed"
+  tail -1 "$archive" | jq -e '.log_scope_complete == false and .judge_metrics_complete == false and .judge_attempts == null and .confirmed_judge_coverage == false and (.armed_generations | length) == 0' >/dev/null \
+    || fail "unknown legacy incarnation must not claim historical coverage or metrics"
+  pass "fm-agy-permission-policy: reused task ids retain only their generation; unscoped legacy timing stays unknown"
+}
+
+test_audit_counts_terminal_metrics_once() {
+  local policy dir archive
+  policy=$(new_case audit-terminal-metrics)
+  dir=$(case_dir "$policy")
+  printf 'harness=agy\nkind=scout\n' > "$dir/state/t1.meta"
+  cat > "$dir/state/agy-permission-log.jsonl" <<'ROWS'
+{"task":"t1","gen":"g1","event":"pre-tool-use","decision":"judge-retry","decider":"judge","judge_attempts":1,"judge_elapsed_seconds":4,"judge_timeouts":1}
+{"task":"t1","gen":"g1","event":"pre-tool-use","decision":"judge-timeout-verdict","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":4,"judge_timeouts":2}
+{"task":"t1","gen":"g1","event":"pre-tool-use","decision":"approve","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":12,"judge_timeouts":2}
+ROWS
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "metrics fixture archive failed"
+  archive="$dir/state/agy-permission-audit.jsonl"
+  jq -e '.judge_attempts == 2 and .judge_retries == 1 and .judge_timeouts == 2 and .judge_elapsed_seconds == 12 and .decisions.approve == 1' "$archive" >/dev/null \
+    || fail "cumulative diagnostics must not inflate terminal metrics: $(cat "$archive")"
+  pass "fm-agy-permission-policy: archive counts terminal metrics once despite cumulative diagnostic rows"
+}
+
+
 test_armed_heartbeat_proves_wiring
 test_refusal_list_denies
 test_refusal_leaves_safe_commands_alone
@@ -1241,7 +1660,7 @@ test_decline_denies_the_retry_without_reescalating
 test_exec_outroot_writes_refuse_not_judge
 test_exec_wiring_writes_refuse
 test_never_approve_uses_a_one_shot_token
-test_sensitive_paths_hold_for_firstmate_then_cache
+test_sensitive_paths_hold_for_firstmate_once
 test_held_marker_binds_before_the_judge
 test_judge_approve_abstains_and_caches
 test_judge_failures_always_deny
@@ -1257,3 +1676,16 @@ test_missing_policy_file_fails_closed
 test_verified_versions_and_grants_digest_verbs
 test_install_worker_merges_and_validates
 test_observer_and_turnend_survive_the_merge
+
+test_exact_shell_inbox_acknowledgements
+test_read_constraints_and_interpreter_routing
+test_exact_template_batch_retry
+test_audit_survives_runtime_cleanup
+
+test_review_read_boundaries_and_nonread_exclusions
+test_complete_lists_and_source_use_prohibitions
+test_audit_counts_terminal_metrics_once
+
+test_common_negative_read_boundaries
+test_archive_scopes_reused_task_ids
+test_spent_credential_token_binds_to_invocation

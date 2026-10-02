@@ -349,7 +349,7 @@ jq -e --slurpfile rules "$RULES" '
 
 # ---- quota evidence: one quota-axi --json snapshot -----------------------------
 command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
-quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
+"$SCRIPT_DIR/fm-quota-read.sh" --json > "$QUOTA" || emit_error "quota-axi --json failed"
 fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
 
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------

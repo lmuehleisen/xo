@@ -17,6 +17,13 @@ mkdir -p "$FAKEBIN"
 
 cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
+if [ -n "${QUOTA_AXI_ARGV_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$QUOTA_AXI_ARGV_LOG"
+fi
+if [ "${QUOTA_AXI_ECHO_ARGV:-0}" = 1 ]; then
+  printf '<%s>\n' "$@"
+  exit 0
+fi
 if [ "${1:-}" = "--version" ]; then
   printf 'quota-axi 0.1.51\n'
   exit 0
@@ -124,6 +131,68 @@ chmod +x "$FAKEBIN/quota-axi"
 
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 ok() { printf 'ok - %s\n' "$1"; }
+
+# Exercise the shared read interface for default TOON, JSON and auth.
+SCOPE_HOME="$LAB/scope-home"
+mkdir -p "$SCOPE_HOME/config"
+READ="$BIN/fm-quota-read.sh"
+read_args() {
+  FM_HOME="$SCOPE_HOME" PATH="$FAKEBIN:$PATH" QUOTA_AXI_ECHO_ARGV=1 "$READ" "$@"
+}
+[ "$(read_args --json)" = '<--json>' ] || fail 'absent scope changed argv'
+[ "$(read_args)" = '<>' ] || fail 'absent scope changed default TOON'
+printf 'claude,codex\n' > "$SCOPE_HOME/config/quota-providers"
+[ "$(read_args)" = $'<--provider>\n<claude,codex>' ] || fail 'TOON scope missing'
+[ "$(read_args --json)" = $'<--json>\n<--provider>\n<claude,codex>' ] || fail 'JSON scope missing'
+[ "$(read_args auth --json)" = $'<auth>\n<--json>\n<--provider>\n<claude,codex>' ] || fail 'auth scope missing'
+for option in --provider --provider=codex; do
+  : > "$LAB/argv"
+  if QUOTA_AXI_ARGV_LOG="$LAB/argv" read_args "$option" codex --json > "$LAB/out" 2> "$LAB/err"; then
+    fail 'caller-supplied provider widened configured scope'
+  fi
+  grep -Fq 'caller-supplied --provider conflicts' "$LAB/err" || fail 'scope conflict missing diagnostic'
+  [ ! -s "$LAB/argv" ] || fail 'scope conflict reached quota-axi'
+done
+for provider in claude codex cursor copilot grok kimi zai agy alibaba opencode-go commandcode minimax mimo deepseek openrouter elevenlabs devin muse; do
+  printf '%s' "$provider" > "$SCOPE_HOME/config/quota-providers"
+  [ "$(read_args)" = "$(printf '<--provider>\n<%s>' "$provider")" ] || fail "valid provider rejected: $provider"
+done
+for bad in '' 'claude,' ',codex' 'claude,,codex' 'claude, codex' 'Claude' 'unknown' 'claude,claude' $'claude\ncodex' $'claude\n\n' $'claude\r'; do
+  printf '%s' "$bad" > "$SCOPE_HOME/config/quota-providers"
+  : > "$LAB/argv"
+  if QUOTA_AXI_ARGV_LOG="$LAB/argv" read_args --json > "$LAB/out" 2> "$LAB/err"; then
+    fail 'malformed scope accepted'
+  fi
+  grep -Fq 'malformed config/quota-providers' "$LAB/err" || fail 'malformed scope missing diagnostic'
+  [ ! -s "$LAB/argv" ] || fail 'malformed scope reached quota-axi'
+done
+rm "$SCOPE_HOME/config/quota-providers"
+mkdir "$SCOPE_HOME/config/quota-providers"
+if read_args > "$LAB/out" 2> "$LAB/err"; then fail 'directory scope accepted'; fi
+rmdir "$SCOPE_HOME/config/quota-providers"
+ok 'shared reader validates provider lists for TOON, JSON and auth'
+
+# Both timed and untimed poll paths preserve the scope, never flag --version.
+printf 'claude,codex\n' > "$SCOPE_HOME/config/quota-providers"
+for timeout in '' 2; do
+  : > "$LAB/argv"
+  timer_args=()
+  [ -z "$timeout" ] || timer_args=(--timeout "$timeout")
+  out=$(FM_HOME="$SCOPE_HOME" QUOTA_AXI_ARGV_LOG="$LAB/argv" QUOTA_AXI_EXHAUSTED_DETAIL=1 \
+    QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll ${timer_args[@]+"${timer_args[@]}"})
+  [ "$(cat "$LAB/argv")" = $'--version\n--json --provider claude,codex' ] || fail 'poll scope or compatibility argv incorrect'
+  printf '%s\n' "$out" | grep -qx 'status: exhausted' || fail 'scoped poll failed'
+  printf 'codex,unknown\n' > "$SCOPE_HOME/config/quota-providers"
+  : > "$LAB/argv"
+  out=$(FM_HOME="$SCOPE_HOME" QUOTA_AXI_ARGV_LOG="$LAB/argv" PATH="$FAKEBIN:$PATH" \
+    "$BIN/fm-procevent-quota.sh" poll ${timer_args[@]+"${timer_args[@]}"} 2> "$LAB/err")
+  printf '%s\n' "$out" | grep -qx 'status: error' || fail 'malformed scope poll did not refuse'
+  grep -Fq 'malformed config/quota-providers' "$LAB/err" || fail 'poll scope diagnostic missing'
+  [ "$(cat "$LAB/argv")" = '--version' ] || fail 'malformed poll performed quota read'
+  printf 'claude,codex\n' > "$SCOPE_HOME/config/quota-providers"
+done
+rm "$SCOPE_HOME/config/quota-providers"
+ok 'timed and untimed polls scope reads and refuse malformed configuration'
 
 if help=$("$BIN/fm-procevent-quota.sh" --help 2>&1); then
   fail "help unexpectedly exited zero"

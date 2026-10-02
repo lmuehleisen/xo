@@ -440,6 +440,21 @@ Admission checks beyond the guard, on agy 1.2.11 (2026-09-25) with the productio
 `--sandbox` composition probe, 2026-09-19, agy 1.2.7: the flag composes with the bypass launch in headless mode, but the probe found no containment the adapter could rely on in that mode, and its interactive-session behaviour under a spawned pane is unverified.
 The launch therefore stays on `--dangerously-skip-permissions` alone, with the policy layer's write guards as the write restriction.
 
+Portable permission-policy checks, refreshed on 2026-10-02 with fixture judges and ShellCheck 0.11.0:
+
+```sh
+bin/fm-test-run.sh tests/fm-agy-permission-policy.test.sh tests/fm-devin-permission-policy.test.sh
+bin/fm-lint.sh
+```
+
+```text
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=63124
+```
+
+These checks cover exact numeric inbox acknowledgements and symlink/sibling refusals, interpreter routing, read-exclusion context beyond bounded brief excerpts, one-shot exact-batch credential approvals, and generation-bound audit retention.
+The fixtures verify policy transport and enforcement, not model agreement with the revised prompt or native background-task ownership.
+They do not extend the live-verified agy version set above.
+
 ### Primary and secondmate supervision
 
 Verified on 2026-09-10 with Agy 1.2.0 and `gemini-3.8-flash` at low effort on macOS using a throwaway Firstmate home and private tmux socket.

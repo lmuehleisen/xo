@@ -213,6 +213,27 @@ TYPESAFE_API_KEY=$KEY FM_CONFIG_OVERRIDE="$OVERRIDE_CONFIG" run code out err "$B
 assert_contains "$out" '  status: clear' "FM_CONFIG_OVERRIDE selects the canonical rules directory"
 pass "TYPESAFE_API_KEY= in .env activates the tool; environment and config overrides work"
 
+# --- provider scope reaches the snapshot, including config overrides --------
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_equals '--json' "$(cat "$QUOTA_AXI_CALLS")" "absent scope preserves snapshot argv"
+printf 'claude,codex\n' > "$HOME_DIR/config/quota-providers"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_equals '--json --provider claude,codex' "$(cat "$QUOTA_AXI_CALLS")" "scope reaches typed resolver snapshot"
+printf 'cursor\n' > "$OVERRIDE_CONFIG/quota-providers"
+reset_log
+TYPESAFE_API_KEY=$KEY FM_CONFIG_OVERRIDE="$OVERRIDE_CONFIG" run code out err "$BRIEF"
+assert_equals '--json --provider cursor' "$(cat "$QUOTA_AXI_CALLS")" "scope follows config override"
+printf 'claude,unknown\n' > "$HOME_DIR/config/quota-providers"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" 'status: error' "malformed scope refuses resolver"
+assert_contains "$err" 'malformed config/quota-providers' "malformed scope explains refusal"
+assert_absent "$QUOTA_AXI_CALLS" "malformed scope never invokes quota-axi"
+rm "$HOME_DIR/config/quota-providers" "$OVERRIDE_CONFIG/quota-providers"
+pass "typed resolver respects home provider scope and refuses malformed lists"
+
 # --- clear: request shape, secret handling, argmax --------------------------
 reset_log
 write_response "$RESPONSE" rule_4 0.9

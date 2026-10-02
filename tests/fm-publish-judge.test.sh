@@ -72,7 +72,7 @@ calls() {
 
 reset_judges() {
   rm -rf "$FM_STATE_OVERRIDE" "$FM_TEST_JUDGE_CALLS" "$FM_TEST_JUDGE_PROMPTS" "$CFG/judge-overrides"
-  unset FM_TEST_JUDGE_CODEX FM_TEST_JUDGE_PI FM_TEST_JUDGE_REFUSE
+  unset FM_TEST_JUDGE_CODEX FM_TEST_JUDGE_PI FM_TEST_JUDGE_REFUSE FM_TEST_JUDGE_SEQUENCE
 }
 
 # judge_text <body-file> -> rc; stdout in OUT, stderr in ERR
@@ -130,9 +130,10 @@ test_operator_narrative_is_refused() {
   export FM_TEST_JUDGE_REFUSE=$NARRATIVE_RE
   judge_text "$TMP_ROOT/body-narrative.md" && fail "an operator-direction narrative should be refused"
   assert_equals refuse "$(printf '%s' "$OUT" | jq -r .verdict)" "the verdict JSON says refuse"
-  assert_equals 'text 1: stub finding' "$(printf '%s' "$OUT" | jq -r '.reasons[0]')" "the judge's reason is carried"
+  assert_contains "$(printf '%s' "$OUT" | jq -r '.reasons[0]')" 'stub finding - policy: "6. Operator-direction narrative:' "the reason quotes the policy"
+  assert_equals 2 "$(calls)" "two independent calls confirmed the refusal"
   assert_contains "$ERR" "fm-publish-judge: REFUSED" "refusal line"
-  assert_contains "$ERR" "finding: text 1: stub finding" "finding line"
+  assert_contains "$ERR" "finding: text 1 (title) lines 1-1: stub finding" "finding line"
   assert_contains "$ERR" "fix: rewrite or remove" "one-line fix"
   assert_contains "$ERR" "fm-publish-judge.sh override $(printf '%s' "$OUT" | jq -r '.hashes[0]')" "the fix names the captain override for this content"
   pass "a PR body with an operator-direction narrative is refused with its finding and a one-line fix"
@@ -147,6 +148,7 @@ test_judge_unavailable_is_refused() {
   assert_contains "$ERR" "pi: failed (exit 1)" "names why pi gave nothing"
   assert_contains "$ERR" "fix: sign the judge in" "one-line fix"
   assert_equals 2 "$(calls)" "both tiers were tried"
+  assert_contains "$ERR" 'policy: "Public publication requires a completed valid judge answer; if no judge answers, refuse."' "unavailable refusal quotes its policy"
   # Nothing is cached for an unanswered call: the judge is asked again.
   judge_text "$TMP_ROOT/body-clean.md" || fail "the same text should pass once a judge answers: $ERR"
   assert_equals 3 "$(calls)" "the retry reached a judge"
@@ -187,8 +189,8 @@ test_fallback_tier_answers() {
 
   reset_judges
   FM_TEST_JUDGE_REFUSE=$NARRATIVE_RE FM_TEST_JUDGE_PI=down judge_text "$TMP_ROOT/body-narrative.md"
-  assert_equals 1 "$(calls)" "a clean refusal is final and never asked of the next judge"
-  pass "the fallback judge answers when the primary is down, hung, or verdictless, and a refusal is final"
+  assert_equals 2 "$(calls)" "a refusal is confirmed on the same tier"
+  pass "the fallback judge answers when the primary is down, hung, or verdictless, and a refusal requires confirmation"
 }
 
 test_verdicts_are_cached_by_content() {
@@ -200,10 +202,10 @@ test_verdicts_are_cached_by_content() {
   export FM_TEST_JUDGE_REFUSE=$NARRATIVE_RE
   judge_text "$TMP_ROOT/body-narrative.md"
   judge_text "$TMP_ROOT/body-narrative.md" && fail "a cached refusal still refuses"
-  assert_equals 2 "$(calls)" "a refusal is cached too"
+  assert_equals 3 "$(calls)" "a confirmed refusal is cached too"
   unset FM_TEST_JUDGE_REFUSE
   "$JUDGE" text --dest acme/other --config "$CFG" "body:$TMP_ROOT/body-clean.md" >/dev/null 2>&1 || fail "other dest"
-  assert_equals 3 "$(calls)" "the cache is per destination"
+  assert_equals 4 "$(calls)" "the cache is per destination"
   [ -s "$FM_STATE_OVERRIDE/publish-judge/log.jsonl" ] || fail "each decision is logged"
   pass "verdicts are cached by content hash per destination, refusals included, and logged"
 }
@@ -225,7 +227,7 @@ test_captain_override() {
   printf '%s 2026-01-01T00:00:00Z\n' "$hash" >"$CFG/judge-overrides"
   rm -rf "$FM_STATE_OVERRIDE"
   judge_text "$TMP_ROOT/body-narrative.md" || fail "an overridden hash should be allowed: $ERR"
-  assert_equals 1 "$(calls)" "an override needs no judge call"
+  assert_equals 2 "$(calls)" "an override needs no additional judge call"
   assert_equals captain-override "$(printf '%s' "$OUT" | jq -r .judge)" "attributed to the override"
   pass "only a confirmed captain override allows refused content, and only that exact content"
 }
@@ -368,7 +370,7 @@ test_one_verdict_per_answer() {
   reset_judges
   FM_TEST_JUDGE_CODEX=conflict judge_text "$TMP_ROOT/body-clean.md" && fail "a conflicting answer should refuse"
   assert_equals refuse "$(printf '%s' "$OUT" | jq -r .verdict)" "the refusal wins"
-  assert_equals 1 "$(calls)" "the conflicting refusal is final"
+  assert_equals 2 "$(calls)" "the conflicting refusal still needs confirmation"
   pass "a judge answer must hold exactly one allow, and a refusal among several verdicts refuses"
 }
 
@@ -438,6 +440,91 @@ test_pi_judge_ignores_an_inherited_agent_dir() {
   pass "the pi judge runs without an inherited PI_CODING_AGENT_DIR or PI_CODING_AGENT_SESSION_DIR"
 }
 
+# Public interface fixtures vary explanations independently of stable keys.
+sequence_finding() { # <category> <location> <start> <end> <why>
+  local policy
+  policy=$("$JUDGE" policy | sed -n "/^$1\\. /p")
+  jq -cn --argjson cat "$1" --arg loc "$2" --argjson start "$3" --argjson end "$4" \
+    --arg why "$5" --arg policy "$policy" '
+    {verdict: "refuse", findings: [{location: $loc, category: $cat, start_line: $start,
+      end_line: $end, why: $why, policy_quote: $policy}]}'
+}
+
+test_refusal_needs_the_same_finding_twice() {
+  local first second mode
+  first=$(sequence_finding 6 'text 2 (body)' 1 1 'first explanation')
+  for mode in allow category location range missing failed timedout; do
+    reset_judges
+    export FM_TEST_JUDGE_CODEX=sequence FM_TEST_JUDGE_SEQUENCE="$TMP_ROOT/sequence"
+    case "$mode" in
+    allow) second='{"verdict":"allow","reasons":[]}' ;;
+    category) second=$(sequence_finding 4 'text 2 (body)' 1 1 'other category') ;;
+    location) second=$(sequence_finding 6 'text 1 (title)' 1 1 'other location') ;;
+    range) second=$(sequence_finding 6 'text 2 (body)' 2 2 'other line') ;;
+    missing) second='no answer' ;;
+    failed) second=EXIT7 ;;
+    timedout) second=HANG ;;
+    esac
+    printf '%s\n%s\n' "$first" "$second" >"$FM_TEST_JUDGE_SEQUENCE"
+    FM_PUBLISH_JUDGE_TIMEOUT=2 judge_text "$TMP_ROOT/body-clean.md" || fail "unconfirmed $mode should pass: $ERR"
+    assert_equals allow "$(printf '%s' "$OUT" | jq -r .verdict)" "$mode does not confirm"
+    assert_equals 2 "$(calls)" "confirmation is one new call"
+    # Distinct prompt nonces and no previous explanation establish fresh input.
+    assert_equals 2 "$(grep '^BEGIN MATERIAL ' "$FM_TEST_JUDGE_PROMPTS" | sort -u | wc -l | tr -d ' ')" "fresh prompt nonces"
+    assert_not_contains "$(cat "$FM_TEST_JUDGE_PROMPTS")" 'first explanation' "the first answer is never fed back"
+  done
+  reset_judges
+  export FM_TEST_JUDGE_CODEX=sequence FM_TEST_JUDGE_SEQUENCE="$TMP_ROOT/sequence"
+  second=$(sequence_finding 6 'text 2 (body)' 1 1 'different explanation')
+  printf '%s\n%s\n' "$first" "$second" >"$FM_TEST_JUDGE_SEQUENCE"
+  judge_text "$TMP_ROOT/body-clean.md" && fail "matching findings should refuse despite different prose"
+  assert_contains "$ERR" 'first explanation - policy: "6. Operator-direction narrative:' "the matched finding carries its exact passage"
+  pass "only the same location, category, and line range on two fresh calls refuses"
+}
+
+test_only_confirmed_findings_are_reported() {
+  reset_judges
+  export FM_TEST_JUDGE_CODEX=sequence FM_TEST_JUDGE_SEQUENCE="$TMP_ROOT/sequence"
+  local a b
+  a=$(sequence_finding 6 'text 2 (body)' 1 1 'confirmed')
+  b=$(sequence_finding 4 'text 2 (body)' 2 2 'unconfirmed')
+  jq -cn --argjson a "$a" --argjson b "$b" '$a | .findings += $b.findings' >"$FM_TEST_JUDGE_SEQUENCE"
+  printf '%s\n' "$a" >>"$FM_TEST_JUDGE_SEQUENCE"
+  judge_text "$TMP_ROOT/body-clean.md" && fail "the intersection should refuse"
+  assert_equals 1 "$(printf '%s' "$OUT" | jq '.reasons | length')" "only one confirmed reason"
+  assert_not_contains "$ERR" unconfirmed "single-run findings are omitted"
+  local quote
+  quote=$("$JUDGE" policy | sed -n '/^6\. /p')
+  assert_contains "$("$GATE" policy)" "version-scoped verification records with dates, tool versions, commands, and results" "verification allowance appears in public policy"
+  assert_contains "$("$GATE" policy)" "evidence about private sessions, people, timings, or operations" "incident evidence is defined in public policy"
+  assert_contains "$("$GATE" policy)" "$quote" "the cited passage is in the public policy"
+  assert_contains "$ERR" "policy: \"$quote\"" "stderr quotes the exact passage"
+  pass "only confirmed findings and their authoritative policy quotes reach a refusal"
+}
+
+test_invalid_citations_are_not_verdicts() {
+  local mode finding
+  for mode in fabricated absent category location range; do
+    reset_judges
+    export FM_TEST_JUDGE_CODEX=sequence FM_TEST_JUDGE_PI=down FM_TEST_JUDGE_SEQUENCE="$TMP_ROOT/sequence"
+    finding=$(sequence_finding 6 'text 2 (body)' 1 1 'stub finding')
+    case "$mode" in
+    fabricated) printf '%s' "$finding" | jq -c '.findings[0].policy_quote = "invented policy"' ;;
+    absent) printf '%s' "$finding" | jq -c 'del(.findings[0].policy_quote)' ;;
+    category) printf '%s' "$finding" | jq -c '.findings[0].category = 99' ;;
+    location) printf '%s' "$finding" | jq -c '.findings[0].location = "missing section"' ;;
+    range) printf '%s' "$finding" | jq -c '.findings[0].end_line = 999' ;;
+    esac >"$FM_TEST_JUDGE_SEQUENCE"
+    judge_text "$TMP_ROOT/body-clean.md" && fail "$mode must not become an accepted verdict"
+    assert_contains "$ERR" 'no publish judge answered' "$mode uses the unavailable path"
+    assert_not_contains "$ERR" 'finding: ' "an invalid finding is never reported"
+  done
+  pass "missing or fabricated passages and invalid finding keys are rejected"
+}
+
+test_refusal_needs_the_same_finding_twice
+test_only_confirmed_findings_are_reported
+test_invalid_citations_are_not_verdicts
 test_pi_prompt_beyond_one_argument_reaches_the_judge
 test_pi_judge_ignores_an_inherited_agent_dir
 test_clean_text_is_allowed

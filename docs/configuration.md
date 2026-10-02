@@ -1063,6 +1063,19 @@ The hooks directory is read-only, so a hook manager run inside a fleet pane (lef
 The flag is a home-wide attribution choice, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract and a secondmate's own workers keep AI trailers too.
 Per-machine Cursor `cli-config.json` attribution-off is not this contract: it does not travel with Firstmate, defaults back to on when unset, and only feeds the CLI's request to the server, so it suppresses the trailer rather than preventing it.
 
+## Quota provider scope (config/quota-providers)
+
+The optional local, gitignored `config/quota-providers` limits every quota and auth read to one nonempty comma-separated line of quota-axi provider ids.
+An absent file preserves quota-axi's default discovery.
+Use lowercase ids without whitespace, empty entries, or duplicates; a trailing newline is allowed.
+Supported ids are `claude`, `codex`, `cursor`, `copilot`, `grok`, `kimi`, `zai`, `agy`, `alibaba`, `opencode-go`, `commandcode`, `minimax`, `mimo`, `deepseek`, `openrouter`, `elevenlabs`, `devin`, and `muse` (quota-axi 0.1.55).
+For example, `claude,codex` restricts reads to those two providers.
+[`bin/fm-quota-read.sh`](../bin/fm-quota-read.sh) validates the file and passes its value as `--provider`; an unreadable or malformed file refuses the read with a diagnostic instead of widening discovery.
+Caller-supplied `--provider` options are refused when a scope file exists, preventing quota-axi from unioning extra providers into the configured selection.
+The helper respects `FM_HOME` and `FM_CONFIG_OVERRIDE`, and compatibility `--version` checks remain unscoped.
+This file is not inherited into secondmate homes: each home selects the providers its own tools and credentials use, which can differ from the primary home.
+The inheritance allowlist remains owned by [`bin/fm-config-inherit-lib.sh`](../bin/fm-config-inherit-lib.sh).
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
@@ -2515,6 +2528,7 @@ agy --mode accept-edits --add-dir "$(pwd -P)"
 ```
 
 The tracked `.agents/hooks.json` supplies the native primary integration; worker dispatch installs separate Firstmate-owned hooks through `bin/fm-agy-hook.sh`.
+Agy task launches require Python 3 for the cleanup audit; `bin/fm-agy-lib.sh` checks it before acquiring an endpoint, including manual and raw launches.
 The existing crew-permissions setting above owns Agy's approval posture, including its interactive shell review requirement.
 [`supervision-protocols/agy.md`](supervision-protocols/agy.md) owns the native background-command wake procedure.
 [`turnend-guard.md`](turnend-guard.md) and [`sessionstart-nudge.md`](sessionstart-nudge.md) own turn-end and startup compatibility, including interruption and compaction limits.

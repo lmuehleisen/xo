@@ -152,7 +152,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### publish-gate
 
-- Intent: pushes, commit messages, and public PR text pass a configurable publish gate; `docs/configuration.md` "Publish guard".
+- Intent: pushes, commit messages, and public PR text pass a configurable publish gate, with a larger body cap only for verified upstream integration records; `docs/configuration.md` "Publish guard".
 - Class: intended.
 - Seam: fork-only `bin/fm-publish-gate.sh`, `bin/fm-publish-judge.sh`, `bin/fm-gh-publish-policy.mjs`, `bin/fm-install-gitleaks.sh`, and `.github/workflows/pr-text.yml`, plus the `publish-identity` job in `.github/workflows/ci.yml`, the publish-policy hunks in `bin/fm-arm-pretool-check.sh` (shared), where a command the publish policy must see fails closed, the nested publish-guard inheritance in `bin/fm-config-inherit-lib.sh` and `bin/fm-remote-inherit.sh`, and the gate hunks in `bin/fm-git-strip-ai-trailers.sh` and `bin/fm-spawn.sh` (shared), where `config/keep-ai-trailers` skips only the trailer strip and the per-task hooks stay installed so the gate still runs.
 - Guard: fork-only `tests/fm-publish-gate.test.sh`, `tests/fm-publish-judge.test.sh`, and `tests/fm-spawn-identity-pin.test.sh`; the keep-ai-trailers cases in `tests/fm-spawn-dispatch-profile.test.sh`; the publish fail-closed cases in `tests/fm-arm-pretool-check.test.sh`; fork-only `tests/fm-pi-worker-publish-policy-live-e2e.test.sh`.
