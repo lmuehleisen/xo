@@ -782,7 +782,6 @@ note_remote_names() {
   done <<<"$transfer_urls"
   transfer_urls=''
   transfer_remote=0
-  fetch_cwd_out=0
 }
 
 # FETCH_OPT_KIND for one fetch option: switch (no value), value (a benign
@@ -2519,7 +2518,7 @@ approve_plain() {  # <base>
       # option's kind decides whether the next word is its value, a cluster's
       # remainder is its glued value, and every non-option positional is a URL
       # both tools guess as http.
-      local opts_done=0 fetch_cwd_out=0 fetch_out_seen=0 transfer_remote=0 transfer_urls=''
+      local opts_done=0 fetch_out_seen=0 transfer_remote=0 transfer_urls=''
       local WARC_COMPRESS=1 WARC_CDX=0
       local -a fetch_out_words=() fetch_out_ev=() fetch_out_doc=() fetch_out_warc=() fetch_out_dirs=() fetch_out_stamped=()
       FETCH_OUTDIR='' FETCH_URLS=''
@@ -2555,7 +2554,7 @@ approve_plain() {  # <base>
                   [ "$w" = --no-warc-compression ] && WARC_COMPRESS=0
                   [ "$w" = --warc-cdx ] && WARC_CDX=1
                   ;;
-                cwdout) fetch_cwd_out=1; transfer_remote=1 ;;
+                cwdout) transfer_remote=1 ;;
                 unknown) never_approve "$base option $w is unknown to this policy"; return 0 ;;
                 *)
                   k=$((k + 1))
@@ -2583,7 +2582,7 @@ approve_plain() {  # <base>
                     fi
                     ci=$((ci + 1))
                     ;;
-                  cwdout) fetch_cwd_out=1; transfer_remote=1; ci=$((ci + 1)) ;;
+                  cwdout) transfer_remote=1; ci=$((ci + 1)) ;;
                   unknown) never_approve "$base option -${w:ci:1} is unknown to this policy"; return 0 ;;
                   nfamily)
                     # wget's -n* options are two characters: -nv -nc -nd -np -nH
