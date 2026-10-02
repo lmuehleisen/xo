@@ -1280,6 +1280,7 @@ curl --output-dir /etc -O https://archive.example/x
 cd /etc && curl -O https://archive.example/x
 wget -O /etc/wget.html https://archive.example/x
 wget -P /etc https://archive.example/x
+wget -P /etc --warc-tempdir /tmp https://archive.example/x
 curl -o bin/fetch.sh https://lookup.example/x
 curl -o .git/hooks/fetch.sh https://lookup.example/x
 curl -o .devin/config.local.json https://lookup.example/x

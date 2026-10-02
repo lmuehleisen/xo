@@ -820,7 +820,8 @@ fetch_long_kind() {  # <base> <option>
         --post-data|--post-file|--body-data|--body-file) FETCH_OPT_KIND=body ;;
         --netrc) FETCH_OPT_KIND=netrc ;;
         --output-document|--output-file|--save-cookies|--warc-file|--append-output) FETCH_OPT_KIND=outfile ;;
-        --directory-prefix|--warc-tempdir) FETCH_OPT_KIND=outdir ;;
+        --directory-prefix) FETCH_OPT_KIND=outdir ;;
+        --warc-tempdir) FETCH_OPT_KIND=warctmp ;;
         --load-cookies|--ca-certificate|--ca-directory|--certificate|--private-key|--random-file|--egd-file|--crl-file) FETCH_OPT_KIND=infile ;;
         --*) if fetch_opt_takes_value "$1" "$2"; then
                FETCH_OPT_KIND=value
@@ -975,6 +976,17 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
         FETCH_OUTDIR=$dabs; return 0
       fi
       never_approve "$base output directory is an expansion this policy cannot read"; return 1 ;;
+    warctmp)
+      # wget --warc-tempdir is temporary WARC files, not the download directory.
+      if [ "$vev" = 1 ]; then
+        never_approve "$base output directory is an expansion this policy cannot read"; return 1
+      fi
+      local wabs=''
+      wabs=$(resolve_maybe_tilde "$v" "$vev" "$CWD" 2>/dev/null) || wabs=''
+      if [ -z "$wabs" ] || ! fetch_dest_ok "$wabs"; then
+        never_approve "$base writes outside the task write roots ($v)"; return 1
+      fi
+      return 0 ;;
     outfile)
       if [ "$vev" = 1 ]; then
         case "$v" in
