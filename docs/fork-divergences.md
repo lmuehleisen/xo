@@ -74,7 +74,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: agy workers default to `--mode accept-edits` rather than a blanket skip, and bypass runs only with `--agy-bypass` under the policed permission hook and judge tier.
 - Class: intended.
-- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh`, and `bin/fm-judge-tier-lib.sh`, plus small spawn hooks in `bin/fm-spawn.sh` (shared).
+- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including generation-bound approval evidence and cleanup audit, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
 - Guard: `tests/fm-agy-permission-policy.test.sh`; `tests/fm-agy-harness.test.sh`; the opt-in live guard `tests/fm-agy-bypass-live-e2e.test.sh`.
 - Upstream: its own agy adapter has no fork permission layer.
 
@@ -313,6 +313,38 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-devin-rate-limit-retry.sh` and its calls in `bin/fm-devin-lib.sh`, with runner registration in `bin/fm-test-run.sh`.
 - Guard: `tests/fm-devin-rate-limit-retry.test.sh`; `tests/fm-devin-rate-limit-retry-live-e2e.test.sh`.
 - Upstream: no equivalent retry owner; drop when the same bounded recovery is available.
+
+### quota-provider-scope
+
+- Intent: each home can restrict quota and authentication discovery to its configured providers; `docs/configuration.md` "Quota provider scope".
+- Class: carried.
+- Seam: fork-only `bin/fm-quota-read.sh`, its callers in `bin/fm-dispatch-resolve.sh` and `bin/fm-procevent-quota.sh`, the provider-scope configuration section, the quota read instructions in `.agents/skills/quota-array-dispatch/SKILL.md` and `.agents/skills/harness-adapters/references/common/model-and-effort.md`, and its guard selection in `bin/fm-test-run.sh`.
+- Guard: `tests/fm-dispatch-resolve.test.sh`; `tests/fm-procevent-quota.test.sh`; `tests/fm-quota-array-dispatch-live-e2e.test.sh`.
+- Upstream: reads the quota tool directly without this home-specific scope; drop when it offers equivalent validated scope propagation.
+
+### contribution-forget
+
+- Intent: stop tracking a publication only after active links are retired, retaining a recoverable audit.
+- Class: carried.
+- Seam: the `forget` command and record-size guard in `bin/fm-contributions.sh`, forgotten-record validation and active-owner projection in `bin/fm-contributions.jq`, and their reference lines in `docs/architecture.md` and `docs/scripts.md`.
+- Guard: `tests/fm-contributions.test.sh` forget, active-link and record-size cases.
+- Upstream: has no equivalent audited removal; drop once it preserves the same evidence and active-link guards.
+
+### codex-catalog-effort
+
+- Intent: derive Codex maximum-effort support from the installed model catalog while preserving the fallback for unavailable catalogs.
+- Class: carried.
+- Seam: `effort_flag_for_harness` in `bin/fm-spawn.sh` and the effort row in `.agents/skills/harness-adapters/references/harness/codex.md`.
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` catalog-supported, unsupported and unavailable-catalog cases.
+- Upstream: permits maximum effort only for its fixed model name; drop when equivalent catalog capability checks land.
+
+### raw-launch-verbatim
+
+- Intent: an explicit raw command avoids adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
+- Class: carried.
+- Seam: `RAW_LAUNCH` guards around adapter resolution, model checks, busy wiring, template substitutions and post-launch readiness in `bin/fm-spawn.sh`.
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` raw-adapter and literal-placeholder cases.
+- Upstream: applies portions of adapter setup to raw commands; drop when the raw path preserves the same command and wiring boundaries.
 
 ### launch-submit-proof
 
