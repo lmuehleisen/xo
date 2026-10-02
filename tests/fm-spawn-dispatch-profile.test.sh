@@ -112,6 +112,7 @@ run_spawn() {
     FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
+    CODEX_HOME="${FM_TEST_CODEX_HOME:-$home/codex-home}" \
     GROK_HOME="$home/grok-home" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" "$@"
 }
@@ -637,11 +638,66 @@ test_codex_threads_model_and_effort() {
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
+write_codex_catalog() {
+  mkdir -p "$HOME_DIR/codex-home"
+  cat > "$HOME_DIR/codex-home/models_cache.json" <<'JSON'
+{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"example-model","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-5.6-luna","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-5","supported_reasoning_levels":[{"effort":"high"}]}]}
+JSON
+}
+
+test_codex_catalog_max_effort() {
+  local model rec id out status launch
+  for model in gpt-6-astra example-model; do
+    id="catalog-$model"
+    rec=$(make_spawn_case "$id" codex "$id")
+    read_case_record "$rec"
+    write_codex_catalog
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model "$model" --effort max 2>&1)
+    status=$?
+    expect_code 0 "$status" "catalog-supported max spawn should succeed"
+    assert_meta_profile "$HOME_DIR/state/$id.meta" codex "$model" max
+    launch=$(cat "$LAUNCH_LOG")
+    assert_contains "$launch" "model_reasoning_effort=\"max\"" "catalog-supported max missing from launch"
+    assert_not_contains "$out" "omitting effort flag" "supported max incorrectly warned"
+  done
+  pass "codex passes max for any catalog-supported model"
+}
+
+test_codex_unavailable_catalog_max_effort() {
+  local kind model rec id out status launch
+  for kind in missing malformed invalid-schema unreadable; do
+    for model in gpt-6-astra gpt-5.6-luna; do
+      id="catalog-$kind-$model"
+      rec=$(make_spawn_case "$id" codex "$id")
+      read_case_record "$rec"
+      mkdir -p "$HOME_DIR/codex-home"
+      case "$kind" in
+        malformed) printf '{broken' > "$HOME_DIR/codex-home/models_cache.json" ;;
+        invalid-schema) printf '{"models":{}}' > "$HOME_DIR/codex-home/models_cache.json" ;;
+        unreadable) mkdir "$HOME_DIR/codex-home/models_cache.json" ;;
+      esac
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model "$model" --effort max 2>&1)
+      status=$?
+      expect_code 0 "$status" "unavailable catalog should preserve spawn behavior"
+      assert_meta_profile "$HOME_DIR/state/$id.meta" codex "$model" max
+      launch=$(cat "$LAUNCH_LOG")
+      if [ "$model" = gpt-5.6-luna ]; then
+        assert_contains "$launch" "model_reasoning_effort=\"max\"" "Luna fallback lost max"
+      else
+        assert_not_contains "$launch" "model_reasoning_effort" "unavailable catalog enabled unsupported max"
+        assert_contains "$out" "warning: Codex model $model requested effort max" "missing fallback warning"
+      fi
+    done
+  done
+  pass "codex preserves historical max behavior with unavailable catalogs"
+}
+
 test_codex_threads_model_and_max_effort() {
   local rec id out status launch
   id=profile-codex-max-z4
   rec=$(make_spawn_case profile-codex-max codex "$id")
   read_case_record "$rec"
+  write_codex_catalog
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5.6-luna --effort max)
   status=$?
@@ -658,8 +714,9 @@ test_codex_omits_max_effort_for_unsupported_model() {
   id=profile-codex-max-unsupported-z4b
   rec=$(make_spawn_case profile-codex-max-unsupported codex "$id")
   read_case_record "$rec"
+  write_codex_catalog
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort max)
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort max 2>&1)
   status=$?
   expect_code 0 "$status" "codex spawn with an unsupported model max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
@@ -667,6 +724,7 @@ test_codex_omits_max_effort_for_unsupported_model() {
   assert_contains "$launch" "codex --model 'gpt-5' --add-dir" \
     "codex launch did not preserve the model flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported model max reasoning effort"
+  assert_contains "$out" "warning: Codex model gpt-5 requested effort max" "missing unsupported effort warning"
   pass "codex omits max for models without the catalog capability"
 }
 
@@ -2086,6 +2144,8 @@ test_raw_launch_naming_a_verified_adapter_runs_verbatim
 test_raw_launch_leaves_adapter_placeholders_untouched
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
+test_codex_catalog_max_effort
+test_codex_unavailable_catalog_max_effort
 test_codex_threads_model_and_max_effort
 test_codex_omits_max_effort_for_unsupported_model
 test_codex_crewmate_launch_disables_the_hook_layer

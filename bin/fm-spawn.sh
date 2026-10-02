@@ -2910,7 +2910,7 @@ model_flag_for_harness() {
 }
 
 effort_flag_for_harness() {
-  local harness=$1 effort=$2 model=${3:-}
+  local harness=$1 effort=$2 model=${3:-} catalog max_supported
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
   claude)
@@ -2919,13 +2919,30 @@ effort_flag_for_harness() {
     esac
     ;;
   codex)
-    # The installed codex config schema uses model_reasoning_effort. The
-    # installed model catalog supports max for gpt-5.6-luna; keep that level
-    # scoped to the model whose catalog entry advertises it.
+    # The installed Codex catalog owns max support. An unavailable or invalid
+    # catalog preserves the historical Luna-only fallback.
     case "$effort" in
     low | medium | high | xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
     max)
-      [ "$model" = gpt-5.6-luna ] || return 0
+      catalog="${CODEX_HOME:-$HOME/.codex}/models_cache.json"
+      max_supported=
+      if [ -r "$catalog" ]; then
+        max_supported=$(jq -r --arg model "$model" '
+          if (.models | type) != "array" then error("invalid model catalog")
+          else any(.models[]; .slug == $model and
+            any(.supported_reasoning_levels[]?; .effort == "max")) end
+        ' "$catalog" 2>/dev/null) || max_supported=
+      fi
+      case "$max_supported" in
+        true) ;;
+        false) printf 'fm-spawn.sh: warning: Codex model %s requested effort %s; catalog does not advertise max, omitting effort flag\n' "$model" "$effort" >&2; return 0 ;;
+        *)
+          if [ "$model" != gpt-5.6-luna ]; then
+            printf 'fm-spawn.sh: warning: Codex model %s requested effort %s; catalog unavailable or invalid, omitting effort flag\n' "$model" "$effort" >&2
+            return 0
+          fi
+          ;;
+      esac
       printf -- '-c %s ' "$(shell_quote 'model_reasoning_effort="max"')"
       ;;
     esac
