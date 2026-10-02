@@ -104,10 +104,10 @@ quota_json() {
   local timeout=${1:-} output
   if [ -n "$timeout" ]; then
     fm_quota_axi_compatible "$timeout" >/dev/null 2>&1 || return 2
-    output=$(fm_run_timed "$timeout" quota-axi --json 2>/dev/null </dev/null) || return 2
+    output=$(fm_run_timed "$timeout" "$SCRIPT_DIR/fm-quota-read.sh" --json </dev/null) || return 2
   else
     fm_quota_axi_compatible >/dev/null 2>&1 || return 2
-    output=$(quota-axi --json 2>/dev/null </dev/null) || return 2
+    output=$("$SCRIPT_DIR/fm-quota-read.sh" --json </dev/null) || return 2
   fi
   printf '%s\n' "$output"
 }
