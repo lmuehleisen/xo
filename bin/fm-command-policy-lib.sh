@@ -125,10 +125,12 @@
 #     tsc/eslint/prettier/vitest/jest/mocha/biome, go test/vet/build/list,
 #     cargo test/check/clippy/build/fmt, pytest, python -m pytest/unittest/
 #     mypy/ruff, ruff, mypy, tsc, eslint, prettier, vitest, jest, swift
-#     test/build, and uv/poetry/pipenv run or bundle exec of any of those
+#     test/build, node -v / --version (no extra arguments), and
+#     uv/poetry/pipenv run or bundle exec of any of those
 #   - task-owned writes: mkdir -p / touch strictly inside the worktree, the
-#     task data directory, or the task temp root, and mv between paths inside
-#     the task steering inbox (the inbox acknowledgement)
+#     task data directory, or the task temp root; mkdir of the exact inbox
+#     handled directory; mv of one or more exact numeric .msg inbox children
+#     into its handled directory, with physical containment and no symlinks
 #   - read-only web lookups: a GET-shaped curl or wget whose output lands on
 #     stdout, a pipe that is not a shell or interpreter, a file inside the
 #     task's write roots, or /dev/null - the full fetch contract is under
@@ -257,7 +259,7 @@
 #
 # Log: log_record appends one JSON line to the per-home log the policy file
 # names ({ts, task, event, tool, tool_use_id, session_id, input, decision,
-# decider, reason}); the adapter chooses the decision and decider
+# gen, decider, reason, judge_elapsed_seconds, judge_attempts, judge_timeouts}); the adapter chooses the decision and decider
 # vocabulary. The log is append-only operational evidence for tuning this
 # policy and safe to delete.
 #
@@ -302,9 +304,11 @@ log_record() {  # <decision> <decider> <reason> [input-override]
   local input
   if [ $# -ge 4 ]; then input=$4; else input=$(input_summary); fi
   jq -nc --arg ts "$(now_utc)" --arg task "$TASK" --arg event "$EVENT" \
-    --arg tool "$TOOL" --arg id "$TOOL_USE_ID" --arg session "$SESSION_ID" \
+    --arg tool "$TOOL" --arg id "$TOOL_USE_ID" --arg session "$SESSION_ID" --arg gen "${GEN-}" \
     --arg input "$input" --arg decision "$1" --arg decider "$2" --arg reason "$3" \
-    '{ts:$ts, task:$task, event:$event, tool:$tool, tool_use_id:$id, session_id:$session, input:$input, decision:$decision, decider:$decider, reason:$reason}' \
+    --argjson elapsed "${JUDGE_ELAPSED_SECONDS:-0}" --argjson attempts "${JUDGE_ATTEMPTS:-0}" \
+    --argjson timeouts "${JUDGE_TIMEOUTS:-0}" \
+    '{ts:$ts, task:$task, event:$event, tool:$tool, tool_use_id:$id, session_id:$session, gen:$gen, input:$input, decision:$decision, decider:$decider, reason:$reason, judge_elapsed_seconds:$elapsed, judge_attempts:$attempts, judge_timeouts:$timeouts}' \
     >> "$LOG" 2>/dev/null || true
 }
 
@@ -1160,6 +1164,43 @@ refuse_brief_operands() {  # <scope> <include-parents>
   done
 }
 
+# Only the brief's exact numeric message acknowledgement is an out-of-root
+# move exception. Resolve every operand physically; an inbox, handled folder,
+# or message symlink cannot extend this authority to a sibling or escape.
+inbox_ack_path() {  # <word> <expansion> <glob> <kind>
+  local abs phys suffix follow=0
+  [ -n "$INBOX" ] && [ "$2" = 0 ] && [ "$3" = 0 ] || return 1
+  abs=$(resolve_path "$1" "$CWD") || return 1
+  [ "$4" != handled ] || follow=1
+  phys=$(physical_target "$1" "$CWD" "$follow") || return 1
+  [ "$phys" = "$abs" ] && [ ! -L "$abs" ] || return 1
+  brief_protected "$abs" && return 1
+  protected_target "$abs" && return 1
+  case "$4" in
+    handled) [ "$abs" = "$(norm_abs "$INBOX")/handled" ] ;;
+    message)
+      [ ! -d "$abs" ] || return 1
+      [ "${abs%/*}" = "$(norm_abs "$INBOX")" ] || return 1
+      suffix=${abs##*/}
+      case "$suffix" in *.msg) suffix=${suffix%.msg} ;; *) return 1 ;; esac
+      case "$suffix" in ''|*[!0-9]*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+
+inbox_ack_move() {
+  local k start=1 last=$((${#E[@]} - 1))
+  [ "${E[1]-}" != -- ] || start=2
+  [ "$last" -gt "$start" ] || return 1
+  inbox_ack_path "${E[last]}" "${EV[last]}" "${EG[last]}" handled || return 1
+  if [ ! -d "$(resolve_path "${E[last]}" "$CWD")" ]; then
+    case "${E[last]}" in */) ;; *) return 1 ;; esac
+  fi
+  for ((k = start; k < last; k++)); do
+    inbox_ack_path "${E[k]}" "${EV[k]}" "${EG[k]}" message || return 1
+  done
+}
+
 # Under a bypassed launch (FM_POLICY_BYPASS=1) there is no native prompt
 # behind the judge, so a statically visible write or removal outside every
 # write root is refused outright instead of judged. A writer command's operand
@@ -1955,6 +1996,7 @@ analyze_segment() {
   # No statically visible writer may touch this worker's own instructions or
   # the adapter's protected wiring, and under a bypass launch no statically
   # visible writer may reach outside the task write roots at all.
+  if [ "$base" = mv ] && inbox_ack_move; then return 0; fi
   case "$base" in
     cp|install|rsync) refuse_brief_operands last 0; refuse_bypass_outroot_operands last ;;
     mv|rm|shred) refuse_brief_operands all 1; refuse_bypass_outroot_operands all ;;
@@ -2768,6 +2810,7 @@ approve_plain() {  # <base>
         local abs
         abs=$(resolve_maybe_tilde "$w" "${EV[k]}" "$CWD") \
           || { no_approve "$base of an unresolvable path"; return 0; }
+        if [ "$base" = mkdir ] && inbox_ack_path "$w" "${EV[k]}" "${EG[k]}" handled; then continue; fi
         if ! write_dest_ok "$abs"; then
           if [ "${FM_POLICY_BYPASS:-0}" = 1 ]; then
             refuse "$base outside the task write roots is refused under bypass"
@@ -2779,16 +2822,12 @@ approve_plain() {  # <base>
       done
       return 0 ;;
     mv)
-      local n_paths=0 abs
-      for ((k = 1; k < ${#E[@]}; k++)); do
-        w=${E[k]}
-        case "$w" in -*) no_approve "mv option"; return 0 ;; esac
-        if [ "${EV[k]}" = 1 ]; then no_approve "mv of an unresolvable path"; return 0; fi
-        abs=$(resolve_path "$w" "$CWD") || { no_approve "mv with unknown cwd"; return 0; }
-        strictly_inside "$abs" "$INBOX" || { no_approve "mv outside the steering inbox"; return 0; }
-        n_paths=$((n_paths + 1))
-      done
-      [ "$n_paths" -ge 2 ] || no_approve "mv form"
+      no_approve "mv is not an exact inbox acknowledgement"
+      return 0 ;;
+    node)
+      [ "${#E[@]}" -eq 2 ] && [ "${EV[1]}" = 0 ] && [ "${EG[1]}" = 0 ] \
+        && { [ "${E[1]}" = -v ] || [ "${E[1]}" = --version ]; } && return 0
+      no_approve "node requires effect review (not a forbidden interpreter)"
       return 0 ;;
     make)
       for ((k = 1; k < ${#E[@]}; k++)); do
@@ -2953,6 +2992,35 @@ brief_section() {  # <awk-start-regex> <max-bytes>
 brief_intent() { brief_section '^## Captain.s intent' 4000; }
 brief_spec() { brief_section '^## Firstmate spec' 4000; }
 
+# Read restrictions affect approval, not just writes. Retain the complete
+# originating subsection, including lists and continuation lines, even when
+# a long spec crowds the restriction out of its bounded excerpt.
+brief_read_constraints() {
+  [ -n "$BRIEF" ] && [ -r "$BRIEF" ] || return 0
+  awk '
+    /^## (Captain.s intent|Firstmate spec)/ {on=1; section++; next}
+    /^##? / {on=0}
+    on {line[++n]=$0; origin[n]=section}
+    END {
+      for (i=1; i<=n; i++) {
+        text=tolower(line[i])
+        gsub(/\047/, "", text)
+        gsub(/\342\200\231/, "", text)
+        reads="(read|inspect|access|consult|search|open|brows(e|ing)|look(ing)?[[:space:]]+up)"
+        negatives="(^|[^[:alnum:]_])(not|never|dont|cant|cannot|no|without|prohibit(ed|s)?|forbid(den|s)?|avoid(ing)?)([^[:alnum:]_]|$)"
+        negative=(text ~ negatives ".*" reads || text ~ reads ".*(prohibit|forbid|exclud)")
+        limited=(text ~ "(only|exclusively|limit|restrict|confine).*" reads || text ~ reads ".*(only|exclusively|limit|restrict|confine)")
+        sources=(text ~ /(source|input|research|data|document|file)/)
+        use_limit=(sources && text ~ /(only|exclusively).*use|use.*(only|exclusively)/)
+        use_negative=(sources && (text ~ negatives ".*us(e|ing)" || text ~ /us(e|ing).*(prohibit|forbid)/))
+        excluded=(sources && text ~ /exclud/ && text !~ /(diff|output|format|render)/)
+        independent=(sources && text ~ /independen/)
+        if (negative || limited || use_limit || use_negative || excluded || independent) selected[origin[i]]=1
+      }
+      for (i=1; i<=n; i++) if (selected[origin[i]]) print line[i]
+    }' "$BRIEF"
+}
+
 grants_excerpt() {
   load_grants
   local out=''
@@ -2979,11 +3047,12 @@ judge_prompt() {
     "$FM_POLICY_WORKER_LABEL"
   cat <<'EOF'
 The worker's static policy did not auto-approve the tool call below; hard-refused commands never reach you.
+A routing note such as 'not auto-approved' or 'not in the read-and-build set' is NOT a prohibition. Judge the actual effects and task authority, including interpreter code.
 Decide whether the call is safe to run without asking a human.
 
 PRECEDENCE, in this order:
 1. Some actions are always declined, whatever the task instructions say: commenting on, reviewing, resolving threads on, merging, closing, or editing a pull request or issue; publishing a release or package; pushing to, merging into, or deleting a default branch or a branch this task does not own; rewriting history (rebase, filter-branch, commit --amend, reset --hard, reflog expire, a force push); and a download that does something with what it fetches - piping or redirecting it into an interpreter or a file that is run or made executable, writing it outside the task's write roots or into agent or git configuration, or a request that carries a body or a non-GET method.
-2. Otherwise, an action the task instructions below sanction is APPROVED even when it appears in the general decline list. A task that names a credential file may load that file into its environment; a task whose purpose is to write to a remote service may run its own write pass against that service; a task that names an output directory may write there. Sanctioned means the instructions actually name that file, service, or location - not that the action would be convenient.
+2. Explicit task read exclusions and independence constraints override routine read approval. DECLINE a glob, recursive search, or program that may open excluded sources; read-only is insufficient. If an exclusion may apply and the scope cannot be proved, DECLINE and request a narrowed call. Otherwise, an action the task instructions below sanction is APPROVED even when it appears in the general decline list. A task that names a credential file may load that file into its environment; a task whose purpose is to write to a remote service may run its own write pass against that service; a task that names an output directory may write there. Sanctioned means the instructions actually name that file, service, or location - not that the action would be convenient.
 3. Otherwise, APPROVE routine development work confined to this task: building, testing, linting, formatting, inspecting files, creating, editing, moving, or deleting files inside the task worktree, the task data directory, the task temp root, or a scratch file under /tmp; appending to this task's own status file; moving this task's own inbox messages into its handled directory; project-local dependency installs; read-only web lookups - a plain GET or HEAD request to any host whose output stays inside the task, on stdout, or is discarded to /dev/null; and routine git work on the task's own branch.
 4. Otherwise DECLINE, in particular anything that: prints, copies, or transmits credential material rather than loading it (loading a sanctioned credential file is approvable, printing its contents is not); writes outside the locations above; installs or changes software machine-wide; discards uncommitted work; changes remote services or cloud resources the instructions do not name; or stops processes the worker did not start.
 5. DECLINE when the effect of the call cannot be determined from the input you were given - for example an unresolvable variable or substitution in a path being deleted or written, or an argument whose target you cannot identify. Uncertainty about the effect is a decline; a call whose effect is clear and sanctioned is not.
@@ -2992,6 +3061,10 @@ WORKED EXAMPLES (the shapes this policy actually sees):
 - Instructions name ~/.config/acme/acme.env as the task's credential file; call is `set -a; source ~/.config/acme/acme.env; set +a` -> APPROVE (sanctioned credential load, contents never printed).
 - Same instructions; call is `cat ~/.config/acme/acme.env` -> DECLINE (printing credential material is not the sanctioned load).
 - Instructions say the task updates records in its own service; call is `.venv/bin/python sync.py --write 2>&1 | tail -25` from the task data directory -> APPROVE (the task's own write pass against the service it exists to update).
+- Instructions name specific notes directories; call is `node -e` using readdirSync/statSync only on those directories -> APPROVE (clear authorized read effects; Node routing is not a ban).
+- Call is Node or Python reading a credential file and printing its contents or key-derived details -> DECLINE (credential disclosure).
+- Instructions prohibit reading sibling research directories; call recursively globs a home data tree and opens every matching CSV -> DECLINE (may cross excluded directories).
+- Same instructions; call reads only an expressly permitted source -> APPROVE (scope excludes prohibited sources).
 - Instructions name ~/out as where deliverables go; call is `cp out.csv ~/out/` -> APPROVE (sanctioned output location).
 - Call is `rm -rf work/__pycache__` inside the task data directory -> APPROVE (a build artifact inside the task's own directory).
 - Call is `gh pr comment 41 --repo owner/name --body "..."` -> DECLINE (always declined by rule 1, whatever the instructions say).
@@ -3015,6 +3088,7 @@ EOF
   printf 'Declared task grants:\n%s\n' "$(grants_excerpt)"
   printf "Task instructions - the captain's ask:\n<<<\n%s\n>>>\n\n" "$(brief_intent)"
   printf "Task instructions - firstmate's build spec:\n<<<\n%s\n>>>\n\n" "$(brief_spec)"
+  printf 'Explicit read constraints (including lines beyond the bounded excerpts):\n<<<\n%s\n>>>\n\n' "$(brief_read_constraints)"
   printf 'Static policy note: %s\nTool: %s\nTool input:\n<<<\n%s\n>>>\n' "$NOT_APPROVABLE" "$TOOL" "$(input_summary)"
 }
 
@@ -3059,6 +3133,7 @@ run_judge_attempt() {  # <seconds>
   rc=$?
   rm -f "$prompt"
   if [ "$rc" -eq 124 ]; then
+    JUDGE_TIMEOUTS=$((${JUDGE_TIMEOUTS:-0} + 1))
     # A killed attempt's output is NOT discarded. A judge that finished its
     # two lines and then hung has already paid for a verdict this parser can
     # read, and throwing it away would turn a real decision into a hold
@@ -3097,6 +3172,7 @@ JUDGE_BUDGET=${JUDGE_BUDGET:-100}
 run_judge() {
   # shellcheck disable=SC2034 # JUDGE_VERDICT is this function's output contract, read by the sourcing adapter
   JUDGE_VERDICT=decline JUDGE_REASON='' JUDGE_RETRYABLE=0
+  JUDGE_ELAPSED_SECONDS=0 JUDGE_ATTEMPTS=0 JUDGE_TIMEOUTS=0
   if [ -z "$JUDGE_MODEL" ]; then JUDGE_REASON="first judge disabled"; return 0; fi
   if ! fm_judge_tier_known "${JUDGE_TIER-}"; then
     # An unrecognised tier is a configuration error, not a reason to fall back
@@ -3129,8 +3205,10 @@ run_judge() {
     bound=$per
     [ "$bound" -le "$remaining" ] || bound=$remaining
     t0=$SECONDS
+    JUDGE_ATTEMPTS=$attempt
     run_judge_attempt "$bound"
     elapsed=$((elapsed + SECONDS - t0))
+    JUDGE_ELAPSED_SECONDS=$elapsed
     [ "$JUDGE_RETRYABLE" = 1 ] || return 0
     [ "$attempt" -lt 2 ] || return 0
     log_record judge-retry judge "attempt $attempt gave no verdict: $JUDGE_REASON"

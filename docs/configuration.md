@@ -2527,6 +2527,7 @@ agy --mode accept-edits --add-dir "$(pwd -P)"
 ```
 
 The tracked `.agents/hooks.json` supplies the native primary integration; worker dispatch installs separate Firstmate-owned hooks through `bin/fm-agy-hook.sh`.
+Agy task launches require Python 3 for the cleanup audit; `bin/fm-agy-lib.sh` checks it before acquiring an endpoint, including manual and raw launches.
 The existing crew-permissions setting above owns Agy's approval posture, including its interactive shell review requirement.
 [`supervision-protocols/agy.md`](supervision-protocols/agy.md) owns the native background-command wake procedure.
 [`turnend-guard.md`](turnend-guard.md) and [`sessionstart-nudge.md`](sessionstart-nudge.md) own turn-end and startup compatibility, including interruption and compaction limits.
