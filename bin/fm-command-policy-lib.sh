@@ -49,6 +49,9 @@
 #       (all from the per-task policy file; empty means the check they feed
 #       degrades closed - an unset WORKTREE makes every recursive rm
 #       unresolvable and refused)
+#   CONFIG_DIR  the home config directory the brief's status command names.
+#       Empty on an older policy file, which falls back to the config sibling
+#       of a status file under state/.
 #   EVENT TOOL TOOL_USE_ID SESSION_ID CMD FILE_PATH INPUT_JSON INPUT_STRINGS
 #   CACHE_INPUT PENDING_DIR CACHE_DIR JUDGE_MODEL JUDGE_TIMEOUT
 #   FM_POLICY_ADAPTER (short adapter id; names the judge's scratch directory
@@ -127,8 +130,13 @@
 #     task data directory, or the task temp root, and mv between paths inside
 #     the task steering inbox (the inbox acknowledgement)
 #   - read-only web lookups: a GET-shaped curl or wget whose output lands on
-#     stdout, a pipe that is not a shell or interpreter, or a file inside the
-#     task's write roots - the full fetch contract is under "Fetches" below
+#     stdout, a pipe that is not a shell or interpreter, a file inside the
+#     task's write roots, or /dev/null - the full fetch contract is under
+#     "Fetches" below
+#   - this home's fm-fleet-ledger.sh, only as `appended <config>
+#     <this-task-status>` while the home config beside the status file's
+#     state directory has no fleet-ledger flag (the brief scaffold's status
+#     command; that invocation writes nothing)
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -168,7 +176,8 @@
 #
 # Fetches (curl and wget). A read-only web lookup is approved for ANY host: a
 # GET-shaped request whose output lands on stdout, a pipe that is not a shell
-# or interpreter, or a file inside the task's write roots. GET-shaped means no
+# or interpreter, a file inside the task's write roots, or /dev/null (a
+# discard, the same as a redirect there). GET-shaped means no
 # request body (-d / --data* / -F / --form* / -T / --upload-file / --json /
 # wget --post-* / --body-*), no non-GET/HEAD method (-X / --request / wget
 # --method), no option that hides the request in a file this policy cannot
@@ -632,6 +641,7 @@ PIPE_FROM_FETCH=0
 SEG_BASE=''
 SEG_EMITS_FETCH=0
 FETCH_OPT_KIND=switch
+FETCH_OPT_NAME=
 
 # 0 when <abs> may receive fetched bytes: inside the task write roots and not
 # under bin/, .git/, .devin/, .claude/, or an agent or git configuration path.
@@ -747,7 +757,31 @@ fetch_url() {  # <word>
       esac ;;
   esac
   FETCH_URLS="$FETCH_URLS$w"$'\n'
+  transfer_urls="${transfer_urls-}$w"$'\n'
   return 0
+}
+
+# A curl -O/--remote-name writes each URL in the current transfer under that
+# transfer's --output-dir. --next starts a new transfer, so the names are
+# recorded before the directory is cleared.
+note_remote_names() {
+  [ "${transfer_remote:-0}" = 1 ] || { transfer_urls=''; return 0; }
+  local u bn odir
+  odir=${FETCH_OUTDIR:-$CWD}
+  while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    bn=${u%%[?#]*}
+    bn=${bn##*/}
+    [ -n "$bn" ] || bn=index.html
+    fetch_out_words[${#fetch_out_words[@]}]=$bn
+    fetch_out_ev[${#fetch_out_ev[@]}]=0
+    fetch_out_doc[${#fetch_out_doc[@]}]=1
+    fetch_out_warc[${#fetch_out_warc[@]}]=0
+    fetch_out_dirs[${#fetch_out_dirs[@]}]=$odir
+    fetch_out_stamped[${#fetch_out_stamped[@]}]=1
+  done <<<"$transfer_urls"
+  transfer_urls=''
+  transfer_remote=0
 }
 
 # FETCH_OPT_KIND for one fetch option: switch (no value), value (a benign
@@ -789,7 +823,8 @@ fetch_long_kind() {  # <base> <option>
         --post-data|--post-file|--body-data|--body-file) FETCH_OPT_KIND=body ;;
         --netrc) FETCH_OPT_KIND=netrc ;;
         --output-document|--output-file|--save-cookies|--warc-file|--append-output) FETCH_OPT_KIND=outfile ;;
-        --directory-prefix|--warc-tempdir) FETCH_OPT_KIND=outdir ;;
+        --directory-prefix) FETCH_OPT_KIND=outdir ;;
+        --warc-tempdir) FETCH_OPT_KIND=warctmp ;;
         --load-cookies|--ca-certificate|--ca-directory|--certificate|--private-key|--random-file|--egd-file|--crl-file) FETCH_OPT_KIND=infile ;;
         --*) if fetch_opt_takes_value "$1" "$2"; then
                FETCH_OPT_KIND=value
@@ -870,6 +905,28 @@ fetch_opt_is_switch() {  # <base> <word>
   return 1
 }
 
+# 0 when FETCH_OPT_NAME is the option that writes the fetched document.
+# wget's -o/--output-file and -a/--append-output are logs, not the document.
+fetch_document_output() {
+  case "$base" in
+    curl) case "$FETCH_OPT_NAME" in -o|--output) return 0 ;; esac ;;
+    wget) case "$FETCH_OPT_NAME" in -O|--output-document) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# --output-dir applies only to the current curl transfer. --next starts another
+# and clears it, so each recorded output keeps the directory in force when its
+# transfer ended rather than the last one in the command.
+stamp_fetch_outdir() {
+  local i
+  for ((i = 0; i < ${#fetch_out_words[@]}; i++)); do
+    [ "${fetch_out_stamped[i]-0}" = 1 ] && continue
+    fetch_out_dirs[i]=${FETCH_OUTDIR-}
+    fetch_out_stamped[i]=1
+  done
+}
+
 # Applies FETCH_OPT_KIND to the option's value. `v` is empty when the option
 # was last in its word; `vev` marks a value this policy cannot read (an
 # expansion or glob - a bare ~/ is the one readable exception). Consumes the
@@ -916,10 +973,23 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
       fi
       local dabs=''
       dabs=$(resolve_maybe_tilde "$v" "$vev" "$CWD" 2>/dev/null) || dabs=''
-      if [ -n "$dabs" ] && fetch_dest_ok "$dabs"; then
+      # The directory is not a write by itself. A file that lands in it is
+      # checked later; wget -O /dev/null does not use -P at all.
+      if [ -n "$dabs" ]; then
         FETCH_OUTDIR=$dabs; return 0
       fi
-      never_approve "$base writes outside the task write roots ($v)"; return 1 ;;
+      never_approve "$base output directory is an expansion this policy cannot read"; return 1 ;;
+    warctmp)
+      # wget --warc-tempdir is temporary WARC files, not the download directory.
+      if [ "$vev" = 1 ]; then
+        never_approve "$base output directory is an expansion this policy cannot read"; return 1
+      fi
+      local wabs=''
+      wabs=$(resolve_maybe_tilde "$v" "$vev" "$CWD" 2>/dev/null) || wabs=''
+      if [ -z "$wabs" ] || ! fetch_dest_ok "$wabs"; then
+        never_approve "$base writes outside the task write roots ($v)"; return 1
+      fi
+      return 0 ;;
     outfile)
       if [ "$vev" = 1 ]; then
         case "$v" in
@@ -927,10 +997,30 @@ fetch_opt_value() {  # <kind> <value> <expansion-or-glob flag>
           *) never_approve "$base output file is an expansion this policy cannot read"; return 1 ;;
         esac
       fi
-      fetch_out_seen=1
+      # A literal /dev/null is recorded and resolved after --output-dir is
+      # known. Without that option it discards, matching a redirect there.
+      # curl applies --output-dir even to an absolute -o, so -o /dev/null then
+      # writes <output-dir>/dev/null. Only a document option counts as output
+      # seen: wget -o/-a and --output-file are logs, and marking them seen
+      # would hide the download wget still writes into the output directory.
+      if fetch_document_output; then fetch_out_seen=1; fi
+      local doc=0 warc=0
+      fetch_document_output && doc=1
+      # wget appends .warc.gz (or .warc) to --warc-file. The name given is not
+      # the file written, so a /dev/null argument is not a discard.
+      [ "$base" = wget ] && [ "$FETCH_OPT_NAME" = --warc-file ] && warc=1
+      if [ "$v" = /dev/null ] && [ "$vev" = 0 ] && [ "$warc" = 0 ]; then
+        fetch_out_words[${#fetch_out_words[@]}]=$v
+        fetch_out_ev[${#fetch_out_ev[@]}]=0
+        fetch_out_doc[${#fetch_out_doc[@]}]=$doc
+        fetch_out_warc[${#fetch_out_warc[@]}]=0
+        return 0
+      fi
       [ "$v" = - ] || {
         fetch_out_words[${#fetch_out_words[@]}]=$v
         fetch_out_ev[${#fetch_out_ev[@]}]=$vev
+        fetch_out_doc[${#fetch_out_doc[@]}]=$doc
+        fetch_out_warc[${#fetch_out_warc[@]}]=$warc
       }
       return 0 ;;
   esac
@@ -2323,6 +2413,56 @@ approve_ensure_agents_md() {
   [ "$pos" -le 1 ] || no_approve "fm-ensure-agents-md.sh form"
 }
 
+# The brief scaffold appends the status line, then runs this home's
+# fm-fleet-ledger.sh as `appended <config> <this-task-status>` so an opt-in
+# ledger can record it. <config> must be the home config beside the status
+# file's state directory, and both paths must physically resolve there: a
+# lexical match through a symlink is not enough, because the helper opens the
+# path it was given. While that config's fleet-ledger flag is absent and the
+# config directory is outside every task write root, the invocation writes
+# nothing and is approved. A present flag, a writable config directory,
+# another subcommand, or another status file stays judged.
+approve_fleet_ledger() {
+  local sub=${E[1]-} cfg='' status='' expected='' state_dir=''
+  local cfg_phys='' expected_phys='' status_phys='' status_expected_phys=''
+  [ "$sub" = appended ] || { no_approve "fm-fleet-ledger.sh ${sub:-without a subcommand}"; return 0; }
+  [ "${#E[@]}" -eq 4 ] || { no_approve "fm-fleet-ledger.sh form"; return 0; }
+  [ "${EV[1]}" = 0 ] && [ "${EV[2]}" = 0 ] && [ "${EV[3]}" = 0 ] \
+    && [ "${EG[1]}" = 0 ] && [ "${EG[2]}" = 0 ] && [ "${EG[3]}" = 0 ] \
+    || { no_approve "fm-fleet-ledger.sh with an unresolvable path"; return 0; }
+  [ -n "$STATUS" ] || { no_approve "fm-fleet-ledger.sh without a known status file"; return 0; }
+  cfg=$(resolve_path "${E[2]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
+  status=$(resolve_path "${E[3]}" "$CWD") || { no_approve "fm-fleet-ledger.sh with unknown cwd"; return 0; }
+  [ "$status" = "$(norm_abs "$STATUS")" ] || { no_approve "fm-fleet-ledger.sh names another status file"; return 0; }
+  if [ -n "${CONFIG_DIR-}" ]; then
+    expected=$(norm_abs "$CONFIG_DIR")
+  else
+    state_dir=$(dirname "$(norm_abs "$STATUS")")
+    case "$state_dir" in
+      */state) expected=$(norm_abs "$(dirname "$state_dir")/config") ;;
+      *) no_approve "fm-fleet-ledger.sh cannot derive the home config from the status file"; return 0 ;;
+    esac
+  fi
+  [ "$cfg" = "$expected" ] || { no_approve "fm-fleet-ledger.sh names another config"; return 0; }
+  cfg_phys=$(physical_target "${E[2]}" "$CWD" 1) || { no_approve "fm-fleet-ledger.sh config path cannot be resolved"; return 0; }
+  expected_phys=$(physical_target "$expected" '' 1) || { no_approve "fm-fleet-ledger.sh config path cannot be resolved"; return 0; }
+  [ "$cfg_phys" = "$expected_phys" ] || { no_approve "fm-fleet-ledger.sh config path does not resolve to the home config"; return 0; }
+  status_phys=$(physical_target "${E[3]}" "$CWD" 0) || { no_approve "fm-fleet-ledger.sh status path cannot be resolved"; return 0; }
+  status_expected_phys=$(physical_target "$(norm_abs "$STATUS")" '' 0) || { no_approve "fm-fleet-ledger.sh status path cannot be resolved"; return 0; }
+  [ "$status_phys" = "$status_expected_phys" ] || { no_approve "fm-fleet-ledger.sh status path does not resolve to this task's status file"; return 0; }
+  # A config directory inside a task write root lets the same command create
+  # the flag first (touch config/fleet-ledger && appended ...). The helper
+  # then writes the ledger. That configuration is not approved.
+  if write_dest_ok "$cfg/fleet-ledger" || write_dest_ok "$cfg_phys/fleet-ledger"; then
+    no_approve "fm-fleet-ledger.sh config directory is inside a task write root"
+    return 0
+  fi
+  if [ -e "$cfg_phys/fleet-ledger" ] || [ -L "$cfg_phys/fleet-ledger" ]; then
+    no_approve "fm-fleet-ledger.sh appended writes the fleet ledger"
+    return 0
+  fi
+}
+
 # fm-captain-hold.sh completes and holds the worker's OWN task. Every task id
 # argument must be this task's id; naming any other task keeps escalating.
 approve_captain_hold() {
@@ -2363,6 +2503,7 @@ approve_plain() {  # <base>
   # The worker-contract helpers this home owns, matched by resolved path.
   if home_helper "${E[0]}" "${EV[0]}" fm-ensure-agents-md.sh; then approve_ensure_agents_md; return 0; fi
   if home_helper "${E[0]}" "${EV[0]}" fm-captain-hold.sh; then approve_captain_hold; return 0; fi
+  if home_helper "${E[0]}" "${EV[0]}" fm-fleet-ledger.sh; then approve_fleet_ledger; return 0; fi
   for w in fm-lint.sh fm-test-run.sh fm-doc-audience-check.sh fm-install-shellcheck.sh fm-install-actionlint.sh; do
     home_helper "${E[0]}" "${EV[0]}" "$w" && return 0
   done
@@ -2385,8 +2526,9 @@ approve_plain() {  # <base>
       # option's kind decides whether the next word is its value, a cluster's
       # remainder is its glued value, and every non-option positional is a URL
       # both tools guess as http.
-      local opts_done=0 fetch_cwd_out=0 fetch_out_seen=0
-      local -a fetch_out_words=() fetch_out_ev=()
+      local opts_done=0 fetch_out_seen=0 transfer_remote=0 transfer_urls=''
+      local WARC_COMPRESS=1 WARC_CDX=0
+      local -a fetch_out_words=() fetch_out_ev=() fetch_out_doc=() fetch_out_warc=() fetch_out_dirs=() fetch_out_stamped=()
       FETCH_OUTDIR='' FETCH_URLS=''
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
@@ -2401,16 +2543,26 @@ approve_plain() {  # <base>
           case "$w" in
             --) opts_done=1; continue ;;
             --*=*)
-              fetch_long_kind "$base" "${w%%=*}"
+              FETCH_OPT_NAME=${w%%=*}
+              fetch_long_kind "$base" "$FETCH_OPT_NAME"
               if [ "$FETCH_OPT_KIND" = unknown ]; then
-                never_approve "$base option ${w%%=*} is unknown to this policy"; return 0
+                never_approve "$base option $FETCH_OPT_NAME is unknown to this policy"; return 0
               fi
               fetch_opt_value "$FETCH_OPT_KIND" "${w#*=}" 0 || return 0 ;;
             --*)
+              FETCH_OPT_NAME=$w
               fetch_long_kind "$base" "$w"
               case "$FETCH_OPT_KIND" in
-                switch) ;;
-                cwdout) fetch_cwd_out=1 ;;
+                switch)
+                  if [ "$w" = --next ]; then
+                    note_remote_names
+                    stamp_fetch_outdir
+                    FETCH_OUTDIR=''
+                  fi
+                  [ "$w" = --no-warc-compression ] && WARC_COMPRESS=0
+                  [ "$w" = --warc-cdx ] && WARC_CDX=1
+                  ;;
+                cwdout) transfer_remote=1 ;;
                 unknown) never_approve "$base option $w is unknown to this policy"; return 0 ;;
                 *)
                   k=$((k + 1))
@@ -2426,10 +2578,19 @@ approve_plain() {  # <base>
               # of the cluster, or the next word when it is last
               local ci=1 clen=${#w}
               while [ "$ci" -lt "$clen" ]; do
+                FETCH_OPT_NAME=-${w:ci:1}
                 fetch_short_kind "$base" "${w:ci:1}"
                 case "$FETCH_OPT_KIND" in
-                  switch) ci=$((ci + 1)) ;;
-                  cwdout) fetch_cwd_out=1; ci=$((ci + 1)) ;;
+                  switch)
+                    # -: is curl's short spelling of --next.
+                    if [ "$FETCH_OPT_NAME" = '-:' ]; then
+                      note_remote_names
+                      stamp_fetch_outdir
+                      FETCH_OUTDIR=''
+                    fi
+                    ci=$((ci + 1))
+                    ;;
+                  cwdout) transfer_remote=1; ci=$((ci + 1)) ;;
                   unknown) never_approve "$base option -${w:ci:1} is unknown to this policy"; return 0 ;;
                   nfamily)
                     # wget's -n* options are two characters: -nv -nc -nd -np -nH
@@ -2458,10 +2619,10 @@ approve_plain() {  # <base>
           fetch_url "$w" || return 0
         fi
       done
-      # Implicit writes into a directory: every wget without -O, and any curl
-      # remote-name switch, lands its download in --output-dir or the cwd.
+      # Implicit writes into a directory: every wget without -O lands in -P or
+      # the cwd. curl -O is recorded per transfer, with that transfer's directory.
+      note_remote_names
       local need_dir=0 odir=''
-      [ "$fetch_cwd_out" = 1 ] && need_dir=1
       [ "$base" = wget ] && [ "$fetch_out_seen" = 0 ] && need_dir=1
       if [ "$need_dir" = 1 ]; then
         odir=${FETCH_OUTDIR:-$CWD}
@@ -2479,14 +2640,43 @@ approve_plain() {  # <base>
         done <<<"$FETCH_URLS"
       fi
       # Deferred output-file targets, resolved now that --output-dir is known.
-      local oi oabs odir2
+      local oi oabs odir2 word_dir
+      stamp_fetch_outdir
       for ((oi = 0; oi < ${#fetch_out_words[@]}; oi++)); do
+        word_dir=${fetch_out_dirs[oi]-}
+        # wget -O /dev/null is the named file, not a path under -P. curl joins
+        # --output-dir onto every -o name, including an absolute one, and only
+        # for the transfer that set that directory.
+        # A document -o is placed under --output-dir, even when the name is
+        # absolute. A dump-header or other auxiliary file is the path given.
+        # wget -O /dev/null is a discard; a wget log is not the download.
         odir2=$CWD
-        case "${fetch_out_words[oi]}" in
-          /*|"$TILDE"/*) ;;
-          *) [ -n "$FETCH_OUTDIR" ] && odir2=$FETCH_OUTDIR ;;
-        esac
-        oabs=$(resolve_maybe_tilde "${fetch_out_words[oi]}" "${fetch_out_ev[oi]}" "$odir2" 2>/dev/null) || oabs=''
+        rel=${fetch_out_words[oi]}
+        if [ "${fetch_out_warc[oi]-0}" = 1 ]; then
+          if [ "$WARC_COMPRESS" = 0 ]; then rel=${rel}.warc; else rel=${rel}.warc.gz; fi
+        elif [ "$rel" = /dev/null ] && [ "${fetch_out_ev[oi]}" = 0 ] \
+          && { [ "${fetch_out_doc[oi]-0}" != 1 ] || [ "$base" = wget ] || [ -z "$word_dir" ]; }; then
+          continue
+        fi
+        if [ "${fetch_out_warc[oi]-0}" = 1 ]; then
+          if [ "$WARC_CDX" = 1 ]; then
+            local cdx=${fetch_out_words[oi]}.cdx cdx_abs=''
+            cdx_abs=$(resolve_maybe_tilde "$cdx" "${fetch_out_ev[oi]}" "$CWD" 2>/dev/null) || cdx_abs=''
+            if [ -z "$cdx_abs" ] || ! fetch_dest_ok "$cdx_abs"; then
+              never_approve "$base writes outside the task write roots ($cdx)"
+              return 0
+            fi
+            fetch_note_file "$cdx_abs"
+          fi
+        fi
+        # Only a curl document (-o/-O) is placed under --output-dir. A log,
+        # dump-header, or other auxiliary file is the path given, relative to
+        # the command's directory, not the output directory.
+        if [ "$base" = curl ] && [ "${fetch_out_doc[oi]-0}" = 1 ] && [ -n "$word_dir" ]; then
+          odir2=$word_dir
+          rel=${rel#/}
+        fi
+        oabs=$(resolve_maybe_tilde "$rel" "${fetch_out_ev[oi]}" "$odir2" 2>/dev/null) || oabs=''
         if [ -n "$oabs" ] && fetch_dest_ok "$oabs"; then
           fetch_note_file "$oabs"
         else
@@ -2794,7 +2984,7 @@ Decide whether the call is safe to run without asking a human.
 PRECEDENCE, in this order:
 1. Some actions are always declined, whatever the task instructions say: commenting on, reviewing, resolving threads on, merging, closing, or editing a pull request or issue; publishing a release or package; pushing to, merging into, or deleting a default branch or a branch this task does not own; rewriting history (rebase, filter-branch, commit --amend, reset --hard, reflog expire, a force push); and a download that does something with what it fetches - piping or redirecting it into an interpreter or a file that is run or made executable, writing it outside the task's write roots or into agent or git configuration, or a request that carries a body or a non-GET method.
 2. Otherwise, an action the task instructions below sanction is APPROVED even when it appears in the general decline list. A task that names a credential file may load that file into its environment; a task whose purpose is to write to a remote service may run its own write pass against that service; a task that names an output directory may write there. Sanctioned means the instructions actually name that file, service, or location - not that the action would be convenient.
-3. Otherwise, APPROVE routine development work confined to this task: building, testing, linting, formatting, inspecting files, creating, editing, moving, or deleting files inside the task worktree, the task data directory, the task temp root, or a scratch file under /tmp; appending to this task's own status file; moving this task's own inbox messages into its handled directory; project-local dependency installs; read-only web lookups - a plain GET or HEAD request to any host whose output stays inside the task or on stdout; and routine git work on the task's own branch.
+3. Otherwise, APPROVE routine development work confined to this task: building, testing, linting, formatting, inspecting files, creating, editing, moving, or deleting files inside the task worktree, the task data directory, the task temp root, or a scratch file under /tmp; appending to this task's own status file; moving this task's own inbox messages into its handled directory; project-local dependency installs; read-only web lookups - a plain GET or HEAD request to any host whose output stays inside the task, on stdout, or is discarded to /dev/null; and routine git work on the task's own branch.
 4. Otherwise DECLINE, in particular anything that: prints, copies, or transmits credential material rather than loading it (loading a sanctioned credential file is approvable, printing its contents is not); writes outside the locations above; installs or changes software machine-wide; discards uncommitted work; changes remote services or cloud resources the instructions do not name; or stops processes the worker did not start.
 5. DECLINE when the effect of the call cannot be determined from the input you were given - for example an unresolvable variable or substitution in a path being deleted or written, or an argument whose target you cannot identify. Uncertainty about the effect is a decline; a call whose effect is clear and sanctioned is not.
 

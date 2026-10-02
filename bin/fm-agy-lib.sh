@@ -283,14 +283,16 @@ fm_agy_spawn_wire() {
     # gen binds this launch's armed line to its own busy generation: the
     # canary matches it so an armed record left by a previous launch or
     # a reused task id can never pass for this one's live wiring.
+    agy_config=${CONFIG:-${FM_HOME:-}/config}
+    case "$agy_config" in /*) ;; *) agy_config="$PWD/$agy_config" ;; esac
     jq -n --arg task "$ID" --arg worktree "$agy_wt_real" \
       --arg status "$STATE_REAL/$ID.status" --arg inbox "$STATE_REAL/$ID.inbox" \
       --arg data "$agy_task_data" --arg tasktmp "$TASK_TMP" --arg brief "$BRIEF" \
       --arg log "$STATE_REAL/agy-permission-log.jsonl" --arg agy "$AGY_BIN" \
       --arg gen "$BUSY_GEN" --arg grants_sha "$agy_grants_sha" \
       --arg judge_tier "$AGY_JUDGE_TIER" --arg judge_bin "$AGY_JUDGE_BIN" \
-      --arg judge_model "$AGY_JUDGE_MODEL" \
-      '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen, judge_tier:$judge_tier, judge_bin:$judge_bin, judge_model:$judge_model, judge_timeout:"60", grants_sha:$grants_sha}' \
+      --arg judge_model "$AGY_JUDGE_MODEL" --arg config "$agy_config" \
+      '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen, judge_tier:$judge_tier, judge_bin:$judge_bin, judge_model:$judge_model, judge_timeout:"60", grants_sha:$grants_sha, config:$config}' \
       > "$agy_policy" || {
       echo "error: cannot spawn agy bypass worker: could not write $agy_policy" >&2
       exit 1

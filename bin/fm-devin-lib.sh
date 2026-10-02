@@ -204,12 +204,14 @@ fm_devin_spawn_wire() {
   # The digest pins the grants block firstmate wrote, so a block the
   # worker adds or edits in its own brief grants nothing.
   devin_grants_sha=$("$SCRIPT_DIR/fm-devin-permission-policy.sh" grants-digest "$BRIEF" 2>/dev/null || true)
+  devin_config=${CONFIG:-${FM_HOME:-}/config}
+  case "$devin_config" in /*) ;; *) devin_config="$PWD/$devin_config" ;; esac
   jq -n --arg task "$ID" --arg worktree "$(cd "$WT" && pwd -P)" \
     --arg status "$STATE_REAL/$ID.status" --arg inbox "$STATE_REAL/$ID.inbox" \
     --arg data "$devin_task_data" --arg tasktmp "$TASK_TMP" --arg brief "$BRIEF" \
     --arg log "$STATE_REAL/devin-permission-log.jsonl" --arg devin "${DEVIN_BIN:-}" \
-    --arg grants_sha "$devin_grants_sha" \
-    '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, devin:$devin, judge_model:"swe-2-high", judge_timeout:"60", grants_sha:$grants_sha}' \
+    --arg grants_sha "$devin_grants_sha" --arg config "$devin_config" \
+    '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, devin:$devin, judge_model:"swe-2-high", judge_timeout:"60", grants_sha:$grants_sha, config:$config}' \
     >"$devin_policy" || {
     rm -f -- "$snapshot" "$config"
     echo "error: cannot spawn devin worker: could not write $devin_policy" >&2

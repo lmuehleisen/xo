@@ -230,7 +230,7 @@ fi
 PAYLOAD=
 case "$EVENT" in retire|repin-grants) ;; *) PAYLOAD=$(cat) ;; esac
 
-TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' DEVIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
+TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' DEVIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' CONFIG_DIR='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
   {
     IFS= read -r -d '' TASK
@@ -245,9 +245,10 @@ if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
     IFS= read -r -d '' JUDGE_MODEL
     IFS= read -r -d '' JUDGE_TIMEOUT
     IFS= read -r -d '' GRANTS_SHA
+    IFS= read -r -d '' CONFIG_DIR
     IFS= read -r -d '' FM_POLICY_JUDGE_TIER
     IFS= read -r -d '' FM_POLICY_JUDGE_BIN
-  } < <(jq -j '[.task, .worktree, .status, .inbox, .data, .tasktmp, .brief, .log, .devin, .judge_model, .judge_timeout, .grants_sha, .judge_tier, .judge_bin]
+  } < <(jq -j '[.task, .worktree, .status, .inbox, .data, .tasktmp, .brief, .log, .devin, .judge_model, .judge_timeout, .grants_sha, .config, .judge_tier, .judge_bin]
     | map((. // "") | tostring | gsub("\u0000"; "")) | join("\u0000") + "\u0000"' "$POLICY" 2>/dev/null)
 fi
 # Which judge answers this task, and the executable it runs. Devin judges Devin
