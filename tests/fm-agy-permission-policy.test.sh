@@ -1567,6 +1567,11 @@ NEW
   [ "$(wc -l < "$archive" | tr -d ' ')" = 2 ] || fail "each metadata incarnation needs its own archive"
   tail -1 "$archive" | jq -e '.generation == "g2" and .log_scope_complete and .kind == "ship" and .confirmed_judge_coverage and .judge_attempts == 2 and .judge_elapsed_seconds == 12 and .judge_timeouts == 1 and .decisions.approve == 1 and .decisions.escalate == 0 and (.resolution_timing | length) == 0 and (.armed_generations | length) == 1 and .armed_generations[0].gen == "g2"' >/dev/null \
     || fail "reused task ids must not combine earlier generations: $(tail -1 "$archive")"
+  printf 'harness=agy\nkind=scout\nbusy_gen=g2\n' > "$dir/state/t1.meta"
+  printf '{"task":"t1","event":"pre-tool-use","decision":"approve","decider":"judge"}\n' >> "$dir/state/agy-permission-log.jsonl"
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "legacy row archive failed"
+  tail -1 "$archive" | jq -e '.generation == "g2" and .log_scope_complete == false and .judge_metrics_complete == false and .judge_attempts == null' >/dev/null \
+    || fail "unattributed historical rows must keep timing incomplete even with a known generation"
   printf 'harness=agy\nkind=scout\n' > "$dir/state/t1.meta"
   rm "$policy"
   bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "unscoped legacy archive failed"

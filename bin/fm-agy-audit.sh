@@ -46,11 +46,14 @@ def archive(state, task):
     policy = json.loads(policy_path.read_text()) if policy_path.exists() else {}
     generation = meta.get("busy_gen") or policy.get("gen")
     rows = []
+    unscoped = False
     log = state / "agy-permission-log.jsonl"
     if log.exists():
         with log.open() as stream:
             for line in stream:
                 row = json.loads(line)
+                if row.get("task") == task and not row.get("gen"):
+                    unscoped = True
                 if generation and row.get("task") == task and row.get("gen") == generation:
                     rows.append(row)
     armed = [r for r in rows if r.get("event") == "armed"]
@@ -86,10 +89,11 @@ def archive(state, task):
                 captain_calls.append({"key": key[1], "state": line.split(" ", 1)[0],
                                       "at": int(epoch[1]) if epoch else None})
     judged = [r for r in decisions if r.get("decider") == "judge"]
-    metrics_complete = bool(generation) and all(all(field in r for field in ("judge_attempts", "judge_elapsed_seconds", "judge_timeouts")) for r in judged)
+    scope_complete = bool(generation) and not unscoped
+    metrics_complete = scope_complete and all(all(field in r for field in ("judge_attempts", "judge_elapsed_seconds", "judge_timeouts")) for r in judged)
     summary = {
         "archive_key": identity, "task": task, "archived_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "generation": generation, "log_scope_complete": bool(generation),
+        "generation": generation, "log_scope_complete": scope_complete,
         "kind": meta.get("kind"), "mode": meta.get("effective_mode", meta.get("mode")),
         "agy_version": policy.get("agy_version", meta.get("agy_version")),
         "permission_mode": meta.get("agy_permission_mode"),
