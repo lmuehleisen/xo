@@ -3005,7 +3005,7 @@ brief_read_constraints() {
       for (i=1; i<=n; i++) {
         text=tolower(line[i])
         gsub(/\047/, "", text)
-        gsub(/’/, "", text)
+        gsub(/\342\200\231/, "", text)
         reads="(read|inspect|access|consult|search|open|brows(e|ing)|look(ing)?[[:space:]]+up)"
         negatives="(^|[^[:alnum:]_])(not|never|dont|cant|cannot|no|without|prohibit(ed|s)?|forbid(den|s)?|avoid(ing)?)([^[:alnum:]_]|$)"
         negative=(text ~ negatives ".*" reads || text ~ reads ".*(prohibit|forbid|exclud)")
