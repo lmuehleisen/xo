@@ -3004,12 +3004,15 @@ brief_read_constraints() {
     END {
       for (i=1; i<=n; i++) {
         text=tolower(line[i])
-        reads="(read|inspect|access|consult|search|open)"
-        negative=(text ~ "(not|never|prohibit|forbid|avoid).*" reads || text ~ reads ".*(prohibit|forbid|exclud)")
+        gsub(/\047/, "", text)
+        gsub(/’/, "", text)
+        reads="(read|inspect|access|consult|search|open|brows(e|ing)|look(ing)?[[:space:]]+up)"
+        negatives="(^|[^[:alnum:]_])(not|never|dont|cant|cannot|no|without|prohibit(ed|s)?|forbid(den|s)?|avoid(ing)?)([^[:alnum:]_]|$)"
+        negative=(text ~ negatives ".*" reads || text ~ reads ".*(prohibit|forbid|exclud)")
         limited=(text ~ "(only|exclusively|limit|restrict|confine).*" reads || text ~ reads ".*(only|exclusively|limit|restrict|confine)")
         sources=(text ~ /(source|input|research|data|document|file)/)
         use_limit=(sources && text ~ /(only|exclusively).*use|use.*(only|exclusively)/)
-        use_negative=(sources && text ~ /(not|never|prohibit|forbid|avoid).*us(e|ing)|us(e|ing).*(prohibit|forbid)/)
+        use_negative=(sources && (text ~ negatives ".*us(e|ing)" || text ~ /us(e|ing).*(prohibit|forbid)/))
         excluded=(sources && text ~ /exclud/ && text !~ /(diff|output|format|render)/)
         independent=(sources && text ~ /independen/)
         if (negative || limited || use_limit || use_negative || excluded || independent) selected[origin[i]]=1

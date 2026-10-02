@@ -1498,15 +1498,92 @@ PY
   pass "fm-agy-permission-policy: complete exclusion lists and source-use prohibitions survive bounded brief excerpts"
 }
 
+test_common_negative_read_boundaries() {
+  local policy dir boundary tool arg i=0
+  export READ_BOUNDARY=''
+  while IFS= read -r boundary; do
+    i=$((i + 1))
+    READ_BOUNDARY=$boundary
+    # Missing constraints deliberately approve, exposing static/context gaps.
+    # shellcheck disable=SC2016
+    policy=$(new_case "negative-form-$i" '
+while [ $# -gt 0 ]; do case "$1" in -p) prompt=$2; shift 2 ;; *) shift ;; esac; done
+input=${prompt##*Tool input:}
+constraints=${prompt##*Explicit read constraints}
+constraints=${constraints%%Static policy note:*}
+case "$input" in *"cat permitted.csv"*) echo "APPROVE: permitted local source"; exit ;; esac
+case "$constraints" in *"$READ_BOUNDARY"*) echo "DECLINE: excluded source" ;; *) echo "APPROVE: missing restriction" ;; esac')
+    dir=$(case_dir "$policy")
+    python3 - "$dir/data/t1/brief.md" "$boundary" <<'PY'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text("# Task\n## Captain's intent\nInspect the permitted source.\n## Firstmate spec\n" + "Ordinary build instruction.\n"*250 + sys.argv[2] + "\n# Setup\n")
+PY
+    tool=run_command
+    arg='cat sibling/records.csv'
+    case "$boundary" in *browse*|*browsing*) tool=search_web; arg='external research sources' ;; esac
+    hook "$policy" pre-tool-use "$tool" "$arg" 2
+    denied "$OUT" || fail "common negative boundary must hold a broad read: $boundary => $OUT"
+    "$POLICY_SH" decline "$policy" agy-permission-c1-s2 </dev/null >/dev/null 2>&1 || fail "close the negative-boundary hold"
+    hook "$policy" pre-tool-use run_command 'cat permitted.csv' 3
+    abstained "$OUT" || fail "negative read boundaries must still permit scoped reads: $OUT"
+  done <<'BOUNDARIES'
+Don't read sibling data.
+Don’t read sibling data.
+No access to external sources.
+Do not browse the web.
+Without consulting external sources, inspect the local source.
+Avoid browsing external sources.
+BOUNDARIES
+  unset READ_BOUNDARY
+  policy=$(new_case negative-word-boundaries 'echo "DECLINE: unexpected review"')
+  dir=$(case_dir "$policy")
+  printf '# Task\n## Captain\047s intent\nInspect local sources.\n## Firstmate spec\nNotes: read permitted.csv.\nNormal access to local data is allowed.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use run_command 'cat permitted.csv'
+  abstained "$OUT" || fail "negative words must not match inside notes or normal: $OUT"
+  pass "fm-agy-permission-policy: common negative read forms reach review without matching unrelated word prefixes"
+}
+
+test_archive_scopes_reused_task_ids() {
+  local policy dir archive
+  policy=$(new_case reused-task-audit)
+  dir=$(case_dir "$policy")
+  printf 'harness=agy\nkind=scout\nagy_bypass=on\nbusy_gen=g1\n' > "$dir/state/t1.meta"
+  cat > "$dir/state/agy-permission-log.jsonl" <<'OLD'
+{"task":"t1","gen":"g1","event":"armed","session_id":"c1"}
+{"task":"t1","gen":"g1","event":"pre-tool-use","session_id":"c1","decision":"approve","decider":"judge","judge_attempts":9,"judge_elapsed_seconds":90,"judge_timeouts":8}
+OLD
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "old incarnation archive failed"
+  printf 'harness=agy\nkind=ship\nagy_bypass=on\nbusy_gen=g2\n' > "$dir/state/t1.meta"
+  jq '.gen="g2"' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  cat >> "$dir/state/agy-permission-log.jsonl" <<'NEW'
+{"task":"t1","gen":"g2","event":"armed","session_id":"c1"}
+{"task":"t1","gen":"g2","event":"pre-tool-use","session_id":"c1","decision":"approve","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":12,"judge_timeouts":1}
+{"task":"t1","gen":"g1","event":"pre-tool-use","session_id":"c1","decision":"escalate","tool_use_id":"c1-s3","ts":"2026-10-02T12:00:00Z"}
+{"task":"t1","gen":"g1","event":"decline","reason":"escalation agy-permission-c1-s3","ts":"2026-10-02T12:00:05Z"}
+NEW
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "new incarnation archive failed"
+  archive="$dir/state/agy-permission-audit.jsonl"
+  [ "$(wc -l < "$archive" | tr -d ' ')" = 2 ] || fail "each metadata incarnation needs its own archive"
+  tail -1 "$archive" | jq -e '.generation == "g2" and .log_scope_complete and .kind == "ship" and .confirmed_judge_coverage and .judge_attempts == 2 and .judge_elapsed_seconds == 12 and .judge_timeouts == 1 and .decisions.approve == 1 and .decisions.escalate == 0 and (.resolution_timing | length) == 0 and (.armed_generations | length) == 1 and .armed_generations[0].gen == "g2"' >/dev/null \
+    || fail "reused task ids must not combine earlier generations: $(tail -1 "$archive")"
+  printf 'harness=agy\nkind=scout\n' > "$dir/state/t1.meta"
+  rm "$policy"
+  bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "unscoped legacy archive failed"
+  tail -1 "$archive" | jq -e '.log_scope_complete == false and .judge_metrics_complete == false and .judge_attempts == null and .confirmed_judge_coverage == false and (.armed_generations | length) == 0' >/dev/null \
+    || fail "unknown legacy incarnation must not claim historical coverage or metrics"
+  pass "fm-agy-permission-policy: reused task ids retain only their generation; unscoped legacy timing stays unknown"
+}
+
 test_audit_counts_terminal_metrics_once() {
   local policy dir archive
   policy=$(new_case audit-terminal-metrics)
   dir=$(case_dir "$policy")
   printf 'harness=agy\nkind=scout\n' > "$dir/state/t1.meta"
   cat > "$dir/state/agy-permission-log.jsonl" <<'ROWS'
-{"task":"t1","event":"pre-tool-use","decision":"judge-retry","decider":"judge","judge_attempts":1,"judge_elapsed_seconds":4,"judge_timeouts":1}
-{"task":"t1","event":"pre-tool-use","decision":"judge-timeout-verdict","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":4,"judge_timeouts":2}
-{"task":"t1","event":"pre-tool-use","decision":"approve","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":12,"judge_timeouts":2}
+{"task":"t1","gen":"g1","event":"pre-tool-use","decision":"judge-retry","decider":"judge","judge_attempts":1,"judge_elapsed_seconds":4,"judge_timeouts":1}
+{"task":"t1","gen":"g1","event":"pre-tool-use","decision":"judge-timeout-verdict","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":4,"judge_timeouts":2}
+{"task":"t1","gen":"g1","event":"pre-tool-use","decision":"approve","decider":"judge","judge_attempts":2,"judge_elapsed_seconds":12,"judge_timeouts":2}
 ROWS
   bash "$ROOT/bin/fm-agy-audit.sh" "$dir/state" t1 || fail "metrics fixture archive failed"
   archive="$dir/state/agy-permission-audit.jsonl"
@@ -1557,3 +1634,6 @@ test_audit_survives_runtime_cleanup
 test_review_read_boundaries_and_nonread_exclusions
 test_complete_lists_and_source_use_prohibitions
 test_audit_counts_terminal_metrics_once
+
+test_common_negative_read_boundaries
+test_archive_scopes_reused_task_ids
