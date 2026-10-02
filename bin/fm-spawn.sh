@@ -2642,7 +2642,11 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
   exit 1
 fi
 
-case "$HARNESS" in
+# A raw launch command runs verbatim: its first word's basename records the
+# adapter for the task record only, so no executable is resolved, no CLI surface
+# is probed, and no catalog check runs - all of which exist to serve the launch
+# templates a raw command never carries.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
 pi | pi-signed)
   PI_BIN=$(resolve_pi_executable "$HARNESS") || {
     echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
@@ -2714,7 +2718,7 @@ if [ "$EFFORT" = ultra ]; then
     exit 1
   }
 fi
-if [ "$HARNESS" = omp ]; then
+if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" || exit 1
 fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
@@ -3032,7 +3036,10 @@ effort_flag_for_harness() {
   esac
 }
 
-case "$LAUNCH" in
+# The executable placeholders exist only in the launch templates. A raw launch
+# command runs verbatim, so nothing below resolves or substitutes on it - a
+# literal __AGYBIN__ in a raw command is the operator's own text.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__AGYBIN__*)
   AGY_BIN=$(resolve_pi_executable agy) || {
     echo "error: agy executable not found on PATH; install the Antigravity CLI or select a different verified harness" >&2
@@ -3042,13 +3049,13 @@ case "$LAUNCH" in
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__DEVINBIN__*)
   DEVIN_BIN=$(resolve_devin_binary) || exit 1
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__MUSEBIN__*)
   MUSE_BIN=$(resolve_muse_binary) || exit 1
   MUSE_CONFIG_HOME=$(resolve_directory_input XDG_CONFIG_HOME "${XDG_CONFIG_HOME:-${HOME:-}/.config}") || exit 1
@@ -3068,7 +3075,7 @@ case "$LAUNCH" in
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__KIMIBIN__*)
   KIMI_BIN=$(resolve_kimi_binary) || exit 1
   LAUNCH=${LAUNCH//__KIMIBIN__/$(shell_quote "$KIMI_BIN")}
@@ -3085,7 +3092,7 @@ case "$LAUNCH" in
   ;;
 esac
 
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__ROVOBIN__*)
   ROVO_BIN=$(resolve_rovo_binary) || exit 1
   LAUNCH=${LAUNCH//__ROVOBIN__/$(shell_quote "$ROVO_BIN")}
@@ -4902,7 +4909,13 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_STATE=$STATE_REAL
   RELAUNCH_REPLACEMENT_WT=$WT
 fi
-if [ "$KIND" != secondmate ]; then
+# A raw launch carries no firstmate wiring: its command runs verbatim with no
+# hooks, extensions, or event writers, so arming a busy record for it would
+# seed state nothing can ever clear - the same reason standalone Kimi below
+# waits for verified wiring. The whole arm/wire section is therefore skipped
+# on the raw path, including the hook and plugin files this block writes into
+# the operator's worktree.
+if [ "$KIND" != secondmate ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   # Arm the semantic busy-state contract (bin/fm-busy-lib.sh) for every
   # adapter with a verified semantic source. The launch brief sent below IS a
   # submitted turn, so the seed record is busy/fm-spawn. The minted gen is
@@ -4923,21 +4936,12 @@ if [ "$KIND" != secondmate ]; then
     ;;
   esac
   case "$HARNESS" in
-  claude* | opencode* | pi | pi-signed | omp)
+  claude* | opencode* | pi | pi-signed | omp | gemini | agy | devin)
     BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
       echo "error: failed to arm the busy-state contract for $ID" >&2
       exit 1
     }
     [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
-    ;;
-  gemini | agy | devin)
-    if [ "$RAW_LAUNCH" -eq 0 ]; then
-      BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
-        echo "error: failed to arm the busy-state contract for $ID" >&2
-        exit 1
-      }
-      [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
-    fi
     ;;
   kimi*)
     # Standalone Kimi stays unknown until fm_busy_kimi_verified opens on a
@@ -4981,38 +4985,36 @@ EOF
     exclude_path '.claude/settings.local.json'
     ;;
   gemini)
-    if [ "$RAW_LAUNCH" -eq 0 ]; then
-      # Semantic busy-state hooks (bin/fm-busy-lib.sh): BeforeAgent opens a
-      # turn and AfterAgent closes it, with SessionEnd closing on process
-      # shutdown so an abnormal end can never leave a stale busy record.
-      # Verified live on gemini-cli 0.58.0 as a clean open/close pair:
-      # mid-turn only BeforeAgent had fired, and AfterAgent followed at turn
-      # end. AfterAgent ALSO fires on a manual Escape interrupt (carrying
-      # prompt_response "[no response text]"), so unlike Claude a cancelled
-      # gemini turn closes its own record instead of leaving it busy.
-      # SessionEnd was observed firing TWICE for one /quit; the busy writer is
-      # idempotent for a repeated idle event, so the duplicate is harmless and
-      # deliberately not de-duplicated here.
-      # These are written into a FIRSTMATE-OWNED settings file under state/,
-      # reached through GEMINI_CLI_SYSTEM_SETTINGS_PATH on the launch command,
-      # never into the worktree's own .gemini/settings.json - that path is the
-      # PROJECT's committed settings file, so writing it would clobber a
-      # project's configuration and retiring it would delete a tracked file.
-      # Hook arrays MERGE across gemini's settings layers rather than
-      # overriding, so a project's own hooks still run alongside these.
-      # AfterAgent keeps the turn-ended NOTIFICATION touch for the watcher.
-      # Every hook command tolerates a refused event (|| true) so a stale-gen
-      # writer can never break gemini's own lifecycle, and each prints the
-      # empty JSON object gemini's hook contract requires on stdout.
-      busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
-      busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source gemini-hook"
-      g_before=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event before-agent >/dev/null 2>&1 || true; printf '{}'")
-      g_after=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event after-agent >/dev/null 2>&1 || true; printf '{}'")
-      g_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end >/dev/null 2>&1 || true; printf '{}'")
-      cat >"$STATE_REAL/$ID.gemini-settings.json" <<EOF
+    # Semantic busy-state hooks (bin/fm-busy-lib.sh): BeforeAgent opens a
+    # turn and AfterAgent closes it, with SessionEnd closing on process
+    # shutdown so an abnormal end can never leave a stale busy record.
+    # Verified live on gemini-cli 0.58.0 as a clean open/close pair:
+    # mid-turn only BeforeAgent had fired, and AfterAgent followed at turn
+    # end. AfterAgent ALSO fires on a manual Escape interrupt (carrying
+    # prompt_response "[no response text]"), so unlike Claude a cancelled
+    # gemini turn closes its own record instead of leaving it busy.
+    # SessionEnd was observed firing TWICE for one /quit; the busy writer is
+    # idempotent for a repeated idle event, so the duplicate is harmless and
+    # deliberately not de-duplicated here.
+    # These are written into a FIRSTMATE-OWNED settings file under state/,
+    # reached through GEMINI_CLI_SYSTEM_SETTINGS_PATH on the launch command,
+    # never into the worktree's own .gemini/settings.json - that path is the
+    # PROJECT's committed settings file, so writing it would clobber a
+    # project's configuration and retiring it would delete a tracked file.
+    # Hook arrays MERGE across gemini's settings layers rather than
+    # overriding, so a project's own hooks still run alongside these.
+    # AfterAgent keeps the turn-ended NOTIFICATION touch for the watcher.
+    # Every hook command tolerates a refused event (|| true) so a stale-gen
+    # writer can never break gemini's own lifecycle, and each prints the
+    # empty JSON object gemini's hook contract requires on stdout.
+    busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
+    busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source gemini-hook"
+    g_before=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event before-agent >/dev/null 2>&1 || true; printf '{}'")
+    g_after=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event after-agent >/dev/null 2>&1 || true; printf '{}'")
+    g_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end >/dev/null 2>&1 || true; printf '{}'")
+    cat >"$STATE_REAL/$ID.gemini-settings.json" <<EOF
 {"hooks":{"BeforeAgent":[{"hooks":[{"type":"command","command":"$g_before"}]}],"AfterAgent":[{"hooks":[{"type":"command","command":"$g_after"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$g_sessionend"}]}]}}
 EOF
-    fi
     ;;
   devin)
     fm_devin_spawn_wire
@@ -5554,33 +5556,45 @@ sq_ompcfg=$(shell_quote "${OMP_WORKER_CFG:-$FM_ROOT/.omp/fm-worker-overlay.yml}"
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 sq_tasktmp=$(shell_quote "$TASK_TMP")
-MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-[ "$HARNESS" != devin ] || MODELFLAG=$(model_flag_for_harness devin "$(fm_devin_launch_model "$MODEL")")
-# A pinned Pi launch confines Pi's model lookup to the declared provider.
-[ -z "$WORKER_ACCOUNT_PROVIDER" ] || MODELFLAG="--provider $(shell_quote "$WORKER_ACCOUNT_PROVIDER") $MODELFLAG"
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
-LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
-LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
-# Relaunch session continuity. Computed here, where the adopted endpoint (T) is
-# known, and substituted only into the Pi-family template's `__PIRESUME__`
-# placeholder; an empty value leaves every other launch byte-identical.
-RESUME_ARGS=
-if [ "$RELAUNCH" -eq 1 ]; then
-  RESUME_ARGS=$(relaunch_resume_args "$HARNESS" "$BACKEND" "$T") || RESUME_ARGS=
+# Every template-token substitution that expands into adapter launch content -
+# flags, resume args, attribution JSON, adapter config overrides - exists only
+# for the launch templates. A raw launch command runs verbatim, so none of them
+# touch it: a literal __MODELFLAG__ or __CLAUDEATTRIBUTION__ in a raw command
+# is the operator's own text, never an empty expansion or a rewritten flag.
+if [ "$RAW_LAUNCH" -eq 0 ]; then
+  MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
+  [ "$HARNESS" != devin ] || MODELFLAG=$(model_flag_for_harness devin "$(fm_devin_launch_model "$MODEL")")
+  # A pinned Pi launch confines Pi's model lookup to the declared provider.
+  [ -z "$WORKER_ACCOUNT_PROVIDER" ] || MODELFLAG="--provider $(shell_quote "$WORKER_ACCOUNT_PROVIDER") $MODELFLAG"
+  EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
+  LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
+  LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+  # Relaunch session continuity. Computed here, where the adopted endpoint (T) is
+  # known, and substituted only into the Pi-family template's `__PIRESUME__`
+  # placeholder; an empty value leaves every other launch byte-identical.
+  RESUME_ARGS=
+  if [ "$RELAUNCH" -eq 1 ]; then
+    RESUME_ARGS=$(relaunch_resume_args "$HARNESS" "$BACKEND" "$T") || RESUME_ARGS=
+  fi
+  LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
+  if [ "$KEEP_AI_TRAILERS" = 1 ]; then
+    LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/}
+  else
+    LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
+  fi
+  if [ "$HARNESS" = rovo ]; then
+    ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
+      echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
+      exit 1
+    }
+    LAUNCH=${LAUNCH//__ROVOCONFIGOVERRIDE__/$ROVOCONFIGOVERRIDE}
+  fi
 fi
-LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
-if [ "$KEEP_AI_TRAILERS" = 1 ]; then
-  LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/}
-else
-  LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
-fi
-if [ "$HARNESS" = rovo ]; then
-  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
-    echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
-    exit 1
-  }
-  LAUNCH=${LAUNCH//__ROVOCONFIGOVERRIDE__/$ROVOCONFIGOVERRIDE}
-fi
+# The remaining substitutions expand only to task-owned paths (the brief, the
+# worktree, the turn-end marker, the wiring sidecars, the shared tmp root) that
+# exist regardless of adapter. They cannot refuse, and they are the one channel
+# a raw command has to reference those paths deliberately, so they still expand
+# inside a raw command.
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
@@ -5589,23 +5603,26 @@ LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OMPEXT__/$sq_ompext}
 LAUNCH=${LAUNCH//__OMPWORKERCFG__/$sq_ompcfg}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
-case "$HARNESS" in
+# The adapter-specific substitutions exist for the launch templates only: a raw
+# launch command runs verbatim, so this step is skipped for it entirely. The
+# binary variables resolve inside the placeholder-gated blocks above, so each
+# substitution still tolerates an unset value rather than aborting under set -u
+# if a template ever drops its placeholder.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
 pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
 omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
-# A raw launch carries no placeholder and resolves no executable, so the
-# substitution must tolerate an unset binary rather than abort under set -u.
 agy) LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "${AGY_BIN:-}")"} ;;
 devin)
   LAUNCH=${LAUNCH//__DEVINBIN__/"$(shell_quote "${DEVIN_BIN:-}")"}
   LAUNCH=${LAUNCH//__DEVINCONFIG__/"$(shell_quote "$STATE_REAL/$ID.devin-config.json")"}
-  [ "$RAW_LAUNCH" -ne 0 ] || fm_devin_launch_assert "$LAUNCH" "$CREW_PERMISSION_MODE" "$STATE_REAL/$ID.devin-config.json" || exit 1
+  fm_devin_launch_assert "$LAUNCH" "$CREW_PERMISSION_MODE" "$STATE_REAL/$ID.devin-config.json" || exit 1
   ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 LAUNCH=${LAUNCH//__TASKTMP__/$sq_tasktmp}
-case "$HARNESS" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
 claude | codex)
   permission_dirs="--add-dir $(shell_quote "$STATE_REAL") --add-dir $(shell_quote "$(cd "$(dirname "$BRIEF")" && pwd -P)") "
   LAUNCH=${LAUNCH//__PERMISSIONDIRS__/$permission_dirs}
@@ -5616,7 +5633,9 @@ agy)
 esac
 # A record-backed launch brief is published into the state dir of the pane
 # receiving it, which for a secondmate is its own home, not this primary's.
-case "$LAUNCH" in
+# Both substitution cases are template machinery: a raw command keeps any
+# literal tokens it carries.
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__BRIEFDOORBELL__*)
   case "$KIND" in
     secondmate) brief_opstate="$PROJ_ABS/state" ;;
@@ -5629,7 +5648,7 @@ case "$LAUNCH" in
   LAUNCH=${LAUNCH//__BRIEFDOORBELL__/"$(shell_quote "$brief_doorbell")"}
   ;;
 esac
-case "$LAUNCH" in
+[ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__CLAUDEADDDIRS__*)
   CLAUDE_ADD_DIRS=$(claude_add_dirs_flag "$KIND" "$STATE" "$DATA" "$FM_ROOT" "$ID") || {
     echo "error: could not resolve the task-channel directories for $ID's claude --add-dir grant" >&2
@@ -5923,7 +5942,10 @@ if [ "$BACKEND" = tmux ] && [ "$RELAUNCH" -eq 1 ]; then
 else
   spawn_send_key "$T" Enter
 fi
-if [ "$HARNESS" = kimi ]; then
+# A raw launch command is the whole interaction: the ready gates and typed
+# brief pointers below presume the launch template's session shape, so they
+# do not run on the verbatim path.
+if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"
     exit 1
@@ -5947,7 +5969,7 @@ if [ "$HARNESS" = kimi ]; then
     exit 1
   fi
 fi
-if [ "$HARNESS" = rovo ]; then
+if [ "$HARNESS" = rovo ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   if ! rovo_wait_for_ready; then
     rovo_spawn_fail "rovo did not show a verified ready signal before brief delivery in window $T"
     exit 1
