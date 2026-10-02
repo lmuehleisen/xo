@@ -573,7 +573,8 @@ function ghTarget(command, spec, parsed, tokens, cwd, context) {
     }
     if (!target.repo) return deny("gh-no-repo");
   }
-  if (["pr create", "pr edit"].includes(command) && context.cwdKnown && !context.compound) {
+  if (["pr create", "pr edit"].includes(command) && context.cwdKnown && !context.compound
+    && parsed.flags.filter((flag) => ["-B", "--base", "-H", "--head"].includes(flag.name)).every((flag) => flag.value !== null && !flag.missing)) {
     const lastValue = (...names) => parsed.flags.filter((flag) => names.includes(flag.name)).at(-1)?.value || "";
     target.prBase = lastValue("-B", "--base");
     if (command === "pr create") {

@@ -864,14 +864,16 @@ INTEGRATION_SOURCES=""
 
 # Use the same trusted executable and environment isolation as privacy reads.
 integration_api() {
+  local paging=()
+  [ "${3:-}" != paginate ] || paging=(--paginate)
   env -u GH_HOST -u GH_REPO -u GH_CONFIG_DIR -u XDG_CONFIG_HOME \
     -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
     -u SSL_CERT_FILE -u SSL_CERT_DIR \
-    "$INTEGRATION_GH" api --hostname github.com "$1" --jq "$2" 2>/dev/null
+    "$INTEGRATION_GH" api --hostname github.com "$1" --jq "$2" ${paging[@]+"${paging[@]}"} 2>/dev/null
 }
 
 # Prove a fork-local PR to main contains a two-parent merge since main, whose
-# first parent descends from main and second parent adds upstream ancestry.
+# second parent adds upstream ancestry.
 # The destination must be this checkout's origin, and its upstream must be
 # configured in the owning home's publish guard (or CI's trusted base workflow).
 # GitHub supplies the graph; cached refs and caller-supplied SHAs prove nothing.
@@ -905,14 +907,15 @@ verify_integration() {
   # A plain fork-local branch or full SHA only; owner:branch heads do not qualify.
   printf '%s' "$head" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' || return 0
   case "$head" in *..*) return 0 ;; esac
-  merges=$(integration_api "repos/$dest/compare/main...$head" '.commits[] | select((.parents | length) == 2) | [.sha, .parents[0].sha, .parents[1].sha] | @tsv') || return 0
+  merges=$(integration_api "repos/$dest/compare/main...$head?per_page=100" '.commits[] | select((.parents | length) == 2) | [.sha, .parents[0].sha, .parents[1].sha] | @tsv' paginate) || return 0
+  # Comparison pages are chronological; consider the latest merges first so
+  # upstream's own older merges cannot crowd out the integration merge.
+  merges=$(printf '%s\n' "$merges" | awk '{ row[NR] = $0 } END { for (i = NR; i > 0; i--) print row[i] }')
   while IFS="$TAB" read -r merge first source; do
     [ -n "$merge" ] || continue
     count=$((count + 1))
     [ "$count" -le 8 ] || break
     printf '%s\n' "$merge" "$first" "$source" | grep -Eqv '^[0-9a-f]{40}$' && continue
-    status=$(integration_api "repos/$dest/compare/main...$first" .status) || continue
-    case "$status" in ahead | identical) ;; *) continue ;; esac
     status=$(integration_api "repos/$upstream/compare/$source...main" .status) || continue
     case "$status" in ahead | identical) ;; *) continue ;; esac
     status=$(integration_api "repos/$dest/compare/$source...main" .status) || continue

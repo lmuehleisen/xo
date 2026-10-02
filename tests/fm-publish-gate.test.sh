@@ -1487,9 +1487,8 @@ merge=$(printf 'c%.0s' $(seq 1 40))
 case "$4" in
 repos/acme/widgets/pulls/3) printf 'main\tintegration\tacme/widgets\n' ;;
 repos/acme/widgets/pulls/4) printf 'main\tintegration\tacme/another-fork\n' ;;
-repos/acme/widgets/compare/main...integration) printf '%s\t%s\t%s\n' "$merge" "$first" "$source" ;;
-repos/acme/widgets/compare/main...feature) exit 0 ;;
-repos/acme/widgets/compare/main..."$first") printf 'ahead\n' ;;
+repos/acme/widgets/compare/main...integration\?per_page=100) printf '%s\t%s\t%s\n' "$merge" "$first" "$source" ;;
+repos/acme/widgets/compare/main...feature\?per_page=100) exit 0 ;;
 repos/acme/upstream/compare/"$source"...main) printf 'ahead\n' ;;
 repos/acme/widgets/compare/"$source"...main) printf 'diverged\n' ;;
 *) exit 1 ;;
@@ -1497,14 +1496,23 @@ esac
 SH
   chmod +x "$FAKEBIN/gh"
   printf '%s\n' "$FAKEBIN/gh" >"$CFG/gh"
-  # Exactly 5000 non-newline characters, with the full recorded parent SHA.
+  # About 5000 characters, with the full recorded parent SHA and a tail marker
+  # proving the semantic judge receives the entire expanded description.
   printf 'Upstream source %s\n' "$source" >"$body"
   printf '%*s\n' 4944 '' | tr ' ' x >>"$body"
-  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr create --repo acme/widgets --base main --head integration --title Integration --body-file '$body'" 2>&1) || fail "integration create should pass: $out"
+  printf 'Tail review marker.\n' >>"$body"
+  out=$(cd "$repo" && FM_TEST_JUDGE_PROMPTS="$TMP_ROOT/integration-prompts" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr create --repo acme/widgets --base main --head integration --title Integration --body-file '$body'" 2>&1) || fail "integration create should pass: $out"
+  assert_contains "$(cat "$TMP_ROOT/integration-prompts")" 'Tail review marker.' 'whole description reaches the judge'
   out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit https://github.com/acme/widgets/pull/3 --body-file '$body'" 2>&1) || fail "integration edit should pass: $out"
   out=$(cd "$repo" && "$GATE" ci-text --config "$CFG" --dest acme/widgets --pr 3 --pr-upstream acme/upstream "body:$body" 2>&1) || fail "CI integration should pass: $out"
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head feature "body:$body" 2>&1) && fail "non-integration body should refuse"
   assert_contains "$out" 'longer than 1500 characters' 'ordinary feature cap'
+  cp "$FAKEBIN/gh" "$FAKEBIN/gh.good"
+  sed 's@repos/acme/upstream/compare/@repos/acme/unavailable/compare/@' "$FAKEBIN/gh.good" >"$FAKEBIN/gh"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "unavailable ancestry should refuse"
+  assert_contains "$out" 'longer than 1500 characters' 'unavailable ancestry cap'
+  cp "$FAKEBIN/gh.good" "$FAKEBIN/gh"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit https://github.com/acme/widgets/pull/3 --base \"\$TARGET_BASE\" --body-file '$body'" 2>&1) && fail "unreadable base must not qualify"
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head missing "body:$body" 2>&1) && fail "unverifiable head should refuse"
   assert_contains "$out" 'longer than 1500 characters' 'unverifiable cap'
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base develop --pr-head integration "body:$body" 2>&1) && fail "non-main base should refuse"
@@ -1519,6 +1527,11 @@ SH
   for _ in $(seq 1 80); do printf '\n'; done >>"$body"
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "81 physical lines should refuse"
   assert_contains "$out" 'longer than 80 lines' 'integration line cap'
+  # Both inclusive boundaries pass: 6000 non-newline characters in 80 lines.
+  printf 'Upstream source %s\n' "$source" >"$body"
+  printf '%*s\n' 5866 '' | tr ' ' x >>"$body"
+  for _ in $(seq 1 78); do printf 'x\n'; done >>"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) || fail "inclusive integration limits should pass: $out"
   # Longer descriptions still receive denylist, narrative, and reply checks.
   printf 'Upstream source %s\n%s\n' "$source" "$PRIVATE_TERM" >"$body"
   out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "integration denylist should refuse"
