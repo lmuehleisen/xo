@@ -665,7 +665,7 @@ test_codex_catalog_max_effort() {
 
 test_codex_unavailable_catalog_max_effort() {
   local kind model rec id out status launch
-  for kind in missing malformed invalid-schema unreadable; do
+  for kind in missing malformed invalid-schema missing-levels invalid-levels unreadable; do
     for model in gpt-6-astra gpt-5.6-luna; do
       id="catalog-$kind-$model"
       rec=$(make_spawn_case "$id" codex "$id")
@@ -674,6 +674,8 @@ test_codex_unavailable_catalog_max_effort() {
       case "$kind" in
         malformed) printf '{broken' > "$HOME_DIR/codex-home/models_cache.json" ;;
         invalid-schema) printf '{"models":{}}' > "$HOME_DIR/codex-home/models_cache.json" ;;
+        missing-levels) printf '{"models":[{"slug":"%s"}]}' "$model" > "$HOME_DIR/codex-home/models_cache.json" ;;
+        invalid-levels) printf '{"models":[{"slug":"%s","supported_reasoning_levels":{}}]}' "$model" > "$HOME_DIR/codex-home/models_cache.json" ;;
         unreadable) mkdir "$HOME_DIR/codex-home/models_cache.json" ;;
       esac
       out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model "$model" --effort max 2>&1)

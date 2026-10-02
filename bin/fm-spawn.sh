@@ -2929,8 +2929,11 @@ effort_flag_for_harness() {
       if [ -r "$catalog" ]; then
         max_supported=$(jq -r --arg model "$model" '
           if (.models | type) != "array" then error("invalid model catalog")
-          else any(.models[]; .slug == $model and
-            any(.supported_reasoning_levels[]?; .effort == "max")) end
+          else [.models[] | select(.slug == $model)] |
+            if any(.[]; (.supported_reasoning_levels | type) != "array")
+            then error("invalid model reasoning levels")
+            else any(.[]; any(.supported_reasoning_levels[]; .effort == "max")) end
+          end
         ' "$catalog" 2>/dev/null) || max_supported=
       fi
       case "$max_supported" in
