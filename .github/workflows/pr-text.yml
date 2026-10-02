@@ -26,8 +26,11 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           printf '%s\n' "$PR_TITLE" >"$RUNNER_TEMP/pr-title.txt"
           printf '%s\n' "${PR_BODY:-}" >"$RUNNER_TEMP/pr-body.txt"
-          bin/fm-publish-gate.sh ci-text "title:$RUNNER_TEMP/pr-title.txt" "body:$RUNNER_TEMP/pr-body.txt"
+          bin/fm-publish-gate.sh ci-text --dest "$PR_REPO" --pr "$PR_NUMBER" --pr-upstream kunchenguid/firstmate "title:$RUNNER_TEMP/pr-title.txt" "body:$RUNNER_TEMP/pr-body.txt"

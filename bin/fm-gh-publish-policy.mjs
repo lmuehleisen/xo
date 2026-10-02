@@ -573,6 +573,21 @@ function ghTarget(command, spec, parsed, tokens, cwd, context) {
     }
     if (!target.repo) return deny("gh-no-repo");
   }
+  if (["pr create", "pr edit"].includes(command) && context.cwdKnown && !context.compound) {
+    const lastValue = (...names) => parsed.flags.filter((flag) => names.includes(flag.name)).at(-1)?.value || "";
+    target.prBase = lastValue("-B", "--base");
+    if (command === "pr create") {
+      target.prHead = lastValue("-H", "--head");
+      if (!target.prHead) {
+        const branch = spawnSync("git", ["branch", "--show-current"], { cwd, encoding: "utf8" });
+        if (branch.status === 0) target.prHead = branch.stdout.trim();
+      }
+    } else {
+      const selector = literalValue(positional[0]);
+      target.prNumber = selector?.match(/^(?:#)?(\d+)$/)?.[1] || selector?.match(/\/pull\/(\d+)(?:[/?#]|$)/)?.[1] || "";
+    }
+    target.cwd = cwd;
+  }
   return target;
 }
 
@@ -849,6 +864,9 @@ function runGate(target) {
   try {
     const withKind = (kind, file) => (kind === "other" ? file : `${kind}:${file}`);
     const args = ["check-text", "--dest", target.repo];
+    if (target.prBase) args.push("--pr-base", target.prBase);
+    if (target.prHead) args.push("--pr-head", target.prHead);
+    if (target.prNumber) args.push("--pr", target.prNumber);
     for (const what of target.unscannable) args.push("--unscannable", what);
     for (const entry of target.files) args.push(withKind(entry.kind, entry.path));
     target.texts.forEach((entry, index) => {
@@ -856,7 +874,7 @@ function runGate(target) {
       writeFileSync(file, `${entry.text}\n`);
       args.push(withKind(entry.kind, file));
     });
-    const result = spawnSync(GATE, args, { encoding: "utf8" });
+    const result = spawnSync(GATE, args, { cwd: target.cwd, encoding: "utf8" });
     if (result.status === 0) return ALLOW;
     // Keep the gate's closing REFUSED and fix lines even after many findings.
     const lines = (result.stderr || "").trim().split("\n");

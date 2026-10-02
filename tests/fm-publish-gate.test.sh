@@ -803,7 +803,10 @@ test_disable_push_helper() {
   local repo out
   repo="$TMP_ROOT/disable"
   fm_git_init_commit "$repo" >/dev/null
+  git -C "$repo" remote add origin https://github.com/acme/widgets.git
   git -C "$repo" remote add upstream https://github.com/acme/upstream.git
+  cp "$CFG/upstream" "$TMP_ROOT/upstream.saved" 2>/dev/null || : >"$TMP_ROOT/upstream.saved"
+  printf 'acme/upstream\n' >"$CFG/upstream"
   out=$("$GATE" disable-push "$repo") || fail "disable-push failed"
   assert_contains "$out" "upstream push after: DISABLED" "disable-push output"
   assert_equals DISABLED "$(git -C "$repo" remote get-url --push upstream)" "upstream push url"
@@ -1465,6 +1468,68 @@ Also reworked the loop so the retry stops after three attempts.'
   pass "PR titles, descriptions, and replies must be short and neutral, in the guard and in CI"
 }
 
+# Live GitHub reads are the public graph interface; synthetic responses model
+# a fork merge, a feature branch, and unavailable ancestry without networking.
+test_integration_pr_body_limits() {
+  local repo="$TMP_ROOT/integration-text" source out body="$TMP_ROOT/integration.md"
+  source=$(printf 'a%.0s' $(seq 1 40))
+  git init -q -b main "$repo"
+  git -C "$repo" remote add origin https://github.com/acme/widgets.git
+  git -C "$repo" remote add upstream https://github.com/acme/upstream.git
+  cp "$CFG/upstream" "$TMP_ROOT/upstream.saved" 2>/dev/null || : >"$TMP_ROOT/upstream.saved"
+  printf 'acme/upstream\n' >"$CFG/upstream"
+  cat >"$FAKEBIN/gh" <<'SH'
+#!/usr/bin/env bash
+[ "$1 $2 $3" = 'api --hostname github.com' ] || exit 1
+source=$(printf 'a%.0s' $(seq 1 40))
+first=$(printf 'b%.0s' $(seq 1 40))
+merge=$(printf 'c%.0s' $(seq 1 40))
+case "$4" in
+repos/acme/widgets/pulls/3) printf 'main\tintegration\tacme/widgets\n' ;;
+repos/acme/widgets/pulls/4) printf 'main\tintegration\tacme/another-fork\n' ;;
+repos/acme/widgets/compare/main...integration) printf '%s\t%s\t%s\n' "$merge" "$first" "$source" ;;
+repos/acme/widgets/compare/main...feature) exit 0 ;;
+repos/acme/widgets/compare/main..."$first") printf 'ahead\n' ;;
+repos/acme/upstream/compare/"$source"...main) printf 'ahead\n' ;;
+repos/acme/widgets/compare/"$source"...main) printf 'diverged\n' ;;
+*) exit 1 ;;
+esac
+SH
+  chmod +x "$FAKEBIN/gh"
+  printf '%s\n' "$FAKEBIN/gh" >"$CFG/gh"
+  # Exactly 5000 non-newline characters, with the full recorded parent SHA.
+  printf 'Upstream source %s\n' "$source" >"$body"
+  printf '%*s\n' 4944 '' | tr ' ' x >>"$body"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr create --repo acme/widgets --base main --head integration --title Integration --body-file '$body'" 2>&1) || fail "integration create should pass: $out"
+  out=$(cd "$repo" && FM_CONFIG_OVERRIDE="$TMP_ROOT/config" "$PRETOOL" --publish-only --claude --command "gh pr edit https://github.com/acme/widgets/pull/3 --body-file '$body'" 2>&1) || fail "integration edit should pass: $out"
+  out=$(cd "$repo" && "$GATE" ci-text --config "$CFG" --dest acme/widgets --pr 3 --pr-upstream acme/upstream "body:$body" 2>&1) || fail "CI integration should pass: $out"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head feature "body:$body" 2>&1) && fail "non-integration body should refuse"
+  assert_contains "$out" 'longer than 1500 characters' 'ordinary feature cap'
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head missing "body:$body" 2>&1) && fail "unverifiable head should refuse"
+  assert_contains "$out" 'longer than 1500 characters' 'unverifiable cap'
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base develop --pr-head integration "body:$body" 2>&1) && fail "non-main base should refuse"
+  out=$(cd "$repo" && "$GATE" ci-text --config "$CFG" --dest acme/widgets --pr 4 --pr-upstream acme/upstream "body:$body" 2>&1) && fail "cross-fork head should refuse"
+  printf '%*s\n' 5000 '' | tr ' ' x >"$TMP_ROOT/unrecorded.md"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$TMP_ROOT/unrecorded.md" 2>&1) && fail "unrecorded source should refuse"
+  printf 'Upstream source %s\n' "$source" >"$body"
+  printf '%*s\n' 5945 '' | tr ' ' x >>"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "6001 characters should refuse"
+  assert_contains "$out" 'longer than 6000 characters' 'integration character cap'
+  printf 'Upstream source %s\n' "$source" >"$body"
+  for _ in $(seq 1 80); do printf '\n'; done >>"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "81 physical lines should refuse"
+  assert_contains "$out" 'longer than 80 lines' 'integration line cap'
+  # Longer descriptions still receive denylist, narrative, and reply checks.
+  printf 'Upstream source %s\n%s\n' "$source" "$PRIVATE_TERM" >"$body"
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "body:$body" 2>&1) && fail "integration denylist should refuse"
+  assert_contains "$out" 'denylist rule' 'integration content scan'
+  out=$(cd "$repo" && "$GATE" check-text --config "$CFG" --dest acme/widgets --pr-base main --pr-head integration "reply:$TMP_ROOT/unrecorded.md" 2>&1) && fail "integration context must not expand reply cap"
+  assert_contains "$out" 'longer than 750 characters' 'reply cap retained'
+  cp "$TMP_ROOT/upstream.saved" "$CFG/upstream"
+  reset_trusted_gh
+  pass "only verified fork-local integrations get the larger body cap in the guard and CI"
+}
+
 # Replies may run to 5 lines and 750 characters, and the narrative rule
 # matches the shapes of incident evidence, not the everyday words a tmux
 # orchestrator's own changes use.
@@ -1610,6 +1675,7 @@ test_gh_guard_refuses_visibility_changes
 test_gh_guard_refuses_api_write_queries
 test_judge_override_is_captain_only
 test_pr_text_shape_rules
+test_integration_pr_body_limits
 test_reply_limits_and_evidence_shapes
 test_git_refusals
 test_ci_commits_and_text
