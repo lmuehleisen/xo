@@ -205,6 +205,33 @@ EOF
   pass "fm-spawn.sh: a raw agy launch command spawns without resolving the agy executable"
 }
 
+test_agy_audit_dependency_refuses_before_launch() {
+  local mode id fields case_dir home proj wt fakebin out status
+  for mode in auto manual raw bypass; do
+    id="rb-python-$mode-$$"
+    fields=$(make_case "python-$mode" "$id")
+    IFS='|' read -r case_dir home proj wt fakebin <<EOF
+$fields
+EOF
+    : "$case_dir"
+    printf '#!/usr/bin/env bash\nexit 127\n' > "$fakebin/python3"
+    chmod +x "$fakebin/python3"
+    [ "$mode" != manual ] || printf 'manual\n' > "$home/config/crew-permissions"
+    case "$mode" in
+      raw) out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout 'agy --version'); status=$? ;;
+      bypass) out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout --agy-bypass); status=$? ;;
+      *) out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout); status=$? ;;
+    esac
+    [ "$status" -ne 0 ] || fail "$mode: unusable Python must refuse agy launch"
+    case "$out" in *'Python 3 is required for its cleanup audit'*) ;; *) fail "$mode: missing audit dependency diagnostic: $out" ;; esac
+    ! window_present "fm-$id" || fail "$mode: dependency refusal must not open an endpoint"
+    [ ! -f "$home/state/$id.meta" ] || fail "$mode: dependency refusal must not publish metadata"
+    [ ! -f "$fakebin/treehouse-calls" ] || fail "$mode: dependency refusal must precede any slot acquisition"
+  done
+  pass "fm-spawn.sh: every agy launch checks its audit dependency before acquiring an endpoint"
+}
+
+test_agy_audit_dependency_refuses_before_launch
 test_bypass_hooks_refusal_rolls_back
 test_post_publication_prelaunch_refusal_rolls_back
 test_foreign_slot_content_keeps_the_lease

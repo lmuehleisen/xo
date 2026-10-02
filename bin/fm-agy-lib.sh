@@ -160,6 +160,13 @@ fm_agy_relaunch_inherit() {
 # roots - so widening the gate changed who they protect, not what they check,
 # and tests/fm-agy-harness.test.sh exercises them on the ship path.
 fm_agy_bypass_validate() {
+  # Every agy task, including manual and raw launches, archives at teardown.
+  # Refuse before acquiring an endpoint rather than discover a missing audit
+  # dependency only after the task has completed.
+  if [ "$HARNESS" = agy ] && ! python3 -c 'import datetime, hashlib, json, pathlib, re, sys' >/dev/null 2>&1; then
+    echo "error: cannot spawn agy task: Python 3 is required for its cleanup audit; install python3 before launching" >&2
+    exit 1
+  fi
   if [ "$AGY_BYPASS" -eq 1 ]; then
     [ "$HARNESS" = agy ] || {
       echo "error: --agy-bypass applies only to agy spawns" >&2

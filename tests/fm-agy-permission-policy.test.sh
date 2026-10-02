@@ -646,6 +646,40 @@ EOF
   pass "fm-agy-permission-policy: credential paths hold for firstmate and approval authorizes one retry"
 }
 
+test_spent_credential_token_binds_to_invocation() {
+  local policy dir command spent ckey
+  policy=$(new_case spent-credential)
+  dir=$(case_dir "$policy")
+  command='cat .env'
+  hook "$policy" pre-tool-use run_command "$command" 5
+  denied "$OUT" || fail "credential read must initially hold"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s5 </dev/null >/dev/null 2>&1 || fail "approve credential read"
+  hook "$policy" pre-tool-use run_command "$command" 8
+  abstained "$OUT" || fail "authorized credential retry must run"
+  spent=$(find "$dir/state/t1.agy-permission-cache" -name '*.once-spent')
+  [ -f "$spent" ] || fail "authorized invocation needs its spent proof"
+  # Keep the earlier post hook missing: its stale proof must not bless a
+  # later retry that bypasses a fresh denial, including an old reusable cache.
+  hook "$policy" pre-tool-use run_command "$command" 9
+  denied "$OUT" || fail "later credential retry must hold"
+  ckey=$(sed -n '3p' "$dir/state/t1.agy-permission-pending/c1-s9.pending")
+  printf 'legacy reusable verdict\n' > "$dir/state/t1.agy-permission-cache/$ckey"
+  hook "$policy" post-tool-use run_command "$command" 9
+  jq -e 'select(.event == "post-tool-use" and .decision == "anomaly" and .reason == "escalation agy-permission-c1-s9")' "$dir/state/agy-permission-log.jsonl" >/dev/null \
+    || fail "stale spent proof must not hide the later deny-bypass anomaly"
+  [ -f "$spent" ] || fail "a different invocation must not remove the earlier run's proof"
+  hook "$policy" post-tool-use run_command "$command" 8
+  [ ! -e "$spent" ] || fail "authorized invocation completion must retire its proof"
+  hook "$policy" pre-tool-use run_command "$command" 10
+  denied "$OUT" || fail "completed one-shot cannot approve another attempt"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s10 </dev/null >/dev/null 2>&1 || fail "approve next exact attempt"
+  hook "$policy" pre-tool-use run_command "$command" 12
+  abstained "$OUT" || fail "a fresh approval must authorize its next pre hook"
+  hook "$policy" post-tool-use run_command "$command" 12
+  [ -z "$(find "$dir/state/t1.agy-permission-cache" -name '*.once-spent')" ] || fail "completed credential proof must be removed"
+  pass "fm-agy-permission-policy: spent credential approval proves only its invocation and retires on completion"
+}
+
 test_held_marker_binds_before_the_judge() {
   local policy dir
   # The fake judge declines npm install on its first call and approves on the
@@ -1642,3 +1676,4 @@ test_audit_counts_terminal_metrics_once
 
 test_common_negative_read_boundaries
 test_archive_scopes_reused_task_ids
+test_spent_credential_token_binds_to_invocation

@@ -501,9 +501,10 @@ case "$EVENT" in
       && [ -f "$CACHE_DIR/$once_key.once" ]; then
       # Firstmate's one-shot approval of a never-approve call: the token is
       # consumed by this retry, so a further retry escalates again. It is
-      # renamed, not deleted, so post-tool-use can still tell the authorized
-      # run from a deny the worker ignored.
-      if mv -f "$CACHE_DIR/$once_key.once" "$CACHE_DIR/$once_key.once-spent" 2>/dev/null; then
+      # Bound to this invocation so a later denied retry cannot borrow proof
+      # from an earlier authorized run, even if its post hook never arrived.
+      if mv -f "$CACHE_DIR/$once_key.once" "$CACHE_DIR/$once_key.once-spent" 2>/dev/null \
+        && tool_slug > "$CACHE_DIR/$once_key.once-spent"; then
         log_record approve firstmate "one-shot approval consumed"
         exit 0
       fi
@@ -559,13 +560,21 @@ case "$EVENT" in
       [ -f "$m" ] || continue
       [ "$(sed -n '2p' "$m" 2>/dev/null)" = "$summary" ] || continue
       mckey=$(sed -n '3p' "$m" 2>/dev/null)
-      if [ -n "$mckey" ] && { [ -f "$CACHE_DIR/$mckey" ] \
-        || [ -f "$CACHE_DIR/$mckey.once" ] || [ -f "$CACHE_DIR/$mckey.once-spent" ]; }; then
+      mclass=$(sed -n '4p' "$m" 2>/dev/null)
+      if [ -n "$mckey" ] && { { [ "$mclass" != never ] && [ -f "$CACHE_DIR/$mckey" ]; } \
+        || { [ -f "$CACHE_DIR/$mckey.once-spent" ] \
+          && [ "$(cat "$CACHE_DIR/$mckey.once-spent")" = "$(tool_slug)" ]; }; }; then
         close_pending "$m" approved "the escalated $TOOL call was approved and ran" policy
       else
         close_pending "$m" anomaly "the held $TOOL call ran WITHOUT a firstmate approval - the deny was not honored; audit this worker's pane" policy
       fi
     done
+    # A completed invocation no longer needs its consumed approval proof.
+    if once_key=$(cache_key 2>/dev/null) && [ -n "$once_key" ] \
+      && [ -f "$CACHE_DIR/$once_key.once-spent" ] \
+      && [ "$(cat "$CACHE_DIR/$once_key.once-spent")" = "$(tool_slug)" ]; then
+      rm -f "$CACHE_DIR/$once_key.once-spent"
+    fi
     exit 0
     ;;
   stop)
