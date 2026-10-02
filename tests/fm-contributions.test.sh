@@ -1130,8 +1130,80 @@ test_forget_refuses_unknown_and_active_links() {
   pass 'forget refuses unknown pairs, blank reasons, unavailable backlog and active links'
 }
 
+test_forget_refuses_unobserved_and_unsafe_metadata() {
+  local home url=https://github.com/o/r/pull/8 mode
+  home=$(new_home forget-evidence-guards)
+  forge_home "$home"
+  printf '# Backlog\n\n## Queued\n' > "$home/data/backlog.md"
+  printf 'pr=%s\n' "$url" > "$home/linked.meta"
+  rm "$home/state/delivery.meta"
+  cp "$home/data/delivery/contributions.json" "$home/original.json"
+  for mode in symlink broken directory; do
+    case "$mode" in
+      symlink) ln -s "$home/linked.meta" "$home/state/delivery.meta" ;;
+      broken) ln -s "$home/absent.meta" "$home/state/delivery.meta" ;;
+      directory) mkdir "$home/state/delivery.meta" ;;
+    esac
+    if with_home "$home" "$ROOT/bin/fm-contributions.sh" forget delivery "$url" --reason retired >/dev/null 2>&1; then
+      fail "forget accepted $mode metadata"
+    fi
+    cmp -s "$home/original.json" "$home/data/delivery/contributions.json" || fail "unsafe $mode metadata changed evidence"
+    if [ "$mode" = directory ]; then rmdir "$home/state/delivery.meta"; else rm "$home/state/delivery.meta"; fi
+  done
+  mutate_record "$home" delivery '.records[0].observation=null | .records[0].checked_at=null'
+  cp "$home/data/delivery/contributions.json" "$home/unobserved.json"
+  if with_home "$home" "$ROOT/bin/fm-contributions.sh" forget delivery "$url" --reason retired >/dev/null 2>&1; then
+    fail 'forget accepted an unobserved saved row'
+  fi
+  cmp -s "$home/unobserved.json" "$home/data/delivery/contributions.json" || fail 'unobserved refusal changed evidence'
+  pass 'forget refuses unobserved records and unsafe task metadata without altering evidence'
+}
+
+test_forget_refuses_oversized_complete_record() {
+  local home url=https://github.com/o/r/pull/8 reason
+  home=$(new_home forget-size)
+  forge_home "$home"
+  printf '# Backlog\n\n## Done\n' > "$home/data/backlog.md"
+  # The existing evidence plus the audit, rather than the reason alone, exceeds the cap.
+  mutate_record "$home" delivery '.records[0].seen=[("x" * 1044000)]'
+  [ "$(wc -c < "$home/data/delivery/contributions.json")" -le 1048576 ] || fail 'size fixture was already unreadable'
+  cp "$home/data/delivery/contributions.json" "$home/original.json"
+  reason=$(jq -nr '"r" * 5000')
+  if with_home "$home" "$ROOT/bin/fm-contributions.sh" forget delivery "$url" --reason "$reason" >/dev/null 2>&1; then
+    fail 'forget accepted an oversized serialized record'
+  fi
+  cmp -s "$home/original.json" "$home/data/delivery/contributions.json" || fail 'oversized update replaced retained evidence'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" pending >/dev/null || fail 'oversized refusal left unreadable evidence'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" forget delivery "$url" --reason retired || fail 'short audit should fit the complete record'
+  pass 'oversized audits preserve readable evidence and smaller audits still succeed'
+}
+
+test_active_links_override_forgotten_marker() {
+  local home url=https://github.com/o/r/pull/8 mode
+  home=$(new_home forget-relink)
+  forge_home "$home"
+  printf '# Backlog\n\n## Done\n' > "$home/data/backlog.md"
+  mutate_record "$home" delivery '.records[0].observation.can_merge=true | .records[0].pending=[{token:"retained",type:"comment"}]'
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" forget delivery "$url" --reason retired || fail 'initial forget failed'
+  for mode in backlog metadata; do
+    case "$mode" in
+      backlog) printf '# Backlog\n\n## Queued\n- [ ] delivery - Linked https://github.com/o/r/pull/8 (repo: sample) (kind: ship)\n' > "$home/data/backlog.md" ;;
+      metadata)
+        printf '# Backlog\n\n## Done\n' > "$home/data/backlog.md"
+        printf 'kind=ship\npr=%s\n' "$url" >> "$home/state/delivery.meta" ;;
+    esac
+    with_home "$home" "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input > "$home/input.json" || fail 'relink snapshot input failed'
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" snapshot "$home/input.json" --all | jq -e '.known == 1 and .rows[0].signals[0].token == "retained"' >/dev/null || fail "active $mode link remained hidden"
+    with_home "$home" "$ROOT/bin/fm-contributions.sh" pending | jq -e 'length == 1 and .[0].token == "retained"' >/dev/null || fail "active $mode link lost pending evidence"
+    jq -e '.records[0].forgotten.reason == "retired"' "$home/data/delivery/contributions.json" >/dev/null || fail 'relink lost the audit'
+  done
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'reactivated poll failed'
+  jq -e '.records[0].observation.can_merge == false and .records[0].forgotten.reason == "retired"' "$home/data/delivery/contributions.json" >/dev/null || fail 'active link failed to resume observation while preserving audit'
+  pass 'links added after forgetting restore observation and signals while retaining the audit'
+}
+
 failures=0
-for test_name in test_forget_retains_audit_and_stops_tracking test_forget_refuses_unknown_and_active_links test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed; do
+for test_name in test_forget_refuses_unobserved_and_unsafe_metadata test_forget_refuses_oversized_complete_record test_active_links_override_forgotten_marker test_forget_retains_audit_and_stops_tracking test_forget_refuses_unknown_and_active_links test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

@@ -79,10 +79,13 @@
 # actor is the invoking local account (id -un), never a forge identity.
 # It excludes that task/URL from ownership, polling, pending, and snapshot views,
 # including historical Done links. Other task owners remain independent.
-# It refuses unknown/unobserved pairs, unreadable records, a missing backlog,
+# It refuses unknown/unobserved pairs, unreadable records or task metadata,
+# a missing backlog,
 # any non-Done structured backlog link to the URL, or any recorded task pr= link
 # to it (metadata remains live until retired, regardless of endpoint liveness).
 # Remove those active links first. Repeated forget preserves the first audit.
+# A subsequent active link overrides the marker while retaining its audit, so
+# concurrent lifecycle updates cannot hide newly owned work.
 # Recovery is a deliberate local edit removing forgotten from the retained row;
 # no record, observation, verdict, or pending evidence is deleted.
 #
@@ -206,6 +209,10 @@ write_record() { # task record-json-file
     jq --slurpfile row "$2" '.records = ([.records[] | select(.url != $row[0].url)] + $row)' "$file" > "$staged"
   else
     jq -n --arg task "$task" --slurpfile row "$2" '{schema:"fm-contributions.v1",task:$task,records:$row}' > "$staged"
+  fi
+  if [ "$(wc -c < "$staged")" -gt 1048576 ]; then
+    rm -f -- "$staged"
+    fail 'updated contribution record exceeds the 1048576-byte reader limit'
   fi
   chmod 600 "$staged"
   fm_pr_regular_destination_on_device_or_absent "$file" "$device" || fail 'contribution destination changed'
@@ -467,7 +474,12 @@ case "${1:-}" in
   pending)
     read_saved
     [ "$ERRORS" -eq 0 ] || fail "$ERRORS unreadable contribution record(s); pending signals are unverified"
-    jq '[.[] | .task as $task | .records[] | select(.forgotten == null) | .url as $url | .pending[] | . + {task:$task,url:$url}]' "$TMP/saved.json"
+    get_input
+    jq_lib -n --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
+      known($input[0];$saved[0]) as $known
+      | [$saved[0][] | .task as $task | .records[] | .url as $url
+         | select(any($known[]; .task == $task and .url == $url))
+         | .pending[] | . + {task:$task,url:$url}]'
     ;;
   forget)
     [ "$#" -eq 5 ] && [ "$4" = --reason ] || fail 'forget needs task, URL and --reason text'
@@ -476,10 +488,15 @@ case "${1:-}" in
     jq -ne --arg reason "$reason" '$reason | test("\\S")' >/dev/null || fail 'a nonempty reason is required'
     acquire; get_input; read_saved
     [ "$ERRORS" -eq 0 ] || fail 'unreadable contribution records; removal refused'
+    for meta in "$STATE"/*.meta; do
+      [ -e "$meta" ] || [ -L "$meta" ] || continue
+      [ ! -L "$meta" ] && [ -f "$meta" ] && [ -r "$meta" ] \
+        || fail 'unsafe or unreadable task metadata; removal refused'
+    done
     jq -e '.backlog.present == true' "$TMP/input.json" >/dev/null || fail 'backlog unavailable; removal refused'
     jq -e --arg task "$task" --arg url "$url" \
-      '.[] | select(.task == $task) | .records[] | select(.url == $url)' "$TMP/saved.json" > "$TMP/row.json" \
-      || fail 'unknown observed task/URL'
+      '.[] | select(.task == $task) | .records[] | select(.url == $url and .observation != null)' "$TMP/saved.json" > "$TMP/row.json" \
+      || fail 'unknown or unobserved task/URL'
     jq -e --arg url "$url" '
       (any(.backlog.records[]?; .structured == true and .state != "done"
         and ((.links // []) | index($url)) != null)
