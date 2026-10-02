@@ -1,7 +1,7 @@
 # Fork divergences
 
 This fork-only ledger owns which differences between this fork and upstream [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) are deliberate.
-README "Personal fork: what differs" stays the owner of user-visible fork behavior; an entry here names its README bullet rather than restating it, and adds the class, seam, guard, and upstream position.
+README "Fork: what differs" stays the owner of user-visible fork behavior; an entry here names its README bullet rather than restating it, and adds the class, seam, guard, and upstream position.
 The [upstream integration checklist](upstream-integration.md) runs every guard named here and classifies each shared-file difference against these entries.
 
 Divergence from upstream is a cost to weigh, not a hard gate.
@@ -136,7 +136,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### fork-documentation
 
-- Intent: the fork's prose describes the fork rather than upstream: README "Personal fork: what differs" and every fork wording in shared prose that states the behavior of another entry here, plus the inventory rows that register fork-only prose.
+- Intent: the fork's prose describes the fork rather than upstream: README "Fork: what differs" and every fork wording in shared prose that states the behavior of another entry here, plus the inventory rows that register fork-only prose.
 - Class: intended.
 - Seam: any shared prose surface, including `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `VISION.md`, `docs/` (for example `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`), and skill prose under `.agents/skills/`, limited to hunks that describe another entry's behavior; fork-only records such as `docs/verification/runtime-backends-fork.md`; and the `docs/documentation-audiences.json` rows that classify fork-only surfaces such as this ledger and `docs/upstream-integration.md`, while any other hunk in these files is still classified on its own.
 - Guard: none; the integration run's ledger-update step reviews these files against the fork each run.
@@ -236,8 +236,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: exact tmux session inventory, now routed through upstream's window inventory.
 - Class: carried.
-- Seam: the remainder in the tmux backend, `bin/fm-backend.sh`, and `bin/fm-crew-state.sh` (shared).
-- Guard: none.
+- Seam: exact session/window inventory in the tmux backend, `bin/fm-backend.sh`, and `bin/fm-crew-state.sh`, plus immutable window identity recorded by `bin/fm-spawn.sh` and checked before endpoint cleanup in `bin/fm-teardown.sh` (shared).
+- Guard: `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-tmux-agent-liveness.test.sh` exact inventory cases; `tests/fm-teardown.test.sh` missing and replaced window cases.
 - Upstream: drop the remainder once upstream's inventory covers it.
 
 ### rehold-reason
@@ -356,7 +356,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ## Incidental
 
-- `codex-animation-port`: the fork's port of upstream #4297 (`tests/fixtures/codex-animation/`), which upstream replaced with #4532; kept for now at a known cost.
-- `ci-shard-timeout`: a small `.github/workflows/ci.yml` difference awaiting CI samples.
+- `codex-animation-port`: the fork's port of upstream #4297 (`tests/fixtures/codex-animation/`), which upstream replaced with #4532; the animation, painted-braille, and ghost extraction hunks in `bin/fm-composer-lib.sh`, their cases in `tests/fm-composer-ghost.test.sh` and `tests/fm-composer-lib.test.sh`, and the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`; kept for now at a known cost.
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.
