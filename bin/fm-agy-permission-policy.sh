@@ -564,6 +564,9 @@ case "$EVENT" in
       [ "$(sed -n '2p' "$m" 2>/dev/null)" = "$summary" ] || continue
       mckey=$(sed -n '3p' "$m" 2>/dev/null)
       mclass=$(sed -n '4p' "$m" 2>/dev/null)
+      # An earlier authorized invocation completing cannot close a later
+      # one-shot hold merely because its command is identical.
+      [ "$mclass" != never ] || [ "${m##*/}" = "$(tool_slug).pending" ] || continue
       if [ -n "$mckey" ] && { { [ "$mclass" != never ] && [ -f "$CACHE_DIR/$mckey" ]; } \
         || { [ -f "$CACHE_DIR/$mckey.once-spent" ] \
           && [ "$(cat "$CACHE_DIR/$mckey.once-spent")" = "$(tool_slug)" ]; }; }; then

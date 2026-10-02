@@ -677,6 +677,18 @@ test_spent_credential_token_binds_to_invocation() {
   abstained "$OUT" || fail "a fresh approval must authorize its next pre hook"
   hook "$policy" post-tool-use run_command "$command" 12
   [ -z "$(find "$dir/state/t1.agy-permission-cache" -name '*.once-spent')" ] || fail "completed credential proof must be removed"
+  hook "$policy" pre-tool-use run_command "$command" 15
+  denied "$OUT" || fail "new credential hold must open"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s15 </dev/null >/dev/null 2>&1 || fail "approve overlapping invocation"
+  hook "$policy" pre-tool-use run_command "$command" 18
+  abstained "$OUT" || fail "overlapping authorized invocation must run"
+  hook "$policy" pre-tool-use run_command "$command" 19
+  denied "$OUT" || fail "later overlapping invocation must hold"
+  hook "$policy" post-tool-use run_command "$command" 18
+  [ -f "$dir/state/t1.agy-permission-pending/c1-s19.pending" ] || fail "earlier completion must not resolve the later held invocation"
+  hook "$policy" post-tool-use run_command "$command" 19
+  jq -e 'select(.event == "post-tool-use" and .decision == "anomaly" and .reason == "escalation agy-permission-c1-s19")' "$dir/state/agy-permission-log.jsonl" >/dev/null \
+    || fail "later overlapping deny-bypass must record its own anomaly"
   pass "fm-agy-permission-policy: spent credential approval proves only its invocation and retires on completion"
 }
 
