@@ -92,7 +92,11 @@ def archive(state, task):
         "recorded_judge": meta.get("agy_judge"),
         "armed_generations": [{"gen": r.get("gen"), "session_id": r.get("session_id"), "at": r.get("ts"), "agy_version": r.get("agy_version"),
                                "judge_tier": r.get("judge_tier"), "judge_model": r.get("judge_model")} for r in armed],
-        "confirmed_judge_coverage": meta.get("agy_bypass") == "on" and any(a.get("gen") == policy.get("gen") and any(r.get("session_id") == a.get("session_id") for r in decisions) for a in armed),
+        "confirmed_judge_coverage": meta.get("agy_bypass") == "on" and bool(policy.get("gen")) and any(
+            a.get("gen") == policy["gen"] and any(
+                r.get("gen") == a["gen"] and r.get("session_id") == a.get("session_id") for r in decisions
+            ) for a in armed
+        ),
         "decisions": {name: sum(r.get("decision") == name for r in decisions) for name in ("approve", "refuse", "escalate")},
         "resolution_timing": resolutions, "captain_resolution_timing": captain_calls,
         "captain_timing_complete": False,  # Existing records do not prove who was asked in chat.

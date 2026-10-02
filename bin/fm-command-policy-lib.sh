@@ -259,7 +259,7 @@
 #
 # Log: log_record appends one JSON line to the per-home log the policy file
 # names ({ts, task, event, tool, tool_use_id, session_id, input, decision,
-# decider, reason, judge_elapsed_seconds, judge_attempts, judge_timeouts}); the adapter chooses the decision and decider
+# gen, decider, reason, judge_elapsed_seconds, judge_attempts, judge_timeouts}); the adapter chooses the decision and decider
 # vocabulary. The log is append-only operational evidence for tuning this
 # policy and safe to delete.
 #
@@ -304,11 +304,11 @@ log_record() {  # <decision> <decider> <reason> [input-override]
   local input
   if [ $# -ge 4 ]; then input=$4; else input=$(input_summary); fi
   jq -nc --arg ts "$(now_utc)" --arg task "$TASK" --arg event "$EVENT" \
-    --arg tool "$TOOL" --arg id "$TOOL_USE_ID" --arg session "$SESSION_ID" \
+    --arg tool "$TOOL" --arg id "$TOOL_USE_ID" --arg session "$SESSION_ID" --arg gen "${GEN-}" \
     --arg input "$input" --arg decision "$1" --arg decider "$2" --arg reason "$3" \
     --argjson elapsed "${JUDGE_ELAPSED_SECONDS:-0}" --argjson attempts "${JUDGE_ATTEMPTS:-0}" \
     --argjson timeouts "${JUDGE_TIMEOUTS:-0}" \
-    '{ts:$ts, task:$task, event:$event, tool:$tool, tool_use_id:$id, session_id:$session, input:$input, decision:$decision, decider:$decider, reason:$reason, judge_elapsed_seconds:$elapsed, judge_attempts:$attempts, judge_timeouts:$timeouts}' \
+    '{ts:$ts, task:$task, event:$event, tool:$tool, tool_use_id:$id, session_id:$session, gen:$gen, input:$input, decision:$decision, decider:$decider, reason:$reason, judge_elapsed_seconds:$elapsed, judge_attempts:$attempts, judge_timeouts:$timeouts}' \
     >> "$LOG" 2>/dev/null || true
 }
 
@@ -1179,6 +1179,7 @@ inbox_ack_path() {  # <word> <expansion> <glob> <kind>
   case "$4" in
     handled) [ "$abs" = "$(norm_abs "$INBOX")/handled" ] ;;
     message)
+      [ ! -d "$abs" ] || return 1
       [ "${abs%/*}" = "$(norm_abs "$INBOX")" ] || return 1
       suffix=${abs##*/}
       case "$suffix" in *.msg) suffix=${suffix%.msg} ;; *) return 1 ;; esac
@@ -1192,6 +1193,9 @@ inbox_ack_move() {
   [ "${E[1]-}" != -- ] || start=2
   [ "$last" -gt "$start" ] || return 1
   inbox_ack_path "${E[last]}" "${EV[last]}" "${EG[last]}" handled || return 1
+  if [ ! -d "$(resolve_path "${E[last]}" "$CWD")" ]; then
+    case "${E[last]}" in */) ;; *) return 1 ;; esac
+  fi
   for ((k = start; k < last; k++)); do
     inbox_ack_path "${E[k]}" "${EV[k]}" "${EG[k]}" message || return 1
   done

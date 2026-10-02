@@ -12,7 +12,7 @@
 # statically visible out-of-root exec write refusals under bypass, the
 # credential-material holds, every judge outcome denied rather than
 # abstained, the firstmate approve/decline resolution including the
-# never-approve one-shot token, declined-retry suppression, held-call retry
+# never-approve and credential one-shot tokens, declined-retry suppression, held-call retry
 # dedup and the marker binding that runs before the cache and the judge,
 # pending closure on post-tool-use - approved or anomaly - and retire but
 # NOT on Stop, the grants digest pin, and the fail-closed guards on foreign
@@ -631,8 +631,8 @@ EOF
   hook "$policy" pre-tool-use run_command "cat ~/.gemini/oauth_creds.json"
   denied "$OUT" "held for firstmate" \
     || fail "an exec read of agy OAuth material must hold for firstmate, got: $OUT"
-  # Firstmate's approval of a held credential read must take effect: the
-  # retry hits the verdict cache rather than re-escalating forever.
+  # Firstmate's approval of a held credential read must take effect for
+  # exactly one identical retry, including template-sensitive reads.
   hook "$policy" pre-tool-use view_file "$HOME/.ssh/id_rsa" 20
   denied "$OUT" "held for firstmate" || fail "the credential read must first be held, got: $OUT"
   held="agy-permission-c1-s20"
@@ -1256,6 +1256,7 @@ mv '$inbox/003.msg' '$inbox/../sibling.inbox/handled/'
 mv '$inbox/not-numeric.msg' '$inbox/handled/'
 mv '$inbox/'*.msg '$inbox/handled/'
 mv '$inbox/003.msg' '$inbox/handled/renamed.msg'
+mv '$inbox/001.msg' '$inbox/handled/002.msg'
 touch '$inbox/handled'
 CASES
   ln -s "$dir/escape" "$inbox/003.msg"
@@ -1372,6 +1373,7 @@ test_audit_survives_runtime_cleanup() {
   jq '.gen="g2"' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
   hook "$policy" pre-tool-use run_command 'cat README.md' 9
   jq '.gen="g3"' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  jq -c 'if .event == "armed" then .gen="g3" else . end' "$dir/state/agy-permission-log.jsonl" > "$dir/log.new" && mv "$dir/log.new" "$dir/state/agy-permission-log.jsonl"
   fm_agy_teardown_retire "$dir/state" t1 || fail "stale generation archive failed"
   tail -1 "$dir/state/agy-permission-audit.jsonl" | jq -e '.confirmed_judge_coverage == false' >/dev/null || fail "stale armed evidence cannot prove this generation"
   policy=$(new_case corrupt-audit)
