@@ -93,7 +93,8 @@
 # CommandLine and Cwd; view_file, grep_search, and list_dir are the read
 # class; write_to_file and replace_file_content are the write class against
 # the task worktree and scratch roots; search_web and read_url_content are
-# read-only web lookups; every other tool name is residue for the judge.
+# read-only web lookups; manage_task kill requires firstmate approval until
+# native ownership is verified; every other tool name is residue for the judge.
 # The pending key is agy-permission-<conversationId>-s<stepIdx>, the only
 # stable call identity agy provides.
 #
