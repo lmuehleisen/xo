@@ -457,9 +457,9 @@ SH
 }
 
 # fm_fake_publish_judges <fakebin> <publish-guard-dir>: stub `codex` and `pi`
-# answering the way bin/fm-publish-judge.sh invokes them (codex writes its
-# answer to -o <file> and reads the prompt on stdin; pi takes the prompt as its
-# last argument), named in the publish-guard directory's codex and pi files,
+# answering the way bin/fm-publish-judge.sh invokes them (each reads the prompt
+# on stdin; codex writes its answer to -o <file>), named in the publish-guard
+# directory's codex and pi files,
 # which the judge reads instead of PATH, so no test reaches a model. Each allows unless FM_TEST_JUDGE_REFUSE (an extended
 # regular expression) matches the material between the prompt's BEGIN and END
 # MATERIAL lines. FM_TEST_JUDGE_CODEX / FM_TEST_JUDGE_PI set a stub's mode:
@@ -467,7 +467,9 @@ SH
 # answer with no verdict), failjson (an allow verdict, then exit 7), hangjson
 # (an allow verdict, then sleep past any bound), twoallow (two allow verdicts),
 # or conflict (an allow and a refuse verdict). FM_TEST_JUDGE_CALLS and
-# FM_TEST_JUDGE_PROMPTS, when set, collect each call's stub name and prompt.
+# FM_TEST_JUDGE_PROMPTS, when set, collect each call's stub name and prompt, and
+# FM_TEST_JUDGE_ENV collects the Pi agent and session directories each call
+# inherited.
 fm_fake_publish_judges() {
   local fakebin=$1 cfg=$2 tool
   mkdir -p "$cfg"
@@ -485,10 +487,13 @@ if [ "$name" = codex ]; then
   prompt=$(cat)
 else
   mode=${FM_TEST_JUDGE_PI:-rules}
-  prompt=${!#}
+  prompt=$(cat)
 fi
 [ -z "${FM_TEST_JUDGE_CALLS:-}" ] || printf '%s\n' "$name" >>"$FM_TEST_JUDGE_CALLS"
 [ -z "${FM_TEST_JUDGE_PROMPTS:-}" ] || printf '%s\n' "$prompt" >>"$FM_TEST_JUDGE_PROMPTS"
+[ -z "${FM_TEST_JUDGE_ENV:-}" ] ||
+  printf '%s agent-dir=%s session-dir=%s\n' "$name" "${PI_CODING_AGENT_DIR-<unset>}" \
+    "${PI_CODING_AGENT_SESSION_DIR-<unset>}" >>"$FM_TEST_JUDGE_ENV"
 allow='{"verdict":"allow","reasons":[]}'
 case "$mode" in
   down) echo "stub judge: not signed in" >&2; exit 1 ;;

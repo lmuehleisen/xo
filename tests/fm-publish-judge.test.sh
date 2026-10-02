@@ -409,6 +409,37 @@ test_judge_entry_points_run_the_literal_preflight() {
   pass "text, corpus, and probe each run the denylist preflight before any model call"
 }
 
+test_pi_prompt_beyond_one_argument_reaches_the_judge() {
+  reset_judges
+  local material="$TMP_ROOT/material-wide.txt" out
+  # One line longer than Linux's 128 KiB single-argument limit, which the
+  # chunker cannot split.
+  { printf '=== text 1\n'; head -c 140000 /dev/zero | tr '\0' 'a'; printf ' WIDE_LINE_END\n'; } >"$material"
+  out=$("$JUDGE" probe --tier pi --dest acme/widgets --kind text --config "$CFG" "$material" 2>&1) \
+    || fail "a probe with a wide line should reach the pi judge: $out"
+  assert_contains "$out" '"verdict":"allow"' "the pi judge answered"
+  assert_equals pi "$(cat "$FM_TEST_JUDGE_CALLS")" "only the pi tier was called"
+  sed -n '/^BEGIN MATERIAL /,/^END MATERIAL /{/^BEGIN MATERIAL /d;/^END MATERIAL /d;p;}' "$FM_TEST_JUDGE_PROMPTS" >"$TMP_ROOT/material-seen.txt"
+  cmp -s "$material" "$TMP_ROOT/material-seen.txt" \
+    || fail "the pi judge must receive the whole material ($(wc -c <"$material") bytes sent, $(wc -c <"$TMP_ROOT/material-seen.txt") received)"
+  pass "the pi judge receives a prompt beyond one argument's limit intact on stdin"
+}
+
+test_pi_judge_ignores_an_inherited_agent_dir() {
+  reset_judges
+  local envlog="$TMP_ROOT/judge-env" out
+  rm -f "$envlog"
+  out=$(FM_TEST_JUDGE_ENV="$envlog" PI_CODING_AGENT_DIR="$TMP_ROOT/pinned-worker-root" \
+    PI_CODING_AGENT_SESSION_DIR="$TMP_ROOT/pinned-worker-sessions" FM_PUBLISH_JUDGE_TIERS=pi \
+    "$JUDGE" text --dest acme/widgets --config "$CFG" "body:$TMP_ROOT/body-clean.md" 2>&1) \
+    || fail "the pi judge should answer under a pinned worker's environment: $out"
+  assert_equals 'pi agent-dir=<unset> session-dir=<unset>' "$(cat "$envlog")" \
+    "the pi judge never runs with a worker's pinned agent or session directory"
+  pass "the pi judge runs without an inherited PI_CODING_AGENT_DIR or PI_CODING_AGENT_SESSION_DIR"
+}
+
+test_pi_prompt_beyond_one_argument_reaches_the_judge
+test_pi_judge_ignores_an_inherited_agent_dir
 test_clean_text_is_allowed
 test_operator_narrative_is_refused
 test_judge_unavailable_is_refused

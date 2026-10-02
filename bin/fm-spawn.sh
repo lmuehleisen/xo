@@ -5085,6 +5085,8 @@ EOF
 // "turn_end" fires at every inner turn boundary (one LLM response plus its
 // tool calls) and stays a wake NOTIFICATION touch for the watcher, never
 // current-state truth.
+// "tool_call" on bash runs the publish policy (bin/fm-arm-pretool-check.sh
+// --publish-only, the form Claude workers register) and blocks on its exit 2.
 import { execFile } from "node:child_process";
 const busyEvent = (state: string, event: string) =>
   new Promise<void>((resolve) => {
@@ -5093,7 +5095,29 @@ const busyEvent = (state: string, event: string) =>
       "--gen", "$BUSY_GEN", "--source", "pi-ext", "--event", event,
     ], () => resolve());
   });
+const publishCheck = (command: string, cwd: string | undefined) =>
+  new Promise<{ code: number; stderr: string }>((resolve) => {
+    execFile("$FM_ROOT/bin/fm-arm-pretool-check.sh", [
+      "--publish-only", "--command", command,
+    ], { cwd: cwd || process.cwd() }, (error: any, _stdout: string, stderr: string) => {
+      // A checker that could not run or was killed (no numeric exit code)
+      // denies, matching the checker's own refusal when it cannot decide.
+      if (error && typeof error.code !== "number") {
+        resolve({ code: 2, stderr: "publish policy check could not run: " + String(error.code || error.signal || error.message) });
+        return;
+      }
+      resolve({ code: error ? error.code : 0, stderr: String(stderr || "") });
+    });
+  });
 export default function (pi: any) {
+  pi.on("tool_call", async (event: any, ctx: any) => {
+    if (event?.toolName !== "bash") return {};
+    const command = String(event?.input?.command ?? "");
+    if (!command) return {};
+    const result = await publishCheck(command, ctx?.cwd);
+    if (result.code !== 2) return {};
+    return { block: true, reason: result.stderr.trim() || "denied by the publish policy" };
+  });
   pi.on("agent_start", () => busyEvent("busy", "agent-start"));
   pi.on("agent_settled", (_event: any, ctx: any) => {
     if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;

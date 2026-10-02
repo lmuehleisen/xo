@@ -51,7 +51,10 @@
 #   codex  `codex exec` on gpt-6.1-sol, low reasoning, read-only sandbox,
 #          ephemeral, no user config or rules, run from an empty directory;
 #   pi     `pi -p` on xai/grok-4.7, low thinking, no tools, no extensions,
-#          skills, or context files, no session.
+#          skills, or context files, no session, and the user's own agent
+#          directory (~/.pi/agent), never an inherited PI_CODING_AGENT_DIR or
+#          PI_CODING_AGENT_SESSION_DIR.
+# Each reads the prompt on stdin, so no argument carries the material.
 # Each judge executable is the absolute path in the private config file named
 # after its tier (<config>/codex, <config>/pi), else the first of that tier's
 # fixed install locations (judge_bin); PATH is never consulted, so an
@@ -344,11 +347,12 @@ tier_run() {
   local tier=$1 seconds=$2 prompt=$3 dir=$4 model rc bin
   model=$(tier_model "$tier") || return 127
   bin=$(judge_bin "$tier") || return 127
+  # The prompt goes on stdin, never as one argument (Linux caps a single
+  # argument at 128 KiB). It is opened inside the bounded command: the timeout
+  # and gtimeout mechanisms start it in the background, where bash replaces an
+  # inherited stdin with /dev/null, so the judge would see an empty prompt.
   case "$tier" in
   codex)
-    # The prompt is opened inside the bounded command: the timeout and
-    # gtimeout mechanisms start it in the background, where bash replaces an
-    # inherited stdin with /dev/null, so codex would judge an empty prompt.
     # shellcheck disable=SC2016 # expanded by the bounded child shell
     (cd "$dir" && fm_run_timed "$seconds" bash -c 'prompt=$1; shift; exec "$@" <"$prompt"' _ "$prompt" \
       "$bin" exec --skip-git-repo-check --ephemeral \
@@ -360,10 +364,17 @@ tier_run() {
     return "$rc"
     ;;
   pi)
-    (cd "$dir" && fm_run_timed "$seconds" "$bin" -p --no-session --no-tools --no-extensions \
+    # Pi takes piped stdin as the whole first prompt when no message is given.
+    # A worker pinned by config/pi-account exports PI_CODING_AGENT_DIR, which
+    # its git hooks inherit; the judge signs in from the user's own agent
+    # directory instead.
+    # shellcheck disable=SC2016 # expanded by the bounded child shell
+    (cd "$dir" && fm_run_timed "$seconds" env -u PI_CODING_AGENT_DIR -u PI_CODING_AGENT_SESSION_DIR \
+      bash -c 'prompt=$1; shift; exec "$@" <"$prompt"' _ "$prompt" \
+      "$bin" -p --no-session --no-tools --no-extensions \
       --no-skills --no-prompt-templates --no-themes --no-context-files --offline \
       --model "$model" --thinking "${FM_PUBLISH_JUDGE_PI_THINKING:-low}" \
-      "$(cat "$prompt")" </dev/null 2>"$dir/stderr.txt")
+      </dev/null 2>"$dir/stderr.txt")
     ;;
   *) return 127 ;;
   esac
