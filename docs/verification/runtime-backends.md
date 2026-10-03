@@ -555,21 +555,22 @@ The composer-classification record below observes the same gate from the other s
 [`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the seeded-secondmate project-trust approval contract and compatibility fallback.
 The live guard below isolates Pi's trust-gate behavior in secondmate-shaped homes; portable launch-command coverage separately verifies that spawn selects the flag for the intended launches.
 
-Verified 2026-10-02 on pi 0.82.0 through the default-on live guard (disposable `PI_CODING_AGENT_DIR` / `HOME` only; never `~/.pi`):
+Verified 2026-10-03 on pi 0.99.2 through the default-on live guard (disposable `PI_CODING_AGENT_DIR` / `HOME` only; never `~/.pi`):
 
 ```sh
 bash tests/fm-pi-seeded-home-trust-live-e2e.test.sh
 ```
 
 ```
-# live pi version: 0.82.0
+# live pi version: 0.99.2
 ok - fresh seeded Pi secondmate-shaped home stalls on Trust project folder? without --approve
 ok - seeded home with --approve starts past the trust dialog without rewriting trust.json
 ok - unseeded path without --approve still prompts on Trust project folder?
-# all fm-pi-seeded-home-trust-live-e2e checks passed (3)
+ok - a saved Pi trust denial skips project extensions without rewriting trust.json
+# all fm-pi-seeded-home-trust-live-e2e checks passed (4)
 ```
 
-Portable launch-command coverage lives in `tests/fm-spawn-dispatch-profile.test.sh` (`test_pi_seeded_secondmate_preapproves_project_trust`, `test_pi_worker_launch_omits_seeded_home_approve`, `test_pi_approve_probe_omits_unsupported_flag`).
+Portable launch-command coverage lives in `tests/fm-spawn-dispatch-profile.test.sh` (`test_pi_seeded_secondmate_preapproves_project_trust`, `test_pi_seeded_secondmate_respects_saved_project_trust`, `test_pi_worker_launch_omits_seeded_home_approve`, `test_pi_approve_probe_omits_unsupported_flag`).
 
 ## Launch-prompt backstop signatures
 
