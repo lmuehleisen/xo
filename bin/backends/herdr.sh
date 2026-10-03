@@ -3370,7 +3370,12 @@ fm_backend_herdr_proof_lines() {  # <text>
 # viewport is the one bound that always contains the composer.
 # Styled capture is preferred. An empty or failed styled read falls through to
 # the plain capture so a missing ANSI format does not look like an empty draft.
-# [row-separator] joins the composer rows as fm_composer_extract_selected_content does.
+# This read serves Claude payload proof and owned-input recovery, so the grok-tuned
+# dark-truecolor ghost strip is off (FM_COMPOSER_GHOST_LUMA_MAX=0): Claude
+# 2.1.283 draws a typed slash command in muted grey 38;2;112;112;112 (verified
+# live), which that strip dropped, judging a typed /exit unsent. Claude's own
+# ghost suggestion is SGR-2 dim and is still stripped.
+# [row-separator] joins composer rows for owned-input recovery.
 fm_backend_herdr_composer_content() {  # <target> [row-separator]
   local target=$1 cap caps
   if cap=$(fm_backend_herdr_visible_capture_ansi "$target" 2>/dev/null) && [ -n "$cap" ]; then
@@ -3380,7 +3385,7 @@ fm_backend_herdr_composer_content() {  # <target> [row-separator]
   else
     return 1
   fi
-  fm_composer_extract_selected_content "$caps" "$cap" "${2:-}"
+  FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$caps" "$cap" "${2:-}"
 }
 
 # fm_backend_herdr_composer_owned_input: herdr's counterpart of

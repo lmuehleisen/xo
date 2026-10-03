@@ -1012,12 +1012,6 @@ if [ "$ACTIONABLE" -eq 1 ]; then
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
     exit 0
   fi
-  # A real wake proves the watcher armed and ran, so it ends any failure
-  # episode still on disk - one a host timeout kill left, or the attended
-  # fail-open another session consumed - and it rewakes regardless: the
-  # attended-alarm suppression below bounds failure continuations only. A
-  # contended reset leaves the episode for the next positive recovery.
-  fm_autoarm_reset_owned "$STATE" "$MY_GEN" || true
   # The host owns its own successors and stops its cycle before handing back.
   if [ "$HOST_MODE" -eq 0 ]; then
     start_handling_successor "$CLOSED_ARM_PID" || true
@@ -1037,8 +1031,29 @@ if [ "$ACTIONABLE" -eq 1 ]; then
     printf 'Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake.\n'
   } >&2
   if autoarm_commit rewake; then
+    # Only a committed hand-back proves recovery. A lost host hand-back must
+    # retain its failure notice so repeated attempts do not notify again.
+    # Real wakes still bypass attended-alarm suppression, and a contended
+    # reset leaves the episode for the next positive recovery.
+    fm_autoarm_reset_owned "$STATE" "$MY_GEN" || true
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
     exit 2
+  fi
+  if [ "$HOST_MODE" -eq 1 ] && fm_autoarm_still_owner "$STATE" "$MY_GEN" \
+    && fm_recovery_marker_snapshot "$STATE/.watcher-down" \
+    && [[ "$FM_RECOVERY_MARKER_TOKEN" == pending:handling:* || "$FM_RECOVERY_MARKER_TOKEN" == announced:handling:* ]] \
+    && ! fm_watcher_healthy "$STATE" "$SCRIPT_DIR/fm-watch.sh" "$GRACE" "$FM_HOME"; then
+    LOST_HANDBACK_COMMITTED=0
+    if [ ! -e "$FAILURE_NOTICE" ]; then
+      printf 'firstmate watcher auto-arm FAILED - the supervision host returned an actionable wake, but its rewake could not be committed.\n' >&2
+      autoarm_commit failed "$FAILURE_NOTICE" && LOST_HANDBACK_COMMITTED=1
+    else
+      autoarm_commit failed-suppressed && LOST_HANDBACK_COMMITTED=1
+    fi
+    if [ "$LOST_HANDBACK_COMMITTED" -eq 1 ]; then
+      [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+      exit 2
+    fi
   fi
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
   exit 0

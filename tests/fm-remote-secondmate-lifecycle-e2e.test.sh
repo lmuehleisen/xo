@@ -1291,6 +1291,24 @@ while kill -0 "$watch_pid" 2>/dev/null && [ "$watch_wait" -lt 1500 ]; do
   watch_wait=$((watch_wait + 1))
 done
 if kill -0 "$watch_pid" 2>/dev/null; then
+  printf '%s\n' '--- liveness watcher stdout ---' >&2
+  cat "$TMP_ROOT/watch-liveness.out" >&2
+  printf '%s\n' '--- liveness watcher stderr ---' >&2
+  cat "$TMP_ROOT/watch-liveness.err" >&2
+  if [ -f "$WATCH_STATE/.secondmate-relaunch-ios" ]; then
+    printf '%s\n' '--- liveness relaunch state ---' >&2
+    cat "$WATCH_STATE/.secondmate-relaunch-ios" >&2
+  fi
+  for job in "$TMP_ROOT"/remote-jobs/jobs/job-*; do
+    [ -f "$job/state" ] || continue
+    IFS= read -r job_state < "$job/state" || continue
+    case "$job_state" in
+      queued | running)
+        printf -- '--- remote job %s: %s ---\n' "${job##*/}" "$job_state" >&2
+        tr '\0' '\n' < "$job/argv" >&2
+        ;;
+    esac
+  done
   kill "$watch_pid" 2>/dev/null || true
   fail "the watcher did not exit on its auto-relaunch wake within the bound"
 fi
