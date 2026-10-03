@@ -2190,8 +2190,9 @@ pi_supports_approve() {
 pi_seeded_home_trust_allows_approve() { # <canonical-home> <agent-dir>
   local home=$1 store=$2/trust.json decision
   [ -e "$store" ] || [ -L "$store" ] || return 0
-  decision=$(jq -r --arg cwd "$home" '
-    if type != "object" then error("expected a trust object")
+  decision=$(jq -rs --arg cwd "$home" '
+    if length != 1 then error("expected one trust object") else .[0] end
+    | if type != "object" then error("expected a trust object")
     elif all(.[]; . == null or type == "boolean") | not then
       error("expected boolean or null trust decisions")
     else . end
@@ -3387,7 +3388,7 @@ if [ "$KIND" = secondmate ]; then
     exit 1
   }
   PROJ_ABS=$(validate_firstmate_home_for_spawn "$ID" "$FIRSTMATE_HOME")
-  if [ "$RAW_LAUNCH" -eq 0 ] && [ -n "${PI_APPROVE:-}" ]; then
+  if [ "$RAW_LAUNCH" -eq 0 ] && { [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; } && [ -n "${PI_APPROVE:-}" ]; then
     # Pin the same store on the launch: a long-lived runtime daemon need not
     # inherit the spawning shell's PI_CODING_AGENT_DIR. An account pin wins.
     PI_TRUST_AGENT_DIR=${WORKER_ACCOUNT_ROOT:-${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}}

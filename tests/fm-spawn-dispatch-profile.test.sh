@@ -1277,7 +1277,7 @@ test_pi_worker_launch_omits_seeded_home_approve() {
 test_pi_seeded_secondmate_respects_saved_project_trust() {
   local harness mode rec id sm store before out status launch
   for harness in pi pi-signed; do
-    for mode in exact-deny parent-deny closer-allow sibling-deny invalid; do
+    for mode in exact-deny parent-deny closer-allow sibling-deny invalid-type invalid-empty invalid-multiple invalid-value; do
       id="trust-$harness-$mode"
       rec=$(make_spawn_case "$id" codex "$id")
       read_case_record "$rec"
@@ -1294,14 +1294,17 @@ test_pi_seeded_secondmate_respects_saved_project_trust() {
         closer-allow) jq -n --arg home "$sm" --arg parent "${sm%/*}" \
           '{($home): true, ($parent): false}' > "$store" ;;
         sibling-deny) jq -n --arg sibling "$sm-other" '{($sibling): false}' > "$store" ;;
-        invalid) printf '[]\n' > "$store" ;;
+        invalid-type) printf '[]\n' > "$store" ;;
+        invalid-empty) : > "$store" ;;
+        invalid-multiple) printf '{}\n{}\n' > "$store" ;;
+        invalid-value) jq -n --arg home "$sm" '{($home): "false"}' > "$store" ;;
       esac
       before=$(cat "$store")
       status=0
       out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
         "$id" "$sm" --secondmate) || status=$?
       case "$mode" in
-        exact-deny|parent-deny|invalid)
+        exact-deny|parent-deny|invalid-*)
           expect_code 1 "$status" "$harness $mode must refuse before launch"
           assert_contains "$out" 'Pi project trust' "$harness trust refusal missing"
           assert_absent "$HOME_DIR/state/$id.meta" "trust refusal wrote task metadata"
