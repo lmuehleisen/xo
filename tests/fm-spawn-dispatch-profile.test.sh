@@ -1275,9 +1275,9 @@ test_pi_worker_launch_omits_seeded_home_approve() {
 }
 
 test_pi_seeded_secondmate_respects_saved_project_trust() {
-  local harness mode rec id sm store before out status launch
+  local harness mode rec id sm agent_dir store before out status launch
   for harness in pi pi-signed; do
-    for mode in exact-deny parent-deny closer-allow sibling-deny invalid-type invalid-empty invalid-multiple invalid-value; do
+    for mode in exact-deny parent-deny closer-allow sibling-deny invalid-type invalid-empty invalid-multiple invalid-value inaccessible; do
       id="trust-$harness-$mode"
       rec=$(make_spawn_case "$id" codex "$id")
       read_case_record "$rec"
@@ -1285,7 +1285,9 @@ test_pi_seeded_secondmate_respects_saved_project_trust() {
       sm="$CASE_DIR/secondmate-home"
       make_seeded_secondmate_home "$sm" "$id"
       sm=$(cd "$sm" && pwd -P)
-      store="$HOME_DIR/pi-agent/trust.json"
+      agent_dir="$HOME_DIR/pi-agent"
+      [ "$mode" != inaccessible ] || agent_dir="$agent_dir/blocked/child"
+      store="$agent_dir/trust.json"
       mkdir -p "$(dirname "$store")"
       case "$mode" in
         exact-deny) jq -n --arg home "$sm" '{($home): false}' > "$store" ;;
@@ -1298,13 +1300,27 @@ test_pi_seeded_secondmate_respects_saved_project_trust() {
         invalid-empty) : > "$store" ;;
         invalid-multiple) printf '{}\n{}\n' > "$store" ;;
         invalid-value) jq -n --arg home "$sm" '{($home): "false"}' > "$store" ;;
+        inaccessible) jq -n --arg home "$sm" '{($home): false}' > "$store" ;;
       esac
       before=$(cat "$store")
+      if [ "$mode" = inaccessible ]; then
+        chmod 000 "$HOME_DIR/pi-agent/blocked"
+        if [ -x "$HOME_DIR/pi-agent/blocked" ]; then
+          chmod 700 "$HOME_DIR/pi-agent/blocked"
+          pass "SKIP: effective user bypasses directory access modes for $harness trust fixture"
+          continue
+        fi
+        if [ -e "$store" ] || [ -L "$store" ]; then
+          chmod 700 "$HOME_DIR/pi-agent/blocked"
+          fail "the inaccessible fixture did not blind the original existence check"
+        fi
+      fi
       status=0
-      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+      out=$(FM_TEST_PI_AGENT_DIR="$agent_dir" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
         "$id" "$sm" --secondmate) || status=$?
+      [ "$mode" != inaccessible ] || chmod 700 "$HOME_DIR/pi-agent/blocked"
       case "$mode" in
-        exact-deny|parent-deny|invalid-*)
+        exact-deny|parent-deny|invalid-*|inaccessible)
           expect_code 1 "$status" "$harness $mode must refuse before launch"
           assert_contains "$out" 'Pi project trust' "$harness trust refusal missing"
           assert_absent "$HOME_DIR/state/$id.meta" "trust refusal wrote task metadata"

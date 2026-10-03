@@ -2189,7 +2189,12 @@ pi_supports_approve() {
 # --approve outranks saved decisions, so a seeded home must not override a deny.
 pi_seeded_home_trust_allows_approve() { # <canonical-home> <agent-dir>
   local home=$1 store=$2/trust.json decision
-  [ -e "$store" ] || [ -L "$store" ] || return 0
+  # Existence tests conflate ENOENT with inaccessible ancestors. Only an
+  # actual missing path permits the first-run approval; other errors must
+  # reach the read below and refuse it.
+  if perl -MErrno=ENOENT -e 'exit((!lstat($ARGV[0]) && $! == ENOENT) ? 0 : 1)' "$store"; then
+    return 0
+  fi
   decision=$(jq -rs --arg cwd "$home" '
     if length != 1 then error("expected one trust object") else .[0] end
     | if type != "object" then error("expected a trust object")
