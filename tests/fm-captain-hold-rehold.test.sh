@@ -171,6 +171,40 @@ test_rehold_preserves_trailing_reason_newlines() {
   pass "re-holds preserve trailing newlines, newline-only reasons and a literal dash exactly"
 }
 
+# Origin updates operate on metadata, not on identically labelled prose in a
+# prior reason. Replays without --origin must keep the real association first.
+test_rehold_preserves_origin_like_reason_lines() {
+  local home first show body phase args=()
+  first=$'quoted metadata follows\nCaptain hold origin: quoted-origin\nEnd previous hold reason.\nCaptain hold origin: another-quote\n\n'
+  for phase in recorded unrecorded; do
+    home=$(make_home "rehold-quoted-origin-$phase")
+    args=()
+    [ "$phase" != recorded ] || args=(--origin real-origin)
+    run_captain "$home" hold sample-quoted --title 'A reason quoting metadata' \
+      --reason "$first" ${args[@]+"${args[@]}"} >/dev/null || fail "the quoted first hold failed"
+    run_captain "$home" hold sample-quoted --reason 'an interim reason' >/dev/null \
+      || fail "re-holding without an origin failed"
+    show=$(tasks_in "$home" show sample-quoted --full)
+    body=$(printf '%s\n' "$show" | sed -n 's/^  body: //p')
+    if [ "$phase" = recorded ]; then
+      printf '%s\n' "$body" | jq -e 'split("\n")[1] == "Captain hold origin: real-origin"' >/dev/null \
+        || fail "archiving a reason displaced the active origin"
+    else
+      printf '%s\n' "$body" | jq -e 'split("\n")[1] | startswith("Captain hold origin: ") | not' >/dev/null \
+        || fail "archiving a reason created origin metadata"
+    fi
+    run_captain "$home" hold sample-quoted --reason 'a replacement reason' --origin replacement-origin \
+      >/dev/null || fail "the quoted origin update failed"
+    show=$(tasks_in "$home" show sample-quoted --full)
+    body=$(printf '%s\n' "$show" | sed -n 's/^  body: //p')
+    printf '%s\n' "$body" | jq -e --arg previous "$first" '
+      (split("\n")[1] == "Captain hold origin: replacement-origin") and
+      contains("Previous hold reason:\n" + $previous + "\nEnd previous hold reason.")
+    ' >/dev/null || fail "origin reassociation altered a preserved reason"
+  done
+  pass "origin updates preserve quoted metadata in prior reasons, including delimiter-like lines"
+}
+
 # Losing the outgoing reason is the failure this seam exists to prevent, so a
 # refused preservation must refuse the replacement rather than proceed.
 test_failed_preservation_refuses_the_rehold() {
@@ -385,6 +419,7 @@ SH
 test_rehold_preserves_the_superseded_reason
 test_identical_rehold_archives_nothing
 test_rehold_preserves_trailing_reason_newlines
+test_rehold_preserves_origin_like_reason_lines
 test_failed_preservation_refuses_the_rehold
 test_lapsed_deferral_rehold_preserves_the_reason
 test_rehold_preserves_a_reason_beginning_with_a_dash

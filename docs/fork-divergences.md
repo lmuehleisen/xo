@@ -242,7 +242,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### rehold-reason
 
-- Intent: preserve a captain-hold reason on re-hold, including trailing newlines and newline-only reasons.
+- Intent: preserve a captain-hold reason on re-hold, including trailing newlines, newline-only reasons and quoted metadata.
 - Class: carried.
 - Seam: `bin/fm-captain-hold.sh` (shared).
 - Guard: fork-only `tests/fm-captain-hold-rehold.test.sh`.

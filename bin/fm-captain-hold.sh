@@ -909,10 +909,15 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
 }
 
 # The origin a hold was recorded for lives in the held task's own body, on a
-# line of its own, so `complete` can tell a call held for this origin from one
-# held for another. Omitting --origin leaves any existing association intact.
+# leading metadata line, after any hold-set stamp. Reason and decision records
+# can quote that label without becoming metadata themselves. Omitting --origin
+# leaves any existing association intact.
 body_hold_origin() {  # <decoded-task-body>
-  printf '%s\n' "$1" | sed -n 's/^Captain hold origin: \(.*\)$/\1/p' | head -1
+  printf '%s\n' "$1" | awk '
+    NR == 1 && /^Captain hold set: / { next }
+    !NF { next }
+    { if (sub(/^Captain hold origin: /, "")) print; exit }
+  '
 }
 
 task_identity() {
@@ -933,8 +938,13 @@ write_hold_origin() {  # <task-id> <shown-body> <origin-or-empty>
   stamp=$(printf '%s\n' "$body" | sed -n 1p)
   [ -n "$(body_hold_set_timestamp "$body")" ] \
     || fail "task $id lost its hold-set stamp before its origin was recorded"
-  rest=$(printf '%s\n' "$body" | sed 1d | awk '!/^Captain hold origin: /' \
-    | awk 'NF || started { started = 1; print }')
+  # Only the first nonblank line after the stamp can be active metadata.
+  # Filtering the entire body would erase quoted labels in preserved reasons.
+  rest=$(printf '%s\n' "$body" | sed 1d | awk '
+    !started && !NF { next }
+    !started { started = 1; if (/^Captain hold origin: /) next }
+    { print }
+  ' | awk 'NF || started { started = 1; print }')
   new_body=$stamp
   if [ -n "$origin" ]; then
     new_body=$(printf '%s\nCaptain hold origin: %s' "$stamp" "$origin")
@@ -1184,7 +1194,7 @@ command_hold() {
 # body cannot be decoded, so the caller reports the failure in its own words
 # rather than exiting from inside a command substitution.
 body_with_record() {  # <shown-body> <record>
-  local body=$1 new_body=$2 hold_set
+  local body=$1 new_body=$2 hold_set hold_origin
   body=$(decode_shown_value "$body") || return 1
   hold_set=$(body_hold_set_timestamp "$body")
   if [ -n "$hold_set" ]; then
@@ -1193,7 +1203,24 @@ body_with_record() {  # <shown-body> <record>
       $'\n\n'*) body=${body#$'\n\n'} ;;
       $'\n'*) body=${body#$'\n'} ;;
     esac
-    new_body=$(printf 'Captain hold set: %s\n\n%s' "$hold_set" "$new_body")
+  fi
+  # Keep active origin metadata ahead of records, so a reason containing an
+  # origin-like line cannot shadow it or be rewritten by a later re-hold.
+  hold_origin=$(body_hold_origin "$body")
+  if [ -n "$hold_origin" ]; then
+    body=${body#"Captain hold origin: $hold_origin"}
+    case "$body" in
+      $'\n\n'*) body=${body#$'\n\n'} ;;
+      $'\n'*) body=${body#$'\n'} ;;
+    esac
+    new_body=$(printf 'Captain hold origin: %s\n\n%s' "$hold_origin" "$new_body")
+  fi
+  if [ -n "$hold_set" ]; then
+    if [ -n "$hold_origin" ]; then
+      new_body=$(printf 'Captain hold set: %s\n%s' "$hold_set" "$new_body")
+    else
+      new_body=$(printf 'Captain hold set: %s\n\n%s' "$hold_set" "$new_body")
+    fi
   fi
   if [ -n "$body" ]; then
     new_body=$(printf '%s\n\n%s' "$new_body" "$body")
@@ -1203,7 +1230,7 @@ body_with_record() {  # <shown-body> <record>
 
 # Record a resolution block beneath any leading active hold-set stamp,
 # preserving the previous body below it and archiving the pristine original.
-# Successful closure removes the stamp to restore resolution-first ordering.
+# Successful closure removes the stamp; any origin stays ahead of the records.
 write_resolution_record() {  # <task-id> <mode> <shown-body>
   local id=$1 mode=$2 body=$3 new_body tmp
   new_body=$(body_with_record "$body" "$(resolution_block "$mode")") \
@@ -1275,7 +1302,7 @@ remove_interrupted_answer_stamp() {  # <task-id>
   if ! printf '%s\n' "$body" > "$tmp" \
     || ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
     rm -f -- "$tmp"
-    fail "could not restore the resolution record ordering for $id"
+    fail "could not remove the closed hold-set stamp for $id"
   fi
   rm -f -- "$tmp"
 }
