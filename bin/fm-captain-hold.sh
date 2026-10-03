@@ -545,20 +545,20 @@ resolution_block() {  # <mode>
 # digest, and its own `Record kind:` - because an archived hold reason is not
 # the captain's answer and must never be read as one.
 superseded_hold_block() {  # <task-id> <timestamp> <previous-reason>
-  printf 'Superseded captain hold reason recorded by fm-captain-hold.\nTask: %s\nSuperseded at: %s\nRecord kind: re-hold\n\nPrevious hold reason:\n%s\n' \
+  printf 'Superseded captain hold reason recorded by fm-captain-hold.\nTask: %s\nSuperseded at: %s\nRecord kind: re-hold\n\nPrevious hold reason:\n%s\nEnd previous hold reason.\n' \
     "$1" "$2" "$3"
 }
 
-# Proof, read back from the backlog itself, that a superseded reason survived.
-# The reason is matched as a whole line so the exact prior bytes are what was
-# preserved, not a loose substring of them. Every pattern is passed with `-e`
-# because a hold reason may legitimately begin with a dash, and grep would
-# otherwise read it as another option and abort the run mid-mutation.
-body_has_superseded_hold_record() {  # <decoded-body> <timestamp> <previous-reason>
-  printf '%s\n' "$1" \
-    | grep -Fxqe 'Superseded captain hold reason recorded by fm-captain-hold.' || return 1
-  printf '%s\n' "$1" | grep -Fxqe "Superseded at: $2" || return 1
-  printf '%s\n' "$1" | grep -Fxqe "$3"
+# Proof, read back from the backlog itself, that the entire record survived.
+# The closing label keeps trailing reason newlines inside the record, where
+# command substitutions and the line-oriented body store cannot trim them.
+body_has_superseded_hold_record() {  # <decoded-body> <task-id> <timestamp> <previous-reason>
+  local expected
+  expected=$(superseded_hold_block "$2" "$3" "$4")
+  case "$1" in
+    *"$expected"*) return 0 ;;
+  esac
+  return 1
 }
 
 # Preserve an outgoing hold reason before a re-hold replaces it, through the
@@ -1025,7 +1025,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
-  local existing_hold_kind='' existing_held='' preserve_hold_set=0 superseded_reason='' decoded_show
+  local existing_hold_kind='' existing_held='' preserve_hold_set=0 superseded_reason='' decoded_show shown_reason
   local pristine_body='' hold_failed=0 stored_reason previous_origin=''
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1079,7 +1079,14 @@ command_hold() {
     if [ "$existing_hold_kind" = captain ]; then
       decoded_show=$(printf '%s\n' "$show" | fm_hold_reason_decode_stream) \
         || fail "could not decode the existing hold reason for $id; it was left unchanged"
-      superseded_reason=$(show_field_value "$decoded_show" hold_reason)
+      shown_reason=$(show_field "$decoded_show" hold_reason)
+      if [ "$shown_reason" != '-' ]; then
+        # Keep trailing newlines, including a newline-only reason. Normalize
+        # the raw empty marker before decoding so a quoted "-" stays literal.
+        superseded_reason=$(decode_shown_value "$shown_reason" && printf '.') \
+          || fail "could not decode the existing hold reason for $id; it was left unchanged"
+        superseded_reason=${superseded_reason%.}
+      fi
       [ "$superseded_reason" != "$reason" ] || superseded_reason=''
     fi
     if [ -n "$title" ]; then
@@ -1132,7 +1139,7 @@ command_hold() {
       || withdraw_superseded_hold_record "$id" "$pristine_body" \
         "task $id disappeared while preserving its previous hold reason"
     show=$TASK_SHOW_OUTPUT
-    body_has_superseded_hold_record "$(show_field_value "$show" body)" "$hold_set" "$superseded_reason" \
+    body_has_superseded_hold_record "$(show_field_value "$show" body)" "$id" "$hold_set" "$superseded_reason" \
       || withdraw_superseded_hold_record "$id" "$pristine_body" \
         "task $id did not retain its previous hold reason; its hold reason was left unchanged"
   fi

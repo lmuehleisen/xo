@@ -137,6 +137,40 @@ EOF
   pass "an identical re-hold stays a no-op and archives nothing"
 }
 
+# Encoded reasons can end in line breaks or contain nothing else. Comparing
+# decoded shell output must not trim them, and preservation must keep the
+# complete byte sequence inside the archived record, not just one matching line.
+test_rehold_preserves_trailing_reason_newlines() {
+  local home first before_body after_body show original_row case_number=0
+  for first in $'sample reason\n' $'sample reason\n\n' $'\n\n' '-'; do
+    case_number=$((case_number + 1))
+    home=$(make_home "rehold-trailing-newlines-$case_number")
+    FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold sample-newlines \
+      --title 'A reason with significant whitespace' --reason "$first" >/dev/null \
+      || fail "the first whitespace hold failed ($case_number)"
+    before_body=$(tasks_in "$home" show sample-newlines --full | sed -n 's/^  body: //p')
+    original_row=$(sed -n '/^- .*sample-newlines/p' "$home/data/backlog.md")
+
+    FM_CAPTAIN_HOLD_NOW=2026-07-14T13:00:00Z run_captain "$home" hold sample-newlines \
+      --reason "$first" >/dev/null || fail "the identical whitespace replay failed ($case_number)"
+    after_body=$(tasks_in "$home" show sample-newlines --full | sed -n 's/^  body: //p')
+    assert_equals "$before_body" "$after_body" "an identical whitespace replay changed the body ($case_number)"
+    assert_absent "$home/data/note-archive.md" "an identical whitespace replay archived a reason ($case_number)"
+
+    FM_CAPTAIN_HOLD_NOW=2026-07-14T14:00:00Z run_captain "$home" hold sample-newlines \
+      --reason 'replacement reason' >/dev/null || fail "the whitespace replacement failed ($case_number)"
+    show=$(tasks_in "$home" show sample-newlines --full)
+    assert_contains "$show" 'hold_reason: "replacement reason"' "the replacement did not land ($case_number)"
+    printf '%s\n' "$show" | sed -n 's/^  body: //p' | jq -e --arg previous "$first" '
+      split("Previous hold reason:\n")[1]
+      | split("\nEnd previous hold reason.")[0] == $previous
+    ' >/dev/null || fail "the preserved reason lost exact whitespace bytes ($case_number)"
+    assert_contains "$(cat "$home/data/note-archive.md")" "$original_row" \
+      "the archive lost the original encoded reason ($case_number)"
+  done
+  pass "re-holds preserve trailing newlines, newline-only reasons and a literal dash exactly"
+}
+
 # Losing the outgoing reason is the failure this seam exists to prevent, so a
 # refused preservation must refuse the replacement rather than proceed.
 test_failed_preservation_refuses_the_rehold() {
@@ -350,6 +384,7 @@ SH
 
 test_rehold_preserves_the_superseded_reason
 test_identical_rehold_archives_nothing
+test_rehold_preserves_trailing_reason_newlines
 test_failed_preservation_refuses_the_rehold
 test_lapsed_deferral_rehold_preserves_the_reason
 test_rehold_preserves_a_reason_beginning_with_a_dash
