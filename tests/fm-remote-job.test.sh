@@ -1397,13 +1397,23 @@ for _ in $(seq 1 200); do
 done
 [ "$(fm_remote_job_read_state "$SCAN_STATE/jobs/$SCAN_POLL_ID" 2>/dev/null || true)" = running ] \
   || fail "the long poll did not begin running in the scan fixture"
-sleep 1.5
+for _ in $(seq 1 200); do
+  [ "$(grep -cx sleep "$SCAN_EXEC_LOG" || true)" -ge 30 ] && break
+  sleep 0.05
+done
+[ "$(grep -cx sleep "$SCAN_EXEC_LOG" || true)" -ge 30 ] \
+  || fail "the scan fixture did not finish its initial sampling window"
 : > "$SCAN_EXEC_LOG"
-sleep 4
+for _ in $(seq 1 200); do
+  [ "$(grep -cx sleep "$SCAN_EXEC_LOG" || true)" -ge 80 ] && break
+  sleep 0.05
+done
+[ "$(grep -cx sleep "$SCAN_EXEC_LOG" || true)" -ge 80 ] \
+  || fail "the lane did not complete 80 samples during the bounded scan window"
 for SCAN_TOOL in wc tr tail; do
   SCAN_HITS=$(grep -cx "$SCAN_TOOL" "$SCAN_EXEC_LOG" || true)
   [ "$SCAN_HITS" -eq 0 ] \
-    || fail "the lane scan ran $SCAN_TOOL $SCAN_HITS times in a 4-second window"
+    || fail "the lane scan ran $SCAN_TOOL $SCAN_HITS times in an 80-sample window"
 done
 [ "$(grep -cx sleep "$SCAN_EXEC_LOG" || true)" -gt 0 ] \
   || fail "the lane stopped sampling during the window"

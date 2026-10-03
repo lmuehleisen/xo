@@ -1213,7 +1213,7 @@ test_take_over_attaches_to_a_cycle_the_named_arm_does_not_own() {
 # left for main, and owns a fresh cycle. The stop must not open recovery over an episode
 # main already acknowledged, and must not hide work still queued.
 test_take_over_owns_a_fresh_cycle_and_keeps_queued_work_surfacing() {
-  local dir state fakebin armout status owner
+  local dir state fakebin armout status owner i
   dir=$(make_case take-over-owner)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -1230,7 +1230,14 @@ test_take_over_owns_a_fresh_cycle_and_keeps_queued_work_surfacing() {
     FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     "$WATCH_ARM" --take-over "$owner" > "$armout" &
   ARM_PID=$!
-  wait_for_file_text "$armout" 'watcher: started pid=' \
+  i=0
+  while [ "$i" -lt "$REARM_REPORT_POLLS" ]; do
+    grep -q '^watcher: started pid=' "$armout" 2>/dev/null && break
+    is_live_non_zombie "$ARM_PID" || break
+    sleep 0.05
+    i=$((i + 1))
+  done
+  grep -q '^watcher: started pid=' "$armout" \
     || fail "--take-over did not own a fresh cycle: $(cat "$armout")"
   wait_for_exit "$SEED_PID" 50 >/dev/null 2>&1 || true
   ! is_live_non_zombie "$SEED_PID" || fail "--take-over left the watcher it took over running"

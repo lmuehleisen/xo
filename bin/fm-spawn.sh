@@ -214,7 +214,9 @@
 #   also adds --approve when that help advertises it, so the first unattended
 #   launch does not stall on Pi's "Trust project folder?" dialog for that home
 #   path; --approve is session-scoped to the launch cwd and does not rewrite the
-#   operator's trust.json. Ordinary Pi worker launches never receive --approve.
+#   operator's trust.json. A saved denial for the home (or its nearest saved
+#   ancestor) refuses launch, as does an unreadable or invalid trust store.
+#   Ordinary Pi worker launches never receive --approve.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
 #   For omp (Oh My Pi), fm-spawn resolves the `omp` executable from PATH once and
@@ -2182,6 +2184,31 @@ pi_supports_approve() {
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--approve([^[:alnum:]_-]|$)'
 }
 
+# Pi's trust store maps canonical directory paths to boolean decisions; null
+# falls through to the closest ancestor. Read it without changing the store.
+# --approve outranks saved decisions, so a seeded home must not override a deny.
+pi_seeded_home_trust_allows_approve() { # <canonical-home> <agent-dir>
+  local home=$1 store=$2/trust.json decision
+  [ -e "$store" ] || [ -L "$store" ] || return 0
+  decision=$(jq -r --arg cwd "$home" '
+    if type != "object" then error("expected a trust object")
+    elif all(.[]; . == null or type == "boolean") | not then
+      error("expected boolean or null trust decisions")
+    else . end
+    | . as $trust
+    | [$cwd | recurse(if . == "/" then empty
+        else sub("/[^/]+$"; "") | if . == "" then "/" else . end end)
+       | $trust[.] | select(type == "boolean")][0]
+  ' "$store") || {
+    echo "error: cannot read Pi project trust; repair the selected account's trust.json before launching this secondmate" >&2
+    return 1
+  }
+  if [ "$decision" = false ]; then
+    echo "error: Pi project trust denies this secondmate home; review its saved trust decision before launching" >&2
+    return 1
+  fi
+}
+
 # omp pre-launch model validation. `omp models --json` (omp 18.1.11) prints
 # {"models":[{"provider","id","selector":"<provider>/<id>",...}]} for built-in and
 # auto-discovered providers only; it never lists a provider an extension
@@ -3360,6 +3387,20 @@ if [ "$KIND" = secondmate ]; then
     exit 1
   }
   PROJ_ABS=$(validate_firstmate_home_for_spawn "$ID" "$FIRSTMATE_HOME")
+  if [ "$RAW_LAUNCH" -eq 0 ] && [ -n "${PI_APPROVE:-}" ]; then
+    # Pin the same store on the launch: a long-lived runtime daemon need not
+    # inherit the spawning shell's PI_CODING_AGENT_DIR. An account pin wins.
+    PI_TRUST_AGENT_DIR=${WORKER_ACCOUNT_ROOT:-${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}}
+    case "$PI_TRUST_AGENT_DIR" in
+      '~/'*) PI_TRUST_AGENT_DIR="$HOME/${PI_TRUST_AGENT_DIR#'~/'}" ;;
+    esac
+    case "$PI_TRUST_AGENT_DIR" in
+      /*) ;;
+      *) PI_TRUST_AGENT_DIR="$PWD/$PI_TRUST_AGENT_DIR" ;;
+    esac
+    pi_seeded_home_trust_allows_approve "$PROJ_ABS" "$PI_TRUST_AGENT_DIR" || exit 1
+    LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "$PI_TRUST_AGENT_DIR") $LAUNCH"
+  fi
   if [ -e "$DATA/secondmates.md" ] || [ -L "$DATA/secondmates.md" ]; then
     if ! secondmate_registry_validate_bindings "$DATA/secondmates.md" resolve_path "$ID" "$FIRSTMATE_HOME"; then
       echo "error: $SECONDMATE_REGISTRY_ERROR" >&2

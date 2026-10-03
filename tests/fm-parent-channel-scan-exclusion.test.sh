@@ -31,7 +31,10 @@ FM_ROOT_OVERRIDE="$(fm_test_tmproot fm-parent-channel-scan-exclusion-root)"
 export FM_ROOT_OVERRIDE
 mkdir -p "$FM_ROOT_OVERRIDE"
 
-cleanup() { rm -rf -- "$TMP_ROOT"; }
+cleanup() {
+  fm_test_rm_tmproot "$TMP_ROOT"
+  fm_test_rm_tmproot "$FM_ROOT_OVERRIDE"
+}
 trap cleanup EXIT
 
 # seed_remote_mate <dir>: build a remote mate home whose state dir carries one

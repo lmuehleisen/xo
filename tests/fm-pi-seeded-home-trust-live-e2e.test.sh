@@ -5,7 +5,7 @@
 # secondmate-shaped home (tracked .pi/extensions + .fm-secondmate-home) under a
 # disposable PI_CODING_AGENT_DIR, then proves the spawn-side --approve flag
 # clears that stall without rewriting the disposable trust store. An unseeded
-# path without --approve still prompts.
+# path without --approve still prompts; a saved denial skips project extensions.
 #
 # Token-free: never submits a prompt and never answers the dialog with Enter.
 # Uses Escape / kill-server only. Never touches ~/.pi.
@@ -27,7 +27,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 
 cleanup() {
   [ -z "${REAL_TMUX:-}" ] || "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
-  [ -z "${LAB:-}" ] || rm -rf -- "$LAB"
+  [ -z "${LAB:-}" ] || fm_test_rm_tmproot "$LAB"
 }
 trap cleanup EXIT
 
@@ -45,7 +45,7 @@ if ! "$PI_BIN" --help 2>&1 | grep -Eq -- '(^|[[:space:]])--approve([^[:alnum:]_-
   exit 0
 fi
 
-LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-pi-seeded-trust.XXXXXX") || fail "could not create disposable lab"
+LAB=$(fm_test_tmproot fm-pi-seeded-trust) || fail "could not create disposable lab"
 PI_DIR="$LAB/pi-agent"
 mkdir -p "$PI_DIR"
 printf '{}\n' > "$PI_DIR/trust.json"
@@ -55,7 +55,9 @@ seed_home() {  # <dir> <id>
   local dir=$1 id=$2
   mkdir -p "$dir/.pi/extensions" "$dir/data" "$dir/state" "$dir/config"
   printf '%s\n' "$id" > "$dir/.fm-secondmate-home"
-  printf 'export default function () {}\n' > "$dir/.pi/extensions/fm-primary-turnend-guard.ts"
+  printf '%s\n' 'import { writeFileSync } from "node:fs";' \
+    'export default function () { if (process.env.FM_TRUST_PROBE_FILE) writeFileSync(process.env.FM_TRUST_PROBE_FILE, "loaded"); }' \
+    > "$dir/.pi/extensions/fm-primary-turnend-guard.ts"
   printf 'export default function () {}\n' > "$dir/.pi/extensions/fm-primary-pi-watch.ts"
   printf '# test charter\n' > "$dir/data/charter.md"
 }
@@ -98,6 +100,7 @@ seed_home "$SEED2" lab-sm-approve
 printf '{}\n' > "$PI_DIR/trust.json"
 "$REAL_TMUX" -L "$SOCKET" new-session -d -s approve -n w -c "$SEED2" -- \
   env HOME="$LAB/home-approve" PI_CODING_AGENT_DIR="$PI_DIR" PI_OFFLINE=1 \
+  FM_TRUST_PROBE_FILE="$LAB/approved-extension" \
   "$PI_BIN" --approve --no-session --no-skills --no-prompt-templates \
   || fail "could not launch pi with --approve"
 if ! capture_until approve 'fm-primary-turnend-guard|fm-primary-pi-watch|No models available|escape interrupt' 15 \
@@ -109,6 +112,7 @@ if printf '%s' "$(cat "$LAB/pane-approve.txt")" | grep -qiE 'Trust project folde
   fail "seeded home with --approve still showed Trust project folder?:
 $(cat "$LAB/pane-approve.txt")"
 fi
+[ -f "$LAB/approved-extension" ] || fail "the approved project extension did not run"
 "$REAL_TMUX" -L "$SOCKET" send-keys -t approve:w Escape >/dev/null 2>&1 || true
 "$REAL_TMUX" -L "$SOCKET" kill-session -t approve >/dev/null 2>&1 || true
 TRUST_AFTER=$(cat "$PI_DIR/trust.json")
@@ -135,5 +139,24 @@ fi
 CHECKED=$((CHECKED + 1))
 pass "unseeded path without --approve still prompts on Trust project folder?"
 
-[ "$CHECKED" -ge 3 ] || fail "guard checked nothing useful (checked=$CHECKED)"
+# --- 4. A saved denial is effective without the overriding flag ------------
+DENIED="$LAB/seeded-denied"
+seed_home "$DENIED" lab-sm-denied
+jq -n --arg home "$DENIED" '{($home): false}' > "$PI_DIR/trust.json"
+TRUST_BEFORE=$(cat "$PI_DIR/trust.json")
+"$REAL_TMUX" -L "$SOCKET" new-session -d -s denied -n w -c "$DENIED" -- \
+  env HOME="$LAB/home-denied" PI_CODING_AGENT_DIR="$PI_DIR" PI_OFFLINE=1 \
+  FM_TRUST_PROBE_FILE="$LAB/denied-extension" \
+  "$PI_BIN" --no-session --no-skills --no-prompt-templates \
+  || fail "could not launch pi with a saved denial"
+if ! capture_until denied 'No models available|escape interrupt' 15 "$LAB/pane-denied.txt"; then
+  fail "saved-denial Pi never reached a post-trust TUI within 15s:
+$(cat "$LAB/pane-denied.txt")"
+fi
+[ ! -e "$LAB/denied-extension" ] || fail "Pi loaded a denied project extension"
+[ "$(cat "$PI_DIR/trust.json")" = "$TRUST_BEFORE" ] || fail "Pi rewrote the saved denial"
+CHECKED=$((CHECKED + 1))
+pass "a saved Pi trust denial skips project extensions without rewriting trust.json"
+
+[ "$CHECKED" -ge 4 ] || fail "guard checked nothing useful (checked=$CHECKED)"
 echo "# all fm-pi-seeded-home-trust-live-e2e checks passed ($CHECKED)"

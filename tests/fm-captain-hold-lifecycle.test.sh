@@ -4583,10 +4583,10 @@ test_hold_reason_round_trips_awkward_characters() {
     raw=$(tasks_in "$home" "$verb" --help)
     assert_equals "$raw" "$out" "public $verb changed help output"
   done
-  out=$(FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" show nonexistent-call 2>&1)
-  rc=$?
-  raw=$(tasks_in "$home" show nonexistent-call 2>&1)
-  raw_rc=$?
+  rc=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" show nonexistent-call 2>&1) || rc=$?
+  raw_rc=0
+  raw=$(tasks_in "$home" show nonexistent-call 2>&1) || raw_rc=$?
   [ "$raw_rc" -ne 0 ] || fail "the missing-task fixture unexpectedly exists"
   expect_code "$raw_rc" "$rc" "public show missing task"
   assert_equals "$raw" "$out" "public show changed a read error"

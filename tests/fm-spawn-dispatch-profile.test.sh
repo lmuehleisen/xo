@@ -110,6 +110,7 @@ run_spawn() {
   # which would make launch assertions depend on the developer's environment.
   # A test opts in to the set case via FM_TEST_CLAUDE_CONFIG_DIR.
   CLAUDE_CONFIG_DIR="${FM_TEST_CLAUDE_CONFIG_DIR:-}" \
+    PI_CODING_AGENT_DIR="${FM_TEST_PI_AGENT_DIR:-$home/pi-agent}" \
     FM_FAKE_LAUNCH_LOG="$launchlog" FM_FAKE_PANE_LOG="${FM_TEST_PANE_LOG:-}" \
     FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
@@ -1273,6 +1274,53 @@ test_pi_worker_launch_omits_seeded_home_approve() {
   pass "ordinary Pi worker launches omit --approve"
 }
 
+test_pi_seeded_secondmate_respects_saved_project_trust() {
+  local harness mode rec id sm store before out status launch
+  for harness in pi pi-signed; do
+    for mode in exact-deny parent-deny closer-allow sibling-deny invalid; do
+      id="trust-$harness-$mode"
+      rec=$(make_spawn_case "$id" codex "$id")
+      read_case_record "$rec"
+      printf '%s\n' "$harness" > "$HOME_DIR/config/secondmate-harness"
+      sm="$CASE_DIR/secondmate-home"
+      make_seeded_secondmate_home "$sm" "$id"
+      sm=$(cd "$sm" && pwd -P)
+      store="$HOME_DIR/pi-agent/trust.json"
+      mkdir -p "$(dirname "$store")"
+      case "$mode" in
+        exact-deny) jq -n --arg home "$sm" '{($home): false}' > "$store" ;;
+        parent-deny) jq -n --arg home "$sm" --arg parent "${sm%/*}" \
+          '{($home): null, ($parent): false}' > "$store" ;;
+        closer-allow) jq -n --arg home "$sm" --arg parent "${sm%/*}" \
+          '{($home): true, ($parent): false}' > "$store" ;;
+        sibling-deny) jq -n --arg sibling "$sm-other" '{($sibling): false}' > "$store" ;;
+        invalid) printf '[]\n' > "$store" ;;
+      esac
+      before=$(cat "$store")
+      status=0
+      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+        "$id" "$sm" --secondmate) || status=$?
+      case "$mode" in
+        exact-deny|parent-deny|invalid)
+          expect_code 1 "$status" "$harness $mode must refuse before launch"
+          assert_contains "$out" 'Pi project trust' "$harness trust refusal missing"
+          assert_absent "$HOME_DIR/state/$id.meta" "trust refusal wrote task metadata"
+          [ ! -s "$LAUNCH_LOG" ] || fail "trust refusal typed a launch command"
+          ;;
+        *)
+          expect_code 0 "$status" "$harness $mode must still launch"
+          launch=$(cat "$LAUNCH_LOG")
+          assert_contains "$launch" '--approve' "allowed seeded home lost --approve"
+          assert_contains "$launch" "PI_CODING_AGENT_DIR='$HOME_DIR/pi-agent'" \
+            "launch did not retain the checked trust store"
+          ;;
+      esac
+      assert_equals "$before" "$(cat "$store")" "spawn rewrote the Pi trust store"
+    done
+  done
+  pass "Pi/pi-signed seeded homes preserve the nearest saved trust decision without rewriting the store"
+}
+
 test_pi_approve_probe_omits_unsupported_flag() {
   local harness rec id sm out status launch
   for harness in pi pi-signed; do
@@ -2242,6 +2290,7 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata
 test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity
 test_pi_seeded_secondmate_preapproves_project_trust
+test_pi_seeded_secondmate_respects_saved_project_trust
 test_pi_worker_launch_omits_seeded_home_approve
 test_pi_approve_probe_omits_unsupported_flag
 test_batch_forwards_shared_profile_flags
