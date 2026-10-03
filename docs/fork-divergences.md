@@ -399,4 +399,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - `codex-animation-port`: the fork's port of upstream #4297 (`tests/fixtures/codex-animation/`), which upstream replaced with #4532; the animation, painted-braille, and ghost extraction hunks in `bin/fm-composer-lib.sh`, their cases in `tests/fm-composer-ghost.test.sh` and `tests/fm-composer-lib.test.sh`, and the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`; kept for now at a known cost.
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
+- `upstream-lint-memory-fallback`: the lint owner and its regression suite take upstream https://github.com/kunchenguid/firstmate/pull/6443 ahead of the next ancestry merge; only memory-exhausted roots retry without source following, within the original bounds, while every canonical library remains a direct lint root.
+  Drop this item once an integration contains that upstream commit.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.

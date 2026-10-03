@@ -3393,7 +3393,7 @@ if [ "$KIND" = secondmate ]; then
     # inherit the spawning shell's PI_CODING_AGENT_DIR. An account pin wins.
     PI_TRUST_AGENT_DIR=${WORKER_ACCOUNT_ROOT:-${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}}
     case "$PI_TRUST_AGENT_DIR" in
-      '~/'*) PI_TRUST_AGENT_DIR="$HOME/${PI_TRUST_AGENT_DIR#'~/'}" ;;
+      \~/*) PI_TRUST_AGENT_DIR="$HOME/${PI_TRUST_AGENT_DIR#\~/}" ;;
     esac
     case "$PI_TRUST_AGENT_DIR" in
       /*) ;;
