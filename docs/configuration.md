@@ -963,7 +963,7 @@ The optional local, gitignored `config/lavish-axi-host` contains one non-empty a
 
 Once a board exists, the process-event adapter derives the polling address from that board's own saved Lavish session instead; its header owns the lookup contract.
 When the file is absent, worker launches do not add a board address, and every Lavish session Firstmate opens binds `127.0.0.1`, which also stops Lavish's own Tailscale detection.
-Keep it absent or loopback unless the network it names is trusted: the Lavish server has no authentication ([`docs/lavish.md`](lavish.md#view-lavish-pages-from-another-computer-over-ssh)).
+Keep it absent, loopback, or this machine's own tailnet address: the Lavish server has no authentication, so any other address exposes it to that whole network ([`docs/lavish.md`](lavish.md#view-lavish-pages-from-another-computer-over-tailscale)).
 
 Malformed or unreadable values refuse the launch before the worker starts.
 The address selects the existing shared server; it does not authorize starting or stopping the server, and the Lavish startup crash remains a vendor-tool concern.
