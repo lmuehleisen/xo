@@ -1144,6 +1144,48 @@ test_claude_ultracode_optin() {
   pass "Claude ultracode is a separate explicit, probed setting and preserves effort"
 }
 
+test_remote_secondmate_ultra_refuses_before_routing() {
+  local rec id=remote-ultra out status verb pin mate
+  for pin in explicit configured; do
+    rec=$(make_spawn_case "remote-ultra-$pin" codex "$id")
+    read_case_record "$rec"
+    printf -- '- %s - remote fixture (host: fixture-host; root: /fixture/root; home: /fixture/home; scope: fixture; projects: alpha; added 2026-10-05)\n' "$id" > "$HOME_DIR/data/secondmates.md"
+    cat > "$FAKEBIN_DIR/ssh-refuse" <<'SH'
+#!/usr/bin/env bash
+printf 'unexpected remote transport\n' >> "${FM_FAKE_LAUNCH_LOG:?}"
+printf 'unexpected remote transport\n' >&2
+exit 99
+SH
+    chmod +x "$FAKEBIN_DIR/ssh-refuse"
+    if [ "$pin" = explicit ]; then
+      out=$(FM_SSH_BIN="$FAKEBIN_DIR/ssh-refuse" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --secondmate --harness codex --model gpt-6-astra --effort ultra)
+    else
+      printf 'codex gpt-6-astra ultra\n' > "$HOME_DIR/config/secondmate-harness"
+      out=$(FM_SSH_BIN="$FAKEBIN_DIR/ssh-refuse" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --secondmate)
+    fi
+    expect_code 1 "$?" "remote secondmate Ultra must refuse before routing: $pin $out"
+    assert_contains "$out" 'only to task workers' "remote parent bypassed the task-only refusal"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a refused remote Ultra published parent metadata"
+    [ ! -s "$LAUNCH_LOG" ] || fail "a refused remote Ultra reached transport"
+  done
+  mate="$CASE_DIR/seeded-mate"
+  make_seeded_secondmate_home "$mate" "$id"
+  mkdir -p "$mate/state/parent-route"
+  printf 'sentinel endpoint\n' > "$mate/state/parent-route/$id.meta"
+  for verb in launch relaunch; do
+    if [ "$verb" = launch ]; then
+      out=$(FM_HOME="$mate" PATH="$FAKEBIN_DIR:$PATH" "$ROOT/bin/fm-remote-secondmate-control.sh" "$verb" "$id" codex gpt-6-astra ultra herdr 2>&1)
+    else
+      out=$(FM_HOME="$mate" PATH="$FAKEBIN_DIR:$PATH" "$ROOT/bin/fm-remote-secondmate-control.sh" "$verb" "$id" codex gpt-6-astra ultra 2>&1)
+    fi
+    status=$?
+    expect_code 1 "$status" "host-local remote control must refuse Ultra before endpoint access: $verb $out"
+    assert_contains "$out" 'only to task workers' "remote control reached the endpoint before refusing Ultra"
+    [ "$(cat "$mate/state/parent-route/$id.meta")" = 'sentinel endpoint' ] || fail "refused Ultra changed endpoint metadata"
+  done
+  pass "remote secondmate Ultra refuses before sync, transport, and endpoint reuse"
+}
+
 goal_pane_fixture() {
   # This fixture renders synchronously; native UI timing belongs to the live guard.
   fm_test_fake_sleep_noop "$FAKEBIN_DIR"
@@ -2742,6 +2784,7 @@ test_opencode_omits_variant_when_model_family_lacks_effort
 test_native_effort_validator_keeps_axes_separate
 test_native_pi_ultra_is_explicit_and_model_scoped
 test_codex_ultra_refuses_unproved_support
+test_remote_secondmate_ultra_refuses_before_routing
 test_claude_ultracode_optin
 test_goal_first_native_input
 test_goal_acknowledgement_is_fresh_and_failure_stays_owned

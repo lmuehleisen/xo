@@ -13,13 +13,15 @@
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
-#        fm-harness.sh validate-native-effort <harness> <model> <effort>
+#        fm-harness.sh validate-native-effort <harness> <model> <effort> [kind]
 #                                        Refuse ultra unless Pi/Pi-signed names
 #                                        codex-native/<id>, or direct Codex's
 #                                        installed bundled catalog advertises
 #                                        ultra for the explicit model and its
 #                                        config parser accepts that effort.
-#                                        Other efforts retain their policy.
+#                                        kind=secondmate refuses direct Codex
+#                                        ultra before probing. Other efforts
+#                                        retain their policy.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.
@@ -543,13 +545,17 @@ resolve_secondmate_effort() {
 }
 
 validate_native_effort() {
-  local harness=${1:-} model=${2:-} effort=${3:-} catalog
+  local harness=${1:-} model=${2:-} effort=${3:-} kind=${4:-} catalog
   [ "$effort" = ultra ] || return 0
   case "$harness" in
     pi|pi-signed)
       case "$model" in codex-native/?*) return 0 ;; esac
       ;;
     codex)
+      if [ "$kind" = secondmate ]; then
+        echo "error: direct Codex ultra applies only to task workers, not secondmates" >&2
+        return 1
+      fi
       if [ -z "$model" ] || [ "$model" = default ]; then
         echo "error: codex ultra requires an explicit --model" >&2
         return 1

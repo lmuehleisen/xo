@@ -1134,7 +1134,7 @@ spawn_remote_secondmate() {
     return 1
     ;;
   esac
-  if [ "$effort" = ultra ] && ! "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$harness" "$model" "$effort"; then
+  if [ "$effort" = ultra ] && ! "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$harness" "$model" "$effort" secondmate; then
     fm_lock_release "$registry_lock" || true
     fm_lock_release "$SPAWN_TASK_LOCK" || true
     return 1
@@ -2833,15 +2833,11 @@ fi
 # Ultra is an explicit native capability, never a Pi thinking-level alias.
 # Validate the fully resolved profile before worktree or endpoint provisioning.
 if [ "$EFFORT" = ultra ]; then
-  if [ "$HARNESS" = codex ] && [ "$KIND" = secondmate ]; then
-    echo "error: direct Codex ultra applies only to task workers, not secondmates" >&2
-    exit 1
-  fi
   [ "$RAW_LAUNCH" = 0 ] || {
     echo "error: --effort ultra requires the canonical --harness pi or pi-signed or codex launch so its native flag cannot be omitted" >&2
     exit 1
   }
-  "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" || exit 1
+  "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" "$KIND" || exit 1
 fi
 if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
   [ "$RAW_LAUNCH" = 0 ] || { echo "error: --ultracode and --goal require a canonical harness launch" >&2; exit 1; }
