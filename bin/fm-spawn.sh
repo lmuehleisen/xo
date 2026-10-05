@@ -2827,11 +2827,6 @@ task_launch_optins_validate() {
     fi
   fi
 }
-# Account selection precedes the probe so Claude checks the store it will use.
-if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
-  (cd "$PROJ_ABS" && task_launch_optins_validate) || exit 1
-fi
-
 secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
 }
@@ -3487,6 +3482,11 @@ else
   PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
+fi
+# Account and project resolution precede the probe so Claude checks the store
+# and project settings it will use, before acquiring a worktree or endpoint.
+if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
+  (cd "$PROJ_ABS" && task_launch_optins_validate) || exit 1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
