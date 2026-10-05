@@ -561,4 +561,4 @@ export const FmPrimaryWatchArm = async ({ client, directory, worktree }) => {
   };
 };
 
-export default v2Plugin("firstmate.primary-watch-arm", FmPrimaryWatchArm);
+export default v2Plugin("firstmate.primary-watch-arm", FmPrimaryWatchArm, { rootOnly: true });

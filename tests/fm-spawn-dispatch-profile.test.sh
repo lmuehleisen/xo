@@ -927,6 +927,34 @@ test_opencode_refuses_pending_startup_composer() {
   pass "OpenCode refuses brief submission into a pending startup composer"
 }
 
+test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
+  local rec id out status mode failure endpoint
+  for failure in readiness submission; do
+    for mode in closed survives unreadable; do
+      id="profile-opencode-$failure-$mode"
+      rec=$(make_spawn_case "$id" opencode "$id")
+      read_case_record "$rec"
+      endpoint="$CASE_DIR/endpoint"
+      out=$(FM_FAKE_TMUX_ENDPOINT_STATE="$endpoint" FM_FAKE_TMUX_CLOSE_MODE="$mode" \
+        FM_FAKE_TMUX_COMPOSER="$([ "$failure" != readiness ] || printf pending)" \
+        FM_FAKE_TMUX_BRIEF_SEND_FAIL="$([ "$failure" != submission ] || printf 1)" \
+        FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+      status=$?
+      expect_code 1 "$status" "OpenCode $failure must fail with $mode endpoint cleanup"
+      if [ "$mode" = closed ]; then
+        [ ! -s "$endpoint" ] || fail "failed startup did not close its endpoint"
+        [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "confirmed closure must roll back provisional ownership"
+      else
+        assert_meta_profile "$HOME_DIR/state/$id.meta" opencode default default
+        [ -s "$HOME_DIR/state/$id.busy-gen" ] || fail "unconfirmed closure lost busy wiring"
+        assert_contains "$out" 'preserved for recovery' "unconfirmed closure must report retained ownership"
+      fi
+    done
+  done
+  pass "OpenCode failed readiness and submission retire confirmed endpoints and preserve uncertain ownership"
+}
+
 test_opencode_threads_model_and_effort_variant() {
   local rec id out status launch
   id=profile-opencode-z7
@@ -2320,6 +2348,7 @@ test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_rejects_v1_before_launch
 test_opencode_refuses_pending_startup_composer
+test_opencode_failed_startup_keeps_only_unconfirmed_endpoints
 test_opencode_threads_model_and_effort_variant
 test_opencode_without_effort_keeps_launch_config_unchanged
 test_opencode_emits_variant_for_openai_family_effort

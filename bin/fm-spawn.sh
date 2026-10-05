@@ -4718,6 +4718,22 @@ rovo_endpoint_cleanup() {
   fm_backend_kill "$BACKEND" "$T" "$tab_id" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
 }
 
+opencode_spawn_fail() { # <detail>
+  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+  rovo_endpoint_cleanup
+  if spawn_endpoint_proven_absent; then
+    SPAWN_ENDPOINT_CLOSED=1
+  else
+    # Preserve the endpoint's owner and wiring when closure is uncertain.
+    # A successful kill call alone is not proof that the worker is gone.
+    SPAWN_ENDPOINT_CLOSED=0
+    SPAWN_FRESH_COMMIT_PENDING=0
+    RELAUNCH_REPLACEMENT_PENDING=0
+    echo "warning: OpenCode endpoint closure is unconfirmed; task record $STATE/$ID.meta and wiring are preserved for recovery" >&2
+  fi
+}
+
 if [ "$RELAUNCH" -eq 1 ] && [ "$BACKEND" = orca ]; then
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$RELAUNCH" -eq 1 ]; then
@@ -6056,17 +6072,18 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
   done
   if [ "$opencode_ready" -ne 1 ]; then
-    printf '%s\n' "$(status_stamp_line "failed: OpenCode V2 composer did not become ready in window $T")" >>"$STATE/$ID.status"
-    echo "error: OpenCode V2 composer did not become ready in window $T" >&2
+    opencode_spawn_fail "OpenCode V2 composer did not become ready in window $T"
     exit 1
   fi
   OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
-    "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || exit 1
+    "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || {
+    opencode_spawn_fail "OpenCode V2 brief encoding failed in window $T"
+    exit 1
+  }
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" = send-failed ]; then
-    printf '%s\n' "$(status_stamp_line "failed: OpenCode V2 brief submission failed in window $T")" >>"$STATE/$ID.status"
-    echo "error: OpenCode V2 brief submission failed in window $T" >&2
+    opencode_spawn_fail "OpenCode V2 brief submission failed in window $T"
     exit 1
   fi
 fi

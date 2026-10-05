@@ -205,6 +205,7 @@ const cleanup = await mod.default.setup({
   session: { prompt: async (input) => { v2Prompts.push(input); } },
   event: { subscribe: async function* () {
     try {
+      yield { type: "session.created", data: { sessionID: "v2-child", parentID: "v2-session" } };
       yield { type: "session.created", data: { sessionID: "v2-session" } };
       yield { type: "session.created", data: { sessionID: "v2-session" } };
     } finally { finished(); }
@@ -214,6 +215,39 @@ await done;
 await cleanup();
 if (v2Prompts.length !== 1 || v2Prompts[0].sessionID !== "v2-session" || v2Prompts[0].text !== process.env.EXPECTED)
   throw new Error(`unexpected V2 prompts: ${JSON.stringify(v2Prompts)}`);
+
+const { v2Plugin } = await import(new URL("./lib/fm-v2-plugin.js", pathToFileURL(process.env.PLUGIN)));
+const lifecycle = [];
+const reads = [];
+const bridge = v2Plugin("root-filter-test", async () => ({
+  event: async ({ event }) => { lifecycle.push(event); },
+}), { rootOnly: true });
+const rootCleanup = await bridge.setup({
+  location: { directory: process.env.WORKTREE },
+  session: { get: async ({ sessionID }) => {
+    reads.push(sessionID);
+    if (sessionID === "unknown") throw new Error("not found");
+    return { data: { id: sessionID, ...(sessionID === "resumed-child" ? { parentID: "resumed-root" } : {}) } };
+  } },
+  event: { subscribe: async function* () {
+    yield { type: "session.execution.succeeded", data: { sessionID: "resumed-child" } };
+    yield { type: "session.execution.started", data: { sessionID: "resumed-root" } };
+    yield { type: "session.created", data: { sessionID: "child", parentID: "resumed-root" } };
+    yield { type: "session.execution.succeeded", data: { sessionID: "child" } };
+    yield { type: "session.execution.failed", data: { sessionID: "unknown" } };
+    yield { type: "session.execution.succeeded", data: { sessionID: "other-root" } };
+    yield { type: "session.execution.interrupted", data: { sessionID: "resumed-root", reason: "shutdown" } };
+    yield { type: "session.execution.succeeded", data: { sessionID: "resumed-root" } };
+  } },
+});
+// The cleanup waits for the subscription; allow its queued API reads to settle.
+await new Promise((resolve) => setImmediate(resolve));
+await rootCleanup();
+if (lifecycle.length !== 2 || lifecycle[0].type !== "session.status" || lifecycle[1].type !== "session.idle"
+    || lifecycle.some((event) => event.properties.sessionID !== "resumed-root"))
+  throw new Error(`primary lifecycle escaped its root: ${JSON.stringify(lifecycle)}`);
+if (reads.join(",") !== "resumed-child,resumed-root,unknown,other-root")
+  throw new Error(`creation/resume relationship lookup drift: ${reads}`);
 EOF
   ) || status=$?
   expect_code 0 "$status" "OpenCode exact nudge delivery"

@@ -97,4 +97,4 @@ export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => 
   };
 };
 
-export default v2Plugin("firstmate.primary-turnend-guard", FmPrimaryTurnendGuard);
+export default v2Plugin("firstmate.primary-turnend-guard", FmPrimaryTurnendGuard, { rootOnly: true });

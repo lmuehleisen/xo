@@ -137,6 +137,23 @@ git -C "$PRIMARY" init -q
 cp "$ROOT/.opencode/plugins/fm-primary-turnend-guard.js" "$ROOT/.opencode/plugins/package.json" "$PRIMARY/.opencode/plugins/"
 cp "$ROOT/.opencode/plugins/lib/fm-v2-plugin.js" "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$PRIMARY/.opencode/plugins/lib/"
 cp "$ROOT/bin/fm-operational-input.sh" "$PRIMARY/bin/"
+cat > "$PRIMARY/.opencode/plugins/fm-live-events.js" <<JS
+import { appendFileSync } from "node:fs";
+export default {
+  id: "firstmate.live-events",
+  async setup(ctx) {
+    const controller = new AbortController();
+    const events = (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (event.type === "session.created") {
+          appendFileSync("$LAB/primary-events", JSON.stringify(event.data) + "\\n");
+        }
+      }
+    })();
+    return async () => { controller.abort(); await events.catch(() => {}); };
+  },
+};
+JS
 cat > "$PRIMARY/bin/fm-turnend-guard.sh" <<SH
 #!/usr/bin/env bash
 if [ -f '$LAB/primary-guard-fired' ]; then exit 0; fi
@@ -155,7 +172,8 @@ while [ "$i" -lt 90 ]; do
   i=$((i + 1)); sleep 0.5
 done
 [ "$i" -lt 90 ] || fail "$VERSION: primary composer did not become ready"
-PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Reply PRIMARY_READY and stop.' 3 0.5 0)
+PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Use the task tool to ask a subagent to reply CHILD_READY without using tools. After it returns, reply PRIMARY_READY and stop.' 3 0.5 0)
 [ "$PRIMARY_VERDICT" != send-failed ] || fail "$VERSION: primary prompt submission failed"
 wait_file_text "$LAB/primary-proof" PRIMARY_FOLLOWUP_OK
-pass "$VERSION: primary turn-end plugin submitted a V2 follow-up"
+jq -es 'any(.[]; .parentID != null)' "$LAB/primary-events" >/dev/null || fail "$VERSION: primary child-session probe was not exercised"
+pass "$VERSION: primary child session stayed scoped and turn-end plugin submitted a V2 follow-up"

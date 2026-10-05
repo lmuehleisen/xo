@@ -64,4 +64,4 @@ export const FmPrimaryPretoolCheck = async ({ directory, worktree }) => {
   };
 };
 
-export default v2Plugin("firstmate.primary-pretool-check", FmPrimaryPretoolCheck);
+export default v2Plugin("firstmate.primary-pretool-check", FmPrimaryPretoolCheck, { rootOnly: true });

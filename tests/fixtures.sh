@@ -123,13 +123,37 @@ case "${1:-}" in
     exit 0
     ;;
   list-windows)
+    if [ -n "${FM_FAKE_TMUX_ENDPOINT_STATE:-}" ]; then
+      if [ -f "$FM_FAKE_TMUX_ENDPOINT_STATE.unreadable" ]; then
+        echo 'inventory unavailable' >&2
+        exit 1
+      fi
+      [ ! -f "$FM_FAKE_TMUX_ENDPOINT_STATE" ] || cat "$FM_FAKE_TMUX_ENDPOINT_STATE"
+      exit 0
+    fi
     if [ -n "${FM_FAKE_DUPLICATE_WINDOW:-}" ]; then
       printf '%s\n' "$FM_FAKE_DUPLICATE_WINDOW"
     fi
     exit 0
     ;;
-  has-session|new-session|kill-window|set-window-option) exit 0 ;;
+  kill-window)
+    if [ -n "${FM_FAKE_TMUX_ENDPOINT_STATE:-}" ]; then
+      case "${FM_FAKE_TMUX_CLOSE_MODE:-closed}" in
+        closed) : > "$FM_FAKE_TMUX_ENDPOINT_STATE" ;;
+        unreadable) : > "$FM_FAKE_TMUX_ENDPOINT_STATE.unreadable" ;;
+        survives) exit 1 ;;
+      esac
+    fi
+    exit 0 ;;
+  has-session|new-session|set-window-option) exit 0 ;;
   new-window)
+    if [ -n "${FM_FAKE_TMUX_ENDPOINT_STATE:-}" ]; then
+      prev=
+      for arg in "$@"; do
+        if [ "$prev" = -n ]; then printf '%s\n' "$arg" > "$FM_FAKE_TMUX_ENDPOINT_STATE"; break; fi
+        prev=$arg
+      done
+    fi
     # -P (alone or clustered, e.g. -dP) asks tmux to print the new window's
     # immutable id, which fm_backend_tmux_create_task returns and fm-spawn
     # persists as window_id= so teardown can bind its reap to that object.
@@ -139,6 +163,11 @@ case "${1:-}" in
     exit 0
     ;;
   send-keys)
+    if [ "${FM_FAKE_TMUX_BRIEF_SEND_FAIL:-0}" = 1 ]; then
+      for arg in "$@"; do
+        case "$arg" in *'Read the brief at'*) exit 1 ;; esac
+      done
+    fi
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
       for a in "$@"; do

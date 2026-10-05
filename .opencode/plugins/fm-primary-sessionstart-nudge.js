@@ -60,4 +60,4 @@ export const FmPrimarySessionstartNudge = async ({ client, directory, worktree }
   };
 };
 
-export default v2Plugin("firstmate.primary-sessionstart-nudge", FmPrimarySessionstartNudge);
+export default v2Plugin("firstmate.primary-sessionstart-nudge", FmPrimarySessionstartNudge, { rootOnly: true });
