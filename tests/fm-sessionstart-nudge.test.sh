@@ -221,7 +221,7 @@ const { v2Plugin } = await import(new URL("./lib/fm-v2-plugin.js", pathToFileURL
 const lifecycle = [];
 const reads = [];
 const bridge = v2Plugin("root-filter-test", async () => ({
-  event: async ({ event }) => { lifecycle.push(event); },
+  event: async ({ event }) => { if (["session.status", "session.idle"].includes(event.type)) lifecycle.push(event); },
 }), { rootOnly: true });
 const rootCleanup = await bridge.setup({
   location: { directory: process.env.WORKTREE },
@@ -240,18 +240,29 @@ const rootCleanup = await bridge.setup({
     yield { type: "session.execution.succeeded", data: { sessionID: "other-root" } };
     yield { type: "session.execution.interrupted", data: { sessionID: "resumed-root", reason: "shutdown" } };
     yield { type: "session.execution.succeeded", data: { sessionID: "resumed-root" } };
+    yield { type: "session.created", data: { sessionID: "new-root", location: { directory: process.env.WORKTREE } } };
+    yield { type: "session.created", data: { sessionID: "foreign", location: { directory: "/unrelated" } } };
+    yield { type: "session.created", data: { sessionID: "new-child", parentID: "new-root", location: { directory: process.env.WORKTREE } } };
+    yield { type: "session.execution.succeeded", data: { sessionID: "new-child" } };
+    yield { type: "session.execution.succeeded", data: { sessionID: "resumed-root" } };
+    yield { type: "session.execution.started", data: { sessionID: "new-root" } };
+    yield { type: "session.execution.succeeded", data: { sessionID: "new-root" } };
   } },
 });
 // The cleanup waits for the subscription; allow its queued API reads to settle.
 await new Promise((resolve) => setImmediate(resolve));
 await rootCleanup();
-if (lifecycle.length !== 2 || lifecycle[0].type !== "session.status" || lifecycle[1].type !== "session.idle"
-    || lifecycle.some((event) => event.properties.sessionID !== "resumed-root"))
+if (lifecycle.length !== 4 || lifecycle.map((event) => event.type).join(",") !== "session.status,session.idle,session.status,session.idle"
+    || lifecycle.map((event) => event.properties.sessionID).join(",") !== "resumed-root,resumed-root,new-root,new-root")
   throw new Error(`primary lifecycle escaped its root: ${JSON.stringify(lifecycle)}`);
 if (reads.join(",") !== "sibling-root,resumed-child,resumed-root,unknown,other-root")
   throw new Error(`creation/resume relationship lookup drift: ${reads}`);
 
 let toolHook;
+let switchRoot;
+let switched;
+const rootSwitch = new Promise((resolve) => { switchRoot = resolve; });
+const rootSwitched = new Promise((resolve) => { switched = resolve; });
 const guarded = [];
 const toolBridge = v2Plugin("tool-root-filter-test", async () => ({
   "tool.execute.before": async (input, output) => {
@@ -266,6 +277,11 @@ const toolCleanup = await toolBridge.setup({
     return { id: sessionID, location: { directory: sessionID === "sibling" ? "/unrelated" : process.env.WORKTREE }, ...(sessionID === "child" ? { parentID: "primary" } : {}) };
   } },
   tool: { hook: async (name, callback) => { toolHook = callback; } },
+  event: { subscribe: async function* () {
+    await rootSwitch;
+    yield { type: "session.created", data: { sessionID: "new-root", location: { directory: process.env.WORKTREE } } };
+    switched();
+  } },
 });
 for (const sessionID of ["sibling", "child", "unknown", "primary", "other-root"]) {
   await toolHook({ sessionID, tool: "shell", input: { command: "allow" } });
@@ -273,8 +289,13 @@ for (const sessionID of ["sibling", "child", "unknown", "primary", "other-root"]
 let denied = false;
 try { await toolHook({ sessionID: "primary", tool: "shell", input: { command: "deny" } }); }
 catch (error) { denied = error.message === "primary guard denied"; }
+switchRoot();
+await rootSwitched;
+await toolHook({ sessionID: "primary", tool: "shell", input: { command: "allow" } });
+await toolHook({ sessionID: "new-root", tool: "shell", input: { command: "allow" } });
 await toolCleanup();
-if (!denied || guarded.length !== 2 || guarded.some(({ input }) => input.tool !== "bash" || input.sessionID !== "primary"))
+if (!denied || guarded.length !== 3 || guarded.some(({ input }) => input.tool !== "bash")
+    || guarded.map(({ input }) => input.sessionID).join(",") !== "primary,primary,new-root")
   throw new Error(`primary tool scope or denial drift: ${JSON.stringify(guarded)}`);
 EOF
   ) || status=$?

@@ -204,12 +204,15 @@ CONFIG=$(jq -cn --arg model "$MODEL" '{model:$model,agents:{build:{model:$model}
 OPENCODE_CONFIG_CONTENT="$CONFIG" tmux new-window -t probe -n primary -c "$PRIMARY" \
   "OPENCODE_CONFIG_CONTENT='$CONFIG' opencode --standalone --auto"
 TARGET=probe:primary
-i=0
-while [ "$i" -lt 90 ]; do
-  [ "$(fm_backend_composer_state tmux "$TARGET")" != empty ] || break
-  i=$((i + 1)); sleep 0.5
-done
-[ "$i" -lt 90 ] || fail "$VERSION: primary composer did not become ready"
+wait_primary_composer() {
+  local i=0
+  while [ "$i" -lt 90 ]; do
+    [ "$(fm_backend_composer_state tmux "$TARGET")" != empty ] || return 0
+    i=$((i + 1)); sleep 0.5
+  done
+  fail "$VERSION: primary composer did not become ready"
+}
+wait_primary_composer
 wait_file_text "$LAB/primary-events" '"type":"session.execution.started"'
 PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Run printf PRIMARY_TOOL_OK in the shell. Then use the task tool to ask a subagent to run printf CHILD_TOOL_OK in its shell and reply CHILD_READY. After it returns, reply PRIMARY_READY and stop.' 3 0.5 0)
 [ "$PRIMARY_VERDICT" != send-failed ] || fail "$VERSION: primary prompt submission failed"
@@ -221,4 +224,15 @@ jq -es --arg root "$PRIMARY_ROOT" 'length == 1 and .[0].sessionID == $root' "$LA
 jq -es --arg root "$PRIMARY_ROOT" 'all(.[]; .sessionID == $root) and any(.[]; (.command // "") | contains("PRIMARY_TOOL_OK"))' "$LAB/primary-scoped-tools" >/dev/null || fail "$VERSION: primary tool guard scope drift"
 jq -es --arg root "$PRIMARY_ROOT" 'any(.[]; .status == "completed" and .sessionID != $root and ((.input.command // "") | contains("CHILD_TOOL_OK")))' "$LAB/primary-tool-results" >/dev/null || fail "$VERSION: child shell tool did not succeed outside primary guard"
 jq -es --arg root "$PRIMARY_ROOT" '[.[] | select(.type == "session.execution.started")][0].sessionID != $root' "$LAB/primary-events" >/dev/null || fail "$VERSION: sibling root did not exercise first execution"
-pass "$VERSION: primary sibling/child lifecycle and tool hooks stayed scoped with one root follow-up"
+wait_primary_composer
+NEW_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" '/new' 3 0.5 0)
+[ "$NEW_VERDICT" != send-failed ] || fail "$VERSION: /new submission failed"
+wait_primary_composer
+NEW_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Run printf NEW_ROOT_TOOL_OK in the shell, then reply NEW_ROOT_READY and stop.' 3 0.5 0)
+[ "$NEW_VERDICT" != send-failed ] || fail "$VERSION: new-root prompt submission failed"
+wait_file_text "$LAB/primary-tool-results" NEW_ROOT_TOOL_OK
+NEW_ROOT=$(jq -rs --arg directory "$PRIMARY_REAL" '[.[] | select(.type == "session.created" and .parentID == null and .location.directory == $directory)][-1].sessionID' "$LAB/primary-events")
+[ "$NEW_ROOT" != "$PRIMARY_ROOT" ] || fail "$VERSION: /new did not create another root"
+jq -es --arg root "$NEW_ROOT" 'any(.[]; .sessionID == $root and ((.command // "") | contains("NEW_ROOT_TOOL_OK")))' "$LAB/primary-scoped-tools" >/dev/null || fail "$VERSION: new-root tool bypassed the primary guard"
+jq -es --arg root "$NEW_ROOT" 'any(.[]; .status == "completed" and .sessionID == $root and ((.input.command // "") | contains("NEW_ROOT_TOOL_OK")))' "$LAB/primary-tool-results" >/dev/null || fail "$VERSION: new-root tool did not complete"
+pass "$VERSION: primary sibling/child lifecycle, tool hooks and /new stayed scoped with one root follow-up"

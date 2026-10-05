@@ -27,7 +27,7 @@ export function v2Plugin(id, factory, { rootOnly = false } = {}) {
       const sessions = new Map();
       const primaryDirectory = directoryIdentity(ctx.location.directory);
       let rootSessionID;
-      async function isPrimarySession(sessionID) {
+      async function isPrimarySession(sessionID, select = false) {
         if (!rootOnly) return true;
         if (!sessionID || !primaryDirectory) return false;
         if (!sessions.has(sessionID)) {
@@ -43,7 +43,7 @@ export function v2Plugin(id, factory, { rootOnly = false } = {}) {
         }
         const session = sessions.get(sessionID);
         if (session.parentID || directoryIdentity(session.location?.directory) !== primaryDirectory) return false;
-        rootSessionID ??= sessionID;
+        if (select || !rootSessionID) rootSessionID = sessionID;
         return sessionID === rootSessionID;
       }
       if (hooks["tool.execute.before"]) {
@@ -56,13 +56,13 @@ export function v2Plugin(id, factory, { rootOnly = false } = {}) {
         });
       }
       const controller = new AbortController();
-      const stream = hooks.event ? (async () => {
+      const stream = hooks.event || rootOnly ? (async () => {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
           let type = event.type;
           let properties = event.data;
           if (rootOnly && type === "session.created") {
             sessions.set(event.data.sessionID, { ...event.data, id: event.data.sessionID });
-            if (!await isPrimarySession(event.data.sessionID)) continue;
+            if (!await isPrimarySession(event.data.sessionID, true)) continue;
           }
           if (rootOnly && type.startsWith("session.execution.")) {
             if (!await isPrimarySession(event.data.sessionID)) continue;
@@ -75,7 +75,7 @@ export function v2Plugin(id, factory, { rootOnly = false } = {}) {
             if (event.data.reason === "shutdown") continue;
             type = "session.idle";
           }
-          await hooks.event({ event: { type, properties } });
+          if (hooks.event) await hooks.event({ event: { type, properties } });
         }
       })() : Promise.resolve();
       // Keep unexpected stream failures visible in OpenCode's plugin logs.
