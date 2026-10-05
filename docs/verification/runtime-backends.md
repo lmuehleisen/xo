@@ -2477,7 +2477,7 @@ The merge suite and the security suite dominate the wall time.
 
 ### 2026-10-05 Pi 1.0.3 compatibility refresh
 
-The credential-free SDK guard, strict typecheck, calm, branch, and watch extension suites, worker publish-policy guard, worker-account pin guard, launch-prompt signature guard, and real-TUI responsiveness guard were run against npm `@earendil-works/pi-coding-agent` 1.0.3.
+The credential-free SDK guard, strict typecheck, calm and branch suites, worker publish-policy guard, worker-account pin guard, launch-prompt signature guard, and real-TUI responsiveness guard were run against npm `@earendil-works/pi-coding-agent` 1.0.3.
 The previous dated publish-policy verification was pi 0.99.2 on Linux and pi 0.87.1 on macOS, on 2026-10-01.
 Pi 1.0.1 renamed `createToolHtmlRenderer`'s lookup from `getToolDefinition` to `getToolRenderers`.
 The calm HTML fixture, ported from upstream `fede6197`, passes both names so Pi 1.0.0 and Pi 1.0.1 or newer each read the key they know.
@@ -2490,14 +2490,15 @@ Pi 1.0.3 treats every mode other than `fullscreen` as the regular screen, and th
 The Azure provider rename from `azure-openai-responses` to `azure` has no matching literal in this repo.
 Pi-signed was not installed, and the native Codex adapter package was not installed, so those guards skipped.
 No provider call left the machine.
-The SDK and extension suites read `FM_PI_PACKAGE_DIR`.
-The publish-policy, worker-account, launch-prompt, and responsiveness guards resolve `pi` from `PATH` and ignore that variable, so those four commands put the isolated 1.0.3 executable's directory first.
+The SDK guard, strict typecheck, branch suite, and live branch guard read `FM_PI_PACKAGE_DIR`.
+The calm suite reads that variable for its package import and resolves `pi` from `PATH` for its flag probe and real TUI launches.
+The publish-policy, worker-account, launch-prompt, and responsiveness guards resolve `pi` from `PATH` and ignore `FM_PI_PACKAGE_DIR`, so those commands put the isolated 1.0.3 executable's directory first.
+The watch extension suite stubs the coding agent, TUI, and TypeBox packages locally and does not read `FM_PI_PACKAGE_DIR`, so it is not Pi 1.0.3 runtime evidence.
 
 ```sh
 FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-primary-types.test.sh
 FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-branch-extension.test.sh
-FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-watch-extension.test.sh
-FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-calm-pi-extension.test.sh
+PATH=<pi-1.0.3 bin>:$PATH FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-calm-pi-extension.test.sh
 FM_PI_BRANCH_LIVE_E2E=1 FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-branch-live-e2e.test.sh
 PATH=<pi-1.0.3 bin>:$PATH bash tests/fm-pi-worker-publish-policy-live-e2e.test.sh
 PATH=<pi-1.0.3 bin>:$PATH bash tests/fm-worker-account-live-e2e.test.sh
