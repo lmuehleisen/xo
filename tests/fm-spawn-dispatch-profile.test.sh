@@ -80,6 +80,8 @@ elif [ "${1:-}" = -p ]; then
   else
     printf '%s\n' '{"is_error":false,"local_command":"effort","result":"Current effort level: high · Ultracode on","num_turns":0}'
   fi
+else
+  [ -z "${FM_FAKE_CLAUDE_WORKER_LOG:-}" ] || printf '%s\n' "$0" "$@" > "$FM_FAKE_CLAUDE_WORKER_LOG"
 fi
 SH
   chmod +x "$fakebin/codex" "$fakebin/claude"
@@ -1065,23 +1067,24 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
   pass "Ultra is explicit for native Pi and Pi-signed, including direct-PR, and refuses unsupported profiles before provisioning"
 }
 
-assert_codex_launch_uses_probed_executable() { # <emitted-launch>
-  local launch=$1 pane_bin
+assert_task_launch_uses_probed_executable() { # <harness> <emitted-launch>
+  local harness=$1 launch=$2 pane_bin
   pane_bin="$CASE_DIR/older-pane-bin"
   mkdir -p "$pane_bin" "$CASE_DIR/pane-home"
-  cat > "$pane_bin/codex" <<'SH'
+  cat > "$pane_bin/$harness" <<'SH'
 #!/usr/bin/env bash
-: > "$FM_FAKE_OLDER_CODEX_CALLED"
+: > "$FM_FAKE_OLDER_HARNESS_CALLED"
 exit 41
 SH
-  chmod +x "$pane_bin/codex"
+  chmod +x "$pane_bin/$harness"
   env PATH="$pane_bin:$PATH" HOME="$CASE_DIR/pane-home" \
-    FM_FAKE_OLDER_CODEX_CALLED="$CASE_DIR/older-codex-called" \
-    FM_FAKE_CODEX_WORKER_LOG="$CASE_DIR/worker-codex.log" \
-    bash -c "$launch" || fail "opted-in launch failed with an older Codex on the pane PATH"
-  [ ! -e "$CASE_DIR/older-codex-called" ] || fail "opted-in launch substituted the pane's unvalidated Codex"
-  [ "$(sed -n '1p' "$CASE_DIR/worker-codex.log")" = "$(CDPATH='' cd -- "$FAKEBIN_DIR" && pwd -P)/codex" ] \
-    || fail "opted-in launch did not execute the Codex binary whose capability probe passed"
+    FM_FAKE_OLDER_HARNESS_CALLED="$CASE_DIR/older-harness-called" \
+    FM_FAKE_CODEX_WORKER_LOG="$CASE_DIR/worker-harness.log" \
+    FM_FAKE_CLAUDE_WORKER_LOG="$CASE_DIR/worker-harness.log" \
+    bash -c "$launch" || fail "opted-in launch failed with an older $harness on the pane PATH"
+  [ ! -e "$CASE_DIR/older-harness-called" ] || fail "opted-in launch substituted the pane's unvalidated $harness"
+  [ "$(sed -n '1p' "$CASE_DIR/worker-harness.log")" = "$(CDPATH='' cd -- "$FAKEBIN_DIR" && pwd -P)/$harness" ] \
+    || fail "opted-in launch did not execute the $harness binary whose capability probe passed"
 }
 
 test_codex_ultra_refuses_unproved_support() {
@@ -1093,7 +1096,7 @@ test_codex_ultra_refuses_unproved_support() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" 'model_reasoning_effort="ultra"' "direct codex ultra config missing"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
-  assert_codex_launch_uses_probed_executable "$launch"
+  assert_task_launch_uses_probed_executable codex "$launch"
   for model in '' default gpt-6-luna; do
     rec=$(make_spawn_case "codex-ultra-unproved-$RANDOM" codex "$id")
     read_case_record "$rec"
@@ -1136,6 +1139,7 @@ test_claude_ultracode_optin() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model opus --effort low)
   expect_code 0 "$?" "supported ultracode should launch: $out"
   launch=$(cat "$LAUNCH_LOG")
+  assert_task_launch_uses_probed_executable claude "$(head -1 "$LAUNCH_LOG")"
   assert_contains "$launch" '"ultracode":true' "ultracode setting missing"
   assert_contains "$launch" "--effort 'low'" "ultracode changed the explicit effort"
   assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
@@ -1343,7 +1347,7 @@ test_goal_first_native_input() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal 'Reply with smoke')
     expect_code 0 "$?" "native $harness goal launch failed: $out"
     launch=$(head -1 "$LAUNCH_LOG")
-    [ "$harness" != codex ] || assert_codex_launch_uses_probed_executable "$launch"
+    assert_task_launch_uses_probed_executable "$harness" "$launch"
     assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
     assert_grep '/goal Reply with smoke.' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
