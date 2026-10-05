@@ -11,6 +11,8 @@ The command addresses the active home's configured data directory, so the existi
 It never reads report bodies, review artifacts, terminal output, or chat.
 
 The `hold` subcommand is the mandatory captain-hold creation path: it uses an existing task or creates one when nothing exists to hold, records its UTC hold-set timestamp as the leading line of the task body, then invokes the underlying tasks-axi hold operation and verifies both records.
+When `--origin` is supplied, its backend identity is recorded on a `Captain hold origin:` body line before the hold, and a refused hold restores the prior association.
+The reason may contain parentheses and line breaks; `bin/fm-hold-reason-lib.sh` owns storage encoding and `bin/fm-tasks-axi.sh` owns decoded public reads.
 Publishing the stamp first ensures a snapshot cannot observe a newly captain-held task without the timestamp that defines its age.
 Retries of an active hold preserve its hold-set timestamp, while re-holding released work starts a new timestamped lifecycle; a closed task is refused rather than reopened, and `--until` stores the captain's own deferral date through tasks-axi's date gate.
 tasks-axi's hold overwrites the reason in place and keeps no record of what it replaced, so a re-hold whose reason actually changes first preserves the outgoing one through the same `--archive-body` mechanism the answer path uses, and refuses the replacement unless that preservation reads back from the backlog.
@@ -22,9 +24,9 @@ For a live ship record whose last event is plain `done:` with no open keyed deci
 This does not exit an agent, merge a branch, or close the task; the existing watcher admits the bounded declared-wait cadence only for a confidently stopped ordinary worker, and a later worker event remains actionable.
 
 The `answer` subcommand records the captain's exact words and resolves the call in the same act: it closes a question-shaped call, while `answer --release` frees a captain-gated work item to proceed without completing it.
-It requires a non-empty captain decision file of at most 8192 bytes, durably writes a resolution block carrying the decision digest and a `Resolution mode:` while retaining the leading hold-set stamp until the selected `tasks-axi done` or `tasks-axi unhold` transition succeeds, then restores the successful record's resolution-first body ordering (the previous body remains preserved below the block and archived through tasks-axi `--archive-body`).
+It requires a non-empty captain decision file of at most 8192 bytes, durably writes a resolution block carrying the decision digest and a `Resolution mode:` while retaining the leading hold-set stamp until the selected `tasks-axi done` or `tasks-axi unhold` transition succeeds, then removes the stamp, leaving origin metadata ahead of the newest resolution record (the previous body remains preserved below the block and archived through tasks-axi `--archive-body`).
 If the close is interrupted, the still-held task therefore keeps its original age basis.
-A matching retry also completes any resolution-first normalization left unfinished after the close itself succeeded.
+A matching retry also completes any stamp removal left unfinished after the close itself succeeded.
 An exact retry is idempotent only when the requested close mode matches the newest record; a drifted answer or mode mismatch is rejected, while a re-held task accepts a new answer as a new record on top.
 On a task closed outside the script, `answer` records the missing block only when the captain-hold annotations tasks-axi preserves through a close prove the captain owned it, and it verifies the task stays closed.
 A hold whose `--until` date has passed keeps those annotations while tasks-axi reports it no longer held, so an expired deferral remains answerable.
@@ -32,10 +34,13 @@ A hold whose `--until` date has passed keeps those annotations while tasks-axi r
 The `complete` subcommand unions the reviewed captain-held task ids into `decision_keys=` and appends `decisions_reviewed=1` while originating task metadata is live.
 A post-teardown visual review can complete against the surviving report and durable tasks without recreating volatile task metadata.
 It accepts `--none` as an explicit semantic inventory result, refused while the origin still has a lifecycle-open keyed status decision, and verifies every listed task against tasks-axi before recording completion.
+An origin cannot inventory itself except for a completed ship's own durable approval hold; a later worker event disallows that exception.
+Other historical self-inventories require a separate held task with `--origin`, replacement of only the invalid entry in the final `decision_keys=` line, and another `complete` call.
+An entry associated with another origin is refused, while legacy entries without an origin are accepted on durability evidence and named in the output.
 With a non-empty inventory it appends a `captain-held [key=<key>]` transfer event naming the reviewed inventory for every still-open keyed status decision, which `bin/fm-classify-lib.sh` recognizes as closing the live status copy without claiming that the captain has answered it.
 
 Scout teardown calls the read-only `verify` subcommand after checking for the report and before removing any source state.
-`verify` requires the recorded attestation, requires every recorded inventory entry to still be durable (actively captain-held, or carrying a recorded answer), and fails on any keyed status decision that opened after the last `complete`, which makes re-running `complete` the repair.
+`verify` requires the recorded attestation, requires every recorded inventory entry to remain durable and pass the same origin checks as `complete`, and fails on any keyed status decision that opened after the last `complete`, which makes re-running `complete` the repair.
 The `--force` path remains the explicit captain-approved discard escape hatch.
 
 ## Cleanup never closes a captain call
@@ -43,6 +48,7 @@ The `--force` path remains the explicit captain-approved discard escape hatch.
 The policy prefers holding the very work item a question gates, so the backlog row a finished task's cleanup is about to close is routinely the captain's own call.
 `bin/fm-teardown.sh` therefore asks the read-only `open` subcommand before its automatic close: exit 0 means the row is still an open captain call (not Done, `hold_kind: captain`), 1 means it is not, and 2 means the answer could not be established, which teardown treats as a refusal before any destructive step rather than as permission to close.
 On 0 only the close changes: after cleanup and still under the task's own lock, teardown records one `Deliverable of the finished work: ...` line at the end of the task body, copies a supported pull request or canonical `data/<id>/report.md` into the row's structured artifact fields, and runs `tasks-axi reopen`, so the row returns to Queued with its hold intact and remains on the appropriate Captain's Call or Charted Next decision surface instead of reading as work still under way.
+Gerrit change URLs are retained as deliverable text rather than pull-request fields, and an answer before replay records the URL as a `Gerrit change <url>` close note.
 The pending-close record teardown already stages before destructive cleanup carries that intent as a `mode=retain` line, so an interrupted cleanup replays the retention at the next session start through the same record, validator, and lock as an ordinary close and never closes the row; if the captain answers before replay, `answer` validates that record and copies any supported retained pull request or report into the row before closing it, after which replay retires the record.
 Two retained-delivery gaps remain bounded by tasks-axi 0.2.6 and are recorded for separate upstream work rather than representing defects introduced by this branch.
 A retained local-only delivery cannot reach the row because `--note` exists on `tasks-axi done` but not on `tasks-axi update`, while the durable pending-close record carrying that note is retired when retention completes.

@@ -225,6 +225,14 @@
 #   name from PATH once, probes that concrete path with --help, and launches the
 #   same path. It adds --tui-mode regular only when that help advertises the flag;
 #   a failed or inconclusive probe omits it so older Pi versions remain launchable.
+#   A --secondmate launch of a Firstmate-seeded home (the existing
+#   .fm-secondmate-home marker validate_firstmate_home_for_spawn already requires)
+#   also adds --approve when that help advertises it, so the first unattended
+#   launch does not stall on Pi's "Trust project folder?" dialog for that home
+#   path; --approve is session-scoped to the launch cwd and does not rewrite the
+#   operator's trust.json. A saved denial for the home (or its nearest saved
+#   ancestor) refuses launch, as does an unreadable or invalid trust store.
+#   Ordinary Pi worker launches never receive --approve.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
 #   For omp (Oh My Pi), fm-spawn resolves the `omp` executable from PATH once and
@@ -409,6 +417,9 @@
 #                  supplies its own trailing space, empty never used)
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
+#     __PIAPPROVE__ optional --approve on a seeded Pi/pi-signed secondmate when
+#                  that executable advertises the flag (empty otherwise; session
+#                  trust for the launch cwd only, never a trust.json rewrite)
 #     __PIRESUME__ optional relaunch-only `--session <reference>` that keeps a
 #                  Pi replacement on the session the endpoint's runtime already
 #                  reports (relaunch_resume_args below owns it; it supplies its
@@ -2207,6 +2218,48 @@ pi_supports_tui_mode() {
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
 }
 
+# Same help-probe shape as pi_supports_tui_mode for the session-scoped project
+# trust flag. A seeded secondmate home carries tracked .pi/extensions that gate
+# Pi behind "Trust project folder?" on first launch; --approve trusts that
+# launch cwd for the run without rewriting ~/.pi/agent/trust.json.
+pi_supports_approve() {
+  local executable=$1 help
+  help=$("$executable" --help 2>&1) || return 1
+  # Pi prints "--approve, -a"; allow comma (and any non-token char) after the name.
+  printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--approve([^[:alnum:]_-]|$)'
+}
+
+# Pi's trust store maps canonical directory paths to boolean decisions; null
+# falls through to the closest ancestor. Read it without changing the store.
+# --approve outranks saved decisions, so a seeded home must not override a deny.
+pi_seeded_home_trust_allows_approve() { # <canonical-home> <agent-dir>
+  local home=$1 store=$2/trust.json decision
+  # Existence tests conflate ENOENT with inaccessible ancestors. Only an
+  # actual missing path permits the first-run approval; other errors must
+  # reach the read below and refuse it.
+  if perl -MErrno=ENOENT -e 'exit((!lstat($ARGV[0]) && $! == ENOENT) ? 0 : 1)' "$store"; then
+    return 0
+  fi
+  decision=$(jq -rs --arg cwd "$home" '
+    if length != 1 then error("expected one trust object") else .[0] end
+    | if type != "object" then error("expected a trust object")
+    elif all(.[]; . == null or type == "boolean") | not then
+      error("expected boolean or null trust decisions")
+    else . end
+    | . as $trust
+    | [$cwd | recurse(if . == "/" then empty
+        else sub("/[^/]+$"; "") | if . == "" then "/" else . end end)
+       | $trust[.] | select(type == "boolean")][0]
+  ' "$store") || {
+    echo "error: cannot read Pi project trust; repair the selected account's trust.json before launching this secondmate" >&2
+    return 1
+  }
+  if [ "$decision" = false ]; then
+    echo "error: Pi project trust denies this secondmate home; review its saved trust decision before launching" >&2
+    return 1
+  fi
+}
+
 # omp pre-launch model validation. `omp models --json` (omp 18.1.11) prints
 # {"models":[{"provider","id","selector":"<provider>/<id>",...}]} for built-in and
 # auto-discovered providers only; it never lists a provider an extension
@@ -2420,7 +2473,7 @@ launch_command_template() { # <harness> <kind> <permission-flags>
     ;;
   opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
   pi | pi-signed)
-    printf '%s' '__PIBIN____PITUIMODE____PIRESUME__'
+    printf '%s' '__PIBIN____PITUIMODE____PIAPPROVE____PIRESUME__'
     if [ "$kind" = secondmate ]; then
       printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     else
@@ -2702,6 +2755,15 @@ pi | pi-signed)
     PI_TUI_MODE=' --tui-mode regular'
   fi
   LAUNCH=${LAUNCH//__PITUIMODE__/$PI_TUI_MODE}
+  # Seeded-home signal is .fm-secondmate-home (required by
+  # validate_firstmate_home_for_spawn before any secondmate launch reaches
+  # the pane). Session-only --approve; never expand to a parent path or
+  # rewrite the operator trust store.
+  PI_APPROVE=
+  if [ "$KIND" = secondmate ] && pi_supports_approve "$PI_BIN"; then
+    PI_APPROVE=' --approve'
+  fi
+  LAUNCH=${LAUNCH//__PIAPPROVE__/$PI_APPROVE}
   LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH"
   ;;
 cursor)
@@ -3418,6 +3480,20 @@ if [ "$KIND" = secondmate ]; then
     exit 1
   }
   PROJ_ABS=$(validate_firstmate_home_for_spawn "$ID" "$FIRSTMATE_HOME")
+  if [ "$RAW_LAUNCH" -eq 0 ] && { [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; } && [ -n "${PI_APPROVE:-}" ]; then
+    # Pin the same store on the launch: a long-lived runtime daemon need not
+    # inherit the spawning shell's PI_CODING_AGENT_DIR. An account pin wins.
+    PI_TRUST_AGENT_DIR=${WORKER_ACCOUNT_ROOT:-${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}}
+    case "$PI_TRUST_AGENT_DIR" in
+      \~/*) PI_TRUST_AGENT_DIR="$HOME/${PI_TRUST_AGENT_DIR#\~/}" ;;
+    esac
+    case "$PI_TRUST_AGENT_DIR" in
+      /*) ;;
+      *) PI_TRUST_AGENT_DIR="$PWD/$PI_TRUST_AGENT_DIR" ;;
+    esac
+    pi_seeded_home_trust_allows_approve "$PROJ_ABS" "$PI_TRUST_AGENT_DIR" || exit 1
+    LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "$PI_TRUST_AGENT_DIR") $LAUNCH"
+  fi
   if [ -e "$DATA/secondmates.md" ] || [ -L "$DATA/secondmates.md" ]; then
     if ! secondmate_registry_validate_bindings "$DATA/secondmates.md" resolve_path "$ID" "$FIRSTMATE_HOME"; then
       echo "error: $SECONDMATE_REGISTRY_ERROR" >&2

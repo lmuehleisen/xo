@@ -550,6 +550,28 @@ The lab home was deleted and the test entry was removed from the store and verif
 That automated spawn case runs against a fake claude, so it asserts the store entry and the launch command and nothing more; the live arms above are what establish that the entry actually suppresses the dialog.
 The composer-classification record below observes the same gate from the other side, where an untrusted worktree left Claude, Grok, and Muse unverified because the guard reads a first-launch trust dialog as an unreadable composer.
 
+## Pi seeded-secondmate project trust
+
+[`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the seeded-secondmate project-trust approval contract and compatibility fallback.
+The live guard below isolates Pi's trust-gate behavior in secondmate-shaped homes; portable launch-command coverage separately verifies that spawn selects the flag for the intended launches.
+
+Verified 2026-10-03 on pi 0.99.2 through the default-on live guard (disposable `PI_CODING_AGENT_DIR` / `HOME` only; never `~/.pi`):
+
+```sh
+bash tests/fm-pi-seeded-home-trust-live-e2e.test.sh
+```
+
+```
+# live pi version: 0.99.2
+ok - fresh seeded Pi secondmate-shaped home stalls on Trust project folder? without --approve
+ok - seeded home with --approve starts past the trust dialog without rewriting trust.json
+ok - unseeded path without --approve still prompts on Trust project folder?
+ok - a saved Pi trust denial skips project extensions without rewriting trust.json
+# all fm-pi-seeded-home-trust-live-e2e checks passed (4)
+```
+
+Portable launch-command coverage lives in `tests/fm-spawn-dispatch-profile.test.sh` (`test_pi_seeded_secondmate_preapproves_project_trust`, `test_pi_seeded_secondmate_respects_saved_project_trust`, `test_pi_worker_launch_omits_seeded_home_approve`, `test_pi_approve_probe_omits_unsupported_flag`).
+
 ## Launch-prompt backstop signatures
 
 `bin/fm-busy-lib.sh`'s launch-prompt backstop (`fm_busy_launch_prompt_parked`) reclassifies a launch whose busy record is still pinned at the fm-spawn seed as `unknown launch-prompt`, rather than `busy fm-spawn`, when the captured pane matches that harness's own recognized trust, sign-in, or first-run dialog.
@@ -572,6 +594,17 @@ ok - pi, pi-signed, omp: a real Pi-engine launch parked on its own rendered trus
 # live gemini version: 0.60.0
 ok - gemini: a real launch parked on its own rendered auth or trust dialog surfaces through the watcher gate
 # checked 3 launch-prompt signature(s) against real installed binaries
+```
+
+Verified 2026-10-05 on pi 1.0.3 from an isolated npm install.
+That run's PATH contained only Pi, so the Claude and Gemini arms reported themselves absent and were not rechecked.
+
+```
+# claude not installed - launch-prompt signature not checked
+# live pi version: 1.0.3
+ok - pi, pi-signed, omp: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate
+# gemini not installed - launch-prompt signature not checked
+# checked 1 launch-prompt signature(s) against real installed binaries
 ```
 
 Claude, launched `--dangerously-skip-permissions` into a brand-new worktree under the operator's own already-onboarded config (the shape a real crewmate spawn produces):
@@ -657,6 +690,16 @@ skip-runner: pi-signed is not installed, so its pin check was not exercised
 # worker account live guard checked: claude pi
 ```
 
+Verified 2026-10-05 on pi 1.0.3 from an isolated npm install of `@earendil-works/pi-coding-agent`.
+Claude was not on PATH for this run, and pi-signed was not installed.
+
+```
+skip-runner: claude is not installed, so its pin check was not exercised
+ok - pi 1.0.3: the pin check reads auth check and the model listing, and refuses what only an ambient credential signs in
+skip-runner: pi-signed is not installed, so its pin check was not exercised
+# worker account live guard checked: pi
+```
+
 The guard submits no prompt and spends no tokens, so it runs by default wherever a runner is installed; rerun it after every Claude or Pi upgrade.
 
 ## Pi worker publish policy
@@ -680,6 +723,14 @@ ok - pi 0.87.1: the worker extension blocks a gh publish and a --no-verify push 
 ```
 skip-runner: pi-signed is not installed, so its worker extension was not exercised
 ok - pi 0.99.2: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
+```
+
+Verified 2026-10-05 on pi 1.0.3 from an isolated npm install of `@earendil-works/pi-coding-agent`; pi-signed was not installed.
+The globally installed Pi CLI was left on its previous release.
+
+```
+skip-runner: pi-signed is not installed, so its worker extension was not exercised
+ok - pi 1.0.3: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
 ```
 
 The guard spends no tokens, so it runs by default wherever Pi is installed; rerun it after every Pi upgrade.
@@ -2464,6 +2515,57 @@ ok - under the away-posture record the wake carries the verbatim read-back tail,
 ```
 
 The merge suite and the security suite dominate the wall time.
+
+### 2026-10-05 Pi 1.0.3 compatibility refresh
+
+The credential-free SDK guard, strict typecheck, calm and branch suites, worker publish-policy guard, worker-account pin guard, launch-prompt signature guard, and real-TUI responsiveness guard were run against npm `@earendil-works/pi-coding-agent` 1.0.3.
+The previous dated publish-policy verification was pi 0.99.2 on Linux and pi 0.87.1 on macOS, on 2026-10-01.
+Pi 1.0.1 renamed `createToolHtmlRenderer`'s lookup from `getToolDefinition` to `getToolRenderers`.
+The calm HTML fixture, ported from upstream `fede6197`, passes both names so Pi 1.0.0 and Pi 1.0.1 or newer each read the key they know.
+Pi 1.0.0 made fullscreen the default TUI mode.
+Calm's scrollback captures, ported from upstream `349e189f`, pass `--tui-mode regular` when the CLI advertises it.
+Spawn already passes that flag, which 1.0.3 advertises.
+The SDK guard still constructs `InteractiveMode` with `tuiMode: "alt-screen"`.
+Pi 1.0.3 treats every mode other than `fullscreen` as the regular screen, and that guard renders through `chatContainer`.
+`--provider` without `--model` is now an error, and a pinned Pi launch already refuses to start unless `--model` names `<provider>/<id>`.
+The Azure provider rename from `azure-openai-responses` to `azure` has no matching literal in this repo.
+Pi-signed was not installed, and the native Codex adapter package was not installed, so those guards skipped.
+No provider call left the machine.
+The SDK guard, strict typecheck, branch suite, and live branch guard read `FM_PI_PACKAGE_DIR`.
+The calm suite reads that variable for its package import and resolves `pi` from `PATH` for its flag probe and real TUI launches.
+The publish-policy, worker-account, launch-prompt, and responsiveness guards resolve `pi` from `PATH` and ignore `FM_PI_PACKAGE_DIR`, so those commands put the isolated 1.0.3 executable's directory first.
+The watch extension suite stubs the coding agent, TUI, and TypeBox packages locally and does not read `FM_PI_PACKAGE_DIR`, so it is not Pi 1.0.3 runtime evidence.
+
+```sh
+FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-primary-types.test.sh
+FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-branch-extension.test.sh
+PATH=<pi-1.0.3 bin>:$PATH FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-calm-pi-extension.test.sh
+FM_PI_BRANCH_LIVE_E2E=1 FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-branch-live-e2e.test.sh
+PATH=<pi-1.0.3 bin>:$PATH bash tests/fm-pi-worker-publish-policy-live-e2e.test.sh
+PATH=<pi-1.0.3 bin>:$PATH bash tests/fm-worker-account-live-e2e.test.sh
+FM_LAUNCH_PROMPT_SIGNALS_LIVE=1 PATH=<pi-1.0.3 bin>:$PATH bash tests/fm-launch-prompt-signals-live-e2e.test.sh
+PATH=<pi-1.0.3 bin>:$PATH bash tests/fm-pi-branch-responsiveness-live-e2e.test.sh
+```
+
+```text
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.0.3
+ok - real Pi SDK 1.0.3 accepts the branch session construction and preserves an unpromptable wake
+ok - real Pi SDK 1.0.3 rejects a post-construction 429 to watcher-owned main delivery without losing its durable row
+ok - real Pi SDK 1.0.3 applies an explicit branch model on create and over a reopened session's recorded model
+ok - real Pi SDK 1.0.3 reports its own supported effort levels and applies an explicit branch effort over a reopened session's recorded level
+ok - real Pi SDK 1.0.3 immediately renders appendEntry in the active transcript, persists it across reopen, and excludes it from model context
+ok - real Pi SDK 1.0.3 queues a streaming-time watcher wake without before_agent_start, keeps the successor chain, and surfaces consumption of both follow-ups
+ok - pi 1.0.3: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
+ok - pi 1.0.3: the pin check reads auth check and the model listing, and refuses what only an ambient credential signs in
+ok - pi, pi-signed, omp: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate
+pi 1.0.3 keystroke echo, worst observed: floor 19.2 ms, extension idle 44.4 ms, extension delivering 27.9 ms
+ok - supervision outcome delivery keeps the real Pi 1.0.3 TUI echoing keystrokes at its unloaded floor
+```
+
+The calm suite's HTML export case passed on Pi 1.0.3 with both lookup names.
+`.github/workflows/ci.yml` still installs the unpinned npm package.
+The 1.0.2 failure was this repo passing only the old lookup name, so the pin stays off and the next Pi release remains what those tests run against.
+The Windows shell-invocation suite skipped because this host is not native Windows.
 
 ## Native Codex through Pi
 

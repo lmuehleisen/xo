@@ -979,6 +979,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   FM_COMPOSER_SCAN_LEFTBAR_END=-1
   FM_COMPOSER_SCAN_PI_PAIR_FOUND=0
   FM_COMPOSER_SCAN_PI_PAIR_VALID=0
+  FM_COMPOSER_SCAN_PI_TITLE_INVALID=0
   FM_COMPOSER_SCAN_PI_OPEN=-1
   FM_COMPOSER_SCAN_PI_CLOSE=-1
   FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=-1
@@ -993,7 +994,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   FM_COMPOSER_SCAN_PI_GLYPH=
   FM_COMPOSER_SCAN_LEFTBAR_GLYPH_ROW=-1
   FM_COMPOSER_SCAN_LEFTBAR_GLYPH=
-  local leftbar_start=-1 pi_open=-1 pi_lines=0 pi_max
+  local leftbar_start=-1 pi_open=-1 pi_lines=0 pi_max pi_title_spaces='' pi_close_spaces
   local probe row_glyph row_glyph_row
   local box_glyph_row=-1 box_glyph='' pi_glyph_row=-1 pi_glyph=''
   pi_max=$FM_COMPOSER_PI_MAX_LINES
@@ -1043,9 +1044,16 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       if [ "$pi_open" -ge 0 ]; then
         FM_COMPOSER_SCAN_PI_PAIR_FOUND=1
+        FM_COMPOSER_SCAN_PI_TITLE_INVALID=0
+        if [ -n "$pi_title_spaces" ]; then
+          pi_close_spaces="$indent${trimmed//─/ }"
+          if [ "$pi_title_spaces" != "$pi_close_spaces" ]; then
+            FM_COMPOSER_SCAN_PI_TITLE_INVALID=1
+          fi
+        fi
         FM_COMPOSER_SCAN_PI_OPEN=$pi_open
         FM_COMPOSER_SCAN_PI_CLOSE=$row
-        if [ "$pi_lines" -le "$pi_max" ]; then
+        if [ "$pi_lines" -le "$pi_max" ] && [ "$FM_COMPOSER_SCAN_PI_TITLE_INVALID" = 0 ]; then
           FM_COMPOSER_SCAN_PI_PAIR_VALID=1
         else
           FM_COMPOSER_SCAN_PI_PAIR_VALID=0
@@ -1054,10 +1062,17 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
         FM_COMPOSER_SCAN_PI_GLYPH=$pi_glyph
       fi
       pi_open=$row
+      pi_title_spaces=''
       pi_lines=0
       pi_glyph_row=-1
       pi_glyph=''
     elif _fm_composer_titled_rule_row "$trimmed" "$indent"; then
+      # Prove the named rule's width against its closing rule. The truncation
+      # ellipsis is one column; other non-ASCII titles remain unproved rather
+      # than guessing their terminal width. Retain the one-column title pad.
+      pi_title_spaces="$indent${trimmed//─/ }"
+      pi_title_spaces=${pi_title_spaces//…/ }
+      pi_title_spaces=$(printf '%s' "$pi_title_spaces" | LC_ALL=C sed 's/[!-~]/ /g')
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       pi_open=$row
       pi_lines=0
@@ -1680,6 +1695,12 @@ _fm_composer_select_cursorless() {
     FM_COMPOSER_SELECTED_KIND=
     return 1
   fi
+  if [ "$FM_COMPOSER_SCAN_PI_TITLE_INVALID" = 1 ] \
+     && [ "$generic" -gt "$FM_COMPOSER_SCAN_PI_OPEN" ] \
+     && [ "$generic" -lt "$FM_COMPOSER_SCAN_PI_CLOSE" ]; then
+    FM_COMPOSER_SELECTED_KIND=
+    return 1
+  fi
   if [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] \
      && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -gt "$generic" ] \
      && [ "$generic" -lt "$FM_COMPOSER_SCAN_PI_OPEN" ]; then
@@ -1939,6 +1960,11 @@ EOF
   fi
   if [ -n "$cy" ]; then
     # Cursor mode (tmux): the shape CONTAINING the cursor is the composer.
+    if [ "$FM_COMPOSER_SCAN_PI_TITLE_INVALID" = 1 ] \
+       && [ "$cy" -gt "$FM_COMPOSER_SCAN_PI_OPEN" ] \
+       && [ "$cy" -lt "$FM_COMPOSER_SCAN_PI_CLOSE" ]; then
+      printf 'unknown'; return 0
+    fi
     if [ "$FM_COMPOSER_SCAN_UNSAFE" = 1 ]; then
       printf 'unknown'; return 0
     fi
