@@ -823,6 +823,16 @@ When pi-signed is selected, Firstmate preserves `FM_PI_HARNESS=pi-signed` and re
 Plain Pi launches set `FM_PI_HARNESS=pi`, so a signed primary's environment cannot relabel a plain Pi worker.
 When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
 
+### Per-task high-quota launch modes
+
+Fresh Claude and Codex task workers can opt into their native orchestration and goal surfaces through [`fm-spawn.sh`](../bin/fm-spawn.sh), whose header and help own the flags, validation, and delivery mechanics.
+These modes remain off unless explicitly selected for that task; Claude workers also override an inherited ultracode setting to off.
+Ultra and ultracode can spend substantially more quota, so firstmate selects them only on the captain's explicit per-task word.
+They do not alter the effort fallback, worker authority, delivery contract, or merge authority.
+Claude ultracode enables dynamic workflows independently of reasoning effort; native goals keep either CLI working toward a supplied completion condition.
+The [Claude](../.agents/skills/harness-adapters/references/harness/claude.md) and [Codex](../.agents/skills/harness-adapters/references/harness/codex.md) adapter references own vendor-specific behavior and supported limits.
+No dispatch-profile fields enable ultracode or goals, and direct Codex ultra is currently a per-spawn override rather than a profile-schema extension.
+
 ### Choose the secondmate harness
 
 `config/secondmate-harness` is a separate local, gitignored file containing the adapter the primary uses to launch secondmate agents, optionally followed by model and effort tokens on the same line.
@@ -1161,7 +1171,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 
 **Model, effort, and fallback behavior**
 
-- `ultra` is native-only: the model-aware validation contract and launch mapping are owned by `bin/fm-harness.sh validate-native-effort` and `bin/fm-spawn.sh` respectively.
+- Profile `ultra` remains scoped to native Pi; direct Codex's per-spawn extension is described under [Per-task high-quota launch modes](#per-task-high-quota-launch-modes), with validation owned by `bin/fm-harness.sh validate-native-effort`.
 - Codex `max` is valid when the profile selects `gpt-5.6-luna`, whose installed catalog entry supports that reasoning level.
 - An omitted model or effort means the selected harness uses its own default for that axis.
 - OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.

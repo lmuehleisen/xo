@@ -14,11 +14,12 @@
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh validate-native-effort <harness> <model> <effort>
-#                                        Refuse ultra unless the harness is pi or
-#                                        pi-signed and the model explicitly names
-#                                        codex-native/<id>. Other efforts retain
-#                                        their adapter's existing policy. Native
-#                                        Codex validates model support at startup.
+#                                        Refuse ultra unless Pi/Pi-signed names
+#                                        codex-native/<id>, or direct Codex's
+#                                        installed bundled catalog advertises
+#                                        ultra for the explicit model and its
+#                                        config parser accepts that effort.
+#                                        Other efforts retain their policy.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.
@@ -78,6 +79,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-gemini-lib.sh"
 # shellcheck source=bin/fm-claude-lib.sh
 . "$SCRIPT_DIR/fm-claude-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 # Print the harness named by a verified environment marker, or nothing when no
 # marker is present. Markers only report what the environment CLAIMS; detect_own
@@ -540,14 +543,34 @@ resolve_secondmate_effort() {
 }
 
 validate_native_effort() {
-  local harness=${1:-} model=${2:-} effort=${3:-}
+  local harness=${1:-} model=${2:-} effort=${3:-} catalog
   [ "$effort" = ultra ] || return 0
   case "$harness" in
     pi|pi-signed)
       case "$model" in codex-native/?*) return 0 ;; esac
       ;;
+    codex)
+      if [ -z "$model" ] || [ "$model" = default ]; then
+        echo "error: codex ultra requires an explicit --model" >&2
+        return 1
+      fi
+      catalog=$(fm_run_timed 15 codex -c 'model_reasoning_effort="ultra"' debug models --bundled </dev/null 2>/dev/null) || {
+        echo "error: installed codex cannot verify ultra support (config parser or bundled catalog unavailable)" >&2
+        return 1
+      }
+      if printf '%s\n' "$catalog" | jq -e --arg model "$model" '
+        (.models | type) == "array" and
+        any(.models[]; .slug == $model and
+          (.supported_reasoning_levels | type) == "array" and
+          any(.supported_reasoning_levels[]; .effort == "ultra"))
+      ' >/dev/null 2>&1; then
+        return 0
+      fi
+      printf 'error: installed codex catalog does not advertise ultra for model %s\n' "$model" >&2
+      return 1
+      ;;
   esac
-  echo "error: ultra effort requires pi or pi-signed with an explicit codex-native/<model> model" >&2
+  echo "error: ultra effort requires pi or pi-signed with codex-native/<model>, or codex with an explicitly supported model" >&2
   return 1
 }
 

@@ -12,13 +12,31 @@ Verified on 2026-06-11 with codex-cli 0.139.0 unless a fact gives a newer versio
 | Skill invocation | `$<skill>`, for example `$no-mistakes`; `/<skill>` is Claude-only and Codex rejects it as "Unrecognized command". |
 | Resume | `codex resume <session-id>`, using the id printed on quit. |
 | Model flag | `--model <model>`. |
-| Effort flag | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh\|max>"'`; `max` is passed for any model whose installed `${CODEX_HOME:-~/.codex}/models_cache.json` entry advertises it in `supported_reasoning_levels`. An unavailable or invalid catalog preserves the Luna-only fallback; omitted requested effort is recorded in metadata and warned at spawn. |
+| Effort flag | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh\|max\|ultra>"'`; `max` uses the installed model cache, preserving the Luna-only fallback when unavailable. Ultra uses the refusal contract in `bin/fm-harness.sh validate-native-effort`; omitted ordinary effort is recorded and warned at spawn. |
 | Model discovery | Open the current interactive session's `/model` picker. |
 | Marker | None; identity comes from ancestry, and `../../../bin/fm-harness.sh` is what keeps a retained foreign `CLAUDECODE` from renaming it. Verified on 2026-09-01 with codex-cli 0.152.0: the pane process is the `node` npm shim and the native `codex` binary runs as its foreground child, so a tool subprocess reaches the native name directly while the shim itself is identified from its script path. |
 
 A directory trust dialog appears on the first run for a repository root: "Do you trust the contents of this directory?"
 Accept it with Enter and verify the instructions begin processing.
 The decision persists for the repository, so later worktrees of the same project skip it.
+
+## Task launch opt-ins
+
+Verified on 2026-10-05 with codex-cli 0.160.0.
+`codex -c 'model_reasoning_effort="ultra"' debug models --bundled` both validates the installed configuration parser and returns its shipped model catalog.
+Ultra is advertised in `supported_reasoning_levels` for GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol, GPT-5.6 Sol, and GPT-5.6 Terra; it is absent for the Luna variants.
+Discover support from the installed CLI rather than treating that list as a permanent model allowlist.
+
+`/goal <objective>` is a built-in slash command backed by the `goals` feature, not a `$goal` skill or dedicated launch flag.
+[`Using Goals in Codex`](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex) documents its thread-scoped objective and lifecycle.
+`codex --enable goals features list` confirms the feature is available.
+The initial positional prompt bypasses the native slash parser on 0.160.0: a trivial `/goal` initial prompt produced a response but `/goal` status subsequently reported no goal set.
+The same command typed after startup reported `Goal active Objective:` and completed with `Goal achieved`.
+Therefore an opted-in worker starts without an ordinary initial prompt and receives its native goal as the first input through the existing backend composer and submit path.
+The current live composer uses `»`, while transcript prompts retain `›`; the shared composer classifier recognizes both.
+
+[`fm-spawn.sh`](../../../../../bin/fm-spawn.sh) owns the explicit flags, quota posture, condition bounds, brief pointer, refusal behavior, and submission mechanics.
+Refresh live evidence with [`fm-worker-launch-optins-live-e2e.test.sh`](../../../../../tests/fm-worker-launch-optins-live-e2e.test.sh); dated results belong in [`runtime-backends.md`](../../../../../docs/verification/runtime-backends.md#task-launch-opt-ins).
 
 ## Hook trust
 

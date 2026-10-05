@@ -37,6 +37,7 @@ make_spawn_fakebin() {
   fakebin=$(fm_test_make_spawn_fakebin "$dir")
   cat > "$fakebin/timeout" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = -k ]; then shift 2; fi
 shift
 exec "$@"
 SH
@@ -49,6 +50,33 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/timeout" "$fakebin/cursor-agent"
+  cat > "$fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *'debug models --bundled'*)
+    [ "${FM_FAKE_CODEX_PROBE_FAIL:-0}" = 0 ] || exit 1
+    if [ -n "${FM_FAKE_CODEX_CATALOG:-}" ]; then
+      printf '%s\n' "$FM_FAKE_CODEX_CATALOG"
+    else
+      printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+    fi
+    ;;
+  *'features list'*) printf '%s\n' "${FM_FAKE_CODEX_GOALS:-goals stable true}" ;;
+esac
+SH
+  cat > "$fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "${FM_FAKE_CLAUDE_VERSION:-2.1.289 (Claude Code)}"
+elif [ "${1:-}" = -p ]; then
+  if [ -n "${FM_FAKE_CLAUDE_ULTRACODE:-}" ]; then
+    printf '%s\n' "$FM_FAKE_CLAUDE_ULTRACODE"
+  else
+    printf '%s\n' '{"is_error":false,"local_command":"effort","result":"Current effort level: high · Ultracode on","num_turns":0}'
+  fi
+fi
+SH
+  chmod +x "$fakebin/codex" "$fakebin/claude"
   make_spawn_pi_probe "$fakebin" pi
   make_spawn_pi_probe "$fakebin" pi-signed
   printf '%s\n' "$fakebin"
@@ -616,7 +644,7 @@ test_claude_threads_model_and_effort() {
   expect_code 0 "$status" "claude spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude sonnet high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --model 'sonnet' --effort 'high'" \
+  assert_contains "$launch" "claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --model 'sonnet' --effort 'high'" \
     "claude launch did not thread model and effort flags"
   assert_not_contains "$launch" "--tui-mode" "non-Pi launches must not receive Pi's TUI mode override"
   pass "claude receives --model and --effort profile flags"
@@ -1011,7 +1039,10 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
       --harness "$harness" --model "$model" --effort ultra 2>&1)
     expect_code 1 "$?" "unsupported Ultra profile should refuse: $native_profile"
-    assert_contains "$out" "ultra effort requires pi or pi-signed" "native-only refusal missing"
+    case "$harness" in
+      codex) assert_contains "$out" "catalog does not advertise ultra" "catalog refusal missing" ;;
+      *) assert_contains "$out" "ultra effort requires pi or pi-signed" "native-only refusal missing" ;;
+    esac
     [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unsupported Ultra published metadata"
     [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "unsupported Ultra provisioned lifecycle wiring"
     [ ! -s "$LAUNCH_LOG" ] || fail "unsupported Ultra launched an agent"
@@ -1025,6 +1056,148 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "raw Ultra launch published metadata"
   assert_contains "$out" "canonical --harness pi or pi-signed" "raw launch refusal was not actionable"
   pass "Ultra is explicit for native Pi and Pi-signed, including direct-PR, and refuses unsupported profiles before provisioning"
+}
+
+test_codex_ultra_refuses_unproved_support() {
+  local rec id=codex-ultra-unproved out model probe launch
+  rec=$(make_spawn_case codex-ultra-supported codex "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+  expect_code 0 "$?" "supported codex ultra should launch: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" 'model_reasoning_effort="ultra"' "direct codex ultra config missing"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+  for model in '' default gpt-6-luna; do
+    rec=$(make_spawn_case "codex-ultra-unproved-$RANDOM" codex "$id")
+    read_case_record "$rec"
+    if [ -n "$model" ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort ultra --model "$model")
+    else
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort ultra)
+    fi
+    expect_code 1 "$?" "unproved codex ultra should refuse: $model $out"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unproved ultra published metadata"
+    [ ! -s "$LAUNCH_LOG" ] || fail "unproved ultra launched a worker"
+  done
+  for probe in malformed unavailable; do
+    rec=$(make_spawn_case "codex-ultra-$probe" codex "$id")
+    read_case_record "$rec"
+    if [ "$probe" = malformed ]; then
+      out=$(FM_FAKE_CODEX_CATALOG='{}' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+    else
+      out=$(FM_FAKE_CODEX_PROBE_FAIL=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+    fi
+    expect_code 1 "$?" "codex ultra must refuse $probe catalog: $out"
+    [ ! -s "$LAUNCH_LOG" ] || fail "bad ultra probe launched a worker"
+  done
+  pass "direct codex ultra requires an explicit model and proof from the installed CLI"
+}
+
+test_claude_ultracode_optin() {
+  local rec id=claude-ultracode out launch
+  rec=$(make_spawn_case "$id" claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model opus --effort low)
+  expect_code 0 "$?" "supported ultracode should launch: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" '"ultracode":true' "ultracode setting missing"
+  assert_contains "$launch" "--effort 'low'" "ultracode changed the explicit effort"
+  assert_grep '^ultracode=on$' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
+  for probe in old-version unsupported-model; do
+    rec=$(make_spawn_case "$id-$probe" claude "$id")
+    read_case_record "$rec"
+    if [ "$probe" = old-version ]; then
+      out=$(FM_FAKE_CLAUDE_VERSION=2.1.202 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode)
+    else
+      out=$(FM_FAKE_CLAUDE_ULTRACODE='{"is_error":false,"local_command":"effort","result":"Current effort level: high","num_turns":0}' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model haiku)
+    fi
+    expect_code 1 "$?" "ultracode must refuse $probe: $out"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unsupported ultracode published metadata"
+    [ ! -s "$LAUNCH_LOG" ] || fail "unsupported ultracode launched"
+  done
+  pass "Claude ultracode is a separate explicit, probed setting and preserves effort"
+}
+
+goal_pane_fixture() {
+  mv "$FAKEBIN_DIR/tmux" "$FAKEBIN_DIR/tmux-goal-base"
+  cat > "$FAKEBIN_DIR/tmux" <<'SH'
+#!/usr/bin/env bash
+dir=$(dirname "$0")
+case "$*" in
+  *'#{cursor_y}'*) printf '3\n'; exit 0 ;;
+esac
+if [ "${1:-}" = capture-pane ]; then
+  if [ -f "$dir/goal-input" ]; then
+    if [ "${FM_FAKE_GOAL_REJECT:-0}" = 1 ]; then
+      printf 'Unrecognized command /goal\n'
+    elif [ "$(cat "$dir/goal-harness")" = claude ]; then
+      printf '  ⎿  Goal set: smoke\n'
+    else
+      printf '• Goal active Objective: smoke\n'
+    fi
+  else
+    printf 'Ready\n'
+  fi
+  printf '\n─────────────\n❯ \n─────────────\n'
+  exit 0
+fi
+if [ "${1:-}" = send-keys ]; then
+  for arg in "$@"; do
+    case "$arg" in /goal*) printf '%s\n' "$arg" > "$dir/goal-input" ;; esac
+  done
+fi
+exec "$dir/tmux-goal-base" "$@"
+SH
+  chmod +x "$FAKEBIN_DIR/tmux"
+}
+
+test_goal_first_native_input() {
+  local harness rec id out launch
+  for harness in claude codex; do
+    id="goal-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal 'Reply with smoke')
+    expect_code 0 "$?" "native $harness goal launch failed: $out"
+    launch=$(head -1 "$LAUNCH_LOG")
+    assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
+    assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
+    assert_grep '^/goal Reply with smoke\.' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
+    assert_grep 'launch-brief.md exactly, including its authority and stop/wait gates' "$FAKEBIN_DIR/goal-input" "goal omitted worker contract"
+    assert_grep '^goal=Reply with smoke$' "$HOME_DIR/state/$id.meta" "goal metadata missing"
+  done
+  id=goal-codex-unavailable
+  rec=$(make_spawn_case "$id" codex "$id")
+  read_case_record "$rec"
+  out=$(FM_FAKE_CODEX_GOALS='goals removed false' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+  expect_code 1 "$?" "unavailable native goal feature must refuse: $out"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unavailable goal published metadata"
+  [ ! -s "$LAUNCH_LOG" ] || fail "unavailable goal launched a worker"
+  id=goal-native-rejected
+  rec=$(make_spawn_case "$id" claude "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(FM_FAKE_GOAL_REJECT=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+  expect_code 1 "$?" "unacknowledged goal must not report a successful spawn: $out"
+  assert_not_contains "$out" "spawned $id" "native goal rejection was silently omitted"
+  pass "Claude and Codex goals are the first native input and preserve the brief contract"
+}
+
+test_task_optins_refuse_wrong_surfaces() {
+  local rec id=wrong-optin out args
+  for args in 'codex --ultracode' 'pi --goal smoke' 'claude --goal='; do
+    rec=$(make_spawn_case "wrong-optin-$RANDOM" claude "$id")
+    read_case_record "$rec"
+    # Deliberate fixture words; no user input is split here.
+    # shellcheck disable=SC2086
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness $args)
+    expect_code 1 "$?" "wrong opt-in surface should refuse: $args $out"
+    [ ! -s "$LAUNCH_LOG" ] || fail "wrong opt-in launched"
+  done
+  pass "launch opt-ins refuse unsupported harnesses and empty goals"
 }
 
 prepare_batch_slots() {
@@ -1069,6 +1242,24 @@ test_batch_preserves_native_ultra() {
   assert_contains "$launch" "--codex-effort 'ultra'" "batch dropped native effort"
   assert_not_contains "$launch" "--thinking 'ultra'" "batch passed an invalid Pi level"
   pass "batch dispatch preserves native Ultra in metadata and launch flags"
+}
+
+test_batch_preserves_launch_optins() {
+  local rec id1=batch-goal-a id2=batch-goal-b out
+  rec=$(make_spawn_case batch-launch-optins claude "$id1" "$id2")
+  read_case_record "$rec"
+  prepare_batch_slots
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness claude --ultracode --goal smoke)
+  expect_code 0 "$?" "batch launch opt-ins failed: $out"
+  for id in "$id1" "$id2"; do
+    assert_grep '^ultracode=on$' "$HOME_DIR/state/$id.meta" "batch dropped ultracode"
+    assert_grep '^goal=smoke$' "$HOME_DIR/state/$id.meta" "batch dropped goal"
+  done
+  [ "$(grep -c '^/goal smoke\.' "$LAUNCH_LOG")" = 2 ] || fail "batch did not submit each native goal exactly once"
+  pass "batch dispatch preserves both explicit task launch opt-ins"
 }
 
 test_pi_scout_launch_enters_recorded_worktree() {
@@ -1263,7 +1454,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
@@ -2065,7 +2256,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flags>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(ai_trailer_hooks_prefix "$2" "$3")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(ai_trailer_hooks_prefix "$2" "$3")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 # An upstream-only config/claude-permission-mode file is not read in this fork:
@@ -2164,7 +2355,12 @@ test_opencode_emits_variant_for_openai_family_effort
 test_opencode_omits_variant_when_model_family_lacks_effort
 test_native_effort_validator_keeps_axes_separate
 test_native_pi_ultra_is_explicit_and_model_scoped
+test_codex_ultra_refuses_unproved_support
+test_claude_ultracode_optin
+test_goal_first_native_input
+test_task_optins_refuse_wrong_surfaces
 test_batch_preserves_native_ultra
+test_batch_preserves_launch_optins
 test_pi_scout_launch_enters_recorded_worktree
 test_pi_threads_model_and_max_effort
 test_pi_tui_mode_probe_is_safe_for_old_and_new_pi
