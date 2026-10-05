@@ -4834,13 +4834,20 @@ spawn_delivery_endpoint_cleanup() {
 
 # Only an additional matching line proves a new acknowledgement. Comparing
 # occurrence counts keeps reordered or scrolled retained output from proving
-# activation, even when a backend reuses presentation history.
-task_goal_ack_is_new() { # <before> <after> <pattern>
+# activation, even when a backend reuses presentation history. A matching
+# fragment of the submitted input is an echo, including wrapped prompt rows.
+task_goal_ack_is_new() { # <before> <after> <pattern> <submitted-input>
   awk -v pattern="$3" '
-    FNR == NR { seen[$0]++; next }
-    $0 ~ pattern { if (seen[$0] > 0) seen[$0]--; else found=1 }
+    FILENAME == ARGV[1] { seen[$0]++; next }
+    FILENAME == ARGV[2] { input=$0; next }
+    $0 ~ pattern {
+      fragment=$0
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", fragment)
+      if (index(input, fragment) > 0) next
+      if (seen[$0] > 0) seen[$0]--; else found=1
+    }
     END { exit !found }
-  ' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+  ' <(printf '%s\n' "$1") <(printf '%s\n' "$4") <(printf '%s\n' "$2")
 }
 
 # Opted-in goals launch with no user prompt, so native /goal is the first
@@ -4863,8 +4870,8 @@ task_goal_start() {
     pane=$(fm_backend_capture "$BACKEND" "$T" 100 "$W") || pane=
     # These are CLI-local acknowledgements, not the model's ordinary reply.
     case "$HARNESS" in
-      claude) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' && return 0 ;;
-      codex) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]' && return 0 ;;
+      claude) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' "$input" && return 0 ;;
+      codex) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]' "$input" && return 0 ;;
     esac
     sleep 0.5
   done
