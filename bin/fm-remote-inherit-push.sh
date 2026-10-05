@@ -88,10 +88,12 @@ stage_item() { # <relative-path>
     fm_config_inherit_batch_record absent "$rel" 0 "$EMPTY_HASH" "$EMPTY" >> "$BATCH"
   fi
 }
+SOURCE_RC=0
 ITEMS=$(fm_config_inherit_items)
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
   if ! stage_item "$rel"; then
+    SOURCE_RC=1
     printf 'error: cannot stage inherited item: %s; destination will be preserved\n' "$rel" >&2
     fm_config_inherit_batch_record error "$rel" 0 "$EMPTY_HASH" "$EMPTY" >> "$BATCH" \
       || die "cannot record failed inherited item"
@@ -101,4 +103,10 @@ $ITEMS
 EOF
 BATCH_BYTES=$(LC_ALL=C wc -c < "$BATCH" | tr -d ' ')
 [ "$BATCH_BYTES" -le 1048576 ] || die "inheritance batch exceeds the remote job byte bound"
-"$SCRIPT_DIR/fm-on.sh" --stdin "$ID" fm-remote-inherit.sh batch "$GENERATION" "$MODE" < "$BATCH"
+# Preserve locally known validation failures even if the remote reports success;
+# otherwise keep its exact status, especially unknown-completion exit 255.
+if "$SCRIPT_DIR/fm-on.sh" --stdin "$ID" fm-remote-inherit.sh batch "$GENERATION" "$MODE" < "$BATCH"; then
+  exit "$SOURCE_RC"
+else
+  exit "$?"
+fi
