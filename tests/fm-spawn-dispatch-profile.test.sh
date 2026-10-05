@@ -1145,6 +1145,8 @@ test_claude_ultracode_optin() {
 }
 
 goal_pane_fixture() {
+  # This fixture renders synchronously; native UI timing belongs to the live guard.
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
   mv "$FAKEBIN_DIR/tmux" "$FAKEBIN_DIR/tmux-goal-base"
   cat > "$FAKEBIN_DIR/tmux" <<'SH'
 #!/usr/bin/env bash

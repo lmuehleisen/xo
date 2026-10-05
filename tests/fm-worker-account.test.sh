@@ -115,6 +115,8 @@ signed_in_claude_root() {
 # Drive the real staged launch under the synthetic pane's credentials, then
 # expose its local-command output through the usual backend capture surface.
 enable_account_runtime_fixture() {
+  # The synthetic local command and capture complete synchronously.
+  fm_test_fake_sleep_noop "$FAKEBIN"
   mv "$FAKEBIN/tmux" "$FAKEBIN/tmux-account-base"
   cat > "$FAKEBIN/tmux" <<SH
 #!/usr/bin/env bash
