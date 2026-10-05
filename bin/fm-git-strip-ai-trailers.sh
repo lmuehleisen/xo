@@ -231,10 +231,21 @@ install_hooks() {
     echo "error: worktree is not a directory: $wt" >&2
     return 1
   }
-  git -C "$wt" rev-parse --is-inside-work-tree >/dev/null || {
-    echo "error: not a git worktree: $wt" >&2
-    return 1
-  }
+  # A core.hooksPath git cannot resolve - an unresolvable ~user dir, for
+  # example - fails even this plain worktree probe: git expands every
+  # core.hooksPath entry while scanning repository config, so no -c or
+  # environment override can preempt the scan. `git config` reads the same
+  # file without expanding it, so when the repo still answers with that key
+  # present and is not marked bare, the worktree check stands. The installed
+  # wrappers still look the path up at hook time and refuse when that lookup
+  # fails.
+  if ! git -C "$wt" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if ! git -C "$wt" config --local --get core.hooksPath >/dev/null 2>&1 ||
+      [ "$(git -C "$wt" config --local --get core.bare 2>/dev/null || true)" = "true" ]; then
+      echo "error: not a git worktree: $wt" >&2
+      return 1
+    fi
+  fi
   chmod u+w "$hooks_dir" 2>/dev/null
   rm -rf "$hooks_dir"
   mkdir -p "$hooks_dir" || return 1

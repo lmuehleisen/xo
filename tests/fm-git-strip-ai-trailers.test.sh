@@ -33,6 +33,19 @@ make_repo() {
   fm_git_init_commit "$dir"
 }
 
+# A core.hooksPath git cannot scan - unresolvable or valueless - fails every
+# repo command, including rev-parse, so a poisoned repo's HEAD is resolved
+# from the gitdir files instead.
+read_head() { # <repo> -> HEAD commit id
+  local repo=$1 ref
+  ref=$(sed -n 's/^ref: //p' "$repo/.git/HEAD")
+  if [ -n "$ref" ]; then
+    cat "$repo/.git/$ref"
+  else
+    cat "$repo/.git/HEAD"
+  fi
+}
+
 test_cursor_trailer_does_not_reach_the_commit_object() {
   local repo hooks body author
   repo="$TMP_ROOT/cursor-object"
@@ -257,7 +270,7 @@ test_empty_project_hookspath_runs_no_repository_hook() {
 }
 
 test_unresolvable_project_hookspath_still_refuses() {
-  local repo hooks head err
+  local repo hooks head err wrapper_err wrapper_rc
   repo="$TMP_ROOT/unresolvable-hookspath"
   make_repo "$repo"
   printf 'note\n' >>"$repo/README.md"
@@ -265,17 +278,22 @@ test_unresolvable_project_hookspath_still_refuses() {
   git -C "$repo" config core.hooksPath '~fm-no-such-user-6171/hooks'
   hooks="$TMP_ROOT/hooks-unresolvable"
   "$STRIP" install "$hooks" "$repo" || fail "install should succeed with an unresolvable core.hooksPath"
-  head=$(git -C "$repo" rev-parse HEAD)
+  head=$(read_head "$repo")
   err=$(with_hooks_env "$hooks" git -C "$repo" commit -q -m 'fix: unresolvable hooksPath' 2>&1) &&
     fail "a commit succeeded although the repository's hooks directory cannot be resolved"
-  assert_contains "$err" "refusing to skip its pre-commit hook" "the refusal did not name the skipped hook"
   assert_equals 1 "$(printf '%s\n' "$err" | grep -c 'failed to expand user dir')" "git's lookup error was not shown exactly once"
-  assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused commit still moved HEAD"
+  # A git that expands core.hooksPath while scanning repository config dies
+  # before any hook runs, so the wrapper is driven directly to prove its own
+  # refusal on every git version.
+  wrapper_err=$(cd "$repo" && "$hooks/pre-commit" 2>&1); wrapper_rc=$?
+  assert_equals 1 "$wrapper_rc" "the hook wrapper did not refuse an unresolvable hooks path"
+  assert_contains "$wrapper_err" "refusing to skip its pre-commit hook" "the refusal did not name the skipped hook"
+  assert_equals "$head" "$(read_head "$repo")" "a refused commit still moved HEAD"
   pass "an unresolvable project core.hooksPath still refuses the commit"
 }
 
 test_valueless_project_hookspath_still_refuses() {
-  local repo hooks head err
+  local repo hooks head err wrapper_err wrapper_rc
   repo="$TMP_ROOT/valueless-hookspath"
   make_repo "$repo"
   hooks="$TMP_ROOT/hooks-valueless"
@@ -286,9 +304,11 @@ test_valueless_project_hookspath_still_refuses() {
   printf '[core]\n\thooksPath\n' >>"$repo/.git/config"
   err=$(with_hooks_env "$hooks" git -C "$repo" commit -q -m 'fix: valueless hooksPath' 2>&1) &&
     fail "a commit succeeded although core.hooksPath has no value"
-  assert_contains "$err" "refusing to skip its pre-commit hook" "the refusal did not name the skipped hook"
   assert_equals 1 "$(printf '%s\n' "$err" | grep -c "missing value for 'core.hookspath'")" "git's lookup error was not shown exactly once"
-  assert_equals "$head" "$(git -C "$repo" -c core.hooksPath=x rev-parse HEAD)" "a refused commit still moved HEAD"
+  wrapper_err=$(cd "$repo" && "$hooks/pre-commit" 2>&1); wrapper_rc=$?
+  assert_equals 1 "$wrapper_rc" "the hook wrapper did not refuse a valueless hooks path"
+  assert_contains "$wrapper_err" "refusing to skip its pre-commit hook" "the refusal did not name the skipped hook"
+  assert_equals "$head" "$(read_head "$repo")" "a refused commit still moved HEAD"
   pass "a valueless project core.hooksPath still refuses the commit"
 }
 

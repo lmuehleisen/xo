@@ -7,7 +7,7 @@ const COORDINATOR_KEY = "__firstmateOpenCodeWatchArm";
 
 let skipNextIdle = false;
 
-function runProcess(command, args, input = "") {
+export function runProcess(command, args, input = "") {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -22,6 +22,13 @@ function runProcess(command, args, input = "") {
     });
     child.on("error", () => resolve({ code: 0, stdout: "", stderr: "" }));
     child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    // A child that exits before reading stdin fails this write with EPIPE;
+    // that is the child's answer, not this helper's failure, and the close
+    // result still stands. Any other stdin error is reported with stderr.
+    child.stdin.on("error", (error) => {
+      if (error && error.code === "EPIPE") return;
+      stderr += `stdin write failed: ${error && error.message ? error.message : error}\n`;
+    });
     child.stdin.end(input);
   });
 }

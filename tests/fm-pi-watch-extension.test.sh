@@ -4406,6 +4406,32 @@ EOF
   pass "OpenCode healthy arm output does not suppress the turn-end guard"
 }
 
+test_opencode_turnend_guard_early_child_exit_keeps_result() {
+  local guard_plugin out status
+  guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  out=$(GUARD_PLUGIN="$guard_plugin" node 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.GUARD_PLUGIN).href);
+// The input exceeds every pipe buffer, so the child - which prints and exits
+// without ever reading stdin - is still being written to when its read end
+// closes. The stdin EPIPE is deterministic, not a scheduler race.
+const result = await mod.runProcess(
+  "sh",
+  ["-c", "printf 'guard-out'; printf 'guard-err' >&2; exit 7"],
+  "x".repeat(1024 * 1024),
+);
+if (result.code !== 7 || result.stdout !== "guard-out" || result.stderr !== "guard-err") {
+  console.error(`the early-exit child's real result was lost: ${JSON.stringify(result)}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a child exiting before reading stdin broke the turn-end guard's process runner"
+  [ -z "$out" ] || fail "OpenCode early-exit regression printed output: $out"
+  pass "a child that exits before reading stdin still resolves with its real exit and output"
+}
+
 test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
@@ -4458,3 +4484,4 @@ test_opencode_established_empty_close_honors_retry_limit
 test_opencode_actionable_close_rechecks_session_lock
 test_opencode_watch_arm_coordinates_with_turnend_guard
 test_opencode_healthy_arm_output_does_not_suppress_guard
+test_opencode_turnend_guard_early_child_exit_keeps_result
