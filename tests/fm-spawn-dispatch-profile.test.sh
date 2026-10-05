@@ -1174,7 +1174,9 @@ if [ "${FM_FAKE_GOAL_CLOSE_FAIL:-0}" = 1 ]; then
   esac
 fi
 prior_ack() {
-  if [ "$(cat "$dir/goal-harness")" = claude ]; then
+  if [ "${FM_FAKE_GOAL_COMPLETE_ONLY:-0}" = 1 ]; then
+    printf 'GPT-6.1-Sol ultra · /fixture           Goal achieved (10s)\n'
+  elif [ "$(cat "$dir/goal-harness")" = claude ]; then
     printf '  ⎿  Goal set: prior\n'
   else
     printf '• Goal active Objective: prior\n'
@@ -1198,6 +1200,8 @@ if [ "${1:-}" = capture-pane ]; then
     if [ -f "$dir/goal-input" ]; then
       if [ "${FM_FAKE_GOAL_REJECT:-0}" = 1 ]; then
         printf 'Unrecognized command /goal\n'
+      elif [ "${FM_FAKE_GOAL_COMPLETE_ONLY:-0}" = 1 ]; then
+        printf 'Ready\n'
       elif [ "$(cat "$dir/goal-harness")" = claude ]; then
         printf '  ⎿  Goal set: smoke\n'
       else
@@ -1208,6 +1212,9 @@ if [ "${1:-}" = capture-pane ]; then
     fi
   fi
   printf '\n─────────────\n❯ \n─────────────\n'
+  if [ "${FM_FAKE_GOAL_COMPLETE_ONLY:-0}" = 1 ] && [ -f "$dir/goal-input" ] && [ "${FM_FAKE_GOAL_STALE_ONLY:-0}" = 0 ]; then
+    prior_ack
+  fi
   exit 0
 fi
 if [ "${1:-}" = send-keys ]; then
@@ -1264,7 +1271,7 @@ test_goal_first_native_input() {
 }
 
 test_goal_acknowledgement_is_fresh_and_failure_stays_owned() {
-  local harness rec id out
+  local harness rec id out stale
   for harness in claude codex; do
     id="goal-fresh-$harness"
     rec=$(make_spawn_case "$id" "$harness" "$id")
@@ -1281,6 +1288,15 @@ test_goal_acknowledgement_is_fresh_and_failure_stays_owned() {
     out=$(FM_FAKE_GOAL_PRIOR_ACK=1 FM_FAKE_GOAL_STALE_ONLY=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
     expect_code 1 "$?" "a reordered stale $harness acknowledgement must refuse: $out"
     assert_not_contains "$out" "spawned $id" "stale acknowledgement reported a successful spawn"
+  done
+  for stale in 0 1; do
+    id="goal-footer-$stale"
+    rec=$(make_spawn_case "$id" codex "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+    out=$(FM_FAKE_GOAL_COMPLETE_ONLY=1 FM_FAKE_GOAL_PRIOR_ACK=1 FM_FAKE_GOAL_STALE_ONLY=$stale run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code "$stale" "$?" "only a new Codex completion footer should confirm activation: $out"
   done
   id=goal-close-unconfirmed
   rec=$(make_spawn_case "$id" claude "$id")

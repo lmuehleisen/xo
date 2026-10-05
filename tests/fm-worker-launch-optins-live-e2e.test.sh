@@ -70,7 +70,8 @@ for harness in claude codex; do
         ;;
       codex)
         printf '%s\n' "$pane" | grep -Eq '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved \(' && activated=1
-        completion_pattern='^[[:space:]]*(• )?Goal achieved \('
+        # Codex renders completion on the model/path footer, not a separate row.
+        completion_pattern='Goal achieved \('
         ;;
     esac
     if printf '%s\n' "$pane" | grep -Eq "$completion_pattern"; then completed=1; break; fi

@@ -4893,7 +4893,7 @@ task_goal_start() {
     # These are CLI-local acknowledgements, not the model's ordinary reply.
     case "$HARNESS" in
       claude) task_native_ack_is_new "$before" "$pane" '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' "$input" && return 0 ;;
-      codex) task_native_ack_is_new "$before" "$pane" '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]' "$input" && return 0 ;;
+      codex) task_native_ack_is_new "$before" "$pane" '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]|^[[:space:]]*[^[:space:]]+([[:space:]]+(low|medium|high|xhigh|max|ultra))?[[:space:]]+·.*[[:space:]]+Goal achieved [(]' "$input" && return 0 ;;
     esac
     sleep 0.5
   done

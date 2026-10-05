@@ -939,6 +939,7 @@ Claude's initial local command reported `Ultracode on` before any model input, c
 Claude acknowledged `Goal set:` and displayed both `ultracode` and `/goal active`, then `Goal achieved`.
 Codex displayed `GPT-6.1-Sol ultra`; a positional `/goal` prompt produced a reply but subsequent native `/goal` status returned `No goal is currently set`.
 Typing `/goal` after startup produced `Goal active Objective:` and ultimately `Goal achieved`.
+Codex displayed the completion as `Goal achieved (10s)` at the right of its model/path footer; the goal guard recognizes that footer as well as the activation row.
 These are CLI surface checks, not proof of a complete fleet dispatch or delegated workflow execution.
 
 Refresh native mode and goal evidence with the opt-in guard below; [`fm-spawn-dispatch-profile.test.sh`](../../tests/fm-spawn-dispatch-profile.test.sh) owns portable validation and emitted-command regressions.
