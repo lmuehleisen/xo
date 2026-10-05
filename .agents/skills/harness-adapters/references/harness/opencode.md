@@ -35,12 +35,13 @@ The live Herdr guard is `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 ../../../tests/fm-herdr-
 ## Primary integration
 
 OpenCode V2 is supported for crewmates and scouts only; primary and persistent secondmate support is deferred.
-The primary default definitions reject V2 `setup(ctx)` before registering hooks, and `../../../bin/fm-spawn.sh` rejects V2 secondmate launches before allocation.
+The primary modules retain their V1 named callback exports and prior behavior; they do not define V2 plugins.
+`../../../bin/fm-spawn.sh` rejects V2 secondmate launches before allocation.
 Use another verified harness for a Firstmate primary or secondmate.
 Server events identify a session's location and parent, but do not prove which same-directory root a client selected.
 The [V2 boundary](../../../../../.opencode/plugins/lib/fm-v2-plugin.js) therefore never selects or prompts a primary root.
-[Supervision verification](../../../../../docs/verification/supervision.md#opencode-v2-primary-boundary) owns the current refusal evidence.
+[Supervision verification](../../../../../docs/verification/supervision.md#opencode-v2-primary-boundary) owns the legacy compatibility evidence.
 
-The named V1 callback implementations remain for legacy primary compatibility.
+The named V1 callback implementations remain unchanged for legacy primary compatibility; V2 does not run their V1 hooks.
 Their watcher, turn-end, pre-tool, and startup mechanics are documented in `../../../docs/supervision-protocols/opencode.md` and `../../../docs/sessionstart-nudge.md`.
 V1 worker launch is not supported by the current spawn adapter.

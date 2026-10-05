@@ -2609,7 +2609,7 @@ ok - opencode v2.0.18: requested model, brief, busy/idle, turn-end, composer, du
 
 The guard proves the real spawn template and per-task plugin load, semantic busy/idle settlement, turn-end notification, ancestry detection, tmux liveness, cursor-aware and cursorless idle classification, draft classification, durable inbox acknowledgement, interruption of a running turn, stopped-agent verification, and deterministic relaunch in the same scratch copy.
 The control command reports `cancel=unconfirmed`; the live guard separately requires the plugin's idle event before proceeding.
-The same guard verifies the V2 primary setup refusal; [supervision verification](supervision.md#opencode-v2-primary-boundary) owns that evidence.
+[Supervision verification](supervision.md#opencode-v2-primary-boundary) owns the separate portable evidence that primary modules preserve their legacy V1 exports.
 The V2 composer includes `Build auto`, a location/shortcut strip below its half-block floor, and sidebar content alongside the input rows.
 Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-sessionstart-nudge.test.sh`.
 This run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.

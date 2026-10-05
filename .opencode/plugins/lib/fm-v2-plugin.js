@@ -1,15 +1,10 @@
 // OpenCode V2 entrypoint adapter for Firstmate's existing hook implementations.
 // V2 public events carry data and execution lifecycle events, rather than the
 // V1 properties/session.idle surface. Keep that translation at this boundary.
-export function v2Plugin(id, factory, { primary = false } = {}) {
+export function v2Plugin(id, factory) {
   return {
     id,
     async setup(ctx) {
-      // Server events cannot prove which root a client selected. Do not arm
-      // primary supervision against an arbitrary same-directory sibling.
-      if (primary) {
-        throw new Error("OpenCode V2 primary support is deferred: server hooks cannot prove client-local session ownership. Use a supported Firstmate primary; OpenCode V2 workers remain supported.");
-      }
       const hooks = await factory({
         directory: ctx.location.directory,
         client: {

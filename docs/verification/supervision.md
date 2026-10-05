@@ -872,13 +872,15 @@ The safe command-channel contract is covered without a notification by `tests/fm
 
 ### OpenCode V2 primary boundary
 
-Verified on 2026-10-05 with `opencode v2.0.18`.
-Run `FM_OPENCODE_LIVE_E2E=1 bash tests/fm-opencode-primary-live-e2e.test.sh` to refresh the worker lifecycle and primary refusal evidence.
-The V2 guard loads all five actual primary definitions with the real server context and requires each to reject setup before any primary hook is installed.
+OpenCode V2 primary support is deferred; the primary modules retain their V1 named callback exports and prior behavior.
+The [V1 loader](https://github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/plugin/index.ts#L82-L115) enumerates module exports and rejects a V2 `{id, setup}` definition because it has no callable server entry point.
+Portable compatibility coverage in `tests/fm-sessionstart-nudge.test.sh` imports all five actual modules, checks their public factory exports, and loads their native V1 hooks:
 
 ```text
-ok - opencode v2.0.18: all primary plugins refuse V2 setup; worker lifecycle remains supported
+ok - OpenCode V1 primary exports load legacy hooks without V2 definitions
 ```
 
-[The OpenCode harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration) owns the unsupported primary boundary.
-The named V1 callback implementations remain unchanged; portable compatibility and refusal regressions are in `tests/fm-pi-watch-extension.test.sh` and `tests/fm-sessionstart-nudge.test.sh`.
+This does not verify a live V1 primary session or V2 primary operation.
+[The OpenCode harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration) owns the unsupported V2 primary boundary.
+`tests/fm-pi-watch-extension.test.sh` retains portable coverage of the legacy OpenCode watcher callbacks.
+Run `FM_OPENCODE_LIVE_E2E=1 bash tests/fm-opencode-primary-live-e2e.test.sh` to refresh the supported V2 worker lifecycle evidence.

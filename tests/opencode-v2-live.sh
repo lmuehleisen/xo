@@ -128,36 +128,3 @@ wait_file_text "$FM_HOME/state/probe-proof" 'relaunched'
 wait_idle
 bash "$ROOT/bin/fm-control.sh" "$ID" exit
 pass "$VERSION: requested model, brief, busy/idle, turn-end, composer, durable steer, interrupt, exit and relaunch"
-
-# V2 primary support is deliberately deferred. Load the real definitions with
-# the real server context and prove each refuses before accepting any session.
-PRIMARY="$LAB/primary"
-PRIMARY_PLUGIN="$LAB/primary-refusal"
-mkdir -p "$PRIMARY" "$PRIMARY_PLUGIN"
-git -C "$PRIMARY" init -q
-printf '%s\n' '{"type":"module","main":"./index.mjs"}' > "$PRIMARY_PLUGIN/package.json"
-cat > "$PRIMARY_PLUGIN/index.mjs" <<JS
-import { appendFileSync } from "node:fs";
-export default {
-  id: "firstmate.live-primary-refusal",
-  async setup(ctx) {
-    for (const name of ["sessionstart-nudge", "turnend-guard", "watch-arm", "pretool-check", "cd-check"]) {
-      const plugin = await import("$ROOT/.opencode/plugins/fm-primary-" + name + ".js");
-      try { await plugin.default.setup(ctx); }
-      catch (error) {
-        if (!error.message.includes("OpenCode V2 primary support is deferred")) throw error;
-        appendFileSync("$LAB/primary-refusals", name + "\\n");
-        continue;
-      }
-      throw new Error("V2 primary plugin accepted setup: " + name);
-    }
-  },
-};
-JS
-CONFIG=$(jq -cn --arg model "$MODEL" --arg plugin "$PRIMARY_PLUGIN" '{model:$model,plugins:[$plugin]}')
-OPENCODE_CONFIG_CONTENT="$CONFIG" tmux new-window -t probe -n primary -c "$PRIMARY" \
-  "OPENCODE_CONFIG_CONTENT='$CONFIG' opencode --standalone --auto"
-TARGET=probe:primary
-wait_file_text "$LAB/primary-refusals" cd-check
-[ "$(wc -l < "$LAB/primary-refusals" | tr -d ' ')" = 5 ] || fail "$VERSION: a primary plugin did not refuse setup"
-pass "$VERSION: all primary plugins refuse V2 setup; worker lifecycle remains supported"
