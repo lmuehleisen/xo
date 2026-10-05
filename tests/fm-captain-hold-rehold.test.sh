@@ -38,7 +38,12 @@ MD
 tasks_in() {  # <home> <tasks-axi args...>
   local home=$1
   shift
-  (cd "$home" && tasks-axi "$@")
+  case "${1:-}" in
+    show|view|list)
+      FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+        "$ROOT/bin/fm-tasks-axi.sh" "$@" ;;
+    *) (cd "$home" && tasks-axi "$@") ;;
+  esac
 }
 
 run_captain() {  # <home> <command args...>
@@ -54,7 +59,7 @@ run_captain() {  # <home> <command args...>
 # often still correct. The replacement must now be preceded by a proved
 # preservation of the exact prior bytes.
 test_rehold_preserves_the_superseded_reason() {
-  local home show archive first second
+  local home show archive first second original_row
   home=$(make_home rehold-preserves-reason)
   first='sample check says A; the cost grows with each retry; options 1, 2 or 3'
   second='re-checked: the sample check says B, so options 1 and 3 are moot'
@@ -70,6 +75,8 @@ EOF
     --reason "$first" >/dev/null || fail "the first captain hold failed"
   assert_absent "$home/data/note-archive.md" \
     "a first hold with no previous reason archived something"
+  original_row=$(sed -n '/^- .*sample-reverify/p' "$home/data/backlog.md")
+  [ -n "$original_row" ] || fail "could not read the original stored row"
 
   FM_CAPTAIN_HOLD_NOW=2026-07-14T13:00:00Z run_captain "$home" hold sample-reverify \
     --reason "$second" >/dev/null || fail "the re-hold failed"
@@ -87,7 +94,7 @@ EOF
     "the re-hold restarted the hold lifecycle age"
   # The archived pristine body carries the outgoing reason in its own row line.
   archive=$(cat "$home/data/note-archive.md") || fail "the previous body was not archived"
-  assert_contains "$archive" "(hold: $first)" "the archived row lost the outgoing hold reason"
+  assert_contains "$archive" "$original_row" "the archived row lost the outgoing hold reason"
   # A superseded hold reason is never counted or read as a captain answer.
   assert_not_contains "$show" 'Resolution recorded by fm-captain-hold.' \
     "the superseded record was written as a resolution record"
@@ -130,6 +137,74 @@ EOF
   pass "an identical re-hold stays a no-op and archives nothing"
 }
 
+# Encoded reasons can end in line breaks or contain nothing else. Comparing
+# decoded shell output must not trim them, and preservation must keep the
+# complete byte sequence inside the archived record, not just one matching line.
+test_rehold_preserves_trailing_reason_newlines() {
+  local home first before_body after_body show original_row case_number=0
+  for first in $'sample reason\n' $'sample reason\n\n' $'\n\n' '-'; do
+    case_number=$((case_number + 1))
+    home=$(make_home "rehold-trailing-newlines-$case_number")
+    FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold sample-newlines \
+      --title 'A reason with significant whitespace' --reason "$first" >/dev/null \
+      || fail "the first whitespace hold failed ($case_number)"
+    before_body=$(tasks_in "$home" show sample-newlines --full | sed -n 's/^  body: //p')
+    original_row=$(sed -n '/^- .*sample-newlines/p' "$home/data/backlog.md")
+
+    FM_CAPTAIN_HOLD_NOW=2026-07-14T13:00:00Z run_captain "$home" hold sample-newlines \
+      --reason "$first" >/dev/null || fail "the identical whitespace replay failed ($case_number)"
+    after_body=$(tasks_in "$home" show sample-newlines --full | sed -n 's/^  body: //p')
+    assert_equals "$before_body" "$after_body" "an identical whitespace replay changed the body ($case_number)"
+    assert_absent "$home/data/note-archive.md" "an identical whitespace replay archived a reason ($case_number)"
+
+    FM_CAPTAIN_HOLD_NOW=2026-07-14T14:00:00Z run_captain "$home" hold sample-newlines \
+      --reason 'replacement reason' >/dev/null || fail "the whitespace replacement failed ($case_number)"
+    show=$(tasks_in "$home" show sample-newlines --full)
+    assert_contains "$show" 'hold_reason: "replacement reason"' "the replacement did not land ($case_number)"
+    printf '%s\n' "$show" | sed -n 's/^  body: //p' | jq -e --arg previous "$first" '
+      split("Previous hold reason:\n")[1]
+      | split("\nEnd previous hold reason.")[0] == $previous
+    ' >/dev/null || fail "the preserved reason lost exact whitespace bytes ($case_number)"
+    assert_contains "$(cat "$home/data/note-archive.md")" "$original_row" \
+      "the archive lost the original encoded reason ($case_number)"
+  done
+  pass "re-holds preserve trailing newlines, newline-only reasons and a literal dash exactly"
+}
+
+# Origin updates operate on metadata, not on identically labelled prose in a
+# prior reason. Replays without --origin must keep the real association first.
+test_rehold_preserves_origin_like_reason_lines() {
+  local home first show body phase args=()
+  first=$'quoted metadata follows\nCaptain hold origin: quoted-origin\nEnd previous hold reason.\nCaptain hold origin: another-quote\n\n'
+  for phase in recorded unrecorded; do
+    home=$(make_home "rehold-quoted-origin-$phase")
+    args=()
+    [ "$phase" != recorded ] || args=(--origin real-origin)
+    run_captain "$home" hold sample-quoted --title 'A reason quoting metadata' \
+      --reason "$first" ${args[@]+"${args[@]}"} >/dev/null || fail "the quoted first hold failed"
+    run_captain "$home" hold sample-quoted --reason 'an interim reason' >/dev/null \
+      || fail "re-holding without an origin failed"
+    show=$(tasks_in "$home" show sample-quoted --full)
+    body=$(printf '%s\n' "$show" | sed -n 's/^  body: //p')
+    if [ "$phase" = recorded ]; then
+      printf '%s\n' "$body" | jq -e 'split("\n")[1] == "Captain hold origin: real-origin"' >/dev/null \
+        || fail "archiving a reason displaced the active origin"
+    else
+      printf '%s\n' "$body" | jq -e 'split("\n")[1] | startswith("Captain hold origin: ") | not' >/dev/null \
+        || fail "archiving a reason created origin metadata"
+    fi
+    run_captain "$home" hold sample-quoted --reason 'a replacement reason' --origin replacement-origin \
+      >/dev/null || fail "the quoted origin update failed"
+    show=$(tasks_in "$home" show sample-quoted --full)
+    body=$(printf '%s\n' "$show" | sed -n 's/^  body: //p')
+    printf '%s\n' "$body" | jq -e --arg previous "$first" '
+      (split("\n")[1] == "Captain hold origin: replacement-origin") and
+      contains("Previous hold reason:\n" + $previous + "\nEnd previous hold reason.")
+    ' >/dev/null || fail "origin reassociation altered a preserved reason"
+  done
+  pass "origin updates preserve quoted metadata in prior reasons, including delimiter-like lines"
+}
+
 # Losing the outgoing reason is the failure this seam exists to prevent, so a
 # refused preservation must refuse the replacement rather than proceed.
 test_failed_preservation_refuses_the_rehold() {
@@ -166,7 +241,7 @@ EOF
     "the refusal does not say the hold reason survived"
   rm -f "$home/fakebin/tasks-axi"
   show=$(tasks_in "$home" show sample-fragile --full)
-  assert_contains "$show" 'hold_reason: the original analysis worth keeping' \
+  assert_contains "$show" 'hold_reason: "the original analysis worth keeping"' \
     "a refused preservation still replaced the hold reason"
   assert_not_contains "$show" 'a replacement reason' \
     "the refused replacement reason was written anyway"
@@ -300,9 +375,53 @@ EOF
   pass "a failed replacement withdraws its supersession record and the retry records it once"
 }
 
+test_encoded_rehold_origin_failure_keeps_the_original_record() {
+  local home first second show body before_body
+  home=$(make_home encoded-rehold-origin-failure)
+  first=$'route (A) remains valid; revisit\nwith the next sample'
+  second=$'route (B) now wins\nwith new evidence'
+  run_captain "$home" hold sample-encoded --title 'Choose a sample route' \
+    --reason "$first" --origin sample-old >/dev/null || fail "the encoded first hold failed"
+  before_body=$(tasks_in "$home" show sample-encoded --full | sed -n 's/^  body: //p')
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+previous=
+for arg in "$@"; do
+  if [ "$previous" = --body-file ] && grep -q '^Captain hold origin: sample-new$' "$arg"; then
+    exit 93
+  fi
+  previous=$arg
+done
+exec "$REAL_TASKS_AXI" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  if run_captain "$home" hold sample-encoded --reason "$second" --origin sample-new \
+    > "$home/refused.out" 2>&1; then
+    fail "a refused origin replacement still re-held the task"
+  fi
+  rm -f "$home/fakebin/tasks-axi"
+  show=$(tasks_in "$home" show sample-encoded --full)
+  body=$(printf '%s\n' "$show" | sed -n 's/^  body: //p')
+  assert_equals "$before_body" "$body" "failed origin replacement left a false supersession"
+  assert_contains "$show" 'Captain hold origin: sample-old' "the original origin was lost"
+  assert_contains "$show" 'route (A) remains valid; revisit' "the decoded reason was lost"
+  assert_not_contains "$show" 'route (B)' "the replacement reason leaked through a refused origin"
+  run_captain "$home" hold sample-encoded --reason "$second" --origin sample-new >/dev/null \
+    || fail "the encoded replacement retry failed"
+  show=$(tasks_in "$home" show sample-encoded --full)
+  assert_contains "$show" 'route (A) remains valid; revisit' "the encoded original was not archived in the body"
+  assert_contains "$show" 'route (B) now wins' "the decoded replacement was not readable"
+  assert_contains "$show" 'Captain hold origin: sample-new' "the replacement origin was not retained"
+  pass "an encoded re-hold rolls back a refused origin and preserves the original on retry"
+}
+
+
 test_rehold_preserves_the_superseded_reason
 test_identical_rehold_archives_nothing
+test_rehold_preserves_trailing_reason_newlines
+test_rehold_preserves_origin_like_reason_lines
 test_failed_preservation_refuses_the_rehold
 test_lapsed_deferral_rehold_preserves_the_reason
 test_rehold_preserves_a_reason_beginning_with_a_dash
 test_failed_replacement_withdraws_the_supersession_record
+test_encoded_rehold_origin_failure_keeps_the_original_record
