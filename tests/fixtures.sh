@@ -115,7 +115,12 @@ esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   capture-pane)
-    if [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
+    if [ -n "${FM_FAKE_TMUX_BRIEF_STATE:-}" ] && [ -f "$FM_FAKE_TMUX_BRIEF_STATE" ]; then
+      case "${FM_FAKE_TMUX_BRIEF_VERDICT:-pending}" in
+        pending) printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n' ;;
+        unknown) echo 'composer unavailable' >&2; exit 1 ;;
+      esac
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
     else
       printf '╭────╮\n│    │\n╰────╯\n'
@@ -163,6 +168,11 @@ case "${1:-}" in
     exit 0
     ;;
   send-keys)
+    if [ -n "${FM_FAKE_TMUX_BRIEF_STATE:-}" ]; then
+      for arg in "$@"; do
+        case "$arg" in *'Read the brief at'*) : > "$FM_FAKE_TMUX_BRIEF_STATE" ;; esac
+      done
+    fi
     if [ "${FM_FAKE_TMUX_BRIEF_SEND_FAIL:-0}" = 1 ]; then
       for arg in "$@"; do
         case "$arg" in *'Read the brief at'*) exit 1 ;; esac

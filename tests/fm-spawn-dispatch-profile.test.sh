@@ -929,7 +929,7 @@ test_opencode_refuses_pending_startup_composer() {
 
 test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
   local rec id out status mode failure endpoint
-  for failure in readiness submission; do
+  for failure in readiness submission pending unknown; do
     for mode in closed survives unreadable; do
       id="profile-opencode-$failure-$mode"
       rec=$(make_spawn_case "$id" opencode "$id")
@@ -938,6 +938,8 @@ test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
       out=$(FM_FAKE_TMUX_ENDPOINT_STATE="$endpoint" FM_FAKE_TMUX_CLOSE_MODE="$mode" \
         FM_FAKE_TMUX_COMPOSER="$([ "$failure" != readiness ] || printf pending)" \
         FM_FAKE_TMUX_BRIEF_SEND_FAIL="$([ "$failure" != submission ] || printf 1)" \
+        FM_FAKE_TMUX_BRIEF_STATE="$CASE_DIR/brief-typed" \
+        FM_FAKE_TMUX_BRIEF_VERDICT="$failure" \
         FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
         run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
       status=$?
@@ -952,7 +954,7 @@ test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
       fi
     done
   done
-  pass "OpenCode failed readiness and submission retire confirmed endpoints and preserve uncertain ownership"
+  pass "OpenCode failed or unconfirmed brief delivery retires confirmed endpoints and preserves uncertain ownership"
 }
 
 test_opencode_threads_model_and_effort_variant() {
