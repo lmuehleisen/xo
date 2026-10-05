@@ -1,6 +1,14 @@
 // OpenCode V2 entrypoint adapter for Firstmate's existing hook implementations.
 // V2 public events carry data and execution lifecycle events, rather than the
 // V1 properties/session.idle surface. Keep that translation at this boundary.
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+
+function directoryIdentity(directory) {
+  if (typeof directory !== "string" || !directory) return "";
+  try { return realpathSync(directory); } catch { return resolve(directory); }
+}
+
 export function v2Plugin(id, factory, { rootOnly = false } = {}) {
   return {
     id,
@@ -16,38 +24,47 @@ export function v2Plugin(id, factory, { rootOnly = false } = {}) {
           },
         },
       });
+      const sessions = new Map();
+      const primaryDirectory = directoryIdentity(ctx.location.directory);
+      let rootSessionID;
+      async function isPrimarySession(sessionID) {
+        if (!rootOnly) return true;
+        if (!sessionID || !primaryDirectory) return false;
+        if (!sessions.has(sessionID)) {
+          // Native resume and tool-only plugins can miss the creation event.
+          try {
+            const { data: session } = await ctx.session.get({ sessionID });
+            if (session.id !== sessionID) return false;
+            sessions.set(sessionID, session);
+          } catch {
+            return false;
+          }
+        }
+        const session = sessions.get(sessionID);
+        if (session.parentID || directoryIdentity(session.location?.directory) !== primaryDirectory) return false;
+        rootSessionID ??= sessionID;
+        return sessionID === rootSessionID;
+      }
       if (hooks["tool.execute.before"]) {
-        await ctx.tool.hook("execute.before", (event) => hooks["tool.execute.before"](
-          { tool: event.tool === "shell" ? "bash" : event.tool },
-          { args: event.input },
-        ));
+        await ctx.tool.hook("execute.before", async (event) => {
+          if (!await isPrimarySession(event.sessionID)) return;
+          return hooks["tool.execute.before"](
+            { tool: event.tool === "shell" ? "bash" : event.tool, sessionID: event.sessionID },
+            { args: event.input },
+          );
+        });
       }
       const controller = new AbortController();
-      const parents = new Map();
-      let rootSessionID;
       const stream = hooks.event ? (async () => {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
           let type = event.type;
           let properties = event.data;
           if (rootOnly && type === "session.created") {
-            parents.set(event.data.sessionID, event.data.parentID ?? null);
-            if (event.data.parentID) continue;
+            sessions.set(event.data.sessionID, { ...event.data, id: event.data.sessionID });
+            if (!await isPrimarySession(event.data.sessionID)) continue;
           }
           if (rootOnly && type.startsWith("session.execution.")) {
-            const sessionID = event.data.sessionID;
-            if (!parents.has(sessionID)) {
-              // Native resume can omit creation from this live subscription.
-              try {
-                const { data: session } = await ctx.session.get({ sessionID });
-                if (session.id !== sessionID) continue;
-                parents.set(sessionID, session.parentID ?? null);
-              } catch {
-                continue;
-              }
-            }
-            if (parents.get(sessionID)) continue;
-            rootSessionID ??= sessionID;
-            if (sessionID !== rootSessionID) continue;
+            if (!await isPrimarySession(event.data.sessionID)) continue;
           }
           if (type === "session.execution.started") {
             type = "session.status";

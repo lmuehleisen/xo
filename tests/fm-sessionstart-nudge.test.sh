@@ -205,9 +205,10 @@ const cleanup = await mod.default.setup({
   session: { prompt: async (input) => { v2Prompts.push(input); } },
   event: { subscribe: async function* () {
     try {
-      yield { type: "session.created", data: { sessionID: "v2-child", parentID: "v2-session" } };
-      yield { type: "session.created", data: { sessionID: "v2-session" } };
-      yield { type: "session.created", data: { sessionID: "v2-session" } };
+      yield { type: "session.created", data: { sessionID: "v2-sibling", location: { directory: "/unrelated" } } };
+      yield { type: "session.created", data: { sessionID: "v2-child", parentID: "v2-session", location: { directory: process.env.WORKTREE } } };
+      yield { type: "session.created", data: { sessionID: "v2-session", location: { directory: process.env.WORKTREE } } };
+      yield { type: "session.created", data: { sessionID: "v2-session", location: { directory: process.env.WORKTREE } } };
     } finally { finished(); }
   } },
 });
@@ -227,12 +228,13 @@ const rootCleanup = await bridge.setup({
   session: { get: async ({ sessionID }) => {
     reads.push(sessionID);
     if (sessionID === "unknown") throw new Error("not found");
-    return { data: { id: sessionID, ...(sessionID === "resumed-child" ? { parentID: "resumed-root" } : {}) } };
+    return { data: { id: sessionID, location: { directory: sessionID === "sibling-root" ? "/unrelated" : process.env.WORKTREE }, ...(sessionID === "resumed-child" ? { parentID: "resumed-root" } : {}) } };
   } },
   event: { subscribe: async function* () {
+    yield { type: "session.execution.started", data: { sessionID: "sibling-root" } };
     yield { type: "session.execution.succeeded", data: { sessionID: "resumed-child" } };
     yield { type: "session.execution.started", data: { sessionID: "resumed-root" } };
-    yield { type: "session.created", data: { sessionID: "child", parentID: "resumed-root" } };
+    yield { type: "session.created", data: { sessionID: "child", parentID: "resumed-root", location: { directory: process.env.WORKTREE } } };
     yield { type: "session.execution.succeeded", data: { sessionID: "child" } };
     yield { type: "session.execution.failed", data: { sessionID: "unknown" } };
     yield { type: "session.execution.succeeded", data: { sessionID: "other-root" } };
@@ -246,8 +248,34 @@ await rootCleanup();
 if (lifecycle.length !== 2 || lifecycle[0].type !== "session.status" || lifecycle[1].type !== "session.idle"
     || lifecycle.some((event) => event.properties.sessionID !== "resumed-root"))
   throw new Error(`primary lifecycle escaped its root: ${JSON.stringify(lifecycle)}`);
-if (reads.join(",") !== "resumed-child,resumed-root,unknown,other-root")
+if (reads.join(",") !== "sibling-root,resumed-child,resumed-root,unknown,other-root")
   throw new Error(`creation/resume relationship lookup drift: ${reads}`);
+
+let toolHook;
+const guarded = [];
+const toolBridge = v2Plugin("tool-root-filter-test", async () => ({
+  "tool.execute.before": async (input, output) => {
+    guarded.push({ input, output });
+    if (output.args.command === "deny") throw new Error("primary guard denied");
+  },
+}), { rootOnly: true });
+const toolCleanup = await toolBridge.setup({
+  location: { directory: process.env.WORKTREE },
+  session: { get: async ({ sessionID }) => {
+    if (sessionID === "unknown") throw new Error("not found");
+    return { data: { id: sessionID, location: { directory: sessionID === "sibling" ? "/unrelated" : process.env.WORKTREE }, ...(sessionID === "child" ? { parentID: "primary" } : {}) } };
+  } },
+  tool: { hook: async (name, callback) => { toolHook = callback; } },
+});
+for (const sessionID of ["sibling", "child", "unknown", "primary", "other-root"]) {
+  await toolHook({ sessionID, tool: "shell", input: { command: "allow" } });
+}
+let denied = false;
+try { await toolHook({ sessionID: "primary", tool: "shell", input: { command: "deny" } }); }
+catch (error) { denied = error.message === "primary guard denied"; }
+await toolCleanup();
+if (!denied || guarded.length !== 2 || guarded.some(({ input }) => input.tool !== "bash" || input.sessionID !== "primary"))
+  throw new Error(`primary tool scope or denial drift: ${JSON.stringify(guarded)}`);
 EOF
   ) || status=$?
   expect_code 0 "$status" "OpenCode exact nudge delivery"

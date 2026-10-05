@@ -132,8 +132,11 @@ pass "$VERSION: requested model, brief, busy/idle, turn-end, composer, durable s
 # Exercise the real primary turn-end plugin's V2 prompt API independently of
 # fleet supervision. Only the shell guard is a fixture: it requests one follow-up.
 PRIMARY="$LAB/primary"
-mkdir -p "$PRIMARY/bin" "$PRIMARY/.opencode/plugins/lib"
+SIBLING="$LAB/sibling"
+mkdir -p "$PRIMARY/bin" "$PRIMARY/.opencode/plugins/lib" "$SIBLING"
 git -C "$PRIMARY" init -q
+git -C "$SIBLING" init -q
+MODEL_REF=$(jq -cn --arg provider "${MODEL%%/*}" --arg id "${MODEL#*/}" '{providerID:$provider,id:$id}')
 cp "$ROOT/.opencode/plugins/package.json" "$PRIMARY/.opencode/plugins/"
 cp "$ROOT/.opencode/plugins/lib/fm-v2-plugin.js" "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$PRIMARY/.opencode/plugins/lib/"
 cp "$ROOT/bin/fm-operational-input.sh" "$PRIMARY/bin/"
@@ -143,6 +146,9 @@ export default {
   id: "firstmate.live-events",
   async setup(ctx) {
     const controller = new AbortController();
+    await ctx.tool.hook("execute.after", (event) => {
+      appendFileSync("$LAB/primary-tool-results", JSON.stringify(event) + "\\n");
+    });
     let followup;
     const events = (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
@@ -156,9 +162,22 @@ export default {
         }
       }
     })();
+    // A second root on this same server must not capture the primary's hooks.
+    const { data: sibling } = await ctx.session.create({ location: { directory: "$SIBLING" }, model: $MODEL_REF });
+    await ctx.session.prompt({ sessionID: sibling.id, text: "Reply SIBLING_READY and stop. Do not use tools." });
     return async () => { controller.abort(); await events.catch(() => {}); };
   },
 };
+JS
+cat > "$PRIMARY/.opencode/plugins/fm-live-tool-guard.js" <<JS
+import { appendFileSync } from "node:fs";
+import { v2Plugin } from "$ROOT/.opencode/plugins/lib/fm-v2-plugin.js";
+export default v2Plugin("firstmate.live-tool-guard", async () => ({
+  "tool.execute.before": async (input, output) => {
+    appendFileSync("$LAB/primary-scoped-tools", JSON.stringify({ ...input, command: output.args?.command }) + "\\n");
+    if (output.args?.command?.includes("CHILD_TOOL_OK")) throw new Error("child incorrectly reached primary guard");
+  },
+}), { rootOnly: true });
 JS
 cat > "$PRIMARY/.opencode/plugins/fm-primary-turnend-guard.js" <<JS
 import { appendFileSync } from "node:fs";
@@ -191,10 +210,14 @@ while [ "$i" -lt 90 ]; do
   i=$((i + 1)); sleep 0.5
 done
 [ "$i" -lt 90 ] || fail "$VERSION: primary composer did not become ready"
-PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Use the task tool to ask a subagent to reply CHILD_READY without using tools. After it returns, reply PRIMARY_READY and stop.' 3 0.5 0)
+PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Run printf PRIMARY_TOOL_OK in the shell. Then use the task tool to ask a subagent to run printf CHILD_TOOL_OK in its shell and reply CHILD_READY. After it returns, reply PRIMARY_READY and stop.' 3 0.5 0)
 [ "$PRIMARY_VERDICT" != send-failed ] || fail "$VERSION: primary prompt submission failed"
 wait_file_text "$LAB/primary-proof" PRIMARY_FOLLOWUP_EXECUTED
 jq -es 'any(.[]; .type == "session.created" and .parentID != null)' "$LAB/primary-events" >/dev/null || fail "$VERSION: primary child-session probe was not exercised"
-PRIMARY_ROOT=$(jq -rs '[.[] | select(.type == "session.created" and .parentID == null)][0].sessionID' "$LAB/primary-events")
+PRIMARY_REAL=$(cd "$PRIMARY" && pwd -P)
+PRIMARY_ROOT=$(jq -rs --arg directory "$PRIMARY_REAL" '[.[] | select(.type == "session.created" and .parentID == null and .location.directory == $directory)][0].sessionID' "$LAB/primary-events")
 jq -es --arg root "$PRIMARY_ROOT" 'length == 1 and .[0].sessionID == $root' "$LAB/primary-prompts" >/dev/null || fail "$VERSION: follow-up targeted a child or repeated"
-pass "$VERSION: primary child session stayed scoped and turn-end plugin submitted a V2 follow-up"
+jq -es --arg root "$PRIMARY_ROOT" 'all(.[]; .sessionID == $root) and any(.[]; (.command // "") | contains("PRIMARY_TOOL_OK"))' "$LAB/primary-scoped-tools" >/dev/null || fail "$VERSION: primary tool guard scope drift"
+jq -es --arg root "$PRIMARY_ROOT" 'any(.[]; .status == "completed" and .sessionID != $root and ((.input.command // "") | contains("CHILD_TOOL_OK")))' "$LAB/primary-tool-results" >/dev/null || fail "$VERSION: child shell tool did not succeed outside primary guard"
+jq -es --arg root "$PRIMARY_ROOT" '[.[] | select(.type == "session.execution.started")][0].sessionID != $root' "$LAB/primary-events" >/dev/null || fail "$VERSION: sibling root did not exercise first execution"
+pass "$VERSION: primary sibling/child lifecycle and tool hooks stayed scoped with one root follow-up"
