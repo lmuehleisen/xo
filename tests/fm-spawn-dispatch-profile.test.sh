@@ -1137,7 +1137,12 @@ if [ "${1:-}" = new-window ]; then
   rm -f "$dir/goal-input"
 fi
 case "$*" in
-  *'#{cursor_y}'*) printf '%s\n' "$((3 + ${FM_FAKE_GOAL_PRIOR_ACK:-0}))"; exit 0 ;;
+  *'#{cursor_y}'*)
+    row=$((3 + ${FM_FAKE_GOAL_PRIOR_ACK:-0}))
+    if [ "${FM_FAKE_GOAL_ECHO:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then row=$((row + 1)); fi
+    printf '%s\n' "$row"
+    exit 0
+    ;;
 esac
 if [ "${FM_FAKE_GOAL_CLOSE_FAIL:-0}" = 1 ]; then
   case "${1:-}" in
@@ -1267,6 +1272,7 @@ test_goal_prompt_echo_is_not_an_acknowledgement() {
     printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
     out=$(FM_FAKE_GOAL_ECHO=1 FM_FAKE_GOAL_REJECT=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal "$condition" 2>&1)
     expect_code 1 "$?" "an echoed $harness goal must not conceal rejection: $out"
+    assert_contains "$out" 'did not acknowledge native /goal activation' "the echo case failed before checking native acknowledgement"
     assert_not_contains "$out" "spawned $id" "echoed goal text proved activation"
   done
   pass "echoed goal text cannot substitute for a native acknowledgement"

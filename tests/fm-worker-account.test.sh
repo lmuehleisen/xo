@@ -209,9 +209,9 @@ test_ultracode_probe_uses_the_worker_account_environment() {
   for pin in pinned ordinary ambient; do
     id="acct-ultracode-$pin"
     new_case "ultracode-$pin" claude
-    expected_key=unset
-    expected_token=unset
-    expected_provider=unset
+    expected_key='unset'
+    expected_token='unset'
+    expected_provider='unset'
     case "$pin" in
       pinned)
         signed_in_claude_root "$CASE/work"
@@ -221,7 +221,7 @@ test_ultracode_probe_uses_the_worker_account_environment() {
       ordinary)
         signed_in_claude_root "$HOME_DIR/user-home/.claude"
         printf '%s\n' ordinary > "$HOME_DIR/config/claude-account"
-        expected_root=unset
+        expected_root='unset'
         ;;
       ambient)
         expected_root="$CASE/ambient-claude"
