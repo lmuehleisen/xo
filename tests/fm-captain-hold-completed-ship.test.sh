@@ -103,6 +103,11 @@ test_completed_ship_hold_declares_wait() {
     run_captain "$home" hold "$id" --reason 'Awaiting local merge approval' >/dev/null
     [ "$(tail -n 1 "$home/state/$id.status")" = 'blocked: new permission prompt' ] \
       || fail "hold hid a new permission gate"
+    if run_captain "$home" complete "$id" "$id" > "$home/self-inventory.out" 2>&1; then
+      fail "self-inventory hid a later worker event"
+    fi
+    assert_contains "$(cat "$home/self-inventory.out")" 'cannot be its own captain-call inventory' \
+      "a later event did not restore the upstream self-inventory refusal"
   done
   pass "holding a completed ship declares an idempotent wait without closing work or hiding a new gate"
 }
