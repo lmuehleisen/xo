@@ -77,7 +77,7 @@ for harness in claude codex; do
         completion_pattern='^[[:space:]]*✔ Goal achieved'
         ;;
       codex)
-        printf '%s\n' "$pane" | grep -Eq '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved \(' && activated=1
+        printf '%s\n' "$pane" | grep -Eq '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]|^[[:space:]]*[^[:space:]]+([[:space:]]+(low|medium|high|xhigh|max|ultra))?[[:space:]]+·.*[[:space:]]+Goal achieved [(]' && activated=1
         # Codex renders completion on the model/path footer, not a separate row.
         completion_pattern='Goal achieved \('
         ;;

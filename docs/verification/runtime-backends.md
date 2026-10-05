@@ -940,6 +940,7 @@ Claude acknowledged `Goal set:` and displayed both `ultracode` and `/goal active
 Codex displayed `GPT-6.1-Sol ultra`; a positional `/goal` prompt produced a reply but subsequent native `/goal` status returned `No goal is currently set`.
 Typing `/goal` after startup produced `Goal active Objective:` and ultimately `Goal achieved`.
 Codex displayed the completion as `Goal achieved (10s)` at the right of its model/path footer; the goal guard recognizes that footer as well as the activation row.
+The native goal also accepted a canonical launch-brief envelope containing the current worker role; its footer displayed `Follow crewmate role contract` and `Goal achieved (2s)`.
 These are CLI surface checks, not proof of a complete fleet dispatch or delegated workflow execution.
 
 Refresh native mode and goal evidence with the opt-in guard below; [`fm-spawn-dispatch-profile.test.sh`](../../tests/fm-spawn-dispatch-profile.test.sh) owns portable validation and emitted-command regressions.
@@ -953,7 +954,7 @@ The refresh above passed on 2026-10-05 with the following output:
 ```text
 ok - claude 2.1.289 (Claude Code): mode launch, native goal acknowledgement and completion
 ok - codex codex-cli 0.160.0: mode launch, native goal acknowledgement and completion
-FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=23970
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=22062
 ```
 
 The Codex 0.160.0 live composer uses `»`, with `›` retained in the transcript.
