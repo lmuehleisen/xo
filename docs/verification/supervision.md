@@ -717,7 +717,10 @@ The Herdr return guard needs the operator's login shell: under `SHELL=/bin/bash`
 Deterministic entry points:
 
 ```sh
-tests/fm-supervision-host.test.sh
+bin/fm-test-run.sh tests/fm-supervision-host.test.sh \
+  tests/fm-supervision-host-attended.test.sh \
+  tests/fm-supervision-host-away.test.sh \
+  tests/fm-supervision-host-recovery.test.sh --jobs 1
 tests/fm-claude-stop-autoarm.test.sh
 tests/fm-afk-launch.test.sh
 tests/fm-supervision-instructions.test.sh
@@ -770,7 +773,10 @@ The Grok stop guard was last verified on 0.2.112 and has drifted from Grok 1.0.4
 Deterministic entry points:
 
 ```sh
-tests/fm-supervision-host.test.sh
+bin/fm-test-run.sh tests/fm-supervision-host.test.sh \
+  tests/fm-supervision-host-attended.test.sh \
+  tests/fm-supervision-host-away.test.sh \
+  tests/fm-supervision-host-recovery.test.sh --jobs 1
 tests/fm-wake-queue.test.sh
 tests/fm-cursor-primary.test.sh
 tests/fm-pi-watch-extension.test.sh
@@ -832,7 +838,10 @@ ok - supervision host live (2.1.283 (Claude Code)): a real engine handles and re
 Deterministic entry points:
 
 ```sh
-tests/fm-supervision-host.test.sh
+bin/fm-test-run.sh tests/fm-supervision-host.test.sh \
+  tests/fm-supervision-host-attended.test.sh \
+  tests/fm-supervision-host-away.test.sh \
+  tests/fm-supervision-host-recovery.test.sh --jobs 1
 tests/fm-afk-return.test.sh
 tests/fm-branch-supervision.test.sh
 ```
