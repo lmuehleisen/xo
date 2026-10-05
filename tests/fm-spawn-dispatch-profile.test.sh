@@ -1342,7 +1342,7 @@ test_task_optins_refuse_wrong_surfaces() {
     expect_code 1 "$?" "wrong opt-in surface should refuse: $args $out"
     [ ! -s "$LAUNCH_LOG" ] || fail "wrong opt-in launched"
   done
-  for length in 4000 4001; do
+  for length in 4001; do
     rec=$(make_spawn_case "goal-too-long-$length" claude "$id")
     read_case_record "$rec"
     condition=$(printf '%*s' "$length" '' | tr ' ' x)
@@ -1352,6 +1352,40 @@ test_task_optins_refuse_wrong_surfaces() {
     [ ! -s "$LAUNCH_LOG" ] || fail "an overlong goal delivered task input"
   done
   pass "launch opt-ins refuse unsupported harnesses and empty goals"
+}
+
+test_goal_directive_exact_boundary() {
+  local rec id=goal-start out payload suffix_chars condition length overflow prefix='/goal smoke'
+  rec=$(make_spawn_case "$id" codex "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+  expect_code 0 "$?" "boundary fixture must first deliver a short native goal: $out"
+  payload=$(cat "$FAKEBIN_DIR/goal-input")
+  # Measure the pointer overhead from a public launch. These case names and
+  # task ids have equal lengths, so the measured overhead stays the same.
+  suffix_chars=$((${#payload} - ${#prefix}))
+  for overflow in 0 1; do
+    if [ "$overflow" = 0 ]; then id=goal-bound; else id=goal-above; fi
+    rec=$(make_spawn_case "$id" codex "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+    length=$((4000 - suffix_chars + overflow))
+    [ "$length" -gt 0 ] && [ "$length" -le 4000 ] || fail "invalid boundary fixture condition length: $length"
+    condition=$(printf '%*s' "$length" '' | tr ' ' x)
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal "$condition")
+    expect_code "$overflow" "$?" "combined goal boundary should accept 4000 and refuse 4001: $out"
+    if [ "$overflow" = 0 ]; then
+      payload=$(cat "$FAKEBIN_DIR/goal-input")
+      [ "${#payload}" = 4006 ] || fail "the accepted directive was not exactly 4000 characters after /goal: ${#payload}"
+    else
+      assert_contains "$out" 'error: --goal plus launch-brief pointer exceeds 4000 characters' "combined boundary refusal used the wrong check"
+      [ ! -s "$LAUNCH_LOG" ] || fail "an overlong combined directive launched a worker"
+    fi
+  done
+  pass "goal directives accept the exact 4000-character boundary and refuse 4001 before launch"
 }
 
 prepare_batch_slots() {
@@ -2649,6 +2683,7 @@ test_goal_first_native_input
 test_goal_acknowledgement_is_fresh_and_failure_stays_owned
 test_goal_prompt_echo_is_not_an_acknowledgement
 test_task_optins_refuse_wrong_surfaces
+test_goal_directive_exact_boundary
 test_batch_preserves_native_ultra
 test_batch_preserves_launch_optins
 test_pi_scout_launch_enters_recorded_worktree
