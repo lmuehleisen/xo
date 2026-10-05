@@ -34,14 +34,13 @@ The live Herdr guard is `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 ../../../tests/fm-herdr-
 
 ## Primary integration
 
-The primary plugins expose V2 default definitions with stable IDs and `setup(ctx)`.
-Their shared [V2 boundary](../../../../../.opencode/plugins/lib/fm-v2-plugin.js) registers tool hooks and abortable public-event subscriptions, translating execution completion into the existing guard and watch-arm callbacks.
-`.opencode/plugins/fm-primary-turnend-guard.js` reacts to root execution settlement; the V2 boundary scopes lifecycle and tool hooks to the plugin home and excludes child sessions, including those whose creation was not observed.
-Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses V2 `ctx.session.prompt` to force one follow-up turn when `../../../bin/fm-turnend-guard.sh` returns 2.
-Legacy follow-up evidence was verified in the V1 interactive TUI; the V2 worker live guard does not claim primary watcher continuity.
-In a home with `config/supervision-host` and no `config/supervision-host-off` the watch-arm plugin spawns the supervision host instead of `../../../bin/fm-watch-arm.sh`, with Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md) owns the host.
-`opencode run` can exit before displaying a queued follow-up, so the adapter steps aside in headless mode.
-On native Windows, the operational-input adapter runs its Bash helper through `bash`; macOS and Linux invoke it directly.
+OpenCode V2 is supported for crewmates and scouts only; primary and persistent secondmate support is deferred.
+The primary default definitions reject V2 `setup(ctx)` before registering hooks, and `../../../bin/fm-spawn.sh` rejects V2 secondmate launches before allocation.
+Use another verified harness for a Firstmate primary or secondmate.
+Server events identify a session's location and parent, but do not prove which same-directory root a client selected.
+The [V2 boundary](../../../../../.opencode/plugins/lib/fm-v2-plugin.js) therefore never selects or prompts a primary root.
+[Supervision verification](../../../../../docs/verification/supervision.md#opencode-v2-primary-boundary) owns the current refusal evidence.
 
-The companion `.opencode/plugins/fm-primary-watch-arm.js` owns normal TUI watcher supervision, wakes it through V2 `ctx.session.prompt`, and coordinates with the guard before a blind-turn follow-up.
-The PreToolUse-equivalent watcher-arm seatbelt registers `ctx.tool.hook("execute.before", ...)`; throwing prevents execution.
+The named V1 callback implementations remain for legacy primary compatibility.
+Their watcher, turn-end, pre-tool, and startup mechanics are documented in `../../../docs/supervision-protocols/opencode.md` and `../../../docs/sessionstart-nudge.md`.
+V1 worker launch is not supported by the current spawn adapter.

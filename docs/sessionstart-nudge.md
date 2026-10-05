@@ -307,7 +307,8 @@ Whenever the digest is incomplete, this approved containment keeps the prefix an
 
 ### OpenCode
 
-OpenCode is a nudge-tier harness.
+OpenCode V1 is a nudge-tier harness.
+[The harness reference](../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration) owns the unsupported V2 primary boundary.
 The `.opencode/plugins/fm-primary-sessionstart-nudge.js` plugin does three things:
 
 - It listens for `session.created`.

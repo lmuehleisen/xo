@@ -2609,10 +2609,11 @@ ok - opencode v2.0.18: requested model, brief, busy/idle, turn-end, composer, du
 
 The guard proves the real spawn template and per-task plugin load, semantic busy/idle settlement, turn-end notification, ancestry detection, tmux liveness, cursor-aware and cursorless idle classification, draft classification, durable inbox acknowledgement, interruption of a running turn, stopped-agent verification, and deterministic relaunch in the same scratch copy.
 The control command reports `cancel=unconfirmed`; the live guard separately requires the plugin's idle event before proceeding.
-The same guard also verifies the real primary turn-end plugin's V2 follow-up API; [supervision verification](supervision.md#opencode-v2-turn-end) owns that evidence.
+The same guard verifies the V2 primary setup refusal; [supervision verification](supervision.md#opencode-v2-primary-boundary) owns that evidence.
 The V2 composer includes `Build auto`, a location/shortcut strip below its half-block floor, and sidebar content alongside the input rows.
 Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-sessionstart-nudge.test.sh`.
-This run does not exercise native `--continue`, provider reasoning variants on paid models, primary watcher continuity, or non-tmux backends.
+This run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.
+V2 primary operation is deferred as documented by the [harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration).
 
 The authoritative migration references are [V2 migration](https://opencode.ai/v2/docs/migrate-v1), [plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1), and the [tagged 2.0.18 source](https://github.com/anomalyco/opencode/tree/v2.0.18).
 Model config content and private-server environment inheritance are established by `packages/core/src/config.ts`, `packages/cli/src/server-process.ts`, and `packages/cli/src/services/standalone.ts` at that tag.

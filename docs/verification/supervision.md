@@ -870,22 +870,15 @@ Observed output:
 
 The safe command-channel contract is covered without a notification by `tests/fm-daemon.test.sh`: the summary reaches both `$1` and stdin, every channel is process-group bounded, and a failed channel falls through.
 
-### OpenCode V2 turn end
+### OpenCode V2 primary boundary
 
-Verified on 2026-10-05 with `opencode v2.0.18` and `opencode/muse-spark-1.3-contributor-free`.
-Run `FM_OPENCODE_LIVE_E2E=1 bash tests/fm-opencode-primary-live-e2e.test.sh` to refresh.
-The V2 branch loads the actual primary turn-end plugin through an instrumented prompt boundary in an independent scratch repository.
-A fixture shell guard returns 2 once, and the real plugin subscribes to execution settlement and submits a follow-up through `ctx.session.prompt`.
-An unrelated root in another directory executes first on the same private server.
-The primary model then runs a shell command and delegates a child shell command.
-A fixture primary tool guard observes root calls and would reject the child's marker command; the child completes its shell call outside that guard.
-The TUI's `/new` command then creates another root whose shell call still reaches the primary guard and completes.
-The guard observes exactly one root-targeted public prompt request and its successful execution settlement; no model-authored proof file is required.
+Verified on 2026-10-05 with `opencode v2.0.18`.
+Run `FM_OPENCODE_LIVE_E2E=1 bash tests/fm-opencode-primary-live-e2e.test.sh` to refresh the worker lifecycle and primary refusal evidence.
+The V2 guard loads all five actual primary definitions with the real server context and requires each to reject setup before any primary hook is installed.
 
 ```text
-ok - opencode v2.0.18: primary sibling/child lifecycle, tool hooks and /new stayed scoped with one root follow-up
+ok - opencode v2.0.18: all primary plugins refuse V2 setup; worker lifecycle remains supported
 ```
 
-This isolated guard verifies one forced follow-up and abortable subscription setup.
-It does not claim a live primary fleet watcher cycle, native session resume, or non-tmux backend coverage.
-Portable callback and module-boundary regressions remain in `tests/fm-pi-watch-extension.test.sh` and `tests/fm-sessionstart-nudge.test.sh`.
+[The OpenCode harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration) owns the unsupported primary boundary.
+The named V1 callback implementations remain unchanged; portable compatibility and refusal regressions are in `tests/fm-pi-watch-extension.test.sh` and `tests/fm-sessionstart-nudge.test.sh`.

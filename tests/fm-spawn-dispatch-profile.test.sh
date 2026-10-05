@@ -913,6 +913,22 @@ test_opencode_rejects_v1_before_launch() {
   pass "OpenCode V1 is refused before launch"
 }
 
+test_opencode_rejects_v2_secondmate_before_launch() {
+  local rec id=profile-opencode-secondmate out status sm
+  rec=$(make_spawn_case profile-opencode-secondmate opencode "$id")
+  read_case_record "$rec"
+  printf '%s\n' opencode > "$HOME_DIR/config/secondmate-harness"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 1 "$status" "OpenCode V2 must refuse a secondmate before launch"
+  assert_contains "$out" 'primary and secondmate support is deferred' "refusal must identify the unsupported role"
+  [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "unsupported secondmate must not publish a worker record"
+  [ ! -s "$LAUNCH_LOG" ] || fail "unsupported secondmate typed a launch command"
+  pass "OpenCode V2 secondmate is refused before launch and publication"
+}
+
 test_opencode_refuses_pending_startup_composer() {
   local rec id=profile-opencode-pending out status launch
   rec=$(make_spawn_case profile-opencode-pending opencode "$id")
@@ -2349,6 +2365,7 @@ test_cursor_threads_model_workspace_and_omits_effort_axis
 test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_rejects_v1_before_launch
+test_opencode_rejects_v2_secondmate_before_launch
 test_opencode_refuses_pending_startup_composer
 test_opencode_failed_startup_keeps_only_unconfirmed_endpoints
 test_opencode_threads_model_and_effort_variant

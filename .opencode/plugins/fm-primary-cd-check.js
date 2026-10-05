@@ -64,4 +64,4 @@ export const FmPrimaryCdCheck = async ({ directory, worktree }) => {
   };
 };
 
-export default v2Plugin("firstmate.primary-cd-check", FmPrimaryCdCheck, { rootOnly: true });
+export default v2Plugin("firstmate.primary-cd-check", FmPrimaryCdCheck, { primary: true });

@@ -2673,6 +2673,10 @@ esac
 
 if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   "$FM_ROOT/bin/fm-harness.sh" validate-opencode || exit 1
+  if [ "$KIND" = secondmate ]; then
+    echo 'error: OpenCode V2 supports crewmates/scouts only; primary and secondmate support is deferred. Select a harness verified for secondmates.' >&2
+    exit 1
+  fi
 fi
 
 # The --agy-bypass and --agy-judge gates (bin/fm-agy-lib.sh).
