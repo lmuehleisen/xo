@@ -105,7 +105,8 @@
 #   --goal <condition> opts a Claude or Codex task worker into the native /goal
 #   command. It is a single nonempty line, not a skill or a CLI goal flag.
 #   The first post-start input carries the condition plus the launch-brief
-#   pointer and stop/wait boundaries (together at most 4000 characters).
+#   pointer and stop/wait boundaries (together at most 4000 characters,
+#   excluding the /goal command prefix).
 #   The existing backend composer and submit path owns readiness and delivery;
 #   a new native goal acknowledgement after the pre-submit capture is required
 #   before spawn reports success. A failed goal launch retains its task record
@@ -5632,11 +5633,12 @@ fi
 
 GOAL_INPUT=
 if [ "$GOAL_SET" = 1 ]; then
-  GOAL_INPUT="/goal $GOAL. Read and follow the launch brief at $BRIEF_REAL exactly, including its authority and stop/wait gates."
-  [ "${#GOAL_INPUT}" -le 4006 ] || {
+  GOAL_DIRECTIVE="$GOAL. Read and follow the launch brief at $BRIEF_REAL exactly, including its authority and stop/wait gates."
+  [ "${#GOAL_DIRECTIVE}" -le 4000 ] || {
     echo "error: --goal plus launch-brief pointer exceeds 4000 characters" >&2
     exit 1
   }
+  GOAL_INPUT="/goal $GOAL_DIRECTIVE"
 fi
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W

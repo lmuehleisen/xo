@@ -1314,7 +1314,7 @@ test_goal_prompt_echo_is_not_an_acknowledgement() {
 }
 
 test_task_optins_refuse_wrong_surfaces() {
-  local rec id=wrong-optin out args
+  local rec id=wrong-optin out args length condition
   for args in 'codex --ultracode' 'pi --goal smoke' 'claude --goal='; do
     rec=$(make_spawn_case "wrong-optin-$RANDOM" claude "$id")
     read_case_record "$rec"
@@ -1323,6 +1323,15 @@ test_task_optins_refuse_wrong_surfaces() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness $args)
     expect_code 1 "$?" "wrong opt-in surface should refuse: $args $out"
     [ ! -s "$LAUNCH_LOG" ] || fail "wrong opt-in launched"
+  done
+  for length in 4000 4001; do
+    rec=$(make_spawn_case "goal-too-long-$length" claude "$id")
+    read_case_record "$rec"
+    condition=$(printf '%*s' "$length" '' | tr ' ' x)
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal "$condition")
+    expect_code 1 "$?" "goal condition or combined directive above the limit should refuse: $out"
+    assert_contains "$out" '4000 characters' "goal limit refusal missing"
+    [ ! -s "$LAUNCH_LOG" ] || fail "an overlong goal delivered task input"
   done
   pass "launch opt-ins refuse unsupported harnesses and empty goals"
 }

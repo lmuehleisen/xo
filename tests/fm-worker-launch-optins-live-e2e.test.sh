@@ -64,10 +64,16 @@ for harness in claude codex; do
   for _ in $(seq 1 180); do
     pane=$(fm_backend_capture tmux "$target" 100)
     case "$harness" in
-      claude) printf '%s\n' "$pane" | grep -Eq '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' && activated=1 ;;
-      codex) printf '%s\n' "$pane" | grep -Eq '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved \(' && activated=1 ;;
+      claude)
+        printf '%s\n' "$pane" | grep -Eq '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' && activated=1
+        completion_pattern='^[[:space:]]*✔ Goal achieved'
+        ;;
+      codex)
+        printf '%s\n' "$pane" | grep -Eq '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved \(' && activated=1
+        completion_pattern='^[[:space:]]*(• )?Goal achieved \('
+        ;;
     esac
-    if printf '%s\n' "$pane" | grep -q 'Goal achieved ('; then completed=1; break; fi
+    if printf '%s\n' "$pane" | grep -Eq "$completion_pattern"; then completed=1; break; fi
     sleep 0.5
   done
   if [ "$activated" != 1 ] || [ "$completed" != 1 ]; then
