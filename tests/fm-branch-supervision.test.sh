@@ -59,7 +59,7 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
   esac
   # A red PR once reached the captain listed as ready for a call while not ready.
   case "$out_a" in
-    *"count a PR as ready only when its checks are green"*"\`bin/fm-pr-state.sh <url>\`"*"A red or pending PR is not ready to review or merge in any posture"*"reproducing on the default branch and unrelated"*"report verdict routine naming the check, never an outcome that calls the PR ready or awaiting review or merge"*) ;;
+    *"\`bin/fm-pr-check.sh <task> <url>\` when the task's ready status or \`pr=\` metadata names the PR's URL and the PR is ready"*"count a PR as ready only under the check rule below"*"no check is pending and every check has passed"*"\`gh pr checks <url>\` and \`bin/fm-pr-state.sh <url>\`"*"the PR is not ready to review or merge in any posture"*"leave the PR check unarmed, and report verdict routine naming the check, never an outcome that calls the PR ready or awaiting review or merge"*"shown to be pre-existing and unrelated, with nothing pending, report verdict captain as work ready for review"*) ;;
     *) fail "branch prompt lost the green-before-ready PR rule" ;;
   esac
   # The 2026-09-22 away window: every landed exemption worker was left sitting

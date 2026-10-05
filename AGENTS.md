@@ -348,7 +348,7 @@ Use the same evidence-first form for objections or clarifying challenges rather 
 
 Reach the captain immediately for:
 
-- Work ready for their review, with the PR's recorded URL; a PR with a failing or pending check is not ready yet (`ship-landing`).
+- Work ready for their review, with the PR's recorded URL; a PR with a pending check, or a failing one not shown to be pre-existing and unrelated, is not ready yet (`ship-landing`).
 - Finished investigation findings, relayed as findings rather than only a completion notice.
 - Gate findings that `ask-user-authority` escalates.
 - A real blocker or failure after the relevant playbook is exhausted.
