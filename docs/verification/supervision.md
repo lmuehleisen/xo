@@ -874,12 +874,13 @@ The safe command-channel contract is covered without a notification by `tests/fm
 
 Verified on 2026-10-05 with `opencode v2.0.18` and `opencode/muse-spark-1.3-contributor-free`.
 Run `FM_OPENCODE_LIVE_E2E=1 bash tests/fm-opencode-primary-live-e2e.test.sh` to refresh.
-The V2 branch copies the actual primary turn-end plugin and its adapter into an independent scratch repository.
+The V2 branch loads the actual primary turn-end plugin through an instrumented prompt boundary in an independent scratch repository.
 A fixture shell guard returns 2 once, and the real plugin subscribes to execution settlement and submits a follow-up through `ctx.session.prompt`.
-The model executes the requested marker write in that follow-up; this verifies event delivery and the public prompt API rather than only a mocked callback.
+The real model creates and completes a child session before the parent settles.
+The guard observes exactly one root-targeted public prompt request and its successful execution settlement; no model-authored proof file is required.
 
 ```text
-ok - opencode v2.0.18: primary turn-end plugin submitted a V2 follow-up
+ok - opencode v2.0.18: primary child session stayed scoped and turn-end plugin submitted a V2 follow-up
 ```
 
 This isolated guard verifies one forced follow-up and abortable subscription setup.

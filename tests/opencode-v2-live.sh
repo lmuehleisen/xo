@@ -134,19 +134,25 @@ pass "$VERSION: requested model, brief, busy/idle, turn-end, composer, durable s
 PRIMARY="$LAB/primary"
 mkdir -p "$PRIMARY/bin" "$PRIMARY/.opencode/plugins/lib"
 git -C "$PRIMARY" init -q
-cp "$ROOT/.opencode/plugins/fm-primary-turnend-guard.js" "$ROOT/.opencode/plugins/package.json" "$PRIMARY/.opencode/plugins/"
+cp "$ROOT/.opencode/plugins/package.json" "$PRIMARY/.opencode/plugins/"
 cp "$ROOT/.opencode/plugins/lib/fm-v2-plugin.js" "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$PRIMARY/.opencode/plugins/lib/"
 cp "$ROOT/bin/fm-operational-input.sh" "$PRIMARY/bin/"
 cat > "$PRIMARY/.opencode/plugins/fm-live-events.js" <<JS
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 export default {
   id: "firstmate.live-events",
   async setup(ctx) {
     const controller = new AbortController();
+    let followup;
     const events = (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        if (event.type === "session.created") {
-          appendFileSync("$LAB/primary-events", JSON.stringify(event.data) + "\\n");
+        appendFileSync("$LAB/primary-events", JSON.stringify({ type: event.type, ...event.data }) + "\\n");
+        if (event.type === "session.execution.started" && existsSync("$LAB/primary-prompts")) {
+          const prompt = JSON.parse(readFileSync("$LAB/primary-prompts", "utf8").trim());
+          if (event.data.sessionID === prompt.sessionID) followup = event.data.sessionID;
+        }
+        if (event.type === "session.execution.succeeded" && event.data.sessionID === followup) {
+          appendFileSync("$LAB/primary-proof", "PRIMARY_FOLLOWUP_EXECUTED\\n");
         }
       }
     })();
@@ -154,11 +160,24 @@ export default {
   },
 };
 JS
+cat > "$PRIMARY/.opencode/plugins/fm-primary-turnend-guard.js" <<JS
+import { appendFileSync } from "node:fs";
+import plugin from "$ROOT/.opencode/plugins/fm-primary-turnend-guard.js";
+export default {
+  ...plugin,
+  setup(ctx) {
+    return plugin.setup({ ...ctx, session: { ...ctx.session, prompt: async (input) => {
+      appendFileSync("$LAB/primary-prompts", JSON.stringify(input) + "\\n");
+      return ctx.session.prompt(input);
+    } } });
+  },
+};
+JS
 cat > "$PRIMARY/bin/fm-turnend-guard.sh" <<SH
 #!/usr/bin/env bash
 if [ -f '$LAB/primary-guard-fired' ]; then exit 0; fi
 touch '$LAB/primary-guard-fired'
-echo "Run printf 'PRIMARY_FOLLOWUP_OK\\n' >> '$LAB/primary-proof', then stop." >&2
+echo 'Reply PRIMARY_FOLLOWUP_OK, then stop.' >&2
 exit 2
 SH
 chmod +x "$PRIMARY/bin/"*.sh
@@ -174,6 +193,8 @@ done
 [ "$i" -lt 90 ] || fail "$VERSION: primary composer did not become ready"
 PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Use the task tool to ask a subagent to reply CHILD_READY without using tools. After it returns, reply PRIMARY_READY and stop.' 3 0.5 0)
 [ "$PRIMARY_VERDICT" != send-failed ] || fail "$VERSION: primary prompt submission failed"
-wait_file_text "$LAB/primary-proof" PRIMARY_FOLLOWUP_OK
-jq -es 'any(.[]; .parentID != null)' "$LAB/primary-events" >/dev/null || fail "$VERSION: primary child-session probe was not exercised"
+wait_file_text "$LAB/primary-proof" PRIMARY_FOLLOWUP_EXECUTED
+jq -es 'any(.[]; .type == "session.created" and .parentID != null)' "$LAB/primary-events" >/dev/null || fail "$VERSION: primary child-session probe was not exercised"
+PRIMARY_ROOT=$(jq -rs '[.[] | select(.type == "session.created" and .parentID == null)][0].sessionID' "$LAB/primary-events")
+jq -es --arg root "$PRIMARY_ROOT" 'length == 1 and .[0].sessionID == $root' "$LAB/primary-prompts" >/dev/null || fail "$VERSION: follow-up targeted a child or repeated"
 pass "$VERSION: primary child session stayed scoped and turn-end plugin submitted a V2 follow-up"

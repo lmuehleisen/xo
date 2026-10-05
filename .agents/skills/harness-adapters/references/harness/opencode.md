@@ -36,7 +36,7 @@ The live Herdr guard is `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 ../../../tests/fm-herdr-
 
 The primary plugins expose V2 default definitions with stable IDs and `setup(ctx)`.
 Their shared [V2 boundary](../../../../../.opencode/plugins/lib/fm-v2-plugin.js) registers tool hooks and abortable public-event subscriptions, translating execution completion into the existing guard and watch-arm callbacks.
-`.opencode/plugins/fm-primary-turnend-guard.js` reacts to execution settlement.
+`.opencode/plugins/fm-primary-turnend-guard.js` reacts to root execution settlement; the V2 boundary excludes child sessions and resolves parent relationships when creation was not observed.
 Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses V2 `ctx.session.prompt` to force one follow-up turn when `../../../bin/fm-turnend-guard.sh` returns 2.
 Legacy follow-up evidence was verified in the V1 interactive TUI; the V2 worker live guard does not claim primary watcher continuity.
 In a home with `config/supervision-host` and no `config/supervision-host-off` the watch-arm plugin spawns the supervision host instead of `../../../bin/fm-watch-arm.sh`, with Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md) owns the host.
