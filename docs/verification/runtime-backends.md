@@ -574,6 +574,17 @@ ok - gemini: a real launch parked on its own rendered auth or trust dialog surfa
 # checked 3 launch-prompt signature(s) against real installed binaries
 ```
 
+Verified 2026-10-05 on pi 1.0.3 from an isolated npm install.
+That run's PATH contained only Pi, so the Claude and Gemini arms reported themselves absent and were not rechecked.
+
+```
+# claude not installed - launch-prompt signature not checked
+# live pi version: 1.0.3
+ok - pi, pi-signed, omp: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate
+# gemini not installed - launch-prompt signature not checked
+# checked 1 launch-prompt signature(s) against real installed binaries
+```
+
 Claude, launched `--dangerously-skip-permissions` into a brand-new worktree under the operator's own already-onboarded config (the shape a real crewmate spawn produces):
 
 ```
@@ -657,6 +668,16 @@ skip-runner: pi-signed is not installed, so its pin check was not exercised
 # worker account live guard checked: claude pi
 ```
 
+Verified 2026-10-05 on pi 1.0.3 from an isolated npm install of `@earendil-works/pi-coding-agent`.
+Claude was not on PATH for this run, and pi-signed was not installed.
+
+```
+skip-runner: claude is not installed, so its pin check was not exercised
+ok - pi 1.0.3: the pin check reads auth check and the model listing, and refuses what only an ambient credential signs in
+skip-runner: pi-signed is not installed, so its pin check was not exercised
+# worker account live guard checked: pi
+```
+
 The guard submits no prompt and spends no tokens, so it runs by default wherever a runner is installed; rerun it after every Claude or Pi upgrade.
 
 ## Pi worker publish policy
@@ -680,6 +701,14 @@ ok - pi 0.87.1: the worker extension blocks a gh publish and a --no-verify push 
 ```
 skip-runner: pi-signed is not installed, so its worker extension was not exercised
 ok - pi 0.99.2: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
+```
+
+Verified 2026-10-05 on pi 1.0.3 from an isolated npm install of `@earendil-works/pi-coding-agent`; pi-signed was not installed.
+The globally installed Pi CLI was left on its previous release.
+
+```
+skip-runner: pi-signed is not installed, so its worker extension was not exercised
+ok - pi 1.0.3: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
 ```
 
 The guard spends no tokens, so it runs by default wherever Pi is installed; rerun it after every Pi upgrade.
@@ -2423,6 +2452,51 @@ ok - under the away-posture record the wake carries the verbatim read-back tail,
 ```
 
 The merge suite and the security suite dominate the wall time.
+
+### 2026-10-05 Pi 1.0.3 compatibility refresh
+
+The credential-free SDK guard, strict typecheck, calm, branch, and watch extension suites, worker publish-policy guard, worker-account pin guard, launch-prompt signature guard, and real-TUI responsiveness guard were run against npm `@earendil-works/pi-coding-agent` 1.0.3.
+The previous dated publish-policy verification was pi 0.99.2 on Linux and pi 0.87.1 on macOS, on 2026-10-01.
+Pi 1.0.0 made fullscreen the default TUI mode and renamed `createToolHtmlRenderer`'s tool lookup from `getToolDefinition` to `getToolRenderers`.
+The extension suites call the renamed lookup, and the SDK guard constructs `InteractiveMode` with `tuiMode: "fullscreen"`.
+Spawn already passes `--tui-mode regular` when the CLI advertises it, which 1.0.3 does, so scrollback-based steering still avoids the fullscreen default.
+`--provider` without `--model` is now an error, and a pinned Pi launch already refuses to start unless `--model` names `<provider>/<id>`.
+The Azure provider rename from `azure-openai-responses` to `azure` has no matching literal in this repo.
+Pi-signed was not installed, and the native Codex adapter package was not installed, so those guards skipped.
+No provider call left the machine.
+
+```sh
+FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-primary-types.test.sh
+FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-branch-extension.test.sh
+FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-watch-extension.test.sh
+FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-calm-pi-extension.test.sh
+FM_PI_BRANCH_LIVE_E2E=1 FM_PI_PACKAGE_DIR=<pi-1.0.3 package> bash tests/fm-pi-branch-live-e2e.test.sh
+bash tests/fm-pi-worker-publish-policy-live-e2e.test.sh
+bash tests/fm-worker-account-live-e2e.test.sh
+FM_LAUNCH_PROMPT_SIGNALS_LIVE=1 bash tests/fm-launch-prompt-signals-live-e2e.test.sh
+bash tests/fm-pi-branch-responsiveness-live-e2e.test.sh
+```
+
+```text
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.0.3
+ok - real Pi SDK 1.0.3 accepts the branch session construction and preserves an unpromptable wake
+ok - real Pi SDK 1.0.3 rejects a post-construction 429 to watcher-owned main delivery without losing its durable row
+ok - real Pi SDK 1.0.3 applies an explicit branch model on create and over a reopened session's recorded model
+ok - real Pi SDK 1.0.3 reports its own supported effort levels and applies an explicit branch effort over a reopened session's recorded level
+ok - real Pi SDK 1.0.3 immediately renders appendEntry in the active transcript, persists it across reopen, and excludes it from model context
+ok - real Pi SDK 1.0.3 queues a streaming-time watcher wake without before_agent_start, keeps the successor chain, and surfaces consumption of both follow-ups
+ok - pi 1.0.3: the worker extension blocks a gh publish and a --no-verify push before they run and lets an ordinary command run
+ok - pi 1.0.3: the pin check reads auth check and the model listing, and refuses what only an ambient credential signs in
+ok - pi, pi-signed, omp: a real Pi-engine launch parked on its own rendered trust dialog surfaces through the watcher gate
+pi 1.0.3 keystroke echo, worst observed: floor 19.2 ms, extension idle 44.4 ms, extension delivering 27.9 ms
+ok - supervision outcome delivery keeps the real Pi 1.0.3 TUI echoing keystrokes at its unloaded floor
+```
+
+The branch extension suite's stock-export case and the calm suite's HTML export case passed on Pi 1.0.3 only after they supplied `getToolRenderers`.
+They still pass `getToolDefinition` as well, which is the name Pi 1.0.0 reads, so an older package is not rejected by the new argument.
+`.github/workflows/ci.yml` still installs the unpinned npm package.
+The 1.0.2 failure was this repo passing only the old lookup name, so the pin stays off and the next Pi release remains what those tests run against.
+The Windows shell-invocation suite skipped because this host is not native Windows.
 
 ## Native Codex through Pi
 

@@ -748,7 +748,7 @@ const runtimeHost = {
   setBeforeSessionInvalidate() {},
   setRebindSession() {},
 };
-const interactive = new InteractiveMode(runtimeHost, { tuiMode: "alt-screen" });
+const interactive = new InteractiveMode(runtimeHost, { tuiMode: "fullscreen" });
 interactive.isInitialized = true;
 interactive.subscribeToAgent();
 const record = {

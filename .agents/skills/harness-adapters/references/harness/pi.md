@@ -17,9 +17,14 @@ Verified on 2026-07-27 with Pi and Pi-signed 0.82.0 unless a fact gives another 
 | Model discovery | Run the selected executable as `<executable> --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
 
 Native Codex sessions may request `ultra` through the native extension flag described by `../../../bin/fm-spawn.sh`; it is separate from Pi's thinking levels.
+Pi 1.0.3's `--thinking` flag also accepts `off` and `minimal`, which Firstmate does not send.
 Pi has no permission system, so workers are always autonomous.
-Pi's installed `packages/coding-agent/docs/settings.md` UI and display section documents `regular` as the `tuiMode` default and `fullscreen` as experimental.
-Fullscreen can bury steering messages by rewriting scrollback, so Firstmate avoids it when the installed CLI supports the override.
+Since Pi 1.0.0, `--provider` without `--model` is an error.
+A pinned Pi launch already has to name `--model <provider>/<id>` before Firstmate adds `--provider`, so that flag is not sent alone.
+Since Pi 1.0.0 the installed `packages/coding-agent/docs/settings.md` terminal and display section documents `fullscreen` as the `tuiMode` default and `regular` as the mode that keeps the terminal's ordinary scrollback.
+Fullscreen can bury steering messages by rewriting scrollback, so Firstmate still passes `--tui-mode regular` when that executable's help advertises the flag.
+The Pi 1.0 provider, thinking, and TUI facts above were rechecked against Pi 1.0.3 on 2026-10-05.
+Pi-signed was not installed for that recheck.
 `../../../bin/fm-spawn.sh --help` owns the executable-pinning and version-safe launch mechanics.
 
 Pi-signed is the signed wrapper identity verified on version 0.82.0.
