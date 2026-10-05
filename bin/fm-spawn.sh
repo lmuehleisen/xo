@@ -96,6 +96,7 @@
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
 #   Direct Codex receives -c model_reasoning_effort="ultra" only when the
 #   installed CLI parser and bundled model catalog prove support.
+#   Its probe and launch use the same absolute executable resolved from PATH.
 #   This direct-Codex extension applies only to task workers, not secondmates.
 #   --ultracode opts a Claude task worker into dynamic workflow orchestration
 #   via session-only --settings JSON, independently of --effort. It requires
@@ -448,6 +449,7 @@
 #     __BRIEFDOORBELL__ quoted printable doorbell naming the launch-brief record this
 #                  script published into the receiving home's operational inbox
 #     __CODEXBRIEF__ encoded initial brief, or --enable goals for a bare goal launch
+#     __CODEXBIN__  codex, or the quoted executable that passed the Ultra probe
 #     __CLAUDEULTRACODE__ session setting for task workers, empty for secondmates
 #     __WORKTREE__  absolute path to the task worktree
 #     __CURSORBIN__ resolved, cursor-verified executable for a cursor launch
@@ -2480,9 +2482,9 @@ launch_command_template() { # <harness> <kind> <permission-flags>
   # secondmate launch deliberately keeps hooks on.
   codex)
     if [ "$kind" = secondmate ]; then
-      printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox __CODEXBRIEF__'
+      printf '%s' '__CODEXBIN__ __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox __CODEXBRIEF__'
     else
-      printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" __CODEXBRIEF__'
+      printf '%s' '__CODEXBIN__ __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" __CODEXBRIEF__'
     fi
     ;;
   opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
@@ -2832,12 +2834,23 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
 fi
 # Ultra is an explicit native capability, never a Pi thinking-level alias.
 # Validate the fully resolved profile before worktree or endpoint provisioning.
+CODEX_ULTRA_BIN=
 if [ "$EFFORT" = ultra ]; then
   [ "$RAW_LAUNCH" = 0 ] || {
     echo "error: --effort ultra requires the canonical --harness pi or pi-signed or codex launch so its native flag cannot be omitted" >&2
     exit 1
   }
-  "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" "$KIND" || exit 1
+  if [ "$HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
+    CODEX_ULTRA_BIN=$(command -v codex) || CODEX_ULTRA_BIN=
+    [ -f "$CODEX_ULTRA_BIN" ] && [ -x "$CODEX_ULTRA_BIN" ] || {
+      echo "error: codex ultra requires a concrete executable from PATH" >&2
+      exit 1
+    }
+    # A pre-existing pane may have a different PATH. Probe and launch this same
+    # absolute executable so an older pane-local CLI cannot replace it.
+    CODEX_ULTRA_BIN=$(CDPATH='' cd -- "$(dirname "$CODEX_ULTRA_BIN")" && printf '%s/%s' "$(pwd -P)" "$(basename "$CODEX_ULTRA_BIN")") || exit 1
+  fi
+  "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" "$KIND" "$CODEX_ULTRA_BIN" || exit 1
 fi
 if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
   [ "$RAW_LAUNCH" = 0 ] || { echo "error: --ultracode and --goal require a canonical harness launch" >&2; exit 1; }
@@ -5865,6 +5878,9 @@ if [ "$RAW_LAUNCH" -eq 0 ]; then
     CODEX_BRIEF='--enable goals'
   fi
   LAUNCH=${LAUNCH//__CODEXBRIEF__/$CODEX_BRIEF}
+  CODEX_LAUNCH_BIN=codex
+  [ -z "$CODEX_ULTRA_BIN" ] || CODEX_LAUNCH_BIN=$(shell_quote "$CODEX_ULTRA_BIN")
+  LAUNCH=${LAUNCH//__CODEXBIN__/$CODEX_LAUNCH_BIN}
   CLAUDE_ULTRACODE=
   if [ "$KIND" != secondmate ]; then
     CLAUDE_ULTRACODE=',"ultracode":false'

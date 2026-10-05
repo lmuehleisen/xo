@@ -594,6 +594,29 @@ test_native_ultra_restart_keeps_local_and_remote_profiles() {
   pass "native Ultra survives local restart and the remote restart transport"
 }
 
+test_remote_codex_ultra_refuses_before_persist_or_restart() {
+  local dir out rc
+  dir=$(new_case remote-codex-ultra)
+  setup_remote_case "$dir" sm2 ok
+  printf 'codex gpt-6-astra ultra\n' > "$dir/home/config/secondmate-harness"
+  cat > "$dir/fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+SH
+  chmod +x "$dir/fakebin/codex"
+  cp "$dir/home/state/sm2.meta" "$dir/meta.before"
+  out=$(run_restart "$dir" sm2); rc=$?
+  expect_code 3 "$rc" "unsupported remote Codex Ultra must remain a partial reload: $out"
+  assert_contains "$out" 'only to task workers' "remote Ultra refusal omitted the unsupported kind"
+  assert_contains "$out" 'nudged: sm2:' "remote Ultra should retain the ordinary re-read fallback"
+  assert_no_grep 'fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" "refused Ultra crossed the lifecycle transport"
+  assert_no_grep 'corr=' "$dir/ssh.log" "refused Ultra requested persistence before validating the kind"
+  [ -z "$(find "$dir/home/state/pending-replies" -type f -print 2>/dev/null)" ] \
+    || fail "refused remote Ultra opened a persistence correlation"
+  cmp -s "$dir/meta.before" "$dir/home/state/sm2.meta" || fail "refused remote Ultra changed metadata"
+  pass "remote secondmate Codex Ultra refuses before persist and lifecycle transport"
+}
+
 # --- T9: an unrelated concurrent reply cannot release the persist gate -------
 test_concurrent_reply_cannot_release_persist_gate() {
   local dir out rc state corr rec
@@ -857,6 +880,7 @@ test_unknown_mate_is_accounted_for
 test_refused_restart_falls_back_without_claiming_a_reload
 test_local_restart_uses_the_home_pin_and_reports_what_ran
 test_native_ultra_restart_keeps_local_and_remote_profiles
+test_remote_codex_ultra_refuses_before_persist_or_restart
 test_remote_mate_restarts_over_the_transport_hop
 test_unreachable_host_is_reported_unknown
 test_concurrent_reply_cannot_release_persist_gate

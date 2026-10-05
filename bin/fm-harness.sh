@@ -13,7 +13,7 @@
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
-#        fm-harness.sh validate-native-effort <harness> <model> <effort> [kind]
+#        fm-harness.sh validate-native-effort <harness> <model> <effort> [kind] [codex-bin]
 #                                        Refuse ultra unless Pi/Pi-signed names
 #                                        codex-native/<id>, or direct Codex's
 #                                        installed bundled catalog advertises
@@ -545,7 +545,7 @@ resolve_secondmate_effort() {
 }
 
 validate_native_effort() {
-  local harness=${1:-} model=${2:-} effort=${3:-} kind=${4:-} catalog
+  local harness=${1:-} model=${2:-} effort=${3:-} kind=${4:-} codex_bin=${5:-codex} catalog
   [ "$effort" = ultra ] || return 0
   case "$harness" in
     pi|pi-signed)
@@ -560,7 +560,7 @@ validate_native_effort() {
         echo "error: codex ultra requires an explicit --model" >&2
         return 1
       fi
-      catalog=$(fm_run_timed 15 codex -c 'model_reasoning_effort="ultra"' debug models --bundled </dev/null 2>/dev/null) || {
+      catalog=$(fm_run_timed 15 "$codex_bin" -c 'model_reasoning_effort="ultra"' debug models --bundled </dev/null 2>/dev/null) || {
         echo "error: installed codex cannot verify ultra support (config parser or bundled catalog unavailable)" >&2
         return 1
       }

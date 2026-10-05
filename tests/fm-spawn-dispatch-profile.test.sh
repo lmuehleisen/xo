@@ -64,6 +64,9 @@ case "$*" in
     fi
     ;;
   *'features list'*) printf '%s\n' "${FM_FAKE_CODEX_GOALS:-goals stable true}" ;;
+  *)
+    [ -z "${FM_FAKE_CODEX_WORKER_LOG:-}" ] || printf '%s\n' "$0" "$@" > "$FM_FAKE_CODEX_WORKER_LOG"
+    ;;
 esac
 SH
   cat > "$fakebin/claude" <<'SH'
@@ -1063,7 +1066,7 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
 }
 
 test_codex_ultra_refuses_unproved_support() {
-  local rec id=codex-ultra-unproved out model probe launch
+  local rec id=codex-ultra-unproved out model probe launch pane_bin
   rec=$(make_spawn_case codex-ultra-supported codex "$id")
   read_case_record "$rec"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
@@ -1071,6 +1074,21 @@ test_codex_ultra_refuses_unproved_support() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" 'model_reasoning_effort="ultra"' "direct codex ultra config missing"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+  pane_bin="$CASE_DIR/older-pane-bin"
+  mkdir -p "$pane_bin" "$CASE_DIR/pane-home"
+  cat > "$pane_bin/codex" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_FAKE_OLDER_CODEX_CALLED"
+exit 41
+SH
+  chmod +x "$pane_bin/codex"
+  env PATH="$pane_bin:$PATH" HOME="$CASE_DIR/pane-home" \
+    FM_FAKE_OLDER_CODEX_CALLED="$CASE_DIR/older-codex-called" \
+    FM_FAKE_CODEX_WORKER_LOG="$CASE_DIR/worker-codex.log" \
+    bash -c "$launch" || fail "Ultra launch failed with an older Codex on the pane PATH"
+  [ ! -e "$CASE_DIR/older-codex-called" ] || fail "Ultra launch substituted the pane's unvalidated Codex"
+  [ "$(sed -n '1p' "$CASE_DIR/worker-codex.log")" = "$(CDPATH='' cd -- "$FAKEBIN_DIR" && pwd -P)/codex" ] \
+    || fail "Ultra launch did not execute the Codex binary whose catalog passed validation"
   for model in '' default gpt-6-luna; do
     rec=$(make_spawn_case "codex-ultra-unproved-$RANDOM" codex "$id")
     read_case_record "$rec"

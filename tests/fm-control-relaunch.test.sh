@@ -1144,6 +1144,43 @@ test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop() {
   pass "fm-control relaunch: an adapter unverified for this task kind refuses before the agent is stopped"
 }
 
+test_secondmate_codex_ultra_refuses_before_stop() {
+  local dir home out rc source id=sm-ultra
+  for source in explicit configured; do
+    dir=$(new_case "sm-ultra-$source" "$id")
+    add_ship_task "$dir" "$id" claude
+    home="$dir/home"
+    mkdir -p "$home/config" "$dir/wt/state" "$dir/wt/data" "$dir/wt/bin"
+    printf '%s\n' "$id" > "$dir/wt/.fm-secondmate-home"
+    printf '# agents\n' > "$dir/wt/AGENTS.md"
+    sed 's/^kind=ship$/kind=secondmate/; s/^mode=no-mistakes$/mode=secondmate/' \
+      "$home/state/$id.meta" > "$dir/meta.updated"
+    printf 'home=%s\n' "$dir/wt" >> "$dir/meta.updated"
+    mv "$dir/meta.updated" "$home/state/$id.meta"
+    cat > "$dir/fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+SH
+    chmod +x "$dir/fakebin/codex"
+    cp "$home/state/$id.meta" "$dir/meta.before"
+    cp "$home/data/$id/brief.md" "$dir/brief.before"
+    if [ "$source" = explicit ]; then
+      out=$(run_control "$dir" "$id" relaunch --harness codex --model gpt-6-astra --effort ultra); rc=$?
+    else
+      printf 'codex gpt-6-astra ultra\n' > "$home/config/secondmate-harness"
+      out=$(run_control "$dir" "$id" relaunch); rc=$?
+    fi
+    expect_code 1 "$rc" "$source direct Codex Ultra must refuse before stopping a secondmate: $out"
+    assert_contains "$out" 'only to task workers' "the refusal must identify the unsupported kind"
+    [ "$(cat "$dir/fake/command")" = claude ] || fail "refused Ultra stopped the secondmate"
+    [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "refused Ultra sent lifecycle input"
+    cmp -s "$dir/meta.before" "$home/state/$id.meta" || fail "refused Ultra changed metadata"
+    cmp -s "$dir/brief.before" "$home/data/$id/brief.md" || fail "refused Ultra changed the brief"
+    assert_absent "$home/state/$id.control-relaunch" "refused Ultra opened a relaunch transaction"
+  done
+  pass "secondmate direct Codex Ultra refuses both explicit and configured relaunches before stop"
+}
+
 test_explicit_secondmate_harness_ignores_configured_profile_axes() {
   local dir home out rc
   dir=$(new_case smexplicit sm4)
@@ -2570,6 +2607,7 @@ test_turnend_auth_paths_are_owned_by_the_control_adapter
 test_secondmate_relaunch_picks_up_the_configured_harness_pin
 test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop
 test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop
+test_secondmate_codex_ultra_refuses_before_stop
 test_explicit_secondmate_harness_ignores_configured_profile_axes
 test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
