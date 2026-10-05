@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Supervision host behavior: away outcomes and interrupted turns.
+# Shared fixtures and cases keep the same bounds across the serial suites.
+# shellcheck source=tests/supervision-host-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/supervision-host-helpers.sh"
+
+test_away_wake_is_handled_on_the_engine_and_never_reaches_main
+test_away_turn_without_a_report_hands_the_wake_to_main
+test_return_during_an_engine_turn_hands_its_outcomes_to_main
+test_silent_outcomes_are_not_relayed_when_the_captain_returns
+test_large_turn_relays_an_early_visible_outcome
+test_outcome_lookup_failure_is_not_treated_as_silence
+test_outcome_after_the_return_survives_a_host_killed_at_the_turn_end
+test_next_host_clears_a_turn_its_killed_predecessor_left
+test_report_without_acknowledgement_hands_the_wake_to_main
+test_return_during_a_failed_turn_still_hands_its_outcomes_to_main
+test_incomplete_engine_result_hands_the_wake_to_main
