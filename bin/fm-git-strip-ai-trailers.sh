@@ -241,7 +241,7 @@ install_hooks() {
   # fails.
   if ! git -C "$wt" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     if ! git -C "$wt" config --local --get core.hooksPath >/dev/null 2>&1 ||
-      [ "$(git -C "$wt" config --local --get core.bare 2>/dev/null || true)" = "true" ]; then
+      [ "$(git -C "$wt" config --local --type=bool --get core.bare 2>/dev/null || true)" = "true" ]; then
       echo "error: not a git worktree: $wt" >&2
       return 1
     fi
