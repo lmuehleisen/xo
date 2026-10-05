@@ -1,3 +1,4 @@
+import { v2Plugin } from "./lib/fm-v2-plugin.js";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
@@ -559,3 +560,5 @@ export const FmPrimaryWatchArm = async ({ client, directory, worktree }) => {
     },
   };
 };
+
+export default v2Plugin("firstmate.primary-watch-arm", FmPrimaryWatchArm);

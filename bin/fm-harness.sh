@@ -13,6 +13,7 @@
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
+#        fm-harness.sh validate-opencode      require a supported OpenCode V2 release
 #        fm-harness.sh validate-native-effort <harness> <model> <effort>
 #                                        Refuse ultra unless the harness is pi or
 #                                        pi-signed and the model explicitly names
@@ -551,7 +552,24 @@ validate_native_effort() {
   return 1
 }
 
+# V2 launch and plugin contracts are verified from 2.0.18 onward. Older
+# releases must fail before a worker endpoint or config is created.
+validate_opencode() {
+  local version
+  version=$(opencode --version 2>&1) || {
+    printf 'error: cannot read OpenCode version: %s\n' "$version" >&2
+    return 1
+  }
+  if [[ "$version" =~ ^opencode[[:space:]]v2\.([0-9]+)\.([0-9]+)$ ]] &&
+    { [ "${BASH_REMATCH[1]}" -gt 0 ] || [ "${BASH_REMATCH[2]}" -ge 18 ]; }; then
+    return 0
+  fi
+  printf 'error: OpenCode adapter requires V2 >= 2.0.18; found %s\n' "$version" >&2
+  return 1
+}
+
 case "${1:-}" in
+  validate-opencode) validate_opencode ;;
   validate-native-effort) shift; validate_native_effort "$@" ;;
   ancestry)
     case "${2:-}" in

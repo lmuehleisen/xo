@@ -95,9 +95,11 @@
 #   exception: bin/fm-harness.sh validate-native-effort owns its model scope;
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
 #   OpenCode has no interactive effort flag, so its effort is written as the
-#   build agent's variant, keyed to the resolved model, inside the
-#   OPENCODE_CONFIG_CONTENT JSON its launch already carries (config schema
-#   verified on opencode 1.18.32); without a model the axis is recorded but omitted.
+#   build agent's provider/model#variant reference in OPENCODE_CONFIG_CONTENT,
+#   inherited by its private V2 server; without a model it is recorded but omitted.
+#   OpenCode requires V2 >= 2.0.18 and starts bare with --standalone --auto,
+#   then waits FM_OPENCODE_READY_POLLS (default 60) at FM_OPENCODE_POLL_INTERVAL
+#   (default 0.5 seconds) for an empty composer before guarded brief submission.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -2426,7 +2428,7 @@ launch_command_template() { # <harness> <kind> <permission-flags>
       printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
-  opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+  opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT=__OPENCODECONFIG__ opencode --standalone --auto' ;;
   pi | pi-signed)
     printf '%s' '__PIBIN____PITUIMODE____PIAPPROVE____PIRESUME__'
     if [ "$kind" = secondmate ]; then
@@ -2668,6 +2670,10 @@ case "$ARG3" in
   }
   ;;
 esac
+
+if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  "$FM_ROOT/bin/fm-harness.sh" validate-opencode || exit 1
+fi
 
 # The --agy-bypass and --agy-judge gates (bin/fm-agy-lib.sh).
 fm_agy_bypass_validate
@@ -2965,7 +2971,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-  claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | gemini | muse | rovo | omp | agy | devin)
+  claude | codex | pi | pi-signed | grok | kimi | cursor | gemini | muse | rovo | omp | agy | devin)
     printf -- '--model %s ' "$(shell_quote "$model")"
     ;;
   esac
@@ -3040,33 +3046,13 @@ effort_flag_for_harness() {
     esac
     ;;
   opencode)
-    # opencode's interactive `opencode --prompt` launch has no effort flag
-    # (`opencode run --variant` is a different, non-interactive mode). Its
-    # config schema (opencode 1.18.32, `opencode debug config` / config.json)
-    # carries per-model reasoning effort as agent.<name>.variant, "Default model
-    # variant for this agent (applies only when using the agent's configured
-    # model)", so the effort rides the OPENCODE_CONFIG_CONTENT JSON the launch
-    # already writes: the default build agent is pinned to the resolved model
-    # and the effort named as its variant, which OpenCode resolves against that
-    # model's own variant list. Those lists are per-provider (anthropic/* expose
-    # high|max, openai/* expose low|medium|high|xhigh), so emit the variant only
-    # when the resolved model's provider is known to expose that effort; any
-    # other provider, or an effort outside its family's list, keeps the
-    # permission-only launch and omits the variant (record-and-omit, as codex
-    # and grok do). Without a resolved model the variant has nothing to key to
-    # and is likewise omitted. The fragment lands inside the launch's
-    # single-quoted assignment, so a literal quote in the model id must close and
-    # reopen that quoting.
+    # V2 agent model references carry the variant as provider/model#variant.
+    # The launch config builder below owns JSON and shell quoting.
     [ -n "$model" ] && [ "$model" != default ] || return 0
     case "${model%%/*}:$effort" in
-    anthropic:high | anthropic:max) ;;
-    openai:low | openai:medium | openai:high | openai:xhigh) ;;
-    *) return 0 ;;
+    anthropic:high | anthropic:max | openai:low | openai:medium | openai:high | openai:xhigh)
+      printf '%s' "$effort" ;;
     esac
-    local model_json
-    model_json=$(json_escape "$model")
-    model_json=${model_json//\'/\'\\\'\'}
-    printf ',"agent":{"build":{"model":"%s","variant":"%s"}}' "$model_json" "$effort"
     ;;
   muse)
     # muse 0.1.0-R708.1 --reasoning-effort accepts none|minimal|low|medium|
@@ -5116,18 +5102,20 @@ EOF
     fm_devin_spawn_wire
     ;;
   opencode*)
-    mkdir -p "$WT/.opencode/plugins"
-    cat >"$WT/.opencode/plugins/fm-busy-state.js" <<EOF
+    mkdir -p "$TASK_TMP/opencode-plugin-$BUSY_GEN"
+    printf '%s\n' '{"type":"module","main":"./index.mjs"}' > "$TASK_TMP/opencode-plugin-$BUSY_GEN/package.json"
+    cat >"$TASK_TMP/opencode-plugin-$BUSY_GEN/index.mjs" <<EOF
 // Firstmate semantic busy-state events + turn-end notification; written by
 // fm-spawn under the contract owned by bin/fm-busy-lib.sh.
-// Semantic state comes from OpenCode's session.status events: busy and retry
-// are active, idle is inactive. Scoping latches the first session that
+// The V2 boundary maps public session.execution events to these callbacks:
+// started is active, succeeded/failed/user-interrupted settle it. Scoping latches the first session that
 // reports activity (the worker's main session - a subagent child session can
 // only start while the main session is already busy) and ignores other
 // sessions' status until the latched session settles, so a child's idle can
 // never clear the worker's busy state. The session.idle touch stays the
 // watcher's wake NOTIFICATION, never current-state truth.
 import { execFile } from "node:child_process";
+import { v2Plugin } from "$FM_ROOT/.opencode/plugins/lib/fm-v2-plugin.js";
 const busyEvent = (state, event) =>
   new Promise((resolve) => {
     execFile("$FM_ROOT/bin/fm-busy-event.sh", [
@@ -5154,6 +5142,7 @@ export const FmBusyState = async () => {
         return;
       }
       if (event.type === "session.idle") {
+        if (event.properties.sessionID !== activeSession) return;
         if (event.properties.sessionID === activeSession) {
           activeSession = null;
           await busyEvent("idle", "session-idle");
@@ -5165,8 +5154,8 @@ export const FmBusyState = async () => {
     },
   };
 };
+export default v2Plugin("firstmate.worker-busy", FmBusyState);
 EOF
-    exclude_path '.opencode/plugins/fm-busy-state.js'
     ;;
   pi | pi-signed)
     # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
@@ -5665,6 +5654,18 @@ if [ "$RAW_LAUNCH" -eq 0 ]; then
   EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
   LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
   LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+  if [ "$HARNESS" = opencode ]; then
+    # Config content is the highest-precedence V2 source. --standalone makes
+    # the server inherit this spawn's environment instead of reusing a daemon.
+    # Neither model selection nor plugin installation writes project config.
+    OPENCODECONFIG=$(jq -cn --arg model "$MODEL" --arg variant "$EFFORTFLAG" \
+      --arg plugin "$TASK_TMP/opencode-plugin-${BUSY_GEN:-}" --arg kind "$KIND" '
+      (if $kind == "secondmate" then {} else {plugins:[$plugin]} end) +
+      (if $model == "" or $model == "default" then {} else
+        {model:$model, default_agent:"build", agents:{build:{model:($model +
+          (if $variant == "" then "" else "#" + $variant end))}}} end)') || exit 1
+    LAUNCH=${LAUNCH//__OPENCODECONFIG__/$(shell_quote "$OPENCODECONFIG")}
+  fi
   # Relaunch session continuity. Computed here, where the adopted endpoint (T) is
   # known, and substituted only into the Pi-family template's `__PIRESUME__`
   # placeholder; an empty value leaves every other launch byte-identical.
@@ -6041,6 +6042,34 @@ fi
 # A raw launch command is the whole interaction: the ready gates and typed
 # brief pointers below presume the launch template's session shape, so they
 # do not run on the verbatim path.
+# V2 --prompt can leave its startup draft unsubmitted. Start with an empty
+# composer, then use the same guarded submission path as later steering.
+if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  opencode_ready=0
+  opencode_poll=0
+  while [ "$opencode_poll" -lt "${FM_OPENCODE_READY_POLLS:-60}" ]; do
+    if [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)" = empty ]; then
+      opencode_ready=1
+      break
+    fi
+    opencode_poll=$((opencode_poll + 1))
+    sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
+  done
+  if [ "$opencode_ready" -ne 1 ]; then
+    printf '%s\n' "$(status_stamp_line "failed: OpenCode V2 composer did not become ready in window $T")" >>"$STATE/$ID.status"
+    echo "error: OpenCode V2 composer did not become ready in window $T" >&2
+    exit 1
+  fi
+  OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
+    "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || exit 1
+  OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
+    3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
+  if [ "$OPENCODE_VERDICT" = send-failed ]; then
+    printf '%s\n' "$(status_stamp_line "failed: OpenCode V2 brief submission failed in window $T")" >>"$STATE/$ID.status"
+    echo "error: OpenCode V2 brief submission failed in window $T" >&2
+    exit 1
+  fi
+fi
 if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"

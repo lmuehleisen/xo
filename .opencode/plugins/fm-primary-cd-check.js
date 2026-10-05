@@ -1,3 +1,4 @@
+import { v2Plugin } from "./lib/fm-v2-plugin.js";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -62,3 +63,5 @@ export const FmPrimaryCdCheck = async ({ directory, worktree }) => {
     },
   };
 };
+
+export default v2Plugin("firstmate.primary-cd-check", FmPrimaryCdCheck);

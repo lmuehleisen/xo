@@ -380,11 +380,22 @@ fm_control_endpoint_absence_verdict() {  # <backend> <target>
 # line: worktree-resident hook files and firstmate-owned state tokens only,
 # never a harness's own managed config.
 fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
-  local harness=${1-} wt=${2-} state=${3-} id=${4-}
+  local harness=${1-} wt=${2-} state=${3-} id=${4-} gen
   [ -n "$wt" ] && [ -n "$state" ] && [ -n "$id" ] || return 1
   case "$harness" in
     claude) printf '%s\n' "$wt/.claude/settings.local.json" ;;
-    opencode) printf '%s\n' "$wt/.opencode/plugins/fm-busy-state.js" ;;
+    opencode)
+      printf '%s\n' "$wt/.opencode/plugins/fm-busy-state.js"
+      gen=
+      IFS= read -r gen < "$state/$id.busy-gen" 2>/dev/null || true
+      case "$gen" in
+        ''|*[!A-Za-z0-9.]*) ;;
+        *)
+          printf '%s\n' "/tmp/fm-$id/opencode-plugin-$gen/index.mjs"
+          printf '%s\n' "/tmp/fm-$id/opencode-plugin-$gen/package.json"
+          ;;
+      esac
+      ;;
     pi|pi-signed) printf '%s\n' "$state/$id.pi-ext.ts" ;;
     omp) printf '%s\n' "$state/$id.omp-ext.ts" ;;
     grok)

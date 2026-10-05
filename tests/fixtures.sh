@@ -309,6 +309,13 @@ fm_test_make_spawn_fakebin() {
   fakebin=$(fm_fakebin "$dir")
   fm_test_fake_tmux_spawn "$fakebin"
   fm_fake_exit0 "$fakebin" "$@"
+  cat > "$fakebin/opencode" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "${FM_FAKE_OPENCODE_VERSION:-opencode v2.0.18}"
+fi
+SH
+  chmod +x "$fakebin/opencode"
   fm_fake_treehouse_lease "$fakebin"
   printf '%s\n' "$fakebin"
 }

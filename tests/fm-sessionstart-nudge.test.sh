@@ -197,6 +197,23 @@ await hooks.event({ event });
 await hooks.event({ event });
 if (prompts.length !== 1) throw new Error(`expected one prompt, got ${prompts.length}`);
 if (prompts[0] !== process.env.EXPECTED) throw new Error(`unexpected prompt: ${prompts[0]}`);
+let finished;
+const done = new Promise((resolve) => { finished = resolve; });
+const v2Prompts = [];
+const cleanup = await mod.default.setup({
+  location: { directory: process.env.WORKTREE },
+  session: { prompt: async (input) => { v2Prompts.push(input); } },
+  event: { subscribe: async function* () {
+    try {
+      yield { type: "session.created", data: { sessionID: "v2-session" } };
+      yield { type: "session.created", data: { sessionID: "v2-session" } };
+    } finally { finished(); }
+  } },
+});
+await done;
+await cleanup();
+if (v2Prompts.length !== 1 || v2Prompts[0].sessionID !== "v2-session" || v2Prompts[0].text !== process.env.EXPECTED)
+  throw new Error(`unexpected V2 prompts: ${JSON.stringify(v2Prompts)}`);
 EOF
   ) || status=$?
   expect_code 0 "$status" "OpenCode exact nudge delivery"
