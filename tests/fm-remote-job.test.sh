@@ -1385,9 +1385,12 @@ SCAN_OTHER_ID=$(scan_stage "$SCAN_HOME_B" fm-delay-job.sh 1 "$TMP_ROOT/other-ran
 : > "$SCAN_CHILD_LOG"
 # Direct exec, not "$BASH": the production shebang is /bin/bash, so this lane
 # runs on the stock macOS bash the same way the deployed worker does.
+# Pin this exec-count fixture to 0.05 seconds so its 80-sample scan window fits
+# within the long poll. poll_cadence_case separately proves the default cadence.
 HOME="$SCAN_ACCOUNT" PATH="$QUIET_SHIM:/usr/bin:/bin:/usr/sbin:/sbin" \
   FM_TEST_EXEC_LOG="$SCAN_EXEC_LOG" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
   FM_REMOTE_JOB_STATE_ROOT="$SCAN_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  FM_REMOTE_JOB_ACTIVE_POLL_SECONDS=0.05 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$SCAN_POLL_ID" \
   > "$TMP_ROOT/scan-lane.out" 2> "$TMP_ROOT/scan-lane.err" &
 SCAN_LANE_PID=$!
