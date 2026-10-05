@@ -1,6 +1,7 @@
 # Lavish on a Tailscale address
 
-This record supports the Tailscale viewing path in [`docs/lavish.md`](../lavish.md): `config/lavish-axi-host` names the Firstmate machine's tailnet IPv4 address, and other tailnet devices open the board directly.
+This record supports the Tailscale viewing path in [`docs/lavish.md`](../lavish.md), in which `config/lavish-axi-host` names the Firstmate machine's tailnet IPv4 address so other tailnet devices can open the board directly.
+The checks cover which addresses the server listens on and answers; a fetch from another device is listed under Not covered.
 It was measured on 2026-10-03 with lavish-axi 0.1.80, Tailscale 1.102.4, Node 24.20.0, and macOS 27.0.1 on arm64.
 `$LAB` below is a scratch directory, `<tailnet-ip>` is the address `tailscale ip -4` printed, `<lan-ip>` is the machine's Wi-Fi address, and `<key>` is the session key Lavish printed.
 A spare port and a scratch state directory kept the run apart from the home's own Lavish server.

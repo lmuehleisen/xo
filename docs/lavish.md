@@ -51,25 +51,14 @@ If Lavish is wanted but not installed, Firstmate builds the static board instead
 
 The Lavish server has no login of its own: anyone who can reach its port can read files the account can read and send feedback that looks like yours.
 When the Firstmate machine and your other devices share a Tailscale tailnet, Lavish can listen on the Firstmate machine's tailnet address as well as loopback, and any of your tailnet devices opens the link directly, with no ssh session to keep open.
-Tailscale encrypts the traffic and admits only tailnet devices, but every device the tailnet access policy lets reach the Firstmate machine can reach Lavish, so check that policy before turning this on.
+Tailscale encrypts the traffic and admits only tailnet devices.
 
 ### Who can reach the port
 
 Lavish listens only on the address you name and on loopback, never on the LAN or Wi-Fi address; a LAN address, `0.0.0.0`, or any other non-tailnet address in `config/lavish-axi-host` exposes the server to everything on that network ([`docs/configuration.md`](configuration.md#lavish-server-address-configlavish-axi-host)).
 Never put the port behind Tailscale Funnel, a public `tailscale serve` share, or any other public tunnel.
 
-On the tailnet, the access policy decides which devices reach the port.
-Only your own personal devices should: tagged devices such as peer relays, exit nodes, and servers, nodes shared in from another tailnet, and other users' devices should not.
-`tailscale debug netmap` on the Firstmate machine prints the packet filter that machine enforces, so you can confirm which source addresses may connect.
-A policy test in the tailnet policy file keeps a later policy change from silently widening access, for example:
-
-```json
-"tests": [
-  {"src": "tag:<relay-tag>", "deny": ["<tailnet-address>:4387"]}
-]
-```
-
-The admin console rejects a policy change that would let that source reach the port.
+On the tailnet, every device the tailnet access policy lets reach the Firstmate machine can open the board; `tailscale debug netmap` on that machine prints the packet filter it enforces.
 
 ### One-time setup
 
@@ -77,16 +66,20 @@ The admin console rejects a policy change that would let that source reach the p
 2. Write exactly that address into `config/lavish-axi-host` in the Firstmate home.
 3. Make sure each device you review from has Tailscale installed, signed in to the same tailnet, and connected.
 
-Boards opened after the change use the new address.
-A Lavish server already running keeps its old address until it stops, which it does 30 minutes after the last page disconnects, and a worker launched before the change keeps the old address until it is relaunched.
-Delete the file, or write `127.0.0.1`, to go back to loopback only.
+Boards opened after the change use the new address: the first one replaces a Lavish server already running with one that also listens there, keeping its open sessions.
+A worker launched before the change keeps the old address until it is relaunched.
+To go back to loopback only, delete the file and stop the server with `bin/fm-lavish.sh run stop`, because a running server keeps every address it already serves.
+
+The file is inherited by every second mate home, including one on another machine.
+A home on another machine cannot listen on this machine's tailnet address, so its boards stay on loopback and Lavish reports that the address could not be bound.
 
 ### Each time you review
 
 When Firstmate gives you a Lavish link, such as `http://100.64.0.1:4387/session/0123456789abcdef`, open it unchanged on any of your tailnet devices.
 Annotate or answer, then use Send to Agent; Send & End also ends the review.
 
-If Tailscale is down on the Firstmate machine when the server starts, the server still serves on loopback and keeps retrying the tailnet address until Tailscale is back.
+If Tailscale is down on the Firstmate machine when the server starts, the server still serves on loopback and keeps retrying the tailnet address in the background.
+Boards opened meanwhile get a `127.0.0.1` link, so ask for the board again once Tailscale is back.
 
 ### Troubleshooting over Tailscale
 
@@ -94,7 +87,7 @@ If Tailscale is down on the Firstmate machine when the server starts, the server
 | --- | --- | --- |
 | The browser cannot connect to the `100.x` address | This device or the Firstmate machine is not connected to the tailnet, or the server is not running | Connect Tailscale on both; if it is connected, ask Firstmate to reopen the board |
 | `403 Forbidden` | The link was opened with a hostname other than the address Lavish printed, such as the machine's MagicDNS name | Use the link exactly as printed |
-| The link shows `127.0.0.1` | The board was opened before `config/lavish-axi-host` was set, or by a server that started earlier | Use the ssh path below, or ask Firstmate to reopen the board once that server has stopped |
+| The link shows `127.0.0.1` | The board was opened before `config/lavish-axi-host` was set, or while Tailscale was down on the Firstmate machine | Ask Firstmate to reopen the board, or use the ssh path below |
 
 ### What was and was not tested over Tailscale
 
@@ -105,7 +98,7 @@ These could not be tested without the laptop itself:
 
 - the laptop browser fetching the board over the tailnet, including after the laptop sleeps or changes network;
 - the live update channel and Send to Agent from another device;
-- a connection attempt from a device the access policy should exclude, such as a tagged device.
+- a connection attempt from any other tailnet device.
 
 ## View Lavish pages from another computer over ssh
 
