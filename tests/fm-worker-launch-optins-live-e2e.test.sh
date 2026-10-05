@@ -8,6 +8,8 @@ set -u
 fm_live_gate opt-in FM_WORKER_LAUNCH_OPTINS_LIVE_E2E tmux jq
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
+# shellcheck source=bin/fm-dod-lib.sh
+. "$ROOT/bin/fm-dod-lib.sh"
 LAB=$(fm_test_tmproot fm-worker-launch-optins-live)
 REAL_TMUX=$(command -v tmux)
 export TMUX_TMPDIR="$LAB"
@@ -57,7 +59,13 @@ for harness in claude codex; do
     fm_backend_capture tmux "$target" 100 | grep -q 'Ultracode on' \
       || fail "$harness $version: startup /effort current did not confirm the actual session mode"
   fi
-  verdict=$(fm_backend_send_text_submit tmux "$target" '/goal Your response contains LAUNCH_OPTINS_OK and the goal is complete. Reply exactly LAUNCH_OPTINS_OK, then mark the goal complete. Use only goal lifecycle tools.' 3 0.4 1.2)
+  objective='Your response contains LAUNCH_OPTINS_OK and the goal is complete. Reply exactly LAUNCH_OPTINS_OK, then mark the goal complete. Use only goal lifecycle tools.'
+  if [ "$harness" = codex ]; then
+    role=$(fm_brief_worker_role "$LAB" live-goal)
+    role=${role//$'\n'/ }
+    objective=$(printf '%s' "$role $objective" | "$ROOT/bin/fm-operational-input.sh" encode launch-brief)
+  fi
+  verdict=$(fm_backend_send_text_submit tmux "$target" "/goal $objective" 3 0.4 1.2)
   [ "$verdict" = empty ] || fail "$harness $version: native goal submit unconfirmed ($verdict)"
   activated=0
   completed=0

@@ -1337,7 +1337,7 @@ SH
 }
 
 test_goal_first_native_input() {
-  local harness rec id out launch
+  local harness rec id out launch input envelope role
   for harness in claude codex; do
     id="goal-$harness"
     rec=$(make_spawn_case "$id" "$harness" "$id")
@@ -1352,6 +1352,21 @@ test_goal_first_native_input() {
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
     assert_grep '/goal Reply with smoke.' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
     assert_grep 'launch-brief.md exactly, including its authority and stop/wait gates' "$FAKEBIN_DIR/goal-input" "goal omitted worker contract"
+    if [ "$harness" = codex ]; then
+      input=$(cat "$FAKEBIN_DIR/goal-input")
+      envelope=${input#'/goal '}
+      [ "$(printf '%s' "$envelope" | "$ROOT/bin/fm-operational-input.sh" kind)" = launch-brief ] \
+        || fail "Codex goal lost its authenticated launch-brief carrier"
+      role=$(printf '%s' "$envelope" | "$ROOT/bin/fm-operational-input.sh" body)
+      case "$role" in
+        '# Current worker role contract You are a crewmate:'*) ;;
+        *) fail "Codex goal did not establish worker identity before its objective: $role" ;;
+      esac
+      assert_contains "$role" 'follow this brief instead of that supervisor contract' "Codex goal retained the repository supervisor role"
+      assert_contains "$role" "$HOME_DIR/state/$id.inbox" "Codex goal lost its task-owned steering inbox"
+      assert_contains "$role" 'Reply with smoke.' "Codex worker envelope lost the requested goal"
+      assert_not_contains "$input" $'\n' "native Codex goal input must remain a single line"
+    fi
     assert_grep 'goal=Reply with smoke' "$HOME_DIR/state/$id.meta" "goal metadata missing"
   done
   id=goal-codex-unavailable

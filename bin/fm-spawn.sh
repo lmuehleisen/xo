@@ -109,6 +109,8 @@
 #   The first post-start input carries the condition plus the launch-brief
 #   pointer and stop/wait boundaries (together at most 4000 characters,
 #   excluding the /goal command prefix).
+#   Codex's goal objective carries the canonical launch-brief envelope and
+#   current worker role before that directive; the same length bound applies.
 #   The existing backend composer and submit path owns readiness and delivery;
 #   a new native goal acknowledgement after the pre-submit capture is required
 #   before spawn reports success. A failed goal launch retains its task record
@@ -5675,6 +5677,15 @@ fi
 GOAL_INPUT=
 if [ "$GOAL_SET" = 1 ]; then
   GOAL_DIRECTIVE="$GOAL. Read and follow the launch brief at $BRIEF_REAL exactly, including its authority and stop/wait gates."
+  if [ "$HARNESS" = codex ]; then
+    # Codex has no Claude-style appended system prompt. A bare brief pointer
+    # would let the repository's supervisor contract select the wrong role.
+    # Native /goal stores its argument as the objective, so carry the current
+    # role through the same typed launch-brief owner as ordinary Codex launches.
+    GOAL_ROLE=$(fm_brief_worker_role "$STATE" "$ID") || exit 1
+    GOAL_ROLE=${GOAL_ROLE//$'\n'/ }
+    GOAL_DIRECTIVE=$(printf '%s' "$GOAL_ROLE $GOAL_DIRECTIVE" | "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || exit 1
+  fi
   [ "${#GOAL_DIRECTIVE}" -le 4000 ] || {
     echo "error: --goal plus launch-brief pointer exceeds 4000 characters" >&2
     exit 1

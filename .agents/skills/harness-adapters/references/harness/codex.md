@@ -33,6 +33,7 @@ Discover support from the installed CLI rather than treating that list as a perm
 The initial positional prompt bypasses the native slash parser on 0.160.0: a trivial `/goal` initial prompt produced a response but `/goal` status subsequently reported no goal set.
 The same command typed after startup reported `Goal active Objective:` and completed with `Goal achieved`.
 Therefore an opted-in worker starts without an ordinary initial prompt and receives its native goal as the first input through the existing backend composer and submit path.
+The goal objective carries the canonical launch-brief envelope and current worker role before the task directive; [`fm-spawn.sh`](../../../../../bin/fm-spawn.sh) owns that carrier and its combined length bound.
 The current live composer uses `»`, while transcript prompts retain `›`; the shared composer classifier recognizes both.
 
 [`fm-spawn.sh`](../../../../../bin/fm-spawn.sh) owns the explicit flags, quota posture, condition bounds, brief pointer, refusal behavior, and submission mechanics.
