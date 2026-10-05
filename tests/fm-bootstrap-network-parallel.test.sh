@@ -407,6 +407,7 @@ EOF
 
   # Even when a sibling fails, confirmed published bytes need an immediate
   # reread. Sending it must not erase the outstanding convergence retry.
+  rm -f "$home/state/.secondmate-nudge-pending/sm.pending"
   out=$(
     PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$primary" \
     FM_BOOTSTRAP_NETWORK=only FM_SSH_BIN="$fakebin/fake-ssh" \
