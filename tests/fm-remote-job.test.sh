@@ -179,13 +179,13 @@ SH
     /bin/sleep 0.05
   done
   grep -qx 1 "$FM_POLL_SLEEP_LOG" || fail "$label dispatcher never reached its one-second quiet wait"
-  [ "$(grep -cx "$dispatch" "$FM_POLL_SLEEP_LOG")" -eq 20 ] || fail "$label dispatcher did not limit its fast burst to 20 $dispatch-second waits"
+  [ "$(grep -cx "$dispatch" "$FM_POLL_SLEEP_LOG")" -eq 4 ] || fail "$label dispatcher did not limit its fast burst to four $dispatch-second waits"
   kill -TERM "$pid" || fail "$label dispatcher stopped unexpectedly"
   wait "$pid" 2>/dev/null || true
   pid=''
-  pass "$label: result and command samples use $expected seconds; dispatcher uses 20 $dispatch-second waits then one second"
+  pass "$label: result and command samples use $expected seconds; dispatcher uses four $dispatch-second waits then one second"
 )
-poll_cadence_case default '' '' 0.05 0.05 || exit 1
+poll_cadence_case default '' '' 0.25 0.05 || exit 1
 poll_cadence_case legacy 0.07 '' 0.07 0.07 || exit 1
 poll_cadence_case active 0.07 0.12 0.12 0.07 || exit 1
 

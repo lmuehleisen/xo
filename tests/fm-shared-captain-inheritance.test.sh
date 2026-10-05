@@ -593,10 +593,144 @@ EOF
   pass "session-start digest renders data/captain-shared.md with the shared read-only label"
 }
 
+# Exercise the real sender and receiver through the public remote argv boundary.
+# The lifecycle suite additionally drives this transfer through the job worker.
+test_remote_batch_propagation() {
+  local base primary second fakebin out rc calls_before wire name
+  base="$TMP_ROOT/remote-batch"
+  primary="$base/primary"
+  second="$base/second"
+  fakebin="$base/bin"
+  mkdir -p "$primary/config/publish-guard" "$primary/data" "$second/config" "$second/data" "$fakebin"
+  printf -- '- batch - Fixture (host: batch-host; root: %s; home: %s; scope: test; projects: ; added 2026-10-05)\n' \
+    "$ROOT" "$second" > "$primary/data/secondmates.md"
+  cat > "$fakebin/ssh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
+done
+[ "$1" = batch-host ] && [ "$2" = fm-remote-entrypoint.sh ] && [ "$3" = 1 ] || exit 91
+root=$(printf '%s' "$4" | base64 --decode)
+home=$(printf '%s' "$5" | base64 --decode)
+args=()
+while IFS= read -r -d '' arg; do args+=("$arg"); done < <(printf '%s' "$6" | base64 --decode)
+[ "${args[0]}" = fm-remote-inherit.sh ] && [ "${args[1]}" = batch ] || exit 92
+printf 'batch\n' >> "$FM_BATCH_CALLS"
+cat > "$FM_BATCH_WIRE"
+FM_HOME="$home" exec "$root/bin/fm-remote-inherit.sh" "${args[@]:1}" < "$FM_BATCH_WIRE"
+SH
+  chmod +x "$fakebin/ssh"
+  printf 'pi\n' > "$primary/config/crew-harness"
+  printf 'tmux\n' > "$primary/config/backend"
+  printf 'on\n' > "$primary/config/trace-context"
+  printf 'synthetic publish rule\n' > "$primary/config/publish-guard/allowlist"
+  # Binary bytes and trailing newlines must survive the wire encoding exactly.
+  printf 'opaque\000config\377\n\n' > "$primary/config/crew-dispatch.json"
+  write_shared "$primary/data/captain-shared.md" 'batch shared v1'
+  wire="$base/wire"
+  batch_push() {
+    FM_HOME="$primary" FM_ROOT_OVERRIDE="$ROOT" FM_SSH_BIN="$fakebin/ssh" \
+      FM_BATCH_CALLS="$base/calls" FM_BATCH_WIRE="$wire" \
+      "$ROOT/bin/fm-remote-inherit-push.sh" batch "$1"
+  }
+  out=$(batch_push 1 2>&1) || fail "batch propagation failed: $out"
+  [ "$(wc -l < "$base/calls" | tr -d ' ')" -eq 1 ] || fail "batch propagation used more than one remote call"
+  cmp -s "$primary/config/crew-dispatch.json" "$second/config/crew-dispatch.json" \
+    || fail "batch propagation altered binary/trailing-newline bytes"
+  cmp -s "$primary/config/publish-guard/allowlist" "$second/config/publish-guard/allowlist" \
+    || fail "batch propagation missed nested declared config"
+  assert_shared_readonly "$second/data/captain-shared.md"
+  write_shared "$primary/data/captain-shared.md" 'batch shared v2'
+  out=$(batch_push 2 2>&1) || fail "batch source-only edit failed: $out"
+  [ "$(remote_quarantine_count "$second")" -eq 0 ] || fail "batch quarantined an untouched shared copy"
+  chmod u+w "$second/data/captain-shared.md"
+  printf 'local batch drift\n' >> "$second/data/captain-shared.md"
+  out=$(batch_push 3 2>&1) || fail "batch drift convergence failed: $out"
+  [ "$(remote_quarantine_count "$second")" -eq 1 ] || fail "batch lost shared drift quarantine"
+  assert_shared_readonly "$second/data/captain-shared.md"
+
+  printf 'off\n' > "$primary/config/trace-context"
+  out=$(FM_CONFIG_INHERIT_LIVE=1 batch_push 4 2>&1) || fail "live batch propagation failed: $out"
+  [ "$(cat "$second/config/trace-context")" = on ] || fail "live batch changed session-scoped config"
+  printf 'stale inheritance\n' > "$second/config/dispatch-never-send"
+  rm "$primary/data/captain-shared.md"
+  out=$(batch_push 5 2>&1) || fail "batch absence convergence failed: $out"
+  assert_absent "$second/config/dispatch-never-send" "batch did not mirror config absence"
+  assert_absent "$second/data/captain-shared.md" "batch did not mirror shared-file absence"
+  [ "$(remote_quarantine_count "$second")" -eq 2 ] || fail "batch removed shared bytes without quarantine"
+  [ "$(cat "$second/config/trace-context")" = off ] || fail "launch batch did not converge session config"
+
+  # One unsafe source preserves its destination while siblings on both sides
+  # of it in declaration order still converge, and the transfer reports failure.
+  rm "$primary/config/crew-harness"
+  ln -s missing "$primary/config/crew-harness"
+  printf 'after source failure\n' > "$primary/config/backend"
+  printf 'before source failure\n' > "$primary/config/crew-dispatch.json"
+  out=$(batch_push 6 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "batch source failure should report incomplete convergence: $out"
+  [ "$(cat "$second/config/crew-harness")" = pi ] || fail "batch source failure removed prior bytes"
+  cmp -s "$primary/config/crew-dispatch.json" "$second/config/crew-dispatch.json" || fail "source failure blocked preceding item"
+  cmp -s "$primary/config/backend" "$second/config/backend" || fail "source failure blocked later item"
+  rm "$primary/config/crew-harness"
+  printf 'codex\n' > "$primary/config/crew-harness"
+  rm "$second/config/crew-harness"
+  printf 'protected referent\n' > "$base/referent"
+  ln -s "$base/referent" "$second/config/crew-harness"
+  printf 'after destination failure\n' > "$primary/config/backend"
+  out=$(batch_push 7 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "batch destination failure should report incomplete convergence: $out"
+  [ -L "$second/config/crew-harness" ] || fail "batch replaced an unsafe destination"
+  [ "$(cat "$base/referent")" = 'protected referent' ] || fail "batch wrote through destination symlink"
+  cmp -s "$primary/config/backend" "$second/config/backend" || fail "destination failure blocked later item"
+  rm "$second/config/crew-harness"
+
+  # Structurally valid batch, one wrong digest: keep that item's bytes but apply
+  # other records. Then replay the older generation to prove supersession holds.
+  out=$(batch_push 8 2>&1) || fail "batch failed after removing unsafe destination: $out"
+  cp "$wire" "$base/valid-wire"
+  perl -pe 'if (/^put\tconfig\/crew-harness\t/) { @f=split /\t/; $f[3]="0" x 64; $_=join("\t", @f) }' \
+    "$base/valid-wire" > "$base/bad-digest"
+  printf 'preserved on digest failure\n' > "$second/config/crew-harness"
+  printf 'replace this sibling\n' > "$second/config/backend"
+  out=$(FM_HOME="$second" "$ROOT/bin/fm-remote-inherit.sh" batch 9 launch < "$base/bad-digest" 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "batch wrong digest must report failure: $out"
+  [ "$(cat "$second/config/crew-harness")" = 'preserved on digest failure' ] || fail "bad batch digest published bytes"
+  cmp -s "$primary/config/backend" "$second/config/backend" || fail "bad digest blocked valid sibling"
+  out=$(FM_HOME="$second" "$ROOT/bin/fm-remote-inherit.sh" batch 7 launch < "$base/valid-wire" 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "batch must reject superseded generations: $out"
+  [ "$(cat "$second/config/crew-harness")" = 'preserved on digest failure' ] || fail "superseded batch published bytes"
+
+  # Framing/topology rejection occurs before any per-item write, even when
+  # early records were valid. Exercise truncation, undeclared paths and duplicates.
+  sed '$d' "$base/valid-wire" > "$base/truncated"
+  sed 's|config/backend|config/not-declared|' "$base/valid-wire" > "$base/undeclared"
+  cat "$base/valid-wire" > "$base/duplicate"
+  sed -n '2p' "$base/valid-wire" >> "$base/duplicate"
+  printf 'topology failure sentinel\n' > "$second/config/crew-dispatch.json"
+  for name in truncated undeclared duplicate; do
+    out=$(FM_HOME="$second" "$ROOT/bin/fm-remote-inherit.sh" batch 10 launch < "$base/$name" 2>&1) && rc=0 || rc=$?
+    expect_code 1 "$rc" "batch $name should fail before application: $out"
+    [ "$(cat "$second/config/crew-dispatch.json")" = 'topology failure sentinel' ] || fail "batch $name wrote before topology validation"
+  done
+  head -c 1048577 /dev/zero > "$base/oversized"
+  out=$(FM_HOME="$second" "$ROOT/bin/fm-remote-inherit.sh" batch 10 launch < "$base/oversized" 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "oversized receiver batch should fail: $out"
+  [ "$(cat "$second/config/crew-dispatch.json")" = 'topology failure sentinel' ] || fail "oversized receiver batch mutated destination"
+  calls_before=$(wc -l < "$base/calls" | tr -d ' ')
+  head -c 800000 /dev/zero > "$primary/config/crew-dispatch.json"
+  out=$(batch_push 10 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "oversized sender batch should fail: $out"
+  [ "$(wc -l < "$base/calls" | tr -d ' ')" -eq "$calls_before" ] || fail "oversized batch reached remote transport"
+  unset -f batch_push
+  pass "remote batch preserves bytes, per-item failures, generations, quarantine, live scope and bounded topology in one call"
+}
+
 test_first_copy_readonly_and_local_files_preserved
 test_true_divergence_after_inherit_still_quarantines
 test_interrupted_publication_matching_source_does_not_quarantine
 test_remote_receiver_accepts_source_only_edit_without_quarantine
+test_remote_batch_propagation
 test_drift_quarantine_collision_and_repeated_convergence
 test_missing_source_mirrors_absence_without_losing_local_bytes
 test_unsafe_artifacts_and_failure_restore_readonly_mode

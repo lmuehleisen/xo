@@ -355,13 +355,13 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-tmux-submit-busy.test.sh`; `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-control-relaunch.test.sh`.
 - Upstream: does not prove these shell submissions or complete the same late-start transaction; drop once equivalent.
 
-### remote-job-recovery-latency
+### remote-inheritance-batch
 
-- Intent: preserve prompt remote recovery across sequential inheritance jobs without increasing the lifecycle guard's recovery bound.
+- Intent: converge all declared inherited material in one remote job while retaining per-item validation and partial-failure recovery.
 - Class: carried.
-- Seam: the 0.05-second active/result default in `bin/fm-remote-job-lib.sh` and the 20-pass post-activity dispatcher burst in `bin/fm-remote-job-worker.sh`.
-- Guard: `tests/fm-remote-job.test.sh` default/override cadence and idle-worker cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` watcher recovery case with its unchanged bound.
-- Upstream: uses 0.25-second active/result sampling and a four-pass burst; retain the fork's prior defaults at the cost of more sampling during activity, while taking upstream's bounded builtin reads and other polling reductions, until an equivalent preserves the recovery guard.
+- Seam: batch framing and complete-declaration validation in `bin/fm-config-inherit-lib.sh`, snapshot staging in `bin/fm-remote-inherit-push.sh`, and batch dispatch through the existing item receiver in `bin/fm-remote-inherit.sh`; remote-job polling uses upstream defaults.
+- Guard: `tests/fm-shared-captain-inheritance.test.sh` batch byte, failure, quarantine, generation and topology cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` one-job transfer and watcher recovery with its unchanged bound.
+- Upstream: stages one remote job per inherited item; drop once equivalent batching preserves these convergence guarantees.
 
 ### isolated-test-cleanup
 
