@@ -3348,6 +3348,8 @@ test_opencode_plugin_package_boundary_is_explicit_esm() {
   mkdir -p "$fixture/plugins/lib"
   printf '%s\n' '{"dependencies":{}}' > "$fixture/package.json"
   cp "$ROOT/.opencode/plugins/package.json" "$fixture/plugins/package.json"
+  mkdir -p "$fixture/plugins/lib"
+  cp "$ROOT/.opencode/plugins/lib/fm-v2-plugin.js" "$fixture/plugins/lib/"
   cp "$ROOT/.opencode/plugins/fm-primary-watch-arm.js" "$plugin"
   cp "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$fixture/plugins/lib/fm-operational-input.js"
   out=$(PLUGIN="$plugin" node --input-type=module 2>&1 <<'EOF'

@@ -869,3 +869,19 @@ Observed output:
 ```
 
 The safe command-channel contract is covered without a notification by `tests/fm-daemon.test.sh`: the summary reaches both `$1` and stdin, every channel is process-group bounded, and a failed channel falls through.
+
+### OpenCode V2 turn end
+
+Verified on 2026-10-05 with `opencode v2.0.18` and `opencode/muse-spark-1.3-contributor-free`.
+Run `FM_OPENCODE_LIVE_E2E=1 bash tests/fm-opencode-primary-live-e2e.test.sh` to refresh.
+The V2 branch copies the actual primary turn-end plugin and its adapter into an independent scratch repository.
+A fixture shell guard returns 2 once, and the real plugin subscribes to execution settlement and submits a follow-up through `ctx.session.prompt`.
+The model executes the requested marker write in that follow-up; this verifies event delivery and the public prompt API rather than only a mocked callback.
+
+```text
+ok - opencode v2.0.18: primary turn-end plugin submitted a V2 follow-up
+```
+
+This isolated guard verifies one forced follow-up and abortable subscription setup.
+It does not claim a live primary fleet watcher cycle, native session resume, or non-tmux backend coverage.
+Portable callback and module-boundary regressions remain in `tests/fm-pi-watch-extension.test.sh` and `tests/fm-sessionstart-nudge.test.sh`.

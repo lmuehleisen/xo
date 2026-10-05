@@ -1517,17 +1517,20 @@ _fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
   fm_composer_normalize_trim_var floor
   # The full-width half-block floor bounds V2's composer independently of its
   # sidebar. Short legacy fixture floors cannot establish a column boundary.
-  if _fm_composer_leftbar_floor_row "$floor" && [ "${#floor}" -ge 40 ]; then
-    width=${#floor}
+  if _fm_composer_leftbar_floor_row "$floor"; then
+    # Count terminal cells without depending on the caller's multibyte locale.
+    floor=${floor//▀/ }
+    floor=${floor//╹/ }
+    [ "${#floor}" -lt 40 ] || width=${#floor}
   fi
   row=$first
   while [ "$row" -le "$last" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")
     content=$(_fm_composer_row_content "$raw" "$styled")
-    [ "$width" -eq 0 ] || content=${content:0:width}
     case "$content" in
       '┃'*) content=${content#┃} ;;
     esac
+    [ "$width" -eq 0 ] || content=${content:0:$((width - 1))}
     fm_composer_normalize_trim_var content
     if [ -z "$content" ]; then row=$((row + 1)); continue; fi
     if [ "$leading_blank" = 1 ] && [ "$row" -gt "$first" ]; then

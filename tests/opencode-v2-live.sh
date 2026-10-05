@@ -128,3 +128,34 @@ wait_file_text "$FM_HOME/state/probe-proof" 'relaunched'
 wait_idle
 bash "$ROOT/bin/fm-control.sh" "$ID" exit
 pass "$VERSION: requested model, brief, busy/idle, turn-end, composer, durable steer, interrupt, exit and relaunch"
+
+# Exercise the real primary turn-end plugin's V2 prompt API independently of
+# fleet supervision. Only the shell guard is a fixture: it requests one follow-up.
+PRIMARY="$LAB/primary"
+mkdir -p "$PRIMARY/bin" "$PRIMARY/.opencode/plugins/lib"
+git -C "$PRIMARY" init -q
+cp "$ROOT/.opencode/plugins/fm-primary-turnend-guard.js" "$ROOT/.opencode/plugins/package.json" "$PRIMARY/.opencode/plugins/"
+cp "$ROOT/.opencode/plugins/lib/fm-v2-plugin.js" "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$PRIMARY/.opencode/plugins/lib/"
+cp "$ROOT/bin/fm-operational-input.sh" "$PRIMARY/bin/"
+cat > "$PRIMARY/bin/fm-turnend-guard.sh" <<SH
+#!/usr/bin/env bash
+if [ -f '$LAB/primary-guard-fired' ]; then exit 0; fi
+touch '$LAB/primary-guard-fired'
+echo "Run printf 'PRIMARY_FOLLOWUP_OK\\n' >> '$LAB/primary-proof', then stop." >&2
+exit 2
+SH
+chmod +x "$PRIMARY/bin/"*.sh
+CONFIG=$(jq -cn --arg model "$MODEL" '{model:$model,agents:{build:{model:$model}}}')
+OPENCODE_CONFIG_CONTENT="$CONFIG" tmux new-window -t probe -n primary -c "$PRIMARY" \
+  "OPENCODE_CONFIG_CONTENT='$CONFIG' opencode --standalone --auto"
+TARGET=probe:primary
+i=0
+while [ "$i" -lt 90 ]; do
+  [ "$(fm_backend_composer_state tmux "$TARGET")" != empty ] || break
+  i=$((i + 1)); sleep 0.5
+done
+[ "$i" -lt 90 ] || fail "$VERSION: primary composer did not become ready"
+PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Reply PRIMARY_READY and stop.' 3 0.5 0)
+[ "$PRIMARY_VERDICT" != send-failed ] || fail "$VERSION: primary prompt submission failed"
+wait_file_text "$LAB/primary-proof" PRIMARY_FOLLOWUP_OK
+pass "$VERSION: primary turn-end plugin submitted a V2 follow-up"

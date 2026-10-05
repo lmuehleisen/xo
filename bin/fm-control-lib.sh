@@ -387,7 +387,9 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
     opencode)
       printf '%s\n' "$wt/.opencode/plugins/fm-busy-state.js"
       gen=
-      IFS= read -r gen < "$state/$id.busy-gen" 2>/dev/null || true
+      if [ -f "$state/$id.busy-gen" ]; then
+        IFS= read -r gen < "$state/$id.busy-gen" || true
+      fi
       case "$gen" in
         ''|*[!A-Za-z0-9.]*) ;;
         *)
