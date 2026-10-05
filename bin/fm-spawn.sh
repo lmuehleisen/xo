@@ -4882,7 +4882,9 @@ task_launch_optin_cleanup() { # <detail>
   # Only positive endpoint absence restores the provisional rollback path.
   SPAWN_FRESH_COMMIT_PENDING=0
   SPAWN_OPTIN_CLEANUP_DONE=1
-  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  if ! printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"; then
+    echo "warning: could not record failed opt-in activation status for $ID" >&2
+  fi
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
     SPAWN_FRESH_COMMIT_PENDING=1

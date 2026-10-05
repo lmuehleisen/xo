@@ -610,9 +610,10 @@ SH
   assert_contains "$out" 'only to task workers' "remote Ultra refusal omitted the unsupported kind"
   assert_contains "$out" 'nudged: sm2:' "remote Ultra should retain the ordinary re-read fallback"
   assert_no_grep 'fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" "refused Ultra crossed the lifecycle transport"
-  assert_no_grep 'corr=' "$dir/ssh.log" "refused Ultra requested persistence before validating the kind"
-  [ -z "$(find "$dir/home/state/pending-replies" -type f -print 2>/dev/null)" ] \
-    || fail "refused remote Ultra opened a persistence correlation"
+  # Remote text delivery correlates even an ordinary nudge. Only that nudge
+  # should cross the transport; no earlier persistence request may be sent.
+  [ "$(grep -c '^fm-remote-secondmate-control.sh send ' "$dir/ssh.log")" = 1 ] \
+    || fail "refused remote Ultra sent a persistence request before its fallback nudge"
   cmp -s "$dir/meta.before" "$dir/home/state/sm2.meta" || fail "refused remote Ultra changed metadata"
   pass "remote secondmate Codex Ultra refuses before persist and lifecycle transport"
 }

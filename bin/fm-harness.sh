@@ -22,6 +22,8 @@
 #                                        kind=secondmate refuses direct Codex
 #                                        ultra before probing. Other efforts
 #                                        retain their policy.
+#                                        codex-bin selects the exact executable;
+#                                        default: codex resolved from PATH.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.

@@ -1264,6 +1264,14 @@ if [ "${1:-}" = capture-pane ]; then
     for generation in "$FM_STATE_OVERRIDE"/*.busy-gen; do
       [ ! -f "$generation" ] || cp "$generation" "$dir/busy-generation-before"
     done
+    if [ "${FM_FAKE_GOAL_STATUS_FAIL:-0}" = 1 ]; then
+      # A directory refuses append even when the runner is root.
+      for meta in "$FM_STATE_OVERRIDE"/*.meta; do
+        [ -f "$meta" ] || continue
+        rm -f "${meta%.meta}.status"
+        mkdir -p "${meta%.meta}.status"
+      done
+    fi
     : > "$dir/signal-sent"
     kill -"${FM_FAKE_GOAL_SIGNAL:-TERM}" "$launcher" || exit 1
   fi
@@ -1417,22 +1425,22 @@ test_goal_prompt_echo_is_not_an_acknowledgement() {
 }
 
 test_interrupted_launch_optins_preserve_endpoint_ownership() {
-  local rec id out scenario harness phase signal unknown expected optin status
-  for scenario in 'codex before TERM 1' 'codex after HUP 0' 'claude before HUP 0' 'claude after TERM 1' 'ultracode before TERM 1'; do
-    read -r harness phase signal unknown <<< "$scenario"
+  local rec id out scenario harness phase signal unknown expected optin status status_fail
+  for scenario in 'codex before TERM 1 0' 'codex after HUP 0 0' 'claude before HUP 0 0' 'claude after TERM 1 0' 'ultracode before TERM 1 0' 'claude before TERM 0 1' 'codex after HUP 1 1'; do
+    read -r harness phase signal unknown status_fail <<< "$scenario"
     optin=goal
     if [ "$harness" = ultracode ]; then harness=claude; optin=ultracode; fi
-    id="interrupt-$optin-$harness-$phase"
+    id="interrupt-$optin-$harness-$phase-$status_fail"
     rec=$(make_spawn_case "$id" "$harness" "$id")
     read_case_record "$rec"
     goal_pane_fixture
     printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
     if [ "$optin" = goal ]; then
-      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown \
+      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown FM_FAKE_GOAL_STATUS_FAIL=$status_fail \
         run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
       status=$?
     else
-      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown \
+      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown FM_FAKE_GOAL_STATUS_FAIL=$status_fail \
         run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode 2>&1)
       status=$?
       assert_not_contains "$(cat "$LAUNCH_LOG")" 'FIRSTMATE_OP: v1 operational-input' "interrupted mode verification delivered its task brief"
@@ -1441,6 +1449,7 @@ test_interrupted_launch_optins_preserve_endpoint_ownership() {
     expect_code "$expected" "$status" "interrupted opt-in launch must retain its signal status: $scenario $out"
     [ -f "$FAKEBIN_DIR/signal-sent" ] || fail "the launcher was not signalled"
     [ -f "$FAKEBIN_DIR/endpoint-kill-attempted" ] || fail "the interrupted launcher did not try to close its exact endpoint"
+    [ "$status_fail" = 0 ] || assert_contains "$out" 'warning: could not record failed opt-in activation status' "failed status append did not report its warning"
     if [ "$harness" = claude ]; then
       [ -f "$FAKEBIN_DIR/busy-generation-before" ] || fail "the Claude interruption case did not arm a busy generation"
     fi
@@ -2237,7 +2246,7 @@ test_codex_template_drift_refuses_launch() {
         copy="$CASE_DIR/root"
         mkdir -p "$copy"
         cp -R "$real_root/bin" "$real_root/.agents" "$copy/"
-        sed -e "/printf '%s' 'codex __MODELFLAG__/$drift" "$real_root/bin/fm-spawn.sh" > "$copy/bin/fm-spawn.sh"
+        sed -e "/printf '%s' '__CODEXBIN__ __MODELFLAG__/$drift" "$real_root/bin/fm-spawn.sh" > "$copy/bin/fm-spawn.sh"
         ! cmp -s "$real_root/bin/fm-spawn.sh" "$copy/bin/fm-spawn.sh" || fail "drift $n did not change the template"
         printf '%s\n' "$mode" > "$HOME_DIR/config/crew-permissions"
         if [ "$kind" = secondmate ]; then
