@@ -1153,7 +1153,7 @@ goal_pane_fixture() {
 dir=$(dirname "$0")
 if [ "${1:-}" = new-window ]; then
   # Each batch task starts in its own fresh composer.
-  rm -f "$dir/goal-input" "$dir/mode-launched"
+  rm -f "$dir/goal-input" "$dir/mode-launched" "$dir/optin-launched"
 fi
 case "$*" in
   *'#{cursor_y}'*)
@@ -1170,7 +1170,7 @@ esac
 if [ "${FM_FAKE_GOAL_CLOSE_FAIL:-0}" = 1 ]; then
   case "${1:-}" in
     kill-window) exit 1 ;;
-    list-windows) [ ! -f "$dir/goal-input" ] || { printf 'inventory unavailable\n' >&2; exit 1; } ;;
+    list-windows) [ ! -f "$dir/optin-launched" ] || { printf 'inventory unavailable\n' >&2; exit 1; } ;;
   esac
 fi
 prior_ack() {
@@ -1183,6 +1183,24 @@ prior_ack() {
   fi
 }
 if [ "${1:-}" = capture-pane ]; then
+  phase=${FM_FAKE_GOAL_SIGNAL_PHASE:-}
+  if [ -n "$phase" ] && [ -f "$dir/optin-launched" ] && [ ! -f "$dir/signal-sent" ] &&
+    { { [ "$phase" = before ] && [ ! -f "$dir/goal-input" ]; } ||
+      { [ "$phase" = after ] && [ -f "$dir/goal-input" ]; }; }; then
+    # Locate only the launcher of this synthetic pane, including capture
+    # subshells, so the signal exercises its actual EXIT cleanup.
+    pid=$PPID
+    launcher=
+    for _ in $(seq 1 12); do
+      case "$pid" in ''|*[!0-9]*|0|1) break ;; esac
+      command=$(ps -o args= -p "$pid")
+      case "$command" in *'/bin/fm-spawn.sh '*) launcher=$pid ;; esac
+      pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+    done
+    [ -n "$launcher" ] || exit 1
+    : > "$dir/signal-sent"
+    kill -"${FM_FAKE_GOAL_SIGNAL:-TERM}" "$launcher" || exit 1
+  fi
   [ ! -f "$dir/mode-launched" ] || printf 'Current effort level: high · %s\n' "${FM_FAKE_CLAUDE_ULTRACODE_RUNTIME:-Ultracode on}"
   if [ "${FM_FAKE_GOAL_ECHO:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then
     if [ "${FM_FAKE_GOAL_ECHO_WRAP:-0}" = 1 ]; then
@@ -1224,6 +1242,7 @@ if [ "${1:-}" = send-keys ]; then
       ". '"*"'")
         staged=${arg#". '"}
         staged=${staged%"'"}
+        : > "$dir/optin-launched"
         if grep -Fq "'/effort current'" "$staged"; then : > "$dir/mode-launched"; fi
         ;;
     esac
@@ -1329,6 +1348,40 @@ test_goal_prompt_echo_is_not_an_acknowledgement() {
     done
   done
   pass "echoed goal text cannot substitute for a native acknowledgement"
+}
+
+test_interrupted_launch_optins_preserve_endpoint_ownership() {
+  local rec id out scenario harness phase signal unknown expected optin status
+  for scenario in 'codex before TERM 1' 'codex after HUP 0' 'claude before HUP 0' 'claude after TERM 1' 'ultracode before TERM 1'; do
+    read -r harness phase signal unknown <<< "$scenario"
+    optin=goal
+    if [ "$harness" = ultracode ]; then harness=claude; optin=ultracode; fi
+    id="interrupt-$optin-$harness-$phase"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    if [ "$optin" = goal ]; then
+      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+      status=$?
+    else
+      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode 2>&1)
+      status=$?
+      assert_not_contains "$(cat "$LAUNCH_LOG")" 'FIRSTMATE_OP: v1 operational-input' "interrupted mode verification delivered its task brief"
+    fi
+    if [ "$signal" = TERM ]; then expected=143; else expected=129; fi
+    expect_code "$expected" "$status" "interrupted opt-in launch must retain its signal status: $scenario $out"
+    [ -f "$FAKEBIN_DIR/signal-sent" ] || fail "the launcher was not signalled"
+    if [ "$unknown" = 1 ]; then
+      [ -f "$HOME_DIR/state/$id.meta" ] || fail "an interrupted launch erased ownership of an unconfirmed endpoint: $scenario $out"
+      [ -f "$HOME_DIR/state/$id.busy-gen" ] || fail "an interrupted launch retired its busy generation"
+    else
+      [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a positively absent interrupted endpoint kept its provisional record"
+    fi
+  done
+  pass "interrupted mode and goal launches preserve ownership until endpoint absence is proven"
 }
 
 test_task_optins_refuse_wrong_surfaces() {
@@ -2680,6 +2733,7 @@ test_claude_ultracode_optin
 test_goal_first_native_input
 test_goal_acknowledgement_is_fresh_and_failure_stays_owned
 test_goal_prompt_echo_is_not_an_acknowledgement
+test_interrupted_launch_optins_preserve_endpoint_ownership
 test_task_optins_refuse_wrong_surfaces
 test_goal_directive_exact_boundary
 test_batch_preserves_native_ultra
