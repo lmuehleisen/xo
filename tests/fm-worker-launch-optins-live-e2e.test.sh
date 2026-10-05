@@ -34,7 +34,7 @@ for harness in claude codex; do
     probe=$(claude -p --settings '{"ultracode":true}' --output-format json '/effort current')
     printf '%s\n' "$probe" | jq -e '.local_command == "effort" and (.result | contains("Ultracode on")) and .num_turns == 0' >/dev/null \
       || fail "$harness $version: ultracode probe failed"
-    args=(env -u CLAUDECODE CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --permission-mode auto --settings '{"ultracode":true}')
+    args=(env -u CLAUDECODE CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --permission-mode auto --settings '{"ultracode":true}' '/effort current')
   else
     model=${FM_WORKER_LAUNCH_OPTINS_CODEX_MODEL:-gpt-6.1-sol}
     "$ROOT/bin/fm-harness.sh" validate-native-effort codex "$model" ultra || fail "$harness $version: ultra validation failed"
@@ -53,6 +53,10 @@ for harness in claude codex; do
     sleep 0.5
   done
   [ "$ready" = 1 ] || fail "$harness $version: no empty composer (check workspace/hook trust)"
+  if [ "$harness" = claude ]; then
+    fm_backend_capture tmux "$target" 100 | grep -q 'Ultracode on' \
+      || fail "$harness $version: startup /effort current did not confirm the actual session mode"
+  fi
   verdict=$(fm_backend_send_text_submit tmux "$target" '/goal Your response contains LAUNCH_OPTINS_OK and the goal is complete. Reply exactly LAUNCH_OPTINS_OK, then mark the goal complete. Use only goal lifecycle tools.' 3 0.4 1.2)
   [ "$verdict" = empty ] || fail "$harness $version: native goal submit unconfirmed ($verdict)"
   activated=0

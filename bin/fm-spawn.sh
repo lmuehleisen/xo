@@ -96,10 +96,12 @@
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
 #   Direct Codex receives -c model_reasoning_effort="ultra" only when the
 #   installed CLI parser and bundled model catalog prove support.
+#   This direct-Codex extension applies only to task workers, not secondmates.
 #   --ultracode opts a Claude task worker into dynamic workflow orchestration
 #   via session-only --settings JSON, independently of --effort. It requires
-#   Claude Code 2.1.289 or newer and a zero-token /effort current probe proving
-#   Ultracode on for the selected model/settings. Unsupported requests refuse.
+#   Claude Code 2.1.289 or newer. Its initial zero-token /effort current
+#   command must freshly confirm Ultracode on in the actual worker session
+#   before any task input is delivered. Unsupported requests refuse.
 #   --goal <condition> opts a Claude or Codex task worker into the native /goal
 #   command. It is a single nonempty line, not a skill or a CLI goal flag.
 #   The first post-start input carries the condition plus the launch-brief
@@ -108,6 +110,7 @@
 #   a new native goal acknowledgement after the pre-submit capture is required
 #   before spawn reports success. A failed goal launch retains its task record
 #   and busy generation unless endpoint absence is positively confirmed.
+#   The same ownership-preserving failure path covers ultracode activation.
 #   These two flags refuse secondmates, relaunches, and raw commands.
 #   They are never inferred from a brief or profile.
 #   Ultra and ultracode spend substantially more quota: use only on the
@@ -2821,6 +2824,10 @@ fi
 # Ultra is an explicit native capability, never a Pi thinking-level alias.
 # Validate the fully resolved profile before worktree or endpoint provisioning.
 if [ "$EFFORT" = ultra ]; then
+  if [ "$HARNESS" = codex ] && [ "$KIND" = secondmate ]; then
+    echo "error: direct Codex ultra applies only to task workers, not secondmates" >&2
+    exit 1
+  fi
   [ "$RAW_LAUNCH" = 0 ] || {
     echo "error: --effort ultra requires the canonical --harness pi or pi-signed or codex launch so its native flag cannot be omitted" >&2
     exit 1
@@ -2858,16 +2865,10 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
 fi
 
 task_launch_optins_validate() {
-  local version probe probe_args=() probe_env=(env -u CLAUDECODE)
+  local version probe
   [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ] || return 0
   if [ "$HARNESS" = claude ]; then
-    if [ -n "$WORKER_ACCOUNT" ]; then
-      # The resolved root is already exported (or unset for ordinary). Use
-      # the launch's own credential-shedding prefix for the probe as well.
-      read -r -a probe_env <<< "$(fm_worker_account_claude_shed)"
-      probe_env+=(-u CLAUDECODE)
-    fi
-    version=$(fm_run_timed 15 "${probe_env[@]}" claude --version </dev/null 2>/dev/null) || version=
+    version=$(fm_run_timed 15 env -u CLAUDECODE claude --version </dev/null 2>/dev/null) || version=
     if ! printf '%s\n' "$version" | awk -F '[. ]' '
       $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
         if ($1 > 2 || ($1 == 2 && ($2 > 1 || ($2 == 1 && $3 >= 289)))) ok=1
@@ -2875,19 +2876,6 @@ task_launch_optins_validate() {
     '; then
       echo "error: task launch opt-ins require verified Claude Code 2.1.289 or newer" >&2
       return 1
-    fi
-    [ -z "$MODEL" ] || [ "$MODEL" = default ] || probe_args+=(--model "$MODEL")
-    [ -z "$EFFORT" ] || probe_args+=(--effort "$EFFORT")
-    if [ "$ULTRACODE" = 1 ]; then
-      probe=$(fm_run_timed 15 "${probe_env[@]}" claude -p --output-format json --settings '{"ultracode":true}' \
-        "${probe_args[@]+"${probe_args[@]}"}" '/effort current' </dev/null 2>/dev/null) || probe=
-      if ! printf '%s\n' "$probe" | jq -e '
-        .is_error == false and .local_command == "effort" and
-        (.result | contains("Ultracode on")) and .num_turns == 0
-      ' >/dev/null 2>&1; then
-        echo "error: installed Claude did not confirm Ultracode on for the selected model/settings" >&2
-        return 1
-      fi
     fi
   elif [ "$GOAL_SET" = 1 ]; then
     probe=$(fm_run_timed 15 codex --enable goals features list </dev/null 2>/dev/null) || probe=
@@ -3567,8 +3555,9 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-# Account and project resolution precede the probe so Claude checks the store
-# and project settings it will use, before acquiring a worktree or endpoint.
+# Account and project resolution precede CLI preflight. Ultracode capability
+# is verified inside the launched session, whose ambient credentials and
+# project-local settings can differ from this spawning process.
 if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
   (cd "$PROJ_ABS" && task_launch_optins_validate) || exit 1
 fi
@@ -4836,7 +4825,7 @@ spawn_delivery_endpoint_cleanup() {
 # occurrence counts keeps reordered or scrolled retained output from proving
 # activation, even when a backend reuses presentation history. A matching
 # fragment of the submitted input is an echo, including wrapped prompt rows.
-task_goal_ack_is_new() { # <before> <after> <pattern> <submitted-input>
+task_native_ack_is_new() { # <before> <after> <pattern> <submitted-input>
   awk -v pattern="$3" '
     FILENAME == ARGV[1] { seen[$0]++; next }
     FILENAME == ARGV[2] { input=$0; next }
@@ -4848,6 +4837,38 @@ task_goal_ack_is_new() { # <before> <after> <pattern> <submitted-input>
     }
     END { exit !found }
   ' <(printf '%s\n' "$1") <(printf '%s\n' "$4") <(printf '%s\n' "$2")
+}
+
+task_ultracode_start() {
+  local pane verdict i
+  for i in $(seq 1 60); do
+    pane=$(fm_backend_capture "$BACKEND" "$T" 100 "$W") || pane=
+    if task_native_ack_is_new "$ULTRACODE_BEFORE" "$pane" 'Ultracode on' '/effort current' &&
+      [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W")" = empty ]; then
+      # A goal remains the first post-start input when both modes are opted
+      # in. Otherwise deliver the withheld launch-brief doorbell now.
+      if [ "$GOAL_SET" = 0 ]; then
+        verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$CLAUDE_TASK_DOORBELL" 3 0.4 1.2 "$W") || return 1
+        [ "$verdict" = empty ] || { echo "error: ultracode launch brief submission was not confirmed ($verdict)" >&2; return 1; }
+      fi
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "error: Claude worker did not freshly confirm Ultracode on before task delivery; inspect $T" >&2
+  return 1
+}
+
+task_launch_optin_fail() { # <detail>
+  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  spawn_delivery_endpoint_cleanup
+  if ! spawn_endpoint_proven_absent; then
+    # An opt-in may have activated despite an unreadable acknowledgement.
+    # Keep ownership until guarded teardown proves the endpoint is gone.
+    SPAWN_FRESH_COMMIT_PENDING=0
+    echo "error: $1 and endpoint shutdown is unconfirmed; retaining task record $STATE/$ID.meta and worktree for recovery" >&2
+  fi
+  exit 1
 }
 
 # Opted-in goals launch with no user prompt, so native /goal is the first
@@ -4870,8 +4891,8 @@ task_goal_start() {
     pane=$(fm_backend_capture "$BACKEND" "$T" 100 "$W") || pane=
     # These are CLI-local acknowledgements, not the model's ordinary reply.
     case "$HARNESS" in
-      claude) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' "$input" && return 0 ;;
-      codex) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]' "$input" && return 0 ;;
+      claude) task_native_ack_is_new "$before" "$pane" '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' "$input" && return 0 ;;
+      codex) task_native_ack_is_new "$before" "$pane" '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]' "$input" && return 0 ;;
     esac
     sleep 0.5
   done
@@ -5911,7 +5932,10 @@ esac
     echo "error: could not publish the launch brief for $ID as an operational-inbox record under $brief_opstate; $HARNESS strips the typed operational marker, so the worker was not launched" >&2
     exit 1
   }
-  if [ "$GOAL_SET" = 1 ]; then
+  CLAUDE_TASK_DOORBELL=$brief_doorbell
+  if [ "$ULTRACODE" = 1 ]; then
+    LAUNCH=${LAUNCH//__BRIEFDOORBELL__/"$(shell_quote '/effort current')"}
+  elif [ "$GOAL_SET" = 1 ]; then
     LAUNCH=${LAUNCH//__BRIEFDOORBELL__/}
   else
     LAUNCH=${LAUNCH//__BRIEFDOORBELL__/"$(shell_quote "$brief_doorbell")"}
@@ -6187,6 +6211,13 @@ fi
 # The pane receives only the short source line for the staged launch file,
 # so that line is also what the tmux Enter recovery below proves it owns.
 LAUNCH_TYPED=". $(shell_quote "$LAUNCH_FILE")"
+ULTRACODE_BEFORE=
+if [ "$ULTRACODE" = 1 ]; then
+  ULTRACODE_BEFORE=$(fm_backend_capture "$BACKEND" "$T" 100 "$W") || {
+    echo "error: Claude ultracode pre-launch capture failed; refusing an unverifiable mode launch" >&2
+    exit 1
+  }
+fi
 # Launch delivery begins: from here a worker may run in the slot, so the
 # per-harness gates below own any failure and nothing is rolled back blindly.
 SPAWN_PRELAUNCH_ENDPOINT=0
@@ -6263,19 +6294,11 @@ if [ "$HARNESS" = rovo ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     exit 1
   fi
 fi
+if [ "$ULTRACODE" = 1 ]; then
+  task_ultracode_start || task_launch_optin_fail 'Claude ultracode activation was not confirmed'
+fi
 if [ "$GOAL_SET" = 1 ]; then
-  if ! task_goal_start; then
-    printf '%s\n' "$(status_stamp_line "failed: $HARNESS native goal launch was not confirmed")" >>"$STATE/$ID.status"
-    spawn_delivery_endpoint_cleanup
-    if ! spawn_endpoint_proven_absent; then
-      # A goal may have activated despite an unreadable acknowledgement.
-      # Keep ownership and its busy generation until guarded teardown proves
-      # the launched endpoint is gone; a best-effort close is not that proof.
-      SPAWN_FRESH_COMMIT_PENDING=0
-      echo "error: $HARNESS goal launch failed and endpoint shutdown is unconfirmed; retaining task record $STATE/$ID.meta and worktree for recovery" >&2
-    fi
-    exit 1
-  fi
+  task_goal_start || task_launch_optin_fail "$HARNESS native goal launch was not confirmed"
 fi
 fm_agy_spawn_ready_gate
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then

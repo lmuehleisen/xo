@@ -934,7 +934,8 @@ The same probe with `--model haiku` omitted `Ultracode on`.
 Codex's bundled catalog advertised `ultra` for `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`, and the two bundled daybreak aliases, while neither Luna variant advertised it.
 Its feature listing returned `goals stable true`.
 
-Interactive probes used `claude --permission-mode auto --settings '{"ultracode":true}'` and `codex --no-daemon --disable hooks --model gpt-6.1-sol -c 'model_reasoning_effort="ultra"'` on a trivial response-only goal.
+Interactive probes used `claude --permission-mode auto --settings '{"ultracode":true}' '/effort current'` and `codex --no-daemon --disable hooks --model gpt-6.1-sol -c 'model_reasoning_effort="ultra"'` on a trivial response-only goal.
+Claude's initial local command reported `Ultracode on` before any model input, confirming the actual interactive session.
 Claude acknowledged `Goal set:` and displayed both `ultracode` and `/goal active`, then `Goal achieved`.
 Codex displayed `GPT-6.1-Sol ultra`; a positional `/goal` prompt produced a reply but subsequent native `/goal` status returned `No goal is currently set`.
 Typing `/goal` after startup produced `Goal active Objective:` and ultimately `Goal achieved`.
@@ -951,7 +952,7 @@ The refresh above passed on 2026-10-05 with the following output:
 ```text
 ok - claude 2.1.289 (Claude Code): mode launch, native goal acknowledgement and completion
 ok - codex codex-cli 0.160.0: mode launch, native goal acknowledgement and completion
-FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=34671
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=23970
 ```
 
 The Codex 0.160.0 live composer uses `»`, with `›` retained in the transcript.

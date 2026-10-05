@@ -20,6 +20,7 @@ Ultracode is a dynamic-workflow orchestration setting, independent of the sessio
 The [vendor model documentation](https://code.claude.com/docs/en/model-config#adjust-effort-level) documents session-only `--settings '{"ultracode":true}'`; `/effort ultracode` is also available, while `--effort ultracode` additionally sets `xhigh`.
 It is unavailable when workflows are disabled or the model lacks `xhigh` support.
 The zero-token `claude -p --settings '{"ultracode":true}' --output-format json '/effort current'` probe reports `Ultracode on` only when active; selecting `haiku` removes that confirmation.
+The same local command works as an interactive startup argument, returning the current session's mode without starting a model turn.
 
 `/goal <condition>` is a built-in command, not a skill or dedicated launch flag.
 It starts a turn and installs a session-scoped model-evaluated Stop hook that continues until the condition holds; it also works in the initial prompt and print mode.

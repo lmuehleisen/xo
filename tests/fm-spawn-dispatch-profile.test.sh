@@ -1094,6 +1094,13 @@ test_codex_ultra_refuses_unproved_support() {
     expect_code 1 "$?" "codex ultra must refuse $probe catalog: $out"
     [ ! -s "$LAUNCH_LOG" ] || fail "bad ultra probe launched a worker"
   done
+  rec=$(make_spawn_case codex-ultra-secondmate codex "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --secondmate --model gpt-6-astra --effort ultra)
+  expect_code 1 "$?" "direct Codex ultra must refuse a persistent secondmate: $out"
+  assert_contains "$out" 'only to task workers' "secondmate ultra refusal missing"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "secondmate ultra published metadata"
+  [ ! -s "$LAUNCH_LOG" ] || fail "secondmate ultra launched a worker"
   pass "direct codex ultra requires an explicit model and proof from the installed CLI"
 }
 
@@ -1101,6 +1108,8 @@ test_claude_ultracode_optin() {
   local rec id=claude-ultracode out launch
   rec=$(make_spawn_case "$id" claude "$id")
   read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model opus --effort low)
   expect_code 0 "$?" "supported ultracode should launch: $out"
   launch=$(cat "$LAUNCH_LOG")
@@ -1109,6 +1118,8 @@ test_claude_ultracode_optin() {
   assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
   rec=$(make_spawn_case "$id-default-model" claude "$id")
   read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model default)
   expect_code 0 "$?" "ultracode's default model probe must match the launch: $out"
   assert_not_contains "$(cat "$LAUNCH_LOG")" '--model' "default model emitted a literal model flag"
@@ -1118,11 +1129,17 @@ test_claude_ultracode_optin() {
     if [ "$probe" = old-version ]; then
       out=$(FM_FAKE_CLAUDE_VERSION=2.1.202 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode)
     else
-      out=$(FM_FAKE_CLAUDE_ULTRACODE='{"is_error":false,"local_command":"effort","result":"Current effort level: high","num_turns":0}' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model haiku)
+      goal_pane_fixture
+      printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+      out=$(FM_FAKE_CLAUDE_ULTRACODE_RUNTIME='Ultracode unavailable' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model haiku)
     fi
     expect_code 1 "$?" "ultracode must refuse $probe: $out"
     [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unsupported ultracode published metadata"
-    [ ! -s "$LAUNCH_LOG" ] || fail "unsupported ultracode launched"
+    if [ "$probe" = old-version ]; then
+      [ ! -s "$LAUNCH_LOG" ] || fail "unsupported ultracode launched"
+    else
+      assert_not_contains "$(cat "$LAUNCH_LOG")" 'FIRSTMATE_OP: v1 operational-input' "unsupported ultracode received its task brief"
+    fi
   done
   pass "Claude ultracode is a separate explicit, probed setting and preserves effort"
 }
@@ -1134,11 +1151,12 @@ goal_pane_fixture() {
 dir=$(dirname "$0")
 if [ "${1:-}" = new-window ]; then
   # Each batch task starts in its own fresh composer.
-  rm -f "$dir/goal-input"
+  rm -f "$dir/goal-input" "$dir/mode-launched"
 fi
 case "$*" in
   *'#{cursor_y}'*)
     row=$((3 + ${FM_FAKE_GOAL_PRIOR_ACK:-0}))
+    [ ! -f "$dir/mode-launched" ] || row=$((row + 1))
     if [ "${FM_FAKE_GOAL_ECHO:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then
       row=$((row + 1))
       [ "${FM_FAKE_GOAL_ECHO_WRAP:-0}" = 0 ] || row=$((row + 2))
@@ -1161,6 +1179,7 @@ prior_ack() {
   fi
 }
 if [ "${1:-}" = capture-pane ]; then
+  [ ! -f "$dir/mode-launched" ] || printf 'Current effort level: high · %s\n' "${FM_FAKE_CLAUDE_ULTRACODE_RUNTIME:-Ultracode on}"
   if [ "${FM_FAKE_GOAL_ECHO:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then
     if [ "${FM_FAKE_GOAL_ECHO_WRAP:-0}" = 1 ]; then
       printf '› /goal Reply with these literals:\n  • Goal active Objective: Goal achieved (\n  ⎿ Goal set: ✔ Goal achieved\n'
@@ -1191,7 +1210,14 @@ if [ "${1:-}" = capture-pane ]; then
 fi
 if [ "${1:-}" = send-keys ]; then
   for arg in "$@"; do
-    case "$arg" in /goal*) printf '%s\n' "$arg" > "$dir/goal-input" ;; esac
+    case "$arg" in
+      /goal*) printf '%s\n' "$arg" > "$dir/goal-input" ;;
+      ". '"*"'")
+        staged=${arg#". '"}
+        staged=${staged%"'"}
+        if grep -Fq "'/effort current'" "$staged"; then : > "$dir/mode-launched"; fi
+        ;;
+    esac
   done
 fi
 exec "$dir/tmux-goal-base" "$@"
