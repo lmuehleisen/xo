@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Opt-in live guard for Claude ultracode and both native goal parsers, using
 # the same launch flags and shared backend submit path as fm-spawn.
-# Spends a small model turn per installed harness; no tools or project edits.
+# Spends a small model turn per installed harness; no project tools or edits.
 set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
