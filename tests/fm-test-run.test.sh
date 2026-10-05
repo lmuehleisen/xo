@@ -124,6 +124,16 @@ init_changed_fixture_repo() {
     printf '#!/usr/bin/env bash\n# tests/lib.sh\n' >"$repo/tests/$script"
     chmod +x "$repo/tests/$script"
   done
+  # Host wrappers reach the wake fixture through their shared case helper.
+  # Keep a direct wake consumer beside them to expose partial selection.
+  : >"$repo/tests/wake-helpers.sh"
+  printf '# wake-helpers.sh\n' >"$repo/tests/supervision-host-helpers.sh"
+  printf '# wake-helpers.sh\n' >>"$repo/tests/fm-daemon.test.sh"
+  for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
+    fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
+    printf '#!/usr/bin/env bash\n# supervision-host-helpers.sh\n' >"$repo/tests/$script"
+    chmod +x "$repo/tests/$script"
+  done
   : >"$repo/tests/lib.sh"
   : >"$repo/tests/fm-backend-herdr-eventwait.test.py"
   : >"$repo/bin/fm-supervisor-target-lib.sh"
@@ -433,6 +443,35 @@ test_changed_dependency_selection_and_unmapped_failure() {
   [ -z "$listed" ] || fail "a retired unmapped source without consumers selected tests: $listed"
   rm -rf "$tmp"
   pass "changed selection covers dependents, fails closed for live unmapped source, and accepts retired unconsumed source"
+}
+
+test_changed_wake_helper_preserves_split_host_coverage() {
+  local tmp repo listed script
+  tmp=$(fm_test_tmproot fm-test-run-wake-helper)
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  # The direct shared-helper path is the control: every host wrapper is found.
+  printf '\n' >>"$repo/tests/supervision-host-helpers.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
+    fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
+    assert_contains "$listed" "tests/$script" "shared host helper selects $script"
+  done
+  printf '# wake-helpers.sh\n' >"$repo/tests/supervision-host-helpers.sh"
+
+  # Only the transitive wake fixture changes. A direct reader must not mask
+  # omission of the four host suites, and unrelated forge coverage stays out.
+  printf '\n' >>"$repo/tests/wake-helpers.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-daemon.test.sh" "wake fixture selects its direct reader"
+  for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
+    fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
+    assert_contains "$listed" "tests/$script" "wake fixture selects its indirect host reader $script"
+  done
+  assert_not_contains "$listed" "tests/fm-pr-merge.test.sh" "wake fixture must not select unrelated forge coverage"
+  fm_test_rm_tmproot "$tmp"
+  pass "a wake-helper-only change selects direct readers and all four split host suites"
 }
 
 # A direct test reference is per-script evidence. Widening it to the referencing
@@ -1944,6 +1983,7 @@ test_task_marker_refuses_the_primary_checkout
 test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure
+test_changed_wake_helper_preserves_split_host_coverage
 test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_uses_bounded_automatic_concurrency
 test_windows_posix_mode_emulation_does_not_fail_parallel_runs
