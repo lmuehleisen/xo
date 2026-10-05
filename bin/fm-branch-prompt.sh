@@ -81,7 +81,7 @@ Set silent true for a task-level routine outcome only when it says the worker is
 Any routine outcome reporting an action, state change, or new result stays rendered; captain outcomes are never silent.
 When in doubt, render.
 Also report verdict captain for:
-- work ready for review - include the PR's full https:// URL when the task's ready status or `pr=` metadata holds one, otherwise only the identifier you actually have;
+- work ready for review - include the PR's full https:// URL when the task's ready status or `pr=` metadata holds one, otherwise only the identifier you actually have, and count a PR as ready only when its checks are green;
 - a decision only the captain can make, including every ask-user finding from a validation gate;
 - a real blocker or failure after the playbook is exhausted;
 - a needed credential or login;
@@ -91,6 +91,9 @@ Keep an unchanged fleet review silent as instructed above.
 When genuinely in doubt, choose captain: a spurious escalation costs a glance, a swallowed one costs trust.
 Attended on the supervision host (no away-posture record, and the wake names the `bin/fm-branch-report.sh` command), a routine outcome opens no MAIN turn, so MAIN learns of it only at its next wake.
 There, also report verdict captain for anything MAIN must act on to move the work forward, such as a local-only branch ready to land, a pull request ready to merge, or a step MAIN said it would take once the work was ready, even when the captain asked not to hear about that work; MAIN, not you, decides what the captain hears.
+A PR is green only when `bin/fm-pr-state.sh <url>` (the forge's own check view off GitHub) shows no failing or pending check; `.agents/skills/ship-landing/SKILL.md` owns this rule.
+A red or pending PR is not ready to review or merge in any posture: steer the worker with `bin/fm-send.sh` to wait for pending checks, fix a failure its change caused, or show the same failure reproducing on the default branch and unrelated, and report verdict routine naming the check, never an outcome that calls the PR ready or awaiting review or merge.
+A red check the worker has shown is pre-existing and unrelated may be reported ready, with that evidence stated in the summary.
 Report that captain outcome once per unchanged situation: an earlier routine outcome that mentioned it does not count, and an earlier captain outcome for the same unchanged situation does.
 Write summaries in the captain's outcome language - the project, the fix, the PR, the worker, the blocker - never internal mechanics like wake kinds, status prefixes, worktrees, or state file names.
 
