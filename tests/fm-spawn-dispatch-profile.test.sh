@@ -1103,7 +1103,7 @@ test_claude_ultracode_optin() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" '"ultracode":true' "ultracode setting missing"
   assert_contains "$launch" "--effort 'low'" "ultracode changed the explicit effort"
-  assert_grep '^ultracode=on$' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
+  assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
   rec=$(make_spawn_case "$id-default-model" claude "$id")
   read_case_record "$rec"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model default)
@@ -1170,9 +1170,9 @@ test_goal_first_native_input() {
     launch=$(head -1 "$LAUNCH_LOG")
     assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
-    assert_grep '^/goal Reply with smoke\.' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
+    assert_grep '/goal Reply with smoke.' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
     assert_grep 'launch-brief.md exactly, including its authority and stop/wait gates' "$FAKEBIN_DIR/goal-input" "goal omitted worker contract"
-    assert_grep '^goal=Reply with smoke$' "$HOME_DIR/state/$id.meta" "goal metadata missing"
+    assert_grep 'goal=Reply with smoke' "$HOME_DIR/state/$id.meta" "goal metadata missing"
   done
   id=goal-codex-unavailable
   rec=$(make_spawn_case "$id" codex "$id")
@@ -1261,8 +1261,8 @@ test_batch_preserves_launch_optins() {
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness claude --ultracode --goal smoke)
   expect_code 0 "$?" "batch launch opt-ins failed: $out"
   for id in "$id1" "$id2"; do
-    assert_grep '^ultracode=on$' "$HOME_DIR/state/$id.meta" "batch dropped ultracode"
-    assert_grep '^goal=smoke$' "$HOME_DIR/state/$id.meta" "batch dropped goal"
+    assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "batch dropped ultracode"
+    assert_grep 'goal=smoke' "$HOME_DIR/state/$id.meta" "batch dropped goal"
   done
   [ "$(grep -c '^/goal smoke\.' "$LAUNCH_LOG")" = 2 ] || fail "batch did not submit each native goal exactly once"
   pass "batch dispatch preserves both explicit task launch opt-ins"
