@@ -2828,7 +2828,9 @@ task_launch_optins_validate() {
   fi
 }
 # Account selection precedes the probe so Claude checks the store it will use.
-(cd "$PROJ_ABS" && task_launch_optins_validate) || exit 1
+if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
+  (cd "$PROJ_ABS" && task_launch_optins_validate) || exit 1
+fi
 
 secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
