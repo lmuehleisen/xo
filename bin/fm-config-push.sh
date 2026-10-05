@@ -8,12 +8,13 @@
 # home= from data/secondmates.md for older meta records, and reuses the same
 # propagation machinery as bootstrap, but deliberately does not
 # fast-forward tracked files.
-# After a successful per-home propagation that changes any allowlisted config/*
+# After propagation that changes any allowlisted config/*
 # item, local routes receive the generation-specific literal-content pointer from
 # fm-config-inherit-lib.sh. Remote routes receive one durable marked reread nudge
 # through their SSH route. Unchanged config and data/captain-shared.md-only
 # updates send no reread unless a previous send failure is pending for that home.
 # Warnings-only skips exit 0; real propagation or reread-send errors exit non-zero.
+# Remote partial changes still receive a reread nudge and retain convergence retry state.
 set -u
 
 usage() {
@@ -25,7 +26,7 @@ live secondmate home.
 
 This is local-material-only:
   - does not fast-forward tracked files
-  - after successful config/* changes, sends a local literal-content pointer or
+  - after config/* changes, sends a local literal-content pointer or
     one durable marked remote reread nudge
     (no message when config is unchanged unless a previous send failure is pending)
   - reports each live home and each inheritable item as pushed, unchanged,
@@ -145,27 +146,29 @@ while IFS='|' read -r id home _window meta; do
       fm_lock_release "$remote_lock" || true
       continue
     fi
+    remote_converged=1
     if remote_out=$(FM_CONFIG_INHERIT_LIVE=1 \
       "$SCRIPT_DIR/fm-remote-inherit-push.sh" "$id" "$remote_generation" 2>&1); then
-      printf '%s\n' "$remote_out" | sed 's/^/  /'
-      remote_nudge=0
-      if printf '%s\n' "$remote_out" | grep -Eq '^(pushed|removed):'; then remote_nudge=1; fi
-      [ "$remote_pending" -eq 0 ] || remote_nudge=1
-      if [ "$remote_nudge" -eq 1 ]; then
-        if FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
-          "$SCRIPT_DIR/fm-send.sh" "fm-$id" "$FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE" >/dev/null 2>&1; then
-          rm -f -- "$remote_marker"
-          echo "  config-reread: sent"
-        else
-          echo "  config-reread: send failed; retry retained"
-          errors=1
-        fi
-      else
-        rm -f -- "$remote_marker"
-      fi
+      :
     else
-      [ -z "$remote_out" ] || printf '%s\n' "$remote_out" | sed 's/^/  /'
+      remote_converged=0
       errors=1
+    fi
+    [ -z "$remote_out" ] || printf '%s\n' "$remote_out" | sed 's/^/  /'
+    remote_nudge=0
+    if printf '%s\n' "$remote_out" | grep -Eq '^(pushed|removed):'; then remote_nudge=1; fi
+    [ "$remote_pending" -eq 0 ] || remote_nudge=1
+    if [ "$remote_nudge" -eq 1 ]; then
+      if FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
+        "$SCRIPT_DIR/fm-send.sh" "fm-$id" "$FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE" >/dev/null 2>&1; then
+        [ "$remote_converged" -eq 0 ] || rm -f -- "$remote_marker"
+        echo "  config-reread: sent"
+      else
+        echo "  config-reread: send failed; retry retained"
+        errors=1
+      fi
+    elif [ "$remote_converged" -eq 1 ]; then
+      rm -f -- "$remote_marker"
     fi
     fm_lock_release "$remote_lock" || true
     continue

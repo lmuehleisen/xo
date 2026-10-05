@@ -1058,6 +1058,7 @@ rm -f "$PARENT/state/.wake-queue"
 
 printf '{"revision":2}\n' > "$PARENT/config/crew-dispatch.json"
 printf 'grok\n' > "$PARENT/config/crew-harness"
+config_before_corr=$(newest_remote_inbox_corr)
 set +e
 FM_FAKE_SSH_MODE=inherit-partial remote_env "$ROOT/bin/fm-config-push.sh" \
   > "$TMP_ROOT/config-partial.out" 2>&1
@@ -1069,6 +1070,9 @@ assert_grep '"revision":2' "$REMOTE_HOME/config/crew-dispatch.json" "partial inh
   || fail "partial inheritance unexpectedly applied the failed file"
 NUDGE_MARKER="$PARENT/state/.secondmate-nudge-pending/ios.pending"
 assert_grep 'remote=1' "$NUDGE_MARKER" "partial inheritance left no durable remote reread marker"
+assert_grep 'config-reread: sent' "$TMP_ROOT/config-partial.out" "partial changes did not receive an immediate reread nudge"
+[ "$(newest_remote_inbox_corr)" != "$config_before_corr" ] \
+  || fail "partial inheritance did not enqueue its reread instruction"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$REMOTE_ROOT/bin/fm-watch.sh"
 remote_env "$ROOT/bin/fm-bootstrap.sh" > "$TMP_ROOT/config-partial-retry.out" \
   || fail "bootstrap did not converge partial remote inheritance"
