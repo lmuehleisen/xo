@@ -5214,19 +5214,8 @@ if (JSON.stringify(actualRow.render(100)) !== JSON.stringify(stockRow.render(100
 }
 
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: true });
-// Pi 1.0.0 reads getToolDefinition. Pi 1.0.2+ reads getToolRenderers.
-const stockHtml = createToolHtmlRenderer({
-  getToolDefinition: () => stockDefinition,
-  getToolRenderers: () => stockDefinition,
-  theme,
-  cwd: process.cwd(),
-});
-const actualHtml = createToolHtmlRenderer({
-  getToolDefinition: () => actualDefinition,
-  getToolRenderers: () => actualDefinition,
-  theme,
-  cwd: process.cwd(),
-});
+const stockHtml = createToolHtmlRenderer({ getToolDefinition: () => stockDefinition, theme, cwd: process.cwd() });
+const actualHtml = createToolHtmlRenderer({ getToolDefinition: () => actualDefinition, theme, cwd: process.cwd() });
 const stockCall = stockHtml.renderCall("stock-html", "fm_branch_outcomes", args);
 const actualCall = actualHtml.renderCall("actual-html", "fm_branch_outcomes", args);
 const stockResult = stockHtml.renderResult("stock-html", "fm_branch_outcomes", result.content, result.details, false);

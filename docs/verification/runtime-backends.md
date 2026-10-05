@@ -2457,9 +2457,13 @@ The merge suite and the security suite dominate the wall time.
 
 The credential-free SDK guard, strict typecheck, calm, branch, and watch extension suites, worker publish-policy guard, worker-account pin guard, launch-prompt signature guard, and real-TUI responsiveness guard were run against npm `@earendil-works/pi-coding-agent` 1.0.3.
 The previous dated publish-policy verification was pi 0.99.2 on Linux and pi 0.87.1 on macOS, on 2026-10-01.
-Pi 1.0.0 made fullscreen the default TUI mode and renamed `createToolHtmlRenderer`'s tool lookup from `getToolDefinition` to `getToolRenderers`.
-The extension suites call the renamed lookup, and the SDK guard constructs `InteractiveMode` with `tuiMode: "fullscreen"`.
-Spawn already passes `--tui-mode regular` when the CLI advertises it, which 1.0.3 does, so scrollback-based steering still avoids the fullscreen default.
+Pi 1.0.1 renamed `createToolHtmlRenderer`'s lookup from `getToolDefinition` to `getToolRenderers`.
+The calm HTML fixture, ported from upstream `fede6197`, passes both names so Pi 1.0.0 and Pi 1.0.1 or newer each read the key they know.
+Pi 1.0.0 made fullscreen the default TUI mode.
+Calm's scrollback captures, ported from upstream `349e189f`, pass `--tui-mode regular` when the CLI advertises it.
+Spawn already passes that flag, which 1.0.3 advertises.
+The SDK guard still constructs `InteractiveMode` with `tuiMode: "alt-screen"`.
+Pi 1.0.3 treats every mode other than `fullscreen` as the regular screen, and that guard renders through `chatContainer`.
 `--provider` without `--model` is now an error, and a pinned Pi launch already refuses to start unless `--model` names `<provider>/<id>`.
 The Azure provider rename from `azure-openai-responses` to `azure` has no matching literal in this repo.
 Pi-signed was not installed, and the native Codex adapter package was not installed, so those guards skipped.
@@ -2492,8 +2496,7 @@ pi 1.0.3 keystroke echo, worst observed: floor 19.2 ms, extension idle 44.4 ms, 
 ok - supervision outcome delivery keeps the real Pi 1.0.3 TUI echoing keystrokes at its unloaded floor
 ```
 
-The branch extension suite's stock-export case and the calm suite's HTML export case passed on Pi 1.0.3 only after they supplied `getToolRenderers`.
-They still pass `getToolDefinition` as well, which is the name Pi 1.0.0 reads, so an older package is not rejected by the new argument.
+The calm suite's HTML export case passed on Pi 1.0.3 with both lookup names.
 `.github/workflows/ci.yml` still installs the unpinned npm package.
 The 1.0.2 failure was this repo passing only the old lookup name, so the pin stays off and the next Pi release remains what those tests run against.
 The Windows shell-invocation suite skipped because this host is not native Windows.
