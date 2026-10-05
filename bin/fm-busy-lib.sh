@@ -931,7 +931,8 @@ fm_busy_claude_launch_prompt_tail() {
 }
 
 # fm_busy_pi_launch_prompt_tail: Pi's project-trust dialog. Live-verified on
-# pi 0.86.1 (2026-09-22) in a fresh untrusted worktree carrying a project-local
+# pi 0.86.1 (2026-09-22) and reconfirmed on pi 1.0.3 (2026-10-05) in a fresh
+# untrusted worktree carrying a project-local
 # .pi/extensions/ file (the shape a real ship/scout spawn always launches
 # into): the rendered heading is "Trust project folder?" and its declining
 # option is literally "Do not trust". An initial guess sourced only from the
