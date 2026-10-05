@@ -105,7 +105,9 @@
 #   The first post-start input carries the condition plus the launch-brief
 #   pointer and stop/wait boundaries (together at most 4000 characters).
 #   The existing backend composer and submit path owns readiness and delivery;
-#   native goal acknowledgement is required before spawn reports success.
+#   a new native goal acknowledgement after the pre-submit capture is required
+#   before spawn reports success. A failed goal launch retains its task record
+#   and busy generation unless endpoint absence is positively confirmed.
 #   These two flags refuse secondmates, relaunches, and raw commands.
 #   They are never inferred from a brief or profile.
 #   Ultra and ultracode spend substantially more quota: use only on the
@@ -4824,10 +4826,21 @@ spawn_delivery_endpoint_cleanup() {
   fm_backend_kill "$BACKEND" "$T" "$tab_id" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
 }
 
+# Only an additional matching line proves a new acknowledgement. Comparing
+# occurrence counts keeps reordered or scrolled retained output from proving
+# activation, even when a backend reuses presentation history.
+task_goal_ack_is_new() { # <before> <after> <pattern>
+  awk -v pattern="$3" '
+    FNR == NR { seen[$0]++; next }
+    $0 ~ pattern { if (seen[$0] > 0) seen[$0]--; else found=1 }
+    END { exit !found }
+  ' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+
 # Opted-in goals launch with no user prompt, so native /goal is the first
 # input. Reuse every backend's existing structural composer and submit core.
 task_goal_start() {
-  local input pane verdict i ready=0
+  local input pane before verdict i ready=0
   input=$GOAL_INPUT
   for i in $(seq 1 60); do
     if [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W")" = empty ]; then
@@ -4837,14 +4850,15 @@ task_goal_start() {
     sleep 0.5
   done
   [ "$ready" = 1 ] || { echo "error: $HARNESS goal launch did not reach an empty composer; inspect $T" >&2; return 1; }
+  before=$(fm_backend_capture "$BACKEND" "$T" 100 "$W") || return 1
   verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$input" 3 0.4 1.2 "$W") || return 1
   [ "$verdict" = empty ] || { echo "error: $HARNESS native /goal submission was not confirmed ($verdict); inspect $T" >&2; return 1; }
   for i in $(seq 1 40); do
     pane=$(fm_backend_capture "$BACKEND" "$T" 100 "$W") || pane=
     # These are CLI-local acknowledgements, not the model's ordinary reply.
     case "$HARNESS" in
-      claude) printf '%s\n' "$pane" | grep -Eq '⎿[[:space:]]+Goal set:|✔ Goal achieved' && return 0 ;;
-      codex) printf '%s\n' "$pane" | grep -Eq '• Goal active Objective:|Goal achieved \(' && return 0 ;;
+      claude) task_goal_ack_is_new "$before" "$pane" '⎿[[:space:]]+Goal set:|✔ Goal achieved' && return 0 ;;
+      codex) task_goal_ack_is_new "$before" "$pane" '• Goal active Objective:|Goal achieved [(]' && return 0 ;;
     esac
     sleep 0.5
   done
@@ -6240,6 +6254,13 @@ if [ "$GOAL_SET" = 1 ]; then
   if ! task_goal_start; then
     printf '%s\n' "$(status_stamp_line "failed: $HARNESS native goal launch was not confirmed")" >>"$STATE/$ID.status"
     spawn_delivery_endpoint_cleanup
+    if ! spawn_endpoint_proven_absent; then
+      # A goal may have activated despite an unreadable acknowledgement.
+      # Keep ownership and its busy generation until guarded teardown proves
+      # the launched endpoint is gone; a best-effort close is not that proof.
+      SPAWN_FRESH_COMMIT_PENDING=0
+      echo "error: $HARNESS goal launch failed and endpoint shutdown is unconfirmed; retaining task record $STATE/$ID.meta and worktree for recovery" >&2
+    fi
     exit 1
   fi
 fi

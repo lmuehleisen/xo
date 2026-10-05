@@ -1133,19 +1133,39 @@ goal_pane_fixture() {
 #!/usr/bin/env bash
 dir=$(dirname "$0")
 case "$*" in
-  *'#{cursor_y}'*) printf '3\n'; exit 0 ;;
+  *'#{cursor_y}'*) printf '%s\n' "$((3 + ${FM_FAKE_GOAL_PRIOR_ACK:-0}))"; exit 0 ;;
 esac
-if [ "${1:-}" = capture-pane ]; then
-  if [ -f "$dir/goal-input" ]; then
-    if [ "${FM_FAKE_GOAL_REJECT:-0}" = 1 ]; then
-      printf 'Unrecognized command /goal\n'
-    elif [ "$(cat "$dir/goal-harness")" = claude ]; then
-      printf '  ⎿  Goal set: smoke\n'
-    else
-      printf '• Goal active Objective: smoke\n'
-    fi
+if [ "${FM_FAKE_GOAL_CLOSE_FAIL:-0}" = 1 ]; then
+  case "${1:-}" in
+    kill-window) exit 1 ;;
+    list-windows) [ ! -f "$dir/goal-input" ] || { printf 'inventory unavailable\n' >&2; exit 1; } ;;
+  esac
+fi
+prior_ack() {
+  if [ "$(cat "$dir/goal-harness")" = claude ]; then
+    printf '  ⎿  Goal set: prior\n'
   else
+    printf '• Goal active Objective: prior\n'
+  fi
+}
+if [ "${1:-}" = capture-pane ]; then
+  if [ "${FM_FAKE_GOAL_STALE_ONLY:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then
+    # The acknowledgement survives but moves as the retained view scrolls.
     printf 'Ready\n'
+    prior_ack
+  else
+    [ "${FM_FAKE_GOAL_PRIOR_ACK:-0}" = 0 ] || prior_ack
+    if [ -f "$dir/goal-input" ]; then
+      if [ "${FM_FAKE_GOAL_REJECT:-0}" = 1 ]; then
+        printf 'Unrecognized command /goal\n'
+      elif [ "$(cat "$dir/goal-harness")" = claude ]; then
+        printf '  ⎿  Goal set: smoke\n'
+      else
+        printf '• Goal active Objective: smoke\n'
+      fi
+    else
+      printf 'Ready\n'
+    fi
   fi
   printf '\n─────────────\n❯ \n─────────────\n'
   exit 0
@@ -1192,7 +1212,41 @@ test_goal_first_native_input() {
   out=$(FM_FAKE_GOAL_REJECT=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
   expect_code 1 "$?" "unacknowledged goal must not report a successful spawn: $out"
   assert_not_contains "$out" "spawned $id" "native goal rejection was silently omitted"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a confirmed closed failed launch retained its provisional record"
   pass "Claude and Codex goals are the first native input and preserve the brief contract"
+}
+
+test_goal_acknowledgement_is_fresh_and_failure_stays_owned() {
+  local harness rec id out
+  for harness in claude codex; do
+    id="goal-fresh-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    out=$(FM_FAKE_GOAL_PRIOR_ACK=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+    expect_code 0 "$?" "a new $harness acknowledgement alongside retained output should confirm: $out"
+    id="goal-stale-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    out=$(FM_FAKE_GOAL_PRIOR_ACK=1 FM_FAKE_GOAL_STALE_ONLY=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code 1 "$?" "a reordered stale $harness acknowledgement must refuse: $out"
+    assert_not_contains "$out" "spawned $id" "stale acknowledgement reported a successful spawn"
+  done
+  id=goal-close-unconfirmed
+  rec=$(make_spawn_case "$id" claude "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(FM_FAKE_GOAL_REJECT=1 FM_FAKE_GOAL_CLOSE_FAIL=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+  expect_code 1 "$?" "unconfirmed shutdown must report failure: $out"
+  assert_contains "$out" 'retaining task record' "unconfirmed shutdown did not name preserved ownership"
+  [ -f "$HOME_DIR/state/$id.meta" ] || fail "unconfirmed goal shutdown erased endpoint ownership"
+  [ -f "$HOME_DIR/state/$id.busy-gen" ] || fail "unconfirmed goal shutdown retired its busy generation"
+  assert_grep 'native goal launch was not confirmed' "$HOME_DIR/state/$id.status" "preserved failed launch lost its failure status"
+  pass "goal acknowledgements must be new and unconfirmed shutdown preserves ownership"
 }
 
 test_task_optins_refuse_wrong_surfaces() {
@@ -2501,6 +2555,7 @@ test_native_pi_ultra_is_explicit_and_model_scoped
 test_codex_ultra_refuses_unproved_support
 test_claude_ultracode_optin
 test_goal_first_native_input
+test_goal_acknowledgement_is_fresh_and_failure_stays_owned
 test_task_optins_refuse_wrong_surfaces
 test_batch_preserves_native_ultra
 test_batch_preserves_launch_optins
