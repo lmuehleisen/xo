@@ -779,6 +779,8 @@ relaunch_rollback() {
 }
 
 resolve_relaunch_profile() {
+  fm_control_relaunch_optins_supported "$(fm_meta_get "$META" ultracode)" "$(fm_meta_get "$META" goal)" \
+    || die "task $ID's native launch opt-ins require a fresh spawn; refusing relaunch before stopping its worker"
   PRIOR_HARNESS=$HARNESS
   PRIOR_RECORDED_HARNESS=$RECORDED_HARNESS
   PRIOR_MODEL=$(fm_meta_get "$META" model)

@@ -954,6 +954,34 @@ test_explicit_model_wins_over_the_recorded_one() {
   pass "fm-control relaunch: explicit model and effort win over the recorded ones"
 }
 
+test_recorded_launch_optins_refuse_recovery_before_stop() {
+  local dir out rc scenario harness field id=rl-optin
+  for scenario in 'claude ultracode=on' 'claude goal=smoke' 'codex goal=smoke'; do
+    read -r harness field <<< "$scenario"
+    dir=$(new_case "recorded-optin-$harness-${field%%=*}" "$id")
+    add_ship_task "$dir" "$id" "$harness"
+    printf '%s' "$harness" > "$dir/fake/command"
+    printf '%s\n' "$field" >> "$dir/home/state/$id.meta"
+    cp "$dir/home/state/$id.meta" "$dir/meta.before"
+    cp "$dir/home/data/$id/brief.md" "$dir/brief.before"
+    out=$(run_control "$dir" "$id" relaunch --note "recover recorded native mode"); rc=$?
+    expect_code 1 "$rc" "recorded launch opt-ins must refuse before stopping: $scenario $out"
+    assert_contains "$out" 'native launch opt-ins require a fresh spawn' "recovery refusal omitted the unsupported native state"
+    [ "$(cat "$dir/fake/command")" = "$harness" ] || fail "recovery stopped an opted-in worker"
+    assert_absent "$dir/home/state/$id.control-relaunch" "refused native recovery opened a transaction"
+    # The lower-level launch owner must also preserve recorded opt-ins after
+    # the agent has stopped, rather than publishing a replacement without them.
+    printf bash > "$dir/fake/command"
+    out=$(run_spawn "$dir" "$id" --relaunch --harness "$harness"); rc=$?
+    expect_code 1 "$rc" "direct recovery silently dropped native state: $scenario $out"
+    assert_contains "$out" 'native launch opt-ins require a fresh spawn' "direct recovery refused for an unrelated reason"
+    [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "refused native recovery sent lifecycle input"
+    cmp -s "$dir/meta.before" "$dir/home/state/$id.meta" || fail "recovery changed recorded native state"
+    cmp -s "$dir/brief.before" "$dir/home/data/$id/brief.md" || fail "recovery changed the launch brief"
+  done
+  pass "recorded mode and goal recovery refuses before stop or replacement publication"
+}
+
 test_relaunch_onto_an_unverified_harness_is_refused() {
   local dir out rc
   dir=$(new_case badharness rl8)
@@ -2600,6 +2628,7 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_explicit_model_wins_over_the_recorded_one
+test_recorded_launch_optins_refuse_recovery_before_stop
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm

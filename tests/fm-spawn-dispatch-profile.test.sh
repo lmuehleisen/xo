@@ -1065,15 +1065,8 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
   pass "Ultra is explicit for native Pi and Pi-signed, including direct-PR, and refuses unsupported profiles before provisioning"
 }
 
-test_codex_ultra_refuses_unproved_support() {
-  local rec id=codex-ultra-unproved out model probe launch pane_bin
-  rec=$(make_spawn_case codex-ultra-supported codex "$id")
-  read_case_record "$rec"
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
-  expect_code 0 "$?" "supported codex ultra should launch: $out"
-  launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" 'model_reasoning_effort="ultra"' "direct codex ultra config missing"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+assert_codex_launch_uses_probed_executable() { # <emitted-launch>
+  local launch=$1 pane_bin
   pane_bin="$CASE_DIR/older-pane-bin"
   mkdir -p "$pane_bin" "$CASE_DIR/pane-home"
   cat > "$pane_bin/codex" <<'SH'
@@ -1085,10 +1078,22 @@ SH
   env PATH="$pane_bin:$PATH" HOME="$CASE_DIR/pane-home" \
     FM_FAKE_OLDER_CODEX_CALLED="$CASE_DIR/older-codex-called" \
     FM_FAKE_CODEX_WORKER_LOG="$CASE_DIR/worker-codex.log" \
-    bash -c "$launch" || fail "Ultra launch failed with an older Codex on the pane PATH"
-  [ ! -e "$CASE_DIR/older-codex-called" ] || fail "Ultra launch substituted the pane's unvalidated Codex"
+    bash -c "$launch" || fail "opted-in launch failed with an older Codex on the pane PATH"
+  [ ! -e "$CASE_DIR/older-codex-called" ] || fail "opted-in launch substituted the pane's unvalidated Codex"
   [ "$(sed -n '1p' "$CASE_DIR/worker-codex.log")" = "$(CDPATH='' cd -- "$FAKEBIN_DIR" && pwd -P)/codex" ] \
-    || fail "Ultra launch did not execute the Codex binary whose catalog passed validation"
+    || fail "opted-in launch did not execute the Codex binary whose capability probe passed"
+}
+
+test_codex_ultra_refuses_unproved_support() {
+  local rec id=codex-ultra-unproved out model probe launch
+  rec=$(make_spawn_case codex-ultra-supported codex "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+  expect_code 0 "$?" "supported codex ultra should launch: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" 'model_reasoning_effort="ultra"' "direct codex ultra config missing"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+  assert_codex_launch_uses_probed_executable "$launch"
   for model in '' default gpt-6-luna; do
     rec=$(make_spawn_case "codex-ultra-unproved-$RANDOM" codex "$id")
     read_case_record "$rec"
@@ -1338,6 +1343,7 @@ test_goal_first_native_input() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal 'Reply with smoke')
     expect_code 0 "$?" "native $harness goal launch failed: $out"
     launch=$(head -1 "$LAUNCH_LOG")
+    [ "$harness" != codex ] || assert_codex_launch_uses_probed_executable "$launch"
     assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
     assert_grep '/goal Reply with smoke.' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
