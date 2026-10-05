@@ -1808,6 +1808,12 @@ families_for_changed_path() {
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;
+    tests/wake-helpers.sh)
+      # The host suites reach wake fixtures through their shared case helper.
+      # The reference scan is not transitive, so include that reader layer.
+      families_for_test_reference wake-helpers.sh supervision-host-helpers.sh \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
     tests/git-config-helpers.sh)
       # The reference scan is not transitive, so match the two helpers that
       # source this one as well: most suites inherit it only through them.
