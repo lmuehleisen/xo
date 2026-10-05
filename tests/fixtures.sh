@@ -102,6 +102,8 @@ fm_test_fake_gh_axi() {
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
 # suites that do not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
+# FM_FAKE_TMUX_BRIEF_STATE names a marker created only when a brief is typed;
+# FM_FAKE_TMUX_BRIEF_VERDICT can then leave that draft pending or unreadable.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'

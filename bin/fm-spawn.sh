@@ -6082,8 +6082,8 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   }
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
-  if [ "$OPENCODE_VERDICT" = send-failed ]; then
-    opencode_spawn_fail "OpenCode V2 brief submission failed in window $T"
+  if [ "$OPENCODE_VERDICT" != empty ]; then
+    opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T"
     exit 1
   fi
 fi
