@@ -2858,10 +2858,16 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
 fi
 
 task_launch_optins_validate() {
-  local version probe probe_args=()
+  local version probe probe_args=() probe_env=(env -u CLAUDECODE)
   [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ] || return 0
   if [ "$HARNESS" = claude ]; then
-    version=$(fm_run_timed 15 claude --version </dev/null 2>/dev/null) || version=
+    if [ -n "$WORKER_ACCOUNT" ]; then
+      # The resolved root is already exported (or unset for ordinary). Use
+      # the launch's own credential-shedding prefix for the probe as well.
+      read -r -a probe_env <<< "$(fm_worker_account_claude_shed)"
+      probe_env+=(-u CLAUDECODE)
+    fi
+    version=$(fm_run_timed 15 "${probe_env[@]}" claude --version </dev/null 2>/dev/null) || version=
     if ! printf '%s\n' "$version" | awk -F '[. ]' '
       $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
         if ($1 > 2 || ($1 == 2 && ($2 > 1 || ($2 == 1 && $3 >= 289)))) ok=1
@@ -2873,7 +2879,7 @@ task_launch_optins_validate() {
     [ -z "$MODEL" ] || [ "$MODEL" = default ] || probe_args+=(--model "$MODEL")
     [ -z "$EFFORT" ] || probe_args+=(--effort "$EFFORT")
     if [ "$ULTRACODE" = 1 ]; then
-      probe=$(fm_run_timed 15 env -u CLAUDECODE claude -p --output-format json --settings '{"ultracode":true}' \
+      probe=$(fm_run_timed 15 "${probe_env[@]}" claude -p --output-format json --settings '{"ultracode":true}' \
         "${probe_args[@]+"${probe_args[@]}"}" '/effort current' </dev/null 2>/dev/null) || probe=
       if ! printf '%s\n' "$probe" | jq -e '
         .is_error == false and .local_command == "effort" and
@@ -4857,8 +4863,8 @@ task_goal_start() {
     pane=$(fm_backend_capture "$BACKEND" "$T" 100 "$W") || pane=
     # These are CLI-local acknowledgements, not the model's ordinary reply.
     case "$HARNESS" in
-      claude) task_goal_ack_is_new "$before" "$pane" '⎿[[:space:]]+Goal set:|✔ Goal achieved' && return 0 ;;
-      codex) task_goal_ack_is_new "$before" "$pane" '• Goal active Objective:|Goal achieved [(]' && return 0 ;;
+      claude) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*⎿[[:space:]]+Goal set:|^[[:space:]]*✔ Goal achieved' && return 0 ;;
+      codex) task_goal_ack_is_new "$before" "$pane" '^[[:space:]]*• Goal active Objective:|^[[:space:]]*(• )?Goal achieved [(]' && return 0 ;;
     esac
     sleep 0.5
   done
