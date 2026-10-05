@@ -1350,7 +1350,8 @@ test_goal_first_native_input() {
     assert_task_launch_uses_probed_executable "$harness" "$launch"
     assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
-    assert_grep '/goal Reply with smoke.' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
+    assert_grep '^/goal ' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
+    assert_grep 'Reply with smoke\.' "$FAKEBIN_DIR/goal-input" "native goal input lost its completion condition"
     assert_grep 'launch-brief.md exactly, including its authority and stop/wait gates' "$FAKEBIN_DIR/goal-input" "goal omitted worker contract"
     if [ "$harness" = codex ]; then
       input=$(cat "$FAKEBIN_DIR/goal-input")
