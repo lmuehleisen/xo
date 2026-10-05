@@ -163,7 +163,7 @@ export default {
       }
     })();
     // A second root on this same server must not capture the primary's hooks.
-    const { data: sibling } = await ctx.session.create({ location: { directory: "$SIBLING" }, model: $MODEL_REF });
+    const sibling = await ctx.session.create({ location: { directory: "$SIBLING" }, model: $MODEL_REF });
     await ctx.session.prompt({ sessionID: sibling.id, text: "Reply SIBLING_READY and stop. Do not use tools." });
     return async () => { controller.abort(); await events.catch(() => {}); };
   },
@@ -210,6 +210,7 @@ while [ "$i" -lt 90 ]; do
   i=$((i + 1)); sleep 0.5
 done
 [ "$i" -lt 90 ] || fail "$VERSION: primary composer did not become ready"
+wait_file_text "$LAB/primary-events" '"type":"session.execution.started"'
 PRIMARY_VERDICT=$(fm_backend_send_text_submit tmux "$TARGET" 'Run printf PRIMARY_TOOL_OK in the shell. Then use the task tool to ask a subagent to run printf CHILD_TOOL_OK in its shell and reply CHILD_READY. After it returns, reply PRIMARY_READY and stop.' 3 0.5 0)
 [ "$PRIMARY_VERDICT" != send-failed ] || fail "$VERSION: primary prompt submission failed"
 wait_file_text "$LAB/primary-proof" PRIMARY_FOLLOWUP_EXECUTED

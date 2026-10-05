@@ -33,7 +33,8 @@ export function v2Plugin(id, factory, { rootOnly = false } = {}) {
         if (!sessions.has(sessionID)) {
           // Native resume and tool-only plugins can miss the creation event.
           try {
-            const { data: session } = await ctx.session.get({ sessionID });
+            // Promise plugins unwrap the HTTP API's single data envelope.
+            const session = await ctx.session.get({ sessionID });
             if (session.id !== sessionID) return false;
             sessions.set(sessionID, session);
           } catch {

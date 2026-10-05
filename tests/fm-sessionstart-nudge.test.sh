@@ -228,7 +228,7 @@ const rootCleanup = await bridge.setup({
   session: { get: async ({ sessionID }) => {
     reads.push(sessionID);
     if (sessionID === "unknown") throw new Error("not found");
-    return { data: { id: sessionID, location: { directory: sessionID === "sibling-root" ? "/unrelated" : process.env.WORKTREE }, ...(sessionID === "resumed-child" ? { parentID: "resumed-root" } : {}) } };
+    return { id: sessionID, location: { directory: sessionID === "sibling-root" ? "/unrelated" : process.env.WORKTREE }, ...(sessionID === "resumed-child" ? { parentID: "resumed-root" } : {}) };
   } },
   event: { subscribe: async function* () {
     yield { type: "session.execution.started", data: { sessionID: "sibling-root" } };
@@ -263,7 +263,7 @@ const toolCleanup = await toolBridge.setup({
   location: { directory: process.env.WORKTREE },
   session: { get: async ({ sessionID }) => {
     if (sessionID === "unknown") throw new Error("not found");
-    return { data: { id: sessionID, location: { directory: sessionID === "sibling" ? "/unrelated" : process.env.WORKTREE }, ...(sessionID === "child" ? { parentID: "primary" } : {}) } };
+    return { id: sessionID, location: { directory: sessionID === "sibling" ? "/unrelated" : process.env.WORKTREE }, ...(sessionID === "child" ? { parentID: "primary" } : {}) };
   } },
   tool: { hook: async (name, callback) => { toolHook = callback; } },
 });
