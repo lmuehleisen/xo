@@ -879,10 +879,11 @@ A fixture shell guard returns 2 once, and the real plugin subscribes to executio
 An unrelated root in another directory executes first on the same private server.
 The primary model then runs a shell command and delegates a child shell command.
 A fixture primary tool guard observes root calls and would reject the child's marker command; the child completes its shell call outside that guard.
+The TUI's `/new` command then creates another root whose shell call still reaches the primary guard and completes.
 The guard observes exactly one root-targeted public prompt request and its successful execution settlement; no model-authored proof file is required.
 
 ```text
-ok - opencode v2.0.18: primary sibling/child lifecycle and tool hooks stayed scoped with one root follow-up
+ok - opencode v2.0.18: primary sibling/child lifecycle, tool hooks and /new stayed scoped with one root follow-up
 ```
 
 This isolated guard verifies one forced follow-up and abortable subscription setup.
