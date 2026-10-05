@@ -1132,6 +1132,10 @@ goal_pane_fixture() {
   cat > "$FAKEBIN_DIR/tmux" <<'SH'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
+if [ "${1:-}" = new-window ]; then
+  # Each batch task starts in its own fresh composer.
+  rm -f "$dir/goal-input"
+fi
 case "$*" in
   *'#{cursor_y}'*) printf '%s\n' "$((3 + ${FM_FAKE_GOAL_PRIOR_ACK:-0}))"; exit 0 ;;
 esac
