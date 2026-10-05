@@ -729,6 +729,10 @@ test_matrix_opencode_leftbar_signals() {
   sidebar=$'  ┃                                                                                                     Connect provider /connect\n  ┃\n  ┃\n  ┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n  ╹'"$floor"$'\n  /tmp/project                    9.7K (1%)  ctrl+p commands'
   assert_screen "V2 sidebar does not pollute composer" empty "$CAPS_TMUX" "$sidebar" 1
   assert_screen "V2 location strip is cursorless furniture" empty "$CAPS_STYLED_NOID" "$sidebar"
+  local spaced_sidebar
+  spaced_sidebar=${sidebar/\/tmp\/project/\/tmp\/my project}
+  assert_screen "V2 whitespace path is cursorless furniture" empty "$CAPS_STYLED_NOID" "$spaced_sidebar"
+  assert_screen "V2 whitespace path with later output stays unknown" unknown "$CAPS_STYLED_NOID" "$spaced_sidebar"$'\nnew output'
   assert_screen "V2 extra output below footer invalidates composer" unknown "$CAPS_STYLED_NOID" "$sidebar"$'\nnew output'
   sidebar=${sidebar/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}
   assert_screen "V2 sidebar draft remains pending" pending "$CAPS_TMUX" "$sidebar" 0
