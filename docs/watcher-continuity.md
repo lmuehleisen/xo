@@ -19,14 +19,14 @@ In this document, an arm is one run of `bin/fm-watch-arm.sh`, which starts a wat
 
 ## Ownership
 
-On Pi, omp, OpenCode, Cursor, and Claude primaries, one component owns re-arming the watcher.
+On Pi, omp, OpenCode V1, Cursor, and Claude primaries, one component owns re-arming the watcher.
 Codex and Grok keep their own protocols; see [Manual recovery and other harnesses](#manual-recovery-and-other-harnesses).
 
 | Harness | Re-arm owner |
 | --- | --- |
 | Pi | `.pi/extensions/fm-primary-pi-watch.ts` |
 | omp | `.omp/extensions/fm-primary-omp-watch.ts` |
-| OpenCode | `.opencode/plugins/fm-primary-watch-arm.js` |
+| OpenCode V1 | `.opencode/plugins/fm-primary-watch-arm.js` |
 | Cursor | `.cursor/hooks.json` `stop` hook (`bin/fm-turnend-guard-cursor.sh`) |
 | Claude | `.claude/settings.json` Stop `asyncRewake` hook (`bin/fm-claude-stop-autoarm.sh`) |
 
@@ -34,7 +34,7 @@ On a non-Pi primary, a home that runs the supervision host also changes what the
 
 ### Pi, omp, and OpenCode adapters
 
-Pi's `.pi/extensions/fm-primary-pi-watch.ts`, omp's `.omp/extensions/fm-primary-omp-watch.ts`, and OpenCode's `.opencode/plugins/fm-primary-watch-arm.js` own continuous re-arm after an actionable child close.
+Pi's `.pi/extensions/fm-primary-pi-watch.ts`, omp's `.omp/extensions/fm-primary-omp-watch.ts`, and OpenCode V1's `.opencode/plugins/fm-primary-watch-arm.js` own continuous re-arm after an actionable child close.
 Each adapter:
 
 - Starts the next arm before delivering the wake prompt.
@@ -134,7 +134,7 @@ This section covers what each re-arm owner does between an actionable close and 
 
 ### Pi, omp, and OpenCode successor start
 
-After an actionable Pi, omp, or OpenCode child close, the adapter:
+After an actionable Pi, omp, or OpenCode V1 child close, the adapter:
 
 1. Waits for the predecessor process to close.
 2. Starts and verifies one singleton successor.
@@ -412,7 +412,7 @@ A live foreign holder therefore cannot strand a TERM'd watcher in this marker-lo
 ### Pi and OpenCode watch extension
 
 `tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops.
-It then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, and:
+It then simulates actionable and empty child closes against the actual Pi and OpenCode V1 close handlers, and:
 
 - Blocks prompt delivery to prove the successor launches first.
 - Verifies single-flight behavior.
@@ -516,9 +516,9 @@ They also cover the reset-time and backoff waits, a failed recovery waiting agai
 
 ## Active limits and verification
 
-The goal is continuity without a Pi, omp, or OpenCode model-memory re-arm step.
+The goal is continuity without a Pi, omp, or OpenCode V1 model-memory re-arm step.
 No zero-latency guarantee is claimed, because lock verification, watcher startup, and bounded retry delays remain deliberate safety work.
-OpenCode support targets persistent TUI sessions rather than headless `opencode run`.
+OpenCode V1 support targets persistent TUI sessions rather than headless `opencode run`.
 
 The other harnesses rely on these mechanisms:
 
