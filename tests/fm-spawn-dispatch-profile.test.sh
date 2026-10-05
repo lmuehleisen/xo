@@ -1153,7 +1153,7 @@ goal_pane_fixture() {
 dir=$(dirname "$0")
 if [ "${1:-}" = new-window ]; then
   # Each batch task starts in its own fresh composer.
-  rm -f "$dir/goal-input" "$dir/mode-launched" "$dir/optin-launched"
+  rm -f "$dir/goal-input" "$dir/mode-launched" "$dir/optin-launched" "$dir/endpoint-kill-attempted"
 fi
 case "$*" in
   *'#{cursor_y}'*)
@@ -1167,6 +1167,9 @@ case "$*" in
     exit 0
     ;;
 esac
+if [ "${1:-}" = kill-window ] && [ -f "$dir/optin-launched" ]; then
+  : > "$dir/endpoint-kill-attempted"
+fi
 if [ "${FM_FAKE_GOAL_CLOSE_FAIL:-0}" = 1 ]; then
   case "${1:-}" in
     kill-window) exit 1 ;;
@@ -1374,6 +1377,7 @@ test_interrupted_launch_optins_preserve_endpoint_ownership() {
     if [ "$signal" = TERM ]; then expected=143; else expected=129; fi
     expect_code "$expected" "$status" "interrupted opt-in launch must retain its signal status: $scenario $out"
     [ -f "$FAKEBIN_DIR/signal-sent" ] || fail "the launcher was not signalled"
+    [ -f "$FAKEBIN_DIR/endpoint-kill-attempted" ] || fail "the interrupted launcher did not try to close its exact endpoint"
     if [ "$unknown" = 1 ]; then
       [ -f "$HOME_DIR/state/$id.meta" ] || fail "an interrupted launch erased ownership of an unconfirmed endpoint: $scenario $out"
       [ -f "$HOME_DIR/state/$id.busy-gen" ] || fail "an interrupted launch retired its busy generation"

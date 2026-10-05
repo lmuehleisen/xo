@@ -112,6 +112,8 @@
 #   before spawn reports success. A failed goal launch retains its task record
 #   and busy generation unless endpoint absence is positively confirmed.
 #   The same ownership-preserving failure path covers ultracode activation.
+#   Interrupted activation also closes the exact endpoint and retains task
+#   ownership until endpoint absence is positively confirmed.
 #   These two flags refuse secondmates, relaunches, and raw commands.
 #   They are never inferred from a brief or profile.
 #   Ultra and ultracode spend substantially more quota: use only on the
@@ -1373,6 +1375,7 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
+SPAWN_OPTIN_CLEANUP_DONE=0
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -1579,6 +1582,11 @@ parse_orca_worktree_result() {
 
 spawn_abort_cleanup() {
   local status=$?
+  if [ "$SPAWN_LAUNCH_SENT" = 1 ] && [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ] &&
+    [ "$SPAWN_OPTIN_CLEANUP_DONE" = 0 ] &&
+    { [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; }; then
+    task_launch_optin_cleanup 'task launch interrupted before activation committed'
+  fi
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] &&
     [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] &&
     [ -n "$SPAWN_META_TMP" ] &&
@@ -4860,15 +4868,24 @@ task_ultracode_start() {
   return 1
 }
 
-task_launch_optin_fail() { # <detail>
+task_launch_optin_cleanup() { # <detail>
+  # Preserve ownership before any cleanup call can itself be interrupted.
+  # Only positive endpoint absence restores the provisional rollback path.
+  SPAWN_FRESH_COMMIT_PENDING=0
+  SPAWN_OPTIN_CLEANUP_DONE=1
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   spawn_delivery_endpoint_cleanup
-  if ! spawn_endpoint_proven_absent; then
+  if spawn_endpoint_proven_absent; then
+    SPAWN_FRESH_COMMIT_PENDING=1
+  else
     # An opt-in may have activated despite an unreadable acknowledgement.
     # Keep ownership until guarded teardown proves the endpoint is gone.
-    SPAWN_FRESH_COMMIT_PENDING=0
     echo "error: $1 and endpoint shutdown is unconfirmed; retaining task record $STATE/$ID.meta and worktree for recovery" >&2
   fi
+}
+
+task_launch_optin_fail() { # <detail>
+  task_launch_optin_cleanup "$1"
   exit 1
 }
 
