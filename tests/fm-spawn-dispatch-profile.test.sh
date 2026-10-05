@@ -69,6 +69,7 @@ SH
 if [ "${1:-}" = --version ]; then
   printf '%s\n' "${FM_FAKE_CLAUDE_VERSION:-2.1.289 (Claude Code)}"
 elif [ "${1:-}" = -p ]; then
+  case "$*" in *'--model default'*) exit 1 ;; esac
   if [ -n "${FM_FAKE_CLAUDE_ULTRACODE:-}" ]; then
     printf '%s\n' "$FM_FAKE_CLAUDE_ULTRACODE"
   else
@@ -1103,6 +1104,11 @@ test_claude_ultracode_optin() {
   assert_contains "$launch" '"ultracode":true' "ultracode setting missing"
   assert_contains "$launch" "--effort 'low'" "ultracode changed the explicit effort"
   assert_grep '^ultracode=on$' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
+  rec=$(make_spawn_case "$id-default-model" claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model default)
+  expect_code 0 "$?" "ultracode's default model probe must match the launch: $out"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" '--model' "default model emitted a literal model flag"
   for probe in old-version unsupported-model; do
     rec=$(make_spawn_case "$id-$probe" claude "$id")
     read_case_record "$rec"

@@ -2806,7 +2806,7 @@ task_launch_optins_validate() {
       echo "error: task launch opt-ins require verified Claude Code 2.1.289 or newer" >&2
       return 1
     fi
-    [ -z "$MODEL" ] || probe_args+=(--model "$MODEL")
+    [ -z "$MODEL" ] || [ "$MODEL" = default ] || probe_args+=(--model "$MODEL")
     [ -z "$EFFORT" ] || probe_args+=(--effort "$EFFORT")
     if [ "$ULTRACODE" = 1 ]; then
       probe=$(fm_run_timed 15 env -u CLAUDECODE claude -p --output-format json --settings '{"ultracode":true}' \
