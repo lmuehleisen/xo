@@ -1876,6 +1876,7 @@ test_git_adapter_refuses_indirect_publication() {
   printf 'URL: %s\nPush: main:main\n' "$TMP_ROOT/public.git" >"$repo/.git/remotes/legacy"
   out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push legacy main 2>&1) && fail "legacy remote must refuse"
   assert_contains "$out" 'legacy remote refused' 'legacy destination refusal'
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c core.quotePath=false diff-tree --root --name-only HEAD 2>&1) || fail "trusted scanner formatting setting must pass: $out"
   git -C "$repo" config remote.origin.mirror true
   out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "implicit mirror must refuse"
   assert_contains "$out" 'implicit mirror' 'implicit refs refusal'
@@ -1897,24 +1898,29 @@ test_git_adapter_checks_rewritten_destination() {
   # Pipeline evidence worktrees need not have the source checkout's hooks.
   # The adapter itself must scan the actual target even without that backstop.
   rm -f "$TMP_ROOT/rewritten-publication.hooks/pre-push"
+  local wrapped="$TMP_ROOT/wrapped-publisher-bin"
+  mkdir -p "$wrapped"
+  printf '#!/bin/sh\nexec "%s" "%s" "%s" "$@"\n' "$(command -v node)" "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" >"$wrapped/git"
+  chmod +x "$wrapped/git"
+  PATH="$wrapped:$PATH" git -C "$repo" status --short >/dev/null || fail "wrapped publisher read failed"
   git -C "$repo" branch clean
   commit_file "$repo" fixture.txt "$PRIVATE_TERM" 'Add fixture' || fail "fixture commit failed"
   git -C "$repo" remote set-url origin "$alias_url"
   for mode in insteadOf pushInsteadOf; do
     git -C "$repo" config "url.$TMP_ROOT/public.git.$mode" "$alias_url"
-    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" main 2>&1) && fail "explicit rewritten public destination must be checked"
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" main 2>&1) && fail "explicit rewritten public destination must be checked"
     if [ "$mode" = insteadOf ]; then
       assert_contains "$out" denylist 'explicit rewrite content refusal'
     else
       assert_contains "$out" 'explicit URL rewrite' 'explicit push rewrite refusal'
     fi
     assert_no_secret_echo "$out" 'rewritten destination refusal'
-    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "named rewritten public destination must be checked"
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "named rewritten public destination must be checked"
     assert_contains "$out" denylist 'named rewrite content refusal'
     git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "refused rewritten push changed remote"
-    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin clean:refs/heads/clean 2>&1) || fail "clean rewritten local push must pass: $out"
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin clean:refs/heads/clean 2>&1) || fail "clean rewritten local push must pass: $out"
     assert_equals "$(git -C "$repo" rev-parse clean)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse clean)" 'checked rewritten local push'
-    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" clean:refs/heads/explicit 2>&1) && fail "rewritten explicit clean target must require configured remote"
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" clean:refs/heads/explicit 2>&1) && fail "rewritten explicit clean target must require configured remote"
     assert_contains "$out" 'explicit URL rewrite' 'explicit rewritten target boundary'
     git -C "$repo" config --unset "url.$TMP_ROOT/public.git.$mode"
   done

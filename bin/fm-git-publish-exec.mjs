@@ -27,6 +27,14 @@ try {
       if (!argv[i + 1]) throw new Error("missing -C directory");
       cwd = path.resolve(cwd, argv[i + 1]); i += 2; continue;
     }
+    // The trusted scanner needs literal path names; this exact formatting
+    // setting cannot select aliases, identity, hooks or a publishing target.
+    if (flag === "-c" && argv[i + 1]?.toLowerCase() === "core.quotepath=false") {
+      otherGlobals = true; i += 2; continue;
+    }
+    if (flag.toLowerCase() === "-ccore.quotepath=false") {
+      otherGlobals = true; i += 1; continue;
+    }
     if (["--git-dir", "--work-tree"].includes(flag)) {
       if (!argv[i + 1]) throw new Error("missing Git directory");
       otherGlobals = true; i += 2; continue;
