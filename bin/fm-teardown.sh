@@ -73,6 +73,25 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# A finished scout can leave a nested directory without owner write permission,
+# for example a copied Git hooks tree. treehouse return then cleans with
+# `git clean -fd`, which unlinks a child only when that child's parent directory
+# is writable and does not repair the mode, so the return fails and the scratch
+# copy stays checked out. prepare_scout_scratch_for_return runs only for
+# kind=scout, after those report, completion-gate, and landed-work refusals,
+# immediately before that task's own treehouse return. It restores owner write
+# on real directories inside the scratch copy and does not follow symlinks.
+# Each directory is entered and checked with pwd -P; owner write is then
+# changed on `.`, the directory inode that process is already in, so a symlink
+# planted on an ancestor after the check cannot redirect the mode change. A
+# path that resolves outside the worktree aborts the return and is not changed.
+# Ship worktrees are not modified, including a --force discard.
+# The walk lists real directories on one filesystem. A directory it cannot
+# descend, a uchg flag, a hard link to an outside inode, and a same-filesystem
+# bind mount of an outside directory stay out of this repair, and it does not
+# change files or flags. The kernel walk inside cd -P can observe a symlink
+# that appears during that walk; pwd -P then refuses an outside result before
+# any mode change.
 # Before destructive cleanup, teardown validates task check artifacts as
 # ordinary single-link files on the state device. It refuses and preserves
 # task state when that proof fails; otherwise it removes the task's check,
@@ -1803,6 +1822,90 @@ cleanup_stale_lock_for_safety_check() {
 
   echo "teardown: worktree safety check blocked by git lock $lock that is not provably stale (may belong to a live process); leaving it in place" >&2
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
+}
+
+# True when path is root or a lexical child of root. The prefix is literal, so
+# a root of /tmp/wt does not accept /tmp/wt-evil.
+scout_dir_is_under() {
+  local root=$1 path=$2 rest
+  [ -n "$root" ] && [ "$root" != / ] || return 1
+  [ -n "$path" ] || return 1
+  [ "$path" = "$root" ] && return 0
+  rest=${path#"$root"/}
+  [ "$rest" != "$path" ]
+}
+
+# Restore owner write on one real directory inside a scratch scout worktree.
+# See the script header. A symlink is skipped. A directory that resolves
+# outside the worktree aborts the return.
+scout_restore_dir_owner_write() {
+  local wt_phys=$1 path=$2 rc=0
+  [ -n "$path" ] || return 0
+  if [ -L "$path" ]; then
+    return 0
+  fi
+  [ -d "$path" ] || return 0
+  if ! scout_dir_is_under "$wt_phys" "$path"; then
+    echo "teardown: refusing to change $path; it is not inside scratch scout worktree $wt_phys" >&2
+    return 1
+  fi
+  # Enter the directory and chmod `.` only after pwd -P still names a path
+  # inside the worktree. chmod of `.` does not walk ancestors again.
+  (
+    CDPATH=
+    cd -P -- "$path" || exit 1
+    now=$(pwd -P) || exit 1
+    scout_dir_is_under "$wt_phys" "$now" || exit 2
+    chmod u+w . || exit 1
+  ) || rc=$?
+  case "$rc" in
+    0) ;;
+    2)
+      echo "teardown: refusing to change $path; it resolves outside scratch scout worktree $wt_phys" >&2
+      return 1
+      ;;
+    *)
+      echo "teardown: cannot restore write permission on $path" >&2
+      return 1
+      ;;
+  esac
+}
+
+# Restore owner write on real directories in a scratch scout worktree so the
+# following treehouse return can unlink a tree the scout left non-writable.
+# See the script header. Ships are unchanged.
+prepare_scout_scratch_for_return() {
+  local wt=$1 wt_phys list path
+  [ "$KIND" = scout ] || return 0
+  [ -n "$wt" ] || return 0
+  [ -d "$wt" ] || return 0
+  # A pool slot recorded through a symlink is resolved once. The walk below
+  # does not follow any symlink inside that physical directory.
+  wt_phys=$(canonical_existing_dir "$wt") || {
+    echo "teardown: cannot resolve scratch scout worktree $wt" >&2
+    return 1
+  }
+  if [ -z "$wt_phys" ] || [ "$wt_phys" = / ]; then
+    echo "teardown: refusing to change $wt; its scratch scout path is not a repairable directory" >&2
+    return 1
+  fi
+  list=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || return 1
+  # -P is stated so this walk cannot follow a symlink into a directory outside
+  # the worktree. -xdev stays on the worktree filesystem. -type d excludes
+  # symlinks, including a link to a directory.
+  if ! find -P "$wt_phys" -xdev -type d -print0 >"$list"; then
+    rm -f "$list"
+    echo "teardown: cannot list scratch scout worktree $wt to restore write permission" >&2
+    return 1
+  fi
+  while IFS= read -r -d '' path; do
+    [ -n "$path" ] || continue
+    if ! scout_restore_dir_owner_write "$wt_phys" "$path"; then
+      rm -f "$list"
+      return 1
+    fi
+  done <"$list"
+  rm -f "$list"
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
@@ -3708,6 +3811,9 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # to pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks
   # left by a killed crew process; see the script header for retry and stale-lock proof.
+  # A scratch scout's non-writable directories are made owner-writable first,
+  # and only then. A ship, including a --force discard, is not modified.
+  prepare_scout_scratch_for_return "$WT" || exit 1
   post_lock_cleanup_check=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
