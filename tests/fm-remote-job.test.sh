@@ -254,8 +254,9 @@ SH
   [ -z "$legacy" ] || export FM_REMOTE_JOB_POLL_SECONDS="$legacy"
   # shellcheck disable=SC2030 # The active override is local to this cadence fixture.
   [ -z "$active" ] || export FM_REMOTE_JOB_ACTIVE_POLL_SECONDS="$active"
+  # shellcheck disable=SC2031 # This cadence fixture sets fresh values; takeover exports stay local.
   export FM_REMOTE_JOB_STATE_ROOT="$poll_dir/state" FM_ROOT_OVERRIDE="$REMOTE_ROOT"
-  # shellcheck disable=SC2030 # Each cadence fixture owns its subshell's bounds.
+  # shellcheck disable=SC2030,SC2031 # Fresh cadence bounds do not depend on the takeover subshell.
   export FM_REMOTE_JOB_QUEUE_TIMEOUT=60 FM_REMOTE_JOB_TIMEOUT=30
   # shellcheck disable=SC2030 # The recording executable is local to this fixture.
   export PATH="$poll_dir/bin:$PATH" FM_POLL_SLEEP_LOG="$poll_dir/sleeps"
@@ -339,6 +340,7 @@ pass "default queue and execution bounds independently cover long polls"
 
 # shellcheck disable=SC2031 # The earlier assignment was confined to DEFAULT_BOUNDS.
 export FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT"
+# shellcheck disable=SC2031 # The parent sets its platform explicitly; takeover exports stay local.
 export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux
 # shellcheck disable=SC2031 # The sourced defaults above were confined to DEFAULT_BOUNDS.
 export FM_REMOTE_JOB_QUEUE_TIMEOUT=5
