@@ -2846,7 +2846,7 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
   fi
 fi
 # Ultra is an explicit native capability, never a Pi thinking-level alias.
-# Validate the fully resolved profile before worktree or endpoint provisioning.
+# Pin native opt-in executables before worktree or endpoint provisioning.
 TASK_OPTIN_BIN=
 if [ "$RAW_LAUNCH" = 0 ] && [ "$KIND" != secondmate ] &&
   { [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ] || { [ "$HARNESS" = codex ] && [ "$EFFORT" = ultra ]; }; }; then
@@ -3596,7 +3596,7 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-# Account and project resolution precede CLI preflight. Ultracode capability
+# Account and project resolution precede Claude's version preflight. Ultracode capability
 # is verified inside the launched session, whose ambient credentials and
 # project-local settings can differ from this spawning process.
 if [ "$HARNESS" = claude ] && { [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; }; then
