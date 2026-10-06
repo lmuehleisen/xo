@@ -67,8 +67,8 @@
 #   model, and effort may change, which is what makes a harness switch one
 #   ordinary relaunch. Same-adapter OpenCode replacements inherit recorded
 #   model and effort unless explicitly supplied. OpenCode restart readiness or
-#   delivery failure retains the endpoint and wiring, keeps an adopted record,
-#   or publishes recovery metadata for a newly rebound endpoint,
+#   delivery failure retains the endpoint, wiring, and published task record,
+#   marking the replacement as failed for recovery,
 #   and captures diagnostics in tasktmp/opencode-startup-<spawn_gen>.log.
 #   It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
@@ -4893,23 +4893,18 @@ opencode_spawn_fail() { # <detail>
     } >"$diagnostic"; then
       echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
     fi
-    # This launch may already be processing a submitted brief. Retain its
-    # endpoint and plugin generation, while the unpublished replacement meta
-    # is discarded by the abort trap so a failed gate cannot report success.
-    RELAUNCH_REPLACEMENT_PENDING=0
-    if [ "$RELAUNCH_REBIND" -eq 1 ]; then
-      # The old address is proven gone. Recovery must own the surviving new
-      # endpoint, but this marker prevents control from calling mere liveness
-      # a successful relaunch after readiness or brief delivery failed.
-      printf 'opencode_launch_failure=%s\n' "$SPAWN_GEN" >>"$SPAWN_META_TMP"
-      if fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
-        SPAWN_META_TMP=
-        echo "warning: OpenCode recovery metadata published for rebound endpoint $T" >&2
-      else
-        echo "error: failed to publish OpenCode recovery endpoint $T: $FM_BACKLOG_TRANSITION_ERROR; reconcile $STATE/$ID.meta before recovery" >&2
-      fi
+    # Publication already bound this replacement to the endpoint. Keep that
+    # record and plugin generation, including when the previous pane was gone.
+    # Mere agent liveness must not turn failed readiness into relaunch success.
+    SPAWN_META_TMP="$STATE/.$ID.meta.opencode-failed.${BASHPID:-$$}"
+    if awk -F= '$1 != "opencode_launch_failure"' "$STATE/$ID.meta" >"$SPAWN_META_TMP" &&
+      printf 'opencode_launch_failure=%s\n' "$SPAWN_GEN" >>"$SPAWN_META_TMP" &&
+      fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
+      SPAWN_META_TMP=
+    else
+      echo "error: could not mark OpenCode replacement failure in $STATE/$ID.meta; reconcile endpoint $T before recovery" >&2
     fi
-    echo "warning: OpenCode endpoint and replacement wiring are preserved; diagnostics=$diagnostic" >&2
+    echo "warning: OpenCode endpoint and replacement wiring are preserved; task record retained; diagnostics=$diagnostic" >&2
     return 0
   fi
   spawn_delivery_endpoint_cleanup

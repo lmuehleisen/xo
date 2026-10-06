@@ -49,11 +49,11 @@ cat > "$FM_HOME/data/$ID/brief.md" <<BRIEF
 Verify a trivial runtime task.
 ## Firstmate spec
 Do not edit or inspect any project files.
-Append exactly "working: brief processed" to $FM_HOME/state/probe-proof.
+Append a newline-terminated line containing "working: brief processed" to $FM_HOME/state/$ID.status.
 Then reply BRIEF_OK and stop until an instruction arrives.
 Your steering inbox is $FM_HOME/state/$ID.inbox.
 Read each *.msg there when instructed and acknowledge it by moving it into handled/.
-If relaunched and probe-proof already exists, append "working: relaunched" instead.
+If the status file already contains "brief processed", append "working: relaunched" instead.
 BRIEF
 tmux new-session -d -s probe -n anchor -c "$LAB/project" -x 140 -y 40 "bash --noprofile --norc -i"
 # Keep the new endpoint on this private server; production allocation still
@@ -80,7 +80,7 @@ wait_idle() {
 }
 . "$ROOT/bin/fm-busy-lib.sh"
 bash "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB/project" --scout --harness opencode --model "$MODEL"
-wait_file_text "$FM_HOME/state/probe-proof" 'brief processed'
+wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
 wait_idle
 [ -f "$FM_HOME/state/$ID.turn-ended" ] || fail "$VERSION: no turn-end notification"
 PLUGIN="/tmp/fm-$ID/opencode-plugin-$(cat "$FM_HOME/state/$ID.busy-gen")/index.mjs"
@@ -107,8 +107,8 @@ done
 [ "$i" -lt 30 ] || fail "$VERSION: draft classified empty"
 tmux send-keys -t "$TARGET" C-u
 sleep 0.3
-bash "$ROOT/bin/fm-send.sh" "$ID" "Append 'working: steer processed' to $FM_HOME/state/probe-proof and acknowledge this inbox message. Then stop."
-wait_file_text "$FM_HOME/state/probe-proof" 'steer processed'
+bash "$ROOT/bin/fm-send.sh" "$ID" "Append 'working: steer processed' to $FM_HOME/state/$ID.status and acknowledge this inbox message. Then stop."
+wait_file_text "$FM_HOME/state/$ID.status" 'steer processed'
 wait_idle
 find "$FM_HOME/state/$ID.inbox/handled" -name '*.msg' | grep -q . || fail "$VERSION: steer was not acknowledged"
 bash "$ROOT/bin/fm-send.sh" "$ID" "Run sleep 30 in the shell tool. Do not run other tools until it finishes."
@@ -119,6 +119,7 @@ while [ "$i" -lt 90 ]; do
   i=$((i + 1)); sleep 0.5
 done
 [ "$i" -lt 90 ] || fail "$VERSION: running surface not observed"
+[ "$(fm_composer_classify_screen styled=0 "$SCREEN")" = empty ] || fail "$VERSION: running cursorless composer unreadable"
 bash "$ROOT/bin/fm-control.sh" "$ID" interrupt
 wait_idle
 bash "$ROOT/bin/fm-control.sh" "$ID" exit
@@ -128,16 +129,39 @@ printf 'preserved work\n' > "$LAB/wt/progress.txt"
 bash "$ROOT/bin/fm-spawn.sh" "$ID" --relaunch
 [ "$(sed -n 's/^model=//p' "$FM_HOME/state/$ID.meta")" = "$MODEL" ] || fail "$VERSION: relaunch lost recorded model"
 [ "$(cat "$LAB/wt/progress.txt")" = 'preserved work' ] || fail "$VERSION: relaunch changed work"
-wait_file_text "$FM_HOME/state/probe-proof" 'relaunched'
+wait_file_text "$FM_HOME/state/$ID.status" 'relaunched'
 wait_idle
 SCREEN=$(tmux capture-pane -p -t "$TARGET")
 [ "$(fm_composer_classify_screen styled=0 "$SCREEN")" = empty ] || fail "$VERSION: restarted cursorless idle unreadable"
 if [ "$MODEL" = opencode/muse-spark-1.3-contributor-free ]; then
   printf '%s\n' "$SCREEN" | grep -Fq 'Muse Spark 1.3 Free OpenCode Zen' || fail "$VERSION: relaunch displayed wrong model"
 fi
-bash "$ROOT/bin/fm-send.sh" "$ID" "Append 'working: restarted steer processed' to $FM_HOME/state/probe-proof and acknowledge this inbox message. Then stop."
-wait_file_text "$FM_HOME/state/probe-proof" 'restarted steer processed'
+HANDLED_BEFORE=$(find "$FM_HOME/state/$ID.inbox/handled" -name '*.msg' | wc -l)
+bash "$ROOT/bin/fm-send.sh" "$ID" "Append 'working: restarted steer processed' to $FM_HOME/state/$ID.status and acknowledge this inbox message. Then stop."
+wait_file_text "$FM_HOME/state/$ID.status" 'restarted steer processed'
 wait_idle
+[ "$(find "$FM_HOME/state/$ID.inbox/handled" -name '*.msg' | wc -l)" -gt "$HANDLED_BEFORE" ] || fail "$VERSION: restarted steer was not acknowledged"
 [ "$(fm_backend_agent_state tmux "$TARGET")" = alive ] || fail "$VERSION: restarted pane lost agent"
 bash "$ROOT/bin/fm-control.sh" "$ID" exit
-pass "$VERSION: fresh spawn, bare relaunch model, preserved work, brief/status, busy/idle, turn-end, cursorless composer, durable steer, interrupt and exit"
+# Force a readiness timeout before brief submission, then prove the real pane
+# and its work survived and that the ordinary control plane can still exit it.
+if FM_OPENCODE_READY_POLLS=0 bash "$ROOT/bin/fm-spawn.sh" "$ID" --relaunch > "$LAB/failed-restart.txt" 2>&1; then
+  fail "$VERSION: forced readiness failure unexpectedly succeeded"
+fi
+grep -Fq 'endpoint and replacement wiring are preserved' "$LAB/failed-restart.txt" || fail "$VERSION: failure omitted recovery diagnostics"
+i=0
+while [ "$i" -lt 60 ]; do
+  [ "$(fm_backend_agent_state tmux "$TARGET")" != alive ] || break
+  i=$((i + 1)); sleep 0.5
+done
+[ "$i" -lt 60 ] || fail "$VERSION: failed readiness removed the real pane"
+[ "$(cat "$LAB/wt/progress.txt")" = 'preserved work' ] || fail "$VERSION: failed readiness changed work"
+find "/tmp/fm-$ID" -name 'opencode-startup-*.log' | grep -q . || fail "$VERSION: no retained failure capture"
+i=0
+while [ "$i" -lt 60 ]; do
+  [ "$(fm_backend_composer_state tmux "$TARGET")" != empty ] || break
+  i=$((i + 1)); sleep 0.5
+done
+[ "$i" -lt 60 ] || fail "$VERSION: retained failed-restart composer did not settle"
+bash "$ROOT/bin/fm-control.sh" "$ID" exit
+pass "$VERSION: fresh spawn, bare relaunch model, preserved work, brief/status, busy/idle, turn-end, cursorless composer, durable steer, interrupt, exit and failed-restart retention"
