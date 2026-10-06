@@ -1056,6 +1056,9 @@ do_relaunch() {
     die "the launch of $ID's replacement reported a failure after republishing task $ID's record, and that record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to check for the agent; reconcile $META before any further control action"
   fi
 
+  if [ "$TARGET_HARNESS" = opencode ] && [ -n "$(fm_meta_get "$META" opencode_launch_failure)" ]; then
+    die "OpenCode replacement readiness or brief delivery failed; endpoint $T is retained for inspection, not confirmed as relaunched"
+  fi
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {
     [ "$spawn_ok" = 1 ] \
       || die "the replacement agent for $ID could not be launched on $TARGET_HARNESS and did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"

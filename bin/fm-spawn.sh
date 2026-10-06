@@ -65,7 +65,12 @@
 #   validated state/<id>.meta, so --backend, --scout, --secondmate, a project
 #   positional, and batch pairs are all refused alongside it; only harness,
 #   model, and effort may change, which is what makes a harness switch one
-#   ordinary relaunch. It refuses unless the recorded endpoint is positively
+#   ordinary relaunch. Same-adapter OpenCode replacements inherit recorded
+#   model and effort unless explicitly supplied. OpenCode restart readiness or
+#   delivery failure retains the endpoint and wiring, keeps an adopted record,
+#   or publishes recovery metadata for a newly rebound endpoint,
+#   and captures diagnostics in tasktmp/opencode-startup-<spawn_gen>.log.
+#   It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
 #   or herdr), and clears the previous harness's per-task wiring before arming
 #   the new incarnation. Two verdicts are agent-free: a `dead` endpoint is
@@ -2207,6 +2212,14 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: task $ID has no recorded harness; pass --harness to relaunch it" >&2
     exit 1
   }
+  # OpenCode's V2 config must retain the selected model on the direct
+  # --relaunch path too; fm-control is not the only allowed stopped-task caller.
+  # Keep this scoped to the same adapter: an explicit harness switch must not
+  # inherit a provider/model or variant selected for the previous harness.
+  if [ "$ARG3" = opencode ] && [ "$RELAUNCH_PRIOR_HARNESS" = opencode ]; then
+    [ "$MODEL_SET" -eq 1 ] || MODEL=$(fm_meta_get "$RELAUNCH_META" model)
+    [ "$EFFORT_SET" -eq 1 ] || EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
+  fi
   fm_agy_relaunch_inherit
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
@@ -4871,6 +4884,34 @@ spawn_delivery_endpoint_cleanup() {
 opencode_spawn_fail() { # <detail>
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
+  if [ "$RELAUNCH" -eq 1 ]; then
+    local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
+    if ! {
+      printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
+        "$1" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
+      fm_backend_capture "$BACKEND" "$T" 100 "$W"
+    } >"$diagnostic"; then
+      echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
+    fi
+    # This launch may already be processing a submitted brief. Retain its
+    # endpoint and plugin generation, while the unpublished replacement meta
+    # is discarded by the abort trap so a failed gate cannot report success.
+    RELAUNCH_REPLACEMENT_PENDING=0
+    if [ "$RELAUNCH_REBIND" -eq 1 ]; then
+      # The old address is proven gone. Recovery must own the surviving new
+      # endpoint, but this marker prevents control from calling mere liveness
+      # a successful relaunch after readiness or brief delivery failed.
+      printf 'opencode_launch_failure=%s\n' "$SPAWN_GEN" >>"$SPAWN_META_TMP"
+      if fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
+        SPAWN_META_TMP=
+        echo "warning: OpenCode recovery metadata published for rebound endpoint $T" >&2
+      else
+        echo "error: failed to publish OpenCode recovery endpoint $T: $FM_BACKLOG_TRANSITION_ERROR; reconcile $STATE/$ID.meta before recovery" >&2
+      fi
+    fi
+    echo "warning: OpenCode endpoint and replacement wiring are preserved; diagnostics=$diagnostic" >&2
+    return 0
+  fi
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
     SPAWN_ENDPOINT_CLOSED=1
@@ -5761,7 +5802,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir opencode_launch_failure", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)

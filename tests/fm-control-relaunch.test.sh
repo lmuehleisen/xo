@@ -72,6 +72,9 @@ case "${1:-}" in
       esac
     done
     payload=${1:-}
+    if [ "${FM_FAKE_OPENCODE_SEND_FAIL:-0}" = 1 ]; then
+      case "$payload" in *'Read the brief at'*) exit 1 ;; esac
+    fi
     if [ "$literal" = 1 ]; then
       # The pane shows what was typed (the staged file's source line), while the
       # literal log records the launch command that line runs.
@@ -85,7 +88,7 @@ case "${1:-}" in
           printf 'zsh' > "$D/command"
           [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
-        *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)
+        *'encode launch-brief'* | *'Firstmate operational input waiting: read'* | *'opencode --standalone --auto'*)
           if [ -n "${FM_FAKE_DROP_LAUNCH_ENTER:-}" ]; then
             printf '%s' "$typed" > "$D/pending-launch"
           elif [ -n "${FM_FAKE_LAUNCH_INTERMEDIATE:-}" ]; then
@@ -126,7 +129,11 @@ case "${1:-}" in
   display-message)
     for a in "$@"; do
       case "$a" in
-        *cursor_y*) printf '1\n'; exit 0 ;;
+        *cursor_y*)
+          if [ "${FM_FAKE_OPENCODE_CURSORLESS:-0}" = 1 ] && [ "$(cat "$D/command")" = opencode ]; then
+            printf '\n'
+          else printf '1\n'; fi
+          exit 0 ;;
         *pane_width*) printf '200\n'; exit 0 ;;
         *pane_current_command*)
           if [ -f "$D/launch-command-reads" ]; then
@@ -154,6 +161,14 @@ case "${1:-}" in
       exit 0
     fi
     [ -z "${FM_FAKE_COMPOSER_READ_FAIL:-}" ] || exit 1
+    if [ "$(cat "$D/command")" = opencode ]; then
+      if [ "${FM_FAKE_OPENCODE_PENDING:-0}" = 1 ]; then
+        printf '┃\n┃  retained draft\n┃\n┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n╹▀▀▀▀▀▀▀▀\n'
+      else
+        printf '┃\n┃\n┃\n┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n╹▀▀▀▀▀▀▀▀\n  12.8K (1%%)  ctrl+p commands    /tmp/project:main\n'
+      fi
+      exit 0
+    fi
     if [ "$(cat "$D/command")" = codex ]; then
       # cursor_y above is zero-based row 1, so the composer is the second row.
       printf 'Codex fixture\n› %s\n' "$(cat "$D/composer" 2>/dev/null)"
@@ -164,6 +179,9 @@ case "${1:-}" in
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
+    exit 0 ;;
+  kill-window)
+    printf '%s\n' "$*" >> "$D/killed-windows"
     exit 0 ;;
   list-windows)
     # The three shapes real tmux answers a per-session inventory with. The
@@ -1013,6 +1031,76 @@ test_worker_account_pin_follows_the_relaunch() {
   assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" \
     "an unpinned replacement must launch exactly as before"
   pass "fm-control relaunch: the replacement follows the home's current worker account pin"
+}
+
+test_opencode_direct_relaunch_retains_model_and_readies_cursorless_composer() {
+  local dir id out rc model override
+  for override in inherit named default; do
+    id="oc-restart-$override"
+    dir=$(new_case "$id" "$id")
+    add_ship_task "$dir" "$id" opencode
+    printf 'zsh' > "$dir/fake/command"
+    printf 'opencode' > "$dir/fake/becomes"
+    cat > "$dir/fakebin/opencode" <<'SH'
+#!/usr/bin/env bash
+printf 'opencode v2.0.18\n'
+SH
+    chmod +x "$dir/fakebin/opencode"
+    model=opencode/muse-spark-1.3-contributor-free
+    sed "s|^model=default$|model=$model|" "$dir/home/state/$id.meta" > "$dir/meta.new"
+    mv "$dir/meta.new" "$dir/home/state/$id.meta"
+    printf 'preserve this work\n' > "$dir/wt/progress.txt"
+    local args=("$id" --relaunch)
+    case "$override" in
+      named) model=opencode/another-model; args+=(--harness opencode --model "$model") ;;
+      default) model=default; args+=(--model default) ;;
+    esac
+    out=$(FM_FAKE_OPENCODE_CURSORLESS=1 FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 \
+      run_spawn "$dir" "${args[@]}"); rc=$?
+    expect_code 0 "$rc" "OpenCode bare restart must ready and deliver its brief: $out"
+    [ "$(meta_field "$dir" "$id" model)" = "$model" ] || fail "restart lost model override=$override"
+    assert_contains "$(cat "$dir/fake/literal")" 'Read the brief at' "ready composer did not receive instructions"
+    if [ "$model" != default ]; then
+      assert_contains "$(cat "$dir/fake/literal")" "\"model\":\"$model\"" "launch config lost model"
+    else
+      assert_not_contains "$(cat "$dir/fake/literal")" '"model":' "explicit default did not clear model pin"
+    fi
+    [ "$(cat "$dir/wt/progress.txt")" = 'preserve this work' ] || fail "restart changed uncommitted work"
+    [ ! -e "$dir/fake/killed-windows" ] || fail "successful restart closed its pane"
+  done
+  pass "OpenCode direct restart inherits its model, honors overrides, and submits through cursorless V2 readiness"
+}
+
+test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
+  local dir id out rc before failure gen
+  for failure in readiness submission; do
+    id="oc-restart-fail-$failure"
+    dir=$(new_case "$id" "$id")
+    add_ship_task "$dir" "$id" opencode
+    printf zsh > "$dir/fake/command"
+    printf opencode > "$dir/fake/becomes"
+    printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+    chmod +x "$dir/fakebin/opencode"
+    before=$(cat "$dir/home/state/$id.meta")
+    printf 'preserved\n' > "$dir/wt/progress.txt"
+    out=$(FM_FAKE_OPENCODE_PENDING="$([ "$failure" != readiness ] || printf 1)" \
+      FM_FAKE_OPENCODE_SEND_FAIL="$([ "$failure" != submission ] || printf 1)" \
+      FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
+      run_spawn "$dir" "$id" --relaunch); rc=$?
+    expect_code 1 "$rc" "OpenCode failed restart must fail: $out"
+    [ ! -e "$dir/fake/killed-windows" ] || fail "failed restart silently removed its pane"
+    [ "$(cat "$dir/home/state/$id.meta")" = "$before" ] || fail "failed restart changed prior record"
+    [ "$(cat "$dir/wt/progress.txt")" = preserved ] || fail "failed restart changed work"
+    assert_contains "$out" 'endpoint and replacement wiring are preserved' "failure must identify retained endpoint"
+    assert_grep '^failed .*OpenCode V2' "$dir/home/state/$id.status" "failure must notify supervisor"
+    gen=$(cat "$dir/home/state/$id.busy-gen")
+    [ -f "/tmp/fm-$id/opencode-plugin-$gen/index.mjs" ] || fail "retained agent lost plugin wiring"
+    assert_grep 'Build auto' "/tmp/fm-$id"/opencode-startup-*.log "failure must retain captured terminal evidence"
+    if [ "$failure" = readiness ]; then
+      assert_not_contains "$(cat "$dir/fake/literal")" 'Read the brief at' "pending composer received a brief"
+    fi
+  done
+  pass "OpenCode failed restart preserves its pane, prior record, work and captured diagnostics"
 }
 
 test_explicit_model_wins_over_the_recorded_one() {
@@ -2341,7 +2429,7 @@ case "${1:-} ${2:-}" in
       ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
     esac
     case "$payload" in
-      *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)
+      *'encode launch-brief'* | *'Firstmate operational input waiting: read'* | *'opencode --standalone --auto'*)
         printf '%s\n' "$payload" > "$D/launched-command"
         : > "$D/herdr-agent-live" ;;
     esac
@@ -2442,6 +2530,34 @@ herdr_case_or_skip() {  # <name> <id> [session] [surviving-pane]
   add_herdr_ship_task "$HERDR_CASE_DIR" "$2" "${3:-fmlab}" "${4:-%7}"
   make_herdr_stub "$HERDR_CASE_DIR"
   return 0
+}
+
+test_opencode_rebind_failure_keeps_recovery_endpoint_without_completing_control() {
+  local dir id out rc verb
+  for verb in spawn control; do
+    id="oc-rebind-$verb"
+    herdr_case_or_skip "$id" "$id" fmlab %none || return 0
+    dir=$HERDR_CASE_DIR
+    sed 's/^harness=claude$/harness=opencode/' "$dir/home/state/$id.meta" > "$dir/meta.new"
+    mv "$dir/meta.new" "$dir/home/state/$id.meta"
+    printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+    chmod +x "$dir/fakebin/opencode"
+    if [ "$verb" = spawn ]; then
+      out=$(FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 run_spawn "$dir" "$id" --relaunch); rc=$?
+    else
+      out=$(FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
+        run_control "$dir" "$id" relaunch --note "resume preserved work"); rc=$?
+    fi
+    expect_code 1 "$rc" "failed OpenCode rebound readiness must stay failed: $out"
+    [ "$(meta_field "$dir" "$id" window)" = 'fmlab:%9' ] || fail "failed rebind lost new recovery address"
+    [ -n "$(meta_field "$dir" "$id" opencode_launch_failure)" ] || fail "failed rebind lacks failure marker"
+    assert_not_contains "$(cat "$dir/fake/herdr-log")" 'pane close' "failed rebind removed recovery pane"
+    if [ "$verb" = control ]; then
+      assert_contains "$out" 'not confirmed as relaunched' "control mistook agent liveness for readiness"
+      [ "$(journal_field "$dir" "$id" phase)" = failed ] || fail "failed readiness completed control journal"
+    fi
+  done
+  pass "OpenCode failed rebind owns its recovery endpoint without completing the relaunch transaction"
 }
 
 test_herdr_relaunch_resumes_only_the_registered_pi_session() {
@@ -2737,6 +2853,8 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_codex_ultra_relaunch_uses_recorded_worktree_configuration
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
+test_opencode_direct_relaunch_retains_model_and_readies_cursorless_composer
+test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics
 test_explicit_model_wins_over_the_recorded_one
 test_recorded_launch_optins_refuse_recovery_before_stop
 test_relaunch_onto_an_unverified_harness_is_refused
@@ -2786,6 +2904,7 @@ test_tmux_refuses_a_window_missing_from_its_session
 test_tmux_refuses_a_session_that_cannot_be_found
 test_tmux_refuses_when_the_server_is_gone
 test_reclaim_refuses_an_unreadable_endpoint
+test_opencode_rebind_failure_keeps_recovery_endpoint_without_completing_control
 test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
