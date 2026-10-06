@@ -612,6 +612,44 @@ test_unsearchable_directory_inside_reported_mount_does_not_block_return() {
   pass "an unsearchable directory inside a reported mount does not stop the scratch copy from being returned"
 }
 
+# A backslash followed by a letter is still part of the path. The reported
+# mount must match those bytes and stay unchanged while the rest is returned.
+test_reported_mount_with_backslash_is_not_made_writable() {
+  local case_dir id=scout-mount-backslash rc dir_mode escaped name
+  skip_if_directory_mode_is_bypassed "scout-mount-backslash" && return 0
+  case_dir=$(make_case scout-mount-backslash)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  name='mnt\tbind'
+  mkdir -p "$case_dir/wt/$name"
+  printf 'stay\n' > "$case_dir/wt/$name/file"
+  chmod a-w "$case_dir/wt/$name" "$case_dir/wt/$name/file"
+  dir_mode=$(mode_of "$case_dir/wt/$name")
+  escaped=$(scout_mountinfo_escape "$case_dir/wt/$name")
+  printf '%s\n' "1 0 1:1 / / rw - ext4 /dev/root rw" > "$case_dir/mountinfo"
+  printf '2 1 1:1 /bound %s rw - ext4 /dev/root rw\n' "$escaped" >> "$case_dir/mountinfo"
+
+  rc=0
+  FM_SCOUT_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-mount-backslash: cleanup removed a non-writable mounted tree (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-mount-backslash: teardown did not reach the worktree return"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-mount-backslash: the same-mount hooks tree was not removed"
+  [ -f "$case_dir/wt/$name/file" ] \
+    || fail "scout-mount-backslash: the mounted tree was removed"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/$name")" \
+    "scout-mount-backslash: mounted directory mode changed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "stay" "$(cat "$case_dir/wt/$name/file")" \
+    "scout-mount-backslash: mounted file contents changed"
+  assert_grep "leaving $case_dir/wt/$name unchanged" "$case_dir/stderr" \
+    "scout-mount-backslash: the reported mount was not left unchanged"$'\n'"$(cat "$case_dir/stderr")"
+  pass "a reported mount whose path contains a backslash is not made writable"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -643,4 +681,5 @@ test_scout_without_completion_gate_is_refused_unchanged
 test_reported_mount_is_not_made_writable
 test_unsearchable_directory_on_scratch_mount_aborts_before_return
 test_unsearchable_directory_inside_reported_mount_does_not_block_return
+test_reported_mount_with_backslash_is_not_made_writable
 test_separate_mount_inside_scratch_scout_is_not_made_writable

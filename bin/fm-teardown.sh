@@ -92,7 +92,8 @@
 # device and the mount point of its physical path with the scratch copy.
 # Linux reads that mount point from /proc/self/mountinfo, so a bind mount is
 # its own mount; other systems use the mount point POSIX df reports for that
-# path. A test run can supply that table only when FM_TEST_SEAM is set;
+# path. The path is compared as raw bytes, so a backslash in it still selects
+# that mount. A test run can supply that table only when FM_TEST_SEAM is set;
 # ordinary cleanup always reads the live table. A different device or mount
 # is left unchanged and is not entered, including a same-filesystem bind
 # mount and every directory under it. A failure to list a directory on the
@@ -1875,7 +1876,8 @@ scout_mountinfo_file() {
 scout_mount_point_mountinfo() {
   local path=$1 mp table
   table=$(scout_mountinfo_file)
-  mp=$(awk -v path="$path" '
+  # Raw path bytes. awk -v would rewrite a backslash escape and miss the mount.
+  mp=$(FM_SCOUT_MOUNT_PATH="$path" awk '
     function unescape(s,    out, i, n, c, esc) {
       out = ""
       n = length(s)
@@ -1899,7 +1901,11 @@ scout_mount_point_mountinfo() {
       if (mp == "/") return index(p, "/") == 1
       return index(p, mp "/") == 1
     }
-    BEGIN { best = ""; bestlen = -1 }
+    BEGIN {
+      path = ENVIRON["FM_SCOUT_MOUNT_PATH"]
+      best = ""
+      bestlen = -1
+    }
     {
       mp = unescape($5)
       if (mp !~ /^\//) next
