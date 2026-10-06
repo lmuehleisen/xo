@@ -109,7 +109,7 @@
 # `read` is the presentation command summarized above; keyed intake remains
 # the separate `answers` contract described here.
 # The versioned `fm-bearings-answer.v1` context is what an answers-mode
-# `/bearings lavish` board queues for each decision card (bin/fm-bearings-board.sh
+# `/ops lavish` board queues for each decision card (bin/fm-bearings-board.sh
 # owns when a board is interactive); a static or view-mode board emits none.
 #
 # It wraps the published `lavish-axi poll` and `lavish-axi reply` interfaces,
