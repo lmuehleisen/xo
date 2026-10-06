@@ -749,6 +749,30 @@ test_matrix_opencode_leftbar_signals() {
   assert_screen "V2 shortcuts without a path refuse" unknown "$CAPS_PLAIN" "${shortcut_first/    \/tmp\/project:main/}"
   assert_screen "V2 shortcut-first footer without floor refuses" unknown "$CAPS_PLAIN" "${shortcut_first/╹$floor/}"
   assert_screen "V2 shortcut-first footer draft refuses" unknown "$CAPS_PLAIN" "${shortcut_first/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}"
+  # Real V2 fresh home layout, including the separate right-aligned version
+  # label. The composer and location strip must still prove the whole frame.
+  local home
+  home=${sidebar/9.7K (1%)/shift+tab agents}$'\n\n\n                        2.0.18'
+  assert_screen "V2 fresh home version furniture on plain capture" empty "$CAPS_PLAIN" "$home"
+  assert_screen "V2 fresh home version furniture on styled capture" empty "$CAPS_STYLED_NOID" "$home"
+  assert_screen "V2 fresh home cursor composer" empty "$CAPS_TMUX" "$home" 1
+  assert_screen "V2 home version label cannot prove missing mode" unknown "$CAPS_PLAIN" "${home/Build auto/Review auto}"
+  assert_screen "V2 home version label cannot prove missing floor" unknown "$CAPS_PLAIN" "${home/╹$floor/}"
+  assert_screen "V2 home draft remains pending" pending "$CAPS_STYLED_NOID" "${home/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}"
+  assert_screen "V2 later output below home version refuses" unknown "$CAPS_PLAIN" "$home"$'\nnew output'
+  assert_screen "V2 later output above home version refuses" unknown "$CAPS_PLAIN" "${home/2.0.18/new output}"$'\n                        2.0.18'
+  assert_screen "V2 two version labels refuse" unknown "$CAPS_PLAIN" "$home"$'\n                        2.0.24'
+  assert_screen "V2 left-aligned version text refuses" unknown "$CAPS_PLAIN" "${home/                        2.0.18/2.0.18}"
+  assert_screen "V2 contiguous version text refuses" unknown "$CAPS_PLAIN" "$sidebar"$'\n                        2.0.18'
+  assert_screen "V2 version-like popup refuses" unknown "$CAPS_PLAIN" "${home/2.0.18/2.0.18 Update Available}"
+  local running
+  running=${sidebar/\/tmp\/project                    9.7K (1%)  ctrl+p commands/⬝⬝⬝⬝ esc interrupt                    9.6K (1%)  ctrl+p commands}
+  assert_screen "V2 running status strip proves cursorless readiness" empty "$CAPS_PLAIN" "$running"
+  assert_screen "V2 running status strip on styled capture" empty "$CAPS_STYLED_NOID" "$running"
+  assert_screen "V2 running strip without commands refuses" unknown "$CAPS_PLAIN" "${running/ctrl+p commands/}"
+  assert_screen "V2 running strip without interrupt refuses" unknown "$CAPS_PLAIN" "${running/esc interrupt/}"
+  assert_screen "V2 running strip with later output refuses" unknown "$CAPS_PLAIN" "$running"$'\nnew output'
+  assert_screen "V2 running strip cannot hide a draft" pending "$CAPS_STYLED_NOID" "${running/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}"
   local custom_sidebar
   custom_sidebar=${sidebar/Build auto/Review auto}
   assert_screen "V2 unknown mode footer stays unknown by default" unknown "$CAPS_STYLED_NOID" "$custom_sidebar"
