@@ -691,6 +691,7 @@ EOF
   printf '{"schema_version":1}\n' > "$fakehome/xdgconfig/muse/auth.json"
   for harness in no-mistakes claude codex opencode pi pi-signed grok kimi cursor-agent omp agy muse gemini rovo; do
     if [ "$harness" = opencode ]; then
+      # shellcheck disable=SC2016 # The stub must expand its own positional argument.
       printf '#!/bin/sh\n[ "${1:-}" != --version ] || printf "opencode v2.0.18\\n"\nexit 0\n' > "$fakebin/$harness"
     else
       printf '#!/bin/sh\nexit 0\n' > "$fakebin/$harness"
