@@ -415,6 +415,21 @@ assert_no_dangerous_calls() { # <msg>
   assert_absent "$CASE_HOME/kcpassword" "the doctor wrote an auto-login password"
 }
 
+# The tool probe certifies secondmate capability, not worker-only CLIs.
+new_case Linux with-herdr no-gui
+CASE_BASE_PATH=$(fm_test_base_path_sans "$BASE_PATH" \
+  claude codex opencode pi pi-signed grok kimi)
+mv "$CASE_BIN/claude" "$CASE_BIN/opencode"
+doctor --worker-tool-probe
+expect_code 1 "$DOCTOR_RC" "an OpenCode-only host passed the secondmate tool probe"
+assert_contains "$DOCTOR_OUT" 'required harness=MISSING' "worker-only OpenCode was certified as a secondmate harness"
+cp "$CASE_BIN/opencode" "$CASE_BIN/claude"
+doctor --worker-tool-probe
+expect_code 0 "$DOCTOR_RC" "a supported secondmate harness failed the same tool probe"
+assert_contains "$DOCTOR_OUT" "required harness=claude:$CASE_BIN/claude" "the supported harness was not certified"
+[ ! -s "$CASE_LAUNCHCTL_LOG" ] || fail "the tool probe attempted platform lifecycle changes"
+pass "remote readiness excludes an OpenCode-only host and accepts a supported secondmate harness"
+
 # --- a host with no herdr is never ready, and --fix cannot install one -------
 
 new_case Darwin no-herdr gui
