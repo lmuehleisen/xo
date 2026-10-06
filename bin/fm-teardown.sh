@@ -1996,7 +1996,7 @@ scout_restore_dir_owner_write() {
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 wt_phys path wt_dev wt_mnt queue next rc
+  local wt=$1 wt_phys path wt_dev wt_mnt queue next rc failed
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
@@ -2028,6 +2028,7 @@ prepare_scout_scratch_for_return() {
       rm -f "$queue"
       return 1
     }
+    failed=0
     while IFS= read -r -d '' path; do
       [ -n "$path" ] || continue
       if [ -L "$path" ] || [ ! -d "$path" ]; then
@@ -2039,18 +2040,22 @@ prepare_scout_scratch_for_return() {
         0) ;;
         3) continue ;;
         *)
-          rm -f "$queue" "$next"
-          return 1
+          failed=1
+          break
           ;;
       esac
       if ! find -P "$path" -mindepth 1 -maxdepth 1 -type d -print0 >>"$next"; then
-        rm -f "$queue" "$next"
         echo "teardown: cannot list scratch scout worktree $wt to restore write permission" >&2
-        return 1
+        failed=1
+        break
       fi
     done <"$queue"
     rm -f "$queue"
     queue=$next
+    if [ "$failed" -ne 0 ]; then
+      rm -f "$queue"
+      return 1
+    fi
   done
   rm -f "$queue"
 }
