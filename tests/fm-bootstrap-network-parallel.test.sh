@@ -125,6 +125,11 @@ case "$command_name" in
     exit 0
     ;;
   fm-remote-inherit.sh)
+    if [ "${FM_FAKE_INHERIT_PARTIAL:-0}" = 1 ]; then
+      printf 'pushed: config/crew-dispatch.json\n'
+      printf 'error: config/crew-harness: synthetic validation refusal\n' >&2
+      exit 1
+    fi
     case "$subcommand" in
       put) printf 'unchanged: %s\n' "$item_rel" ;;
     esac
@@ -337,6 +342,11 @@ test_remote_inheritance_failure_names_its_own_error_not_an_unchanged_item() {
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects" "$primary"
   git init -q -b main "$primary"
   cp -R "$ROOT/bin" "$primary/bin"
+  cat > "$primary/bin/fm-send.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FAKE_SSH_LOG"
+SH
+  chmod +x "$primary/bin/fm-send.sh"
   printf 'test primary\n' > "$primary/AGENTS.md"
   git -C "$primary" add AGENTS.md bin
   git -C "$primary" commit -qm 'seed primary default branch'
@@ -382,7 +392,7 @@ EOF
     FM_FAKE_GIT_FETCH_SLEEP=0 \
     FM_INHERITABLE_CONFIG='crew-dispatch.json crew-harness' \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
-    "$ROOT/bin/fm-bootstrap.sh" 2>&1
+    "$primary/bin/fm-bootstrap.sh" 2>&1
   )
 
   line=$(printf '%s\n' "$out" | grep '^SECONDMATE_SYNC: secondmate sm: skipped: remote inheritance failed on host-sm:' || true)
@@ -394,6 +404,23 @@ EOF
   case "$line" in
     *"unchanged:"*) fail "the failure reason must not report an earlier unchanged item, got: $line" ;;
   esac
+
+  # Even when a sibling fails, confirmed published bytes need an immediate
+  # reread. Sending it must not erase the outstanding convergence retry.
+  rm -f "$home/state/.secondmate-nudge-pending/sm.pending"
+  out=$(
+    PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$primary" \
+    FM_BOOTSTRAP_NETWORK=only FM_SSH_BIN="$fakebin/fake-ssh" \
+    FM_FAKE_SSH_LOG="$log" FM_FAKE_SSH_SLEEP=0 FM_FAKE_GIT_FETCH_SLEEP=0 \
+    FM_INHERITABLE_CONFIG='crew-dispatch.json crew-harness' \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_INHERIT_PARTIAL=1 \
+    "$primary/bin/fm-bootstrap.sh" 2>&1
+  )
+  assert_contains "$out" 'remote inheritance failed on host-sm:' \
+    "partial inheritance must still report failure"
+  assert_grep 'fm-sm ' "$log" "bootstrap did not send a reread after partial inheritance"
+  assert_grep 'remote=1' "$home/state/.secondmate-nudge-pending/sm.pending" \
+    "partial inheritance reread cleared the convergence retry marker"
 
   if [ -n "${FM_TEST_EVIDENCE_FILE:-}" ]; then
     printf '=== inherit-failure bootstrap output ===\n%s\n' "$out" >> "$FM_TEST_EVIDENCE_FILE"

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Apply one primary-authoritative inherited item inside the selected remote home.
+# Apply primary-authoritative inherited material inside the selected remote home.
 #
 # Usage:
+#   fm-remote-inherit.sh batch <generation> <launch|live> < stdin
 #   fm-remote-inherit.sh put <allowlisted-relative-path> <bytes> <sha256> <generation> < stdin
 #   fm-remote-inherit.sh absent <allowlisted-relative-path> 0 <empty-sha256> <generation>
 #
 # Only the inherited-material allowlist is writable or removable. Writes are
 # atomic ordinary-file replacements. data/captain-shared.md is read-only and is
 # quarantined before removal or before replacing bytes not last published here.
+# A batch uses the library-owned wire format and one remote job; each item runs
+# this same guarded receiver, and one item failure does not prevent the others.
+# Malformed framing/topology or an oversized batch fails before any write.
 set -eu
 
 FM_HOME=${FM_HOME:?FM_HOME is required}
@@ -42,6 +46,38 @@ $(fm_config_inherit_items)
 EOF
   return 1
 }
+
+if [ "${1:-}" = batch ]; then
+  [ "$#" -eq 3 ] || usage
+  case "$2" in ''|*[!0-9]*) die "generation must be a positive integer" ;; esac
+  [ "${#2}" -le 18 ] && [ "$2" -ge 1 ] || die "generation is outside the supported range"
+  case "$3" in launch|live) ;; *) die "batch convergence mode must be launch or live" ;; esac
+  BATCH_TMP=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-remote-inherit.XXXXXX") \
+    || die "cannot stage inheritance batch"
+  trap 'rm -rf -- "$BATCH_TMP"' EXIT
+  head -c "$((MAX_BYTES + 1))" > "$BATCH_TMP/wire" || die "cannot read inheritance batch"
+  BATCH_BYTES=$(LC_ALL=C wc -c < "$BATCH_TMP/wire" | tr -d ' ')
+  [ "$BATCH_BYTES" -le "$MAX_BYTES" ] || die "inheritance batch exceeds the byte bound"
+  fm_config_inherit_batch_unpack "$BATCH_TMP/wire" "$BATCH_TMP" "$3" \
+    || die "cannot decode inheritance batch"
+  BATCH_RC=0
+  while IFS=$'\t' read -r command rel bytes hash index; do
+    case "$command" in
+      skip) printf 'unchanged: %s\n' "$rel" ;;
+      error)
+        printf 'error: %s: primary source failed validation; destination preserved\n' "$rel" >&2
+        BATCH_RC=1
+        ;;
+      *)
+        if ! "$SCRIPT_DIR/fm-remote-inherit.sh" "$command" "$rel" "$bytes" "$hash" "$2" < "$BATCH_TMP/$index"; then
+          printf 'error: %s: inheritance failed; other declared items continue\n' "$rel" >&2
+          BATCH_RC=1
+        fi
+        ;;
+    esac
+  done < "$BATCH_TMP/manifest"
+  exit "$BATCH_RC"
+fi
 
 [ "$#" -eq 5 ] || usage
 COMMAND=$1

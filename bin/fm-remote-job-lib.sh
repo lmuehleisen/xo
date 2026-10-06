@@ -55,7 +55,7 @@
 # Abandoned .stage.* staging litter older than
 # FM_REMOTE_JOB_STAGE_REAP_SECONDS is reaped by the worker's stale sweep.
 #
-# Result consumers and active-command monitors sample every 0.05 seconds by
+# Result consumers and active-command monitors sample every 0.25 seconds by
 # default; the dispatcher's post-activity burst still samples every 0.05 seconds.
 # FM_REMOTE_JOB_ACTIVE_POLL_SECONDS overrides the active/result interval; an
 # explicitly supplied FM_REMOTE_JOB_POLL_SECONDS remains the legacy fallback
@@ -100,7 +100,7 @@ FM_REMOTE_JOB_MAX_BYTES=${FM_REMOTE_JOB_MAX_BYTES:-1048576}
 FM_REMOTE_JOB_QUEUE_TIMEOUT=${FM_REMOTE_JOB_QUEUE_TIMEOUT:-360}
 FM_REMOTE_JOB_TIMEOUT=${FM_REMOTE_JOB_TIMEOUT:-360}
 FM_REMOTE_JOB_WAIT_GRACE=${FM_REMOTE_JOB_WAIT_GRACE:-30}
-FM_REMOTE_JOB_ACTIVE_POLL_SECONDS=${FM_REMOTE_JOB_ACTIVE_POLL_SECONDS:-${FM_REMOTE_JOB_POLL_SECONDS:-0.05}}
+FM_REMOTE_JOB_ACTIVE_POLL_SECONDS=${FM_REMOTE_JOB_ACTIVE_POLL_SECONDS:-${FM_REMOTE_JOB_POLL_SECONDS:-0.25}}
 FM_REMOTE_JOB_POLL_SECONDS=${FM_REMOTE_JOB_POLL_SECONDS:-0.05}
 FM_REMOTE_JOB_REAP_SECONDS=${FM_REMOTE_JOB_REAP_SECONDS:-3600}
 FM_REMOTE_JOB_STAGE_REAP_SECONDS=${FM_REMOTE_JOB_STAGE_REAP_SECONDS:-600}
