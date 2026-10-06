@@ -17,13 +17,16 @@
 #       Commit-msg check for a repository that has a public or unlisted network
 #       remote: refuses a message carrying a non-allowlisted email address or a
 #       denylist or generic-pattern hit. Never rewrites the message.
-#   fm-publish-gate.sh check-text --dest <owner/repo|gist> [--pr-base <branch> --pr-head <branch> | --pr <number> | --pr-branch <branch>] [--unscannable <what>]... [--config <dir>] [<text>...]
+#   fm-publish-gate.sh check-text --dest <owner/repo|gist> [--pr-base <branch> --pr-head <branch> | --pr <number> | --pr-branch <branch>] [--issue <number>] [--unscannable <what>]... [--config <dir>] [<text>...]
 #       The scanner the gh publish guard (bin/fm-gh-publish-policy.mjs) calls
 #       for PR, issue, release, gist, repo, and API text. Each <text> is a
 #       file, optionally prefixed with its kind - title:<file>, body:<file> (a
-#       PR or issue description), or reply:<file> (a comment or review reply)
+#       PR description), issue-body:<file> (an issue description), or
+#       reply:<file> (a comment or review reply)
 #       - so the shape limits below apply to it. With no <text> only the
-#       destination is checked. Each --unscannable names content the command
+#       destination is checked. --issue identifies an existing issue edit;
+#       its trusted live type check is required for the larger upstream cap.
+#       Each --unscannable names content the command
 #       also publishes that no scanner reads (a release asset, an attachment,
 #       an API content write); it is refused for a public destination and
 #       allowed for a confirmed-private one. Exit 0 allows.
@@ -181,7 +184,12 @@
 # Verification uses live GitHub ancestry and the configured upstream remote
 # (CI supplies --pr-upstream); failures retain the ordinary cap. The complete
 # body still passes every content check and the publish judge.
-# A reply is at most 5 lines and 750 characters; and a body or reply must not
+# For kunchenguid/firstmate only, an issue body may use 60 lines and 4000
+# characters, and a comment or review reply 20 lines and 2000 characters
+# (conservatively counted as UTF-8 bytes, including newlines).
+# Issue edits verify the live target is an issue; PR descriptions keep their
+# existing limits. Extended text receives a full required secret scan.
+# A reply elsewhere is at most 5 lines and 750 characters; a body or reply must not
 # carry what the operator asked or decided ("captain asked", "per <someone>'s
 # direction") or the shapes of incident evidence: a process id with its number
 # (pid 4242, pid=4242), a tmux pane id (%12), or a clock time (14:05). Everyday
@@ -864,14 +872,15 @@ NARRATIVE_RULE='(^|[^a-z])captain (asked|said|wants|wanted|requested|decided|app
 EVIDENCE_RULE='(^|[^a-z0-9_])pid[ =:]?[0-9]+|(^|[^a-z0-9%])%[0-9]+([^0-9]|$)|(^|[^0-9:])([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?([^0-9:]|$)'
 
 # PR context is evidence to verify, never an override. Only PR create/edit and
-# ci-text supply it; issues, replies, and other text retain the ordinary cap.
+# ci-text supply it; length exceptions never waive content checks.
 PR_BASE=""
 PR_HEAD=""
 PR_NUMBER=""
 PR_BRANCH=""
 PR_UPSTREAM=""
 INTEGRATION_SOURCES=""
-NO_MISTAKES_BODY=0
+EXTENDED_TEXT=0
+ISSUE_NUMBER=""
 
 # Use the same trusted executable and environment isolation as privacy reads.
 integration_gh() {
@@ -977,9 +986,10 @@ parse_text_context() {
   TEXT_ARGS=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
-    --pr-base | --pr-head | --pr | --pr-branch | --pr-upstream)
+    --pr-base | --pr-head | --pr | --pr-branch | --pr-upstream | --issue)
       [ "$#" -gt 1 ] || usage
       case "$1" in
+      --issue) ISSUE_NUMBER=$2 ;;
       --pr-base) PR_BASE=$2 ;;
       --pr-head) PR_HEAD=$2 ;;
       --pr) PR_NUMBER=$2 ;;
@@ -993,10 +1003,20 @@ parse_text_context() {
   done
 }
 
+# gh issue edit and the REST issues endpoint also accept PR numbers. Verify
+# that an existing target is an issue before widening its description cap.
+# An unavailable live fact retains the ordinary limit; new issues need no read.
+upstream_issue_body() {
+  [ -n "$ISSUE_NUMBER" ] || return 0
+  printf '%s' "$ISSUE_NUMBER" | grep -Eq '^[0-9]+$' || return 1
+  INTEGRATION_GH=$(trusted_gh) || return 1
+  [ "$(integration_api "repos/$DEST_KEY/issues/$ISSUE_NUMBER" ".number == $ISSUE_NUMBER and (.pull_request == null)")" = true ]
+}
+
 # check_shape <kind> <file> <n>: the length and narrative limits of the public
 # text policy for a title, body, or reply.
 check_shape() {
-  local kind=$1 file=$2 n=$3 chars lines body_lines=20 body_chars=1500 source
+  local kind=$1 file=$2 n=$3 chars lines body_lines=20 body_chars=1500 source reply_lines=5 reply_chars=750
   chars=$(tr -d '\n' <"$file" | wc -c | tr -d ' ')
   lines=$(grep -c . "$file" || true)
   case "$kind" in
@@ -1018,20 +1038,34 @@ check_shape() {
       node "$ROOT/bin/fm-no-mistakes-body.mjs" "$(config_dir)" "$gh" "$DEST_KEY" "$PR_BASE" "$PR_HEAD" "$PR_NUMBER" "$PR_BRANCH" "$file"
       rc=$?
       case "$rc" in
-      0) body_lines=300 body_chars=24000; chars=$(wc -c <"$file" | tr -d ' '); lines=$(awk 'END { print NR + 0 }' "$file"); NO_MISTAKES_BODY=1 ;;
+      0) body_lines=300 body_chars=24000; chars=$(wc -c <"$file" | tr -d ' '); lines=$(awk 'END { print NR + 0 }' "$file"); EXTENDED_TEXT=1 ;;
       2) refuse "malformed no-mistakes-submissions config" "correct the approved upstream, fork and contribution branch rows" ;;
       esac
     fi
     [ "$lines" -le "$body_lines" ] || finding "shape: a description longer than $body_lines lines" "text $n"
     [ "$chars" -le "$body_chars" ] || finding "shape: a description longer than $body_chars characters" "text $n"
     ;;
+  issue-body)
+    if [ "$DEST_KEY" = kunchenguid/firstmate ] && upstream_issue_body; then
+      body_lines=60 body_chars=4000 EXTENDED_TEXT=1
+      chars=$(wc -c <"$file" | tr -d ' ')
+      lines=$(awk 'END { print NR + 0 }' "$file")
+    fi
+    [ "$lines" -le "$body_lines" ] || finding "shape: an issue description longer than $body_lines lines" "text $n"
+    [ "$chars" -le "$body_chars" ] || finding "shape: an issue description longer than $body_chars characters" "text $n"
+    ;;
   reply)
-    [ "$lines" -le 5 ] || finding "shape: a reply longer than 5 lines" "text $n"
-    [ "$chars" -le 750 ] || finding "shape: a reply longer than 750 characters" "text $n"
+    if [ "$DEST_KEY" = kunchenguid/firstmate ]; then
+      reply_lines=20 reply_chars=2000 EXTENDED_TEXT=1
+      chars=$(wc -c <"$file" | tr -d ' ')
+      lines=$(awk 'END { print NR + 0 }' "$file")
+    fi
+    [ "$lines" -le "$reply_lines" ] || finding "shape: a reply longer than $reply_lines lines" "text $n"
+    [ "$chars" -le "$reply_chars" ] || finding "shape: a reply longer than $reply_chars characters" "text $n"
     ;;
   esac
   case "$kind" in
-  body | reply)
+  body | issue-body | reply)
     if grep -qiE "$NARRATIVE_RULE" "$file"; then
       finding "shape: narrative about what the operator asked or decided" "text $n"
     fi
@@ -1048,7 +1082,7 @@ add_texts() {
   for t in "$@"; do
     i=$((i + 1))
     case "$t" in
-    title:* | body:* | reply:*)
+    title:* | body:* | issue-body:* | reply:*)
       kind=${t%%:*}
       f=${t#*:}
       ;;
@@ -1453,8 +1487,8 @@ cmd_check_text() {
   add_texts ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   scan_corpus 1
   scan_corpus_emails
-  if [ "$NO_MISTAKES_BODY" = 1 ]; then
-    command -v gitleaks >/dev/null 2>&1 || refuse "gitleaks is required for generated no-mistakes text" "install the pinned scanner before retrying"
+  if [ "$EXTENDED_TEXT" = 1 ]; then
+    command -v gitleaks >/dev/null 2>&1 || refuse "gitleaks is required for extended public text" "install the pinned scanner before retrying"
     local rc
     mkdir -p "$PG_TMP/text-scan" "$PG_TMP/text-ignore"
     cp "$PG_TMP/corpus.txt" "$PG_TMP/text-scan/body.txt"
@@ -1462,8 +1496,8 @@ cmd_check_text() {
     rc=$?
     case "$rc" in
     0) ;;
-    3) finding "gitleaks secret in generated text" "text" ;;
-    *) refuse "gitleaks could not scan generated text" "repair the scanner before retrying" ;;
+    3) finding "gitleaks secret in extended text" "text" ;;
+    *) refuse "gitleaks could not scan extended text" "repair the scanner before retrying" ;;
     esac
   fi
   [ "$FINDINGS" -eq 0 ] ||
@@ -1690,11 +1724,17 @@ Sensitive evidence never goes into the PR. The code can.
   private incident evidence.
 Incident evidence stays in private reports; a public PR carries only a
 sanitized reproduction.
-The gh publish guard and CI refuse a title over 100 characters, a description
-over 20 lines or 1500 characters (80 lines and 6000 characters for a verified
-upstream-integration PR to its fork's main, recording the full upstream source
-commit), a reply over 5 lines or 750 characters, and,
-in a description or reply, what the operator asked or decided or the shape of
+The gh publish guard and CI refuse a title over 100 characters and an ordinary
+PR description over 20 lines or 1500 characters (80 lines and 6000 characters
+for a verified upstream-integration PR to its fork's main, recording the full
+upstream source commit). Other descriptions and replies keep the ordinary
+20-line / 1500-character and 5-line / 750-character limits, except that the gh
+publish guard allows kunchenguid/firstmate issue descriptions up to 60 lines
+and 4000 characters, and replies up to 20 lines and 2000 characters. Those
+extended caps count UTF-8 bytes including newlines and require full secret
+scanning. PR descriptions keep their existing limits. Issue edits must
+be confirmed as issues by the trusted live read; unavailable facts retain the
+ordinary cap. In a description or reply, what the operator asked or decided or the shape of
 incident evidence: a process id with its number (pid 4242), a tmux pane id
 (%12), or a clock time (14:05). Everyday words such as pid, pane, timeline, or
 incident are fine on their own.

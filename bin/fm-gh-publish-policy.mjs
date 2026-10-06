@@ -181,8 +181,8 @@ const SPECS = {
   "pr reopen": { repoFlags: true, onlyWithText: true, text: { "-c": "reply", "--comment": "reply" }, positional: "target" },
   "issue create": {
     repoFlags: true,
-    text: { "-t": "title", "--title": "title", "-b": "body", "--body": "body" },
-    file: { "-F": "body", "--body-file": "body" },
+    text: { "-t": "title", "--title": "title", "-b": "issue-body", "--body": "issue-body" },
+    file: { "-F": "issue-body", "--body-file": "issue-body" },
     asset: ["--attach"],
     generated: ["-e", "--editor", "-w", "--web", "-T", "--template", "--recover"],
     values: ["-a", "--assignee", "--blocked-by", "--blocking", "-l", "--label", "-m", "--milestone", "--parent", "-p", "--project", "--type", "-T", "--template", "--recover"],
@@ -191,8 +191,8 @@ const SPECS = {
   },
   "issue edit": {
     repoFlags: true,
-    text: { "-t": "title", "--title": "title", "-b": "body", "--body": "body" },
-    file: { "-F": "body", "--body-file": "body" },
+    text: { "-t": "title", "--title": "title", "-b": "issue-body", "--body": "issue-body" },
+    file: { "-F": "issue-body", "--body-file": "issue-body" },
     asset: ["--attach"],
     values: [
       "--add-assignee", "--add-blocked-by", "--add-blocking", "--add-label", "--add-project", "--add-sub-issue", "-m", "--milestone",
@@ -590,6 +590,11 @@ function ghTarget(command, spec, parsed, tokens, cwd, context) {
     }
     target.cwd = cwd;
   }
+  if (command === "issue edit") {
+    const selector = literalValue(positional[0]);
+    target.issueNumber = selector?.match(/^(?:#)?(\d+)$/)?.[1]
+      || selector?.match(/\/(?:issues|pull)\/(\d+)(?:[/?#]|$)/)?.[1] || "unknown";
+  }
   return target;
 }
 
@@ -827,7 +832,7 @@ function ghApiTarget(words, tokens, cwd, context) {
   const replyEndpoint = /(^|\/)(comments|reviews)(\/|$)/.test(rest);
   const kindOf = (field) => {
     if (field === "title") return "title";
-    if (field === "body") return replyEndpoint ? "reply" : "body";
+    if (field === "body") return replyEndpoint ? "reply" : /^issues(?:\/\d+)?$/.test(rest) ? "issue-body" : "body";
     return "other";
   };
   // A visibility change, a repository generated from this one as a template
@@ -840,6 +845,7 @@ function ghApiTarget(words, tokens, cwd, context) {
     if (changed) return changed;
   }
   const target = { repo, texts: [], files: [], unscannable: [] };
+  if (/^issues\/\d+$/.test(rest)) target.issueNumber = rest.split("/")[1];
   // A contents or git-data write creates commits or refs the pre-push gate
   // never sees, from content the text scan cannot read.
   const writeKind = /^(contents|git)(\/|$)/.exec(rest);
@@ -866,6 +872,7 @@ function runGate(target) {
   try {
     const withKind = (kind, file) => (kind === "other" ? file : `${kind}:${file}`);
     const args = ["check-text", "--dest", target.repo];
+    if (target.issueNumber) args.push("--issue", target.issueNumber);
     if (target.prBase) args.push("--pr-base", target.prBase);
     if (target.prHead) args.push("--pr-head", target.prHead);
     if (target.prNumber) args.push("--pr", target.prNumber);

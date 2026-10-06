@@ -14,7 +14,7 @@
 #       "commit <sha> path <p>", "commit <sha> <file>:<n>", "ref <ref>").
 #   fm-publish-judge.sh text --dest <owner/repo|gist> [--config <dir>] [<text>...]
 #       Judge PR, issue, release, gist, or repo text. Each <text> is a file,
-#       optionally prefixed with its kind (title:, body:, reply:), exactly as
+#       optionally prefixed with its kind (title:, body:, issue-body:, reply:), exactly as
 #       bin/fm-publish-gate.sh check-text takes them. No text (a deletion, for
 #       example) has nothing to judge and is allowed.
 #   fm-publish-judge.sh probe --tier <codex|pi> --dest <d> --kind <commits|text> <material>
@@ -207,7 +207,7 @@ text_material() { # <text>...
   for t in "$@"; do
     i=$((i + 1))
     case "$t" in
-    title:* | body:* | reply:*)
+    title:* | body:* | issue-body:* | reply:*)
       kind=${t%%:*}
       f=${t#*:}
       ;;

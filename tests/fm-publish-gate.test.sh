@@ -1830,6 +1830,73 @@ test_local_gate_transport_preserves_hooks() {
   pass "pinned local gate intake removes hook bypass, preserves client and receive hooks, and refuses gate options elsewhere"
 }
 
+test_upstream_issue_and_reply_limits() {
+  local out kind verb cap file="$TMP_ROOT/upstream-detail.md"
+  write_config
+  printf 'public kunchenguid/firstmate\n' >>"$CFG/allowlist"
+  # Boundary files count all physical lines and bytes, including newlines.
+  for kind in issue-body reply; do
+    if [ "$kind" = issue-body ]; then cap=60; verb='issue create --title Detail'; else cap=20; verb='pr comment 3'; fi
+    awk -v cap="$cap" 'BEGIN { for (i=0; i<cap; i++) print "Detail." }' >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md" || fail "raised line cap must pass: $POLICY_OUT"
+    printf '\n' >>"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "blank lines above raised cap must refuse"
+    assert_contains "$POLICY_OUT" "longer than $cap lines" 'raised line cap'
+    if [ "$kind" = issue-body ]; then cap=4000; else cap=2000; fi
+    awk -v cap="$cap" 'BEGIN { for (i=0; i<cap; i++) printf "x" }' >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md" || fail "raised character cap must pass: $POLICY_OUT"
+    printf 'x' >>"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "above raised character cap must refuse"
+    assert_contains "$POLICY_OUT" "longer than $cap characters" 'raised character cap'
+    policy "gh $verb --repo acme/widgets --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "other destinations must keep ordinary caps"
+    printf '%s\n' "$PRIVATE_TERM" >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "raised limits must keep literal checks"
+    assert_contains "$POLICY_OUT" denylist 'raised cap literal check'
+    printf 'the captain asked for it\n' >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "raised limits must keep narrative checks"
+    if [ "$REAL_GITLEAKS" = 1 ]; then
+      printf 'token = "ghp_%s"\n' "$(printf 'Z%.0s' $(seq 1 16))9a8b7c6d5e4f3a2b1c0d" >"$file"
+      policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+      [ $? -eq 2 ] || fail "extended issues and replies must keep secret scans"
+      assert_contains "$POLICY_OUT" gitleaks 'raised cap secret check'
+    fi
+  done
+  awk 'BEGIN { for (i=0; i<30; i++) print "Precise technical detail." }' >"$file"
+  policy 'gh pr create --repo kunchenguid/firstmate --title Detail --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "ordinary upstream PR description must keep its cap"
+  # gh issue edit and REST issue PATCH can also address PRs. A live issue
+  # fact qualifies; PRs and unavailable facts keep the ordinary body cap.
+  cat >"$FAKEBIN/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'api --hostname github.com repos/kunchenguid/firstmate/issues/3 --jq .number == 3 and (.pull_request == null)') printf '%s\n' "${FM_TEST_IS_ISSUE:-true}" ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$FAKEBIN/gh"
+  printf '%s\n' "$FAKEBIN/gh" >"$CFG/gh"
+  policy 'gh issue edit 3 --repo kunchenguid/firstmate --body-file upstream-detail.md' || fail "verified issue edit must qualify: $POLICY_OUT"
+  policy 'gh api -X PATCH repos/kunchenguid/firstmate/issues/3 -F body=@upstream-detail.md' || fail "verified REST issue edit must qualify: $POLICY_OUT"
+  policy 'gh api -X POST repos/kunchenguid/firstmate/issues -F title=Detail -F body=@upstream-detail.md' || fail "REST issue creation must qualify: $POLICY_OUT"
+  FM_TEST_IS_ISSUE=false policy 'gh issue edit https://github.com/kunchenguid/firstmate/pull/3 --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "issue edit targeting a PR must not widen its body"
+  FM_TEST_IS_ISSUE=false policy 'gh api -X PATCH repos/kunchenguid/firstmate/issues/3 -F body=@upstream-detail.md'
+  [ $? -eq 2 ] || fail "REST issue edit targeting a PR must not widen its body"
+  reset_trusted_gh
+  policy 'gh issue edit 3 --repo kunchenguid/firstmate --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "unavailable issue fact must retain ordinary limits"
+  printf 'A\nB\nC\nD\nE\nF\n' >"$file"
+  policy 'gh issue comment 3 --repo kunchenguid/firstmate --body-file upstream-detail.md' || fail "issue comments must use scoped reply cap"
+  policy 'gh pr review 3 --repo kunchenguid/firstmate --comment --body-file upstream-detail.md' || fail "review replies must use scoped reply cap"
+  policy 'gh api -X POST repos/kunchenguid/firstmate/issues/3/comments -F body=@upstream-detail.md' || fail "REST comments must use scoped reply cap"
+  pass "upstream issue and reply limits bind destination and target type, count blank lines, and preserve content checks"
+}
+
 test_identity_file_contract
 test_pin_neutralizes_git_c_user_email
 test_clean_push_passes
@@ -1892,5 +1959,6 @@ test_runtime_stdin_adapter
 test_no_mistakes_body_scope
 test_contribution_poison_and_evidence_adapter
 test_local_gate_transport_preserves_hooks
+test_upstream_issue_and_reply_limits
 
 echo "# all fm-publish-gate tests passed"
