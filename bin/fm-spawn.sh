@@ -1391,6 +1391,7 @@ SPAWN_META_LOCK=
 SPAWN_META_LOCK_HELD=0
 SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
+SPAWN_FRESH_FAILURE_EVENT=
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_TREEHOUSE_PROJECT_LOCK=
@@ -1423,6 +1424,7 @@ spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
     "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
+    SPAWN_FRESH_FAILURE_EVENT=
     # With the record gone, the worker's private tmux servers and directory go
     # too, unless a launched worker's endpoint is not proven gone: removing the
     # directory under it would send its bare tmux back to the default server.
@@ -1435,6 +1437,9 @@ spawn_fresh_commit_rollback() {
     return 0
   fi
   echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
+  [ -z "$SPAWN_FRESH_FAILURE_EVENT" ] ||
+    printf '%s\n' "$SPAWN_FRESH_FAILURE_EVENT" >>"$STATE/$ID.status"
+  SPAWN_FRESH_FAILURE_EVENT=
   return 1
 }
 
@@ -4899,8 +4904,8 @@ spawn_delivery_endpoint_cleanup() {
 }
 
 opencode_spawn_fail() { # <detail>
-  local failure_state=${2:-idle}
-  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  local failure_state=${2:-idle} failure_event
+  failure_event=$(status_stamp_line "failed: $1")
   echo "error: $1; inspect window $T" >&2
   local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
   if ! {
@@ -4912,6 +4917,7 @@ opencode_spawn_fail() { # <detail>
   fi
   echo "spawn: OpenCode startup diagnostics=$diagnostic" >&2
   if [ "$RELAUNCH" -eq 1 ]; then
+    printf '%s\n' "$failure_event" >>"$STATE/$ID.status"
     # Readiness failure settles an unchanged launch seed; submission ambiguity
     # makes it unknown. Never replace newer native activity with either verdict.
     # Keep the generation armed for lifecycle events from the retained pane.
@@ -4952,6 +4958,13 @@ opencode_spawn_fail() { # <detail>
     SPAWN_FRESH_COMMIT_PENDING=0
     RELAUNCH_REPLACEMENT_PENDING=0
     echo "warning: OpenCode endpoint closure is unconfirmed; task record $STATE/$ID.meta and wiring are preserved for recovery" >&2
+  fi
+  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+    # A completed pre-brief rollback has no task to own a status wake. Publish
+    # only if record rollback fails, without removing any earlier history.
+    SPAWN_FRESH_FAILURE_EVENT=$failure_event
+  else
+    printf '%s\n' "$failure_event" >>"$STATE/$ID.status"
   fi
   return 1
 }
