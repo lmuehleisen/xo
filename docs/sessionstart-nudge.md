@@ -50,7 +50,7 @@ Codex's interactive TUI has no tracked session-open, compaction, or re-emit chan
 
 The run tier exists because the nudge can only ask.
 An agent can defer an instruction, including when a first-command skill has its own read-only path.
-Running the digest through the native adapter removes that discretion, so even a session whose first command is a skill has already taken the helm.
+Running the digest through the native adapter removes that discretion, so even a session whose first command is a skill has already taken the conn.
 
 The nudge tier remains the floor for harnesses that cannot carry hook stdout into model context.
 It is never a second contract: both tiers end in the same `bin/fm-session-start.sh`.
@@ -64,14 +64,14 @@ The run wrapper learns the source in one of two ways:
 - It takes `--source <name>` when the adapter knows the source natively.
 - Otherwise it reads the `source` field from a Claude/Codex-shaped JSON hook payload on stdin.
 
-A re-emit (`--reemit`) reprints the digest for a process that already has the helm and lost only its context.
+A re-emit (`--reemit`) reprints the digest for a process that already has the conn and lost only its context.
 
 | Source | Action | Why |
 | --- | --- | --- |
-| `startup`, `new` | Full digest | This is a true session start that has not taken the helm; Pi CLI continuations are refined to `resume` by the adapter before reaching this boundary. |
-| `clear`, `compact` | `--reemit` after a proven complete startup, otherwise full digest | This process normally has the helm and lost only its context, but an earlier hook may have been truncated after acquiring the lock. |
+| `startup`, `new` | Full digest | This is a true session start that has not taken the conn; Pi CLI continuations are refined to `resume` by the adapter before reaching this boundary. |
+| `clear`, `compact` | `--reemit` after a proven complete startup, otherwise full digest | This process normally has the conn and lost only its context, but an earlier hook may have been truncated after acquiring the lock. |
 | `resume`, `reload`, `fork` | Delegate to the nudge wrapper | Prior context is restored, so re-running is redundant when the lock is still ours and an instruction is enough when a new process resumed an old session. |
-| unreadable or unrecognized | Full digest | Taking the helm redundantly is cheap and idempotent; not taking it is the bug this tier exists to fix. |
+| unreadable or unrecognized | Full digest | Taking the conn redundantly is cheap and idempotent; not taking it is the bug this tier exists to fix. |
 
 ### Change from the previous nudge matcher
 
@@ -185,7 +185,7 @@ So a truncated digest does neither of these:
 - They share `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so every hook uses one primary-detection owner.
 
 A fresh clone has no gitignored state directory yet.
-When the root otherwise qualifies as primary, the run wrapper creates the state directory before the unchanged scope check, so the first session takes the helm without a manual `mkdir state`.
+When the root otherwise qualifies as primary, the run wrapper creates the state directory before the unchanged scope check, so the first session takes the conn without a manual `mkdir state`.
 If that creation fails, the run wrapper prints one stderr line naming the state directory and the reason, then stands down as it would for any ineligible root.
 The nudge wrapper and every other hook still stand down while the state directory is missing.
 
@@ -199,8 +199,8 @@ The nudge payload has three parts:
 - It carries the current `session-start` protocol kind.
 - It retains exactly ``Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.`` as its body.
 
-The Ahoy skill owns the rule that this marked operational input is never a captain-authored session boundary, including its narrow legacy compatibility cases.
-The Ahoy skill's own step 0 helm check is the fallback that protects a nudge-tier harness whose first command is a skill.
+The Report skill owns the rule that this marked operational input is never a captain-authored session boundary, including its narrow legacy compatibility cases.
+The Report skill's own step 0 conn check is the fallback that protects a nudge-tier harness whose first command is a skill.
 
 ### Nudge wrapper lock check
 
@@ -278,7 +278,7 @@ Each mapped session generation starts one native prerequisite.
 #### Pi message delivery
 
 Pi is the only adapter that injects a message rather than hook stdout.
-So whatever it injects must carry operational provenance, or the Ahoy skill would have to guess whether it was captain-authored.
+So whatever it injects must carry operational provenance, or the Report skill would have to guess whether it was captain-authored.
 
 For `session_start`, the extension does the following:
 
@@ -353,7 +353,7 @@ Project hooks load only when the workspace is launched with `--trust`.
 
 Cursor's `sessionStart` fires at every session open with no source distinction, including a resumed session.
 So a resume re-runs the full digest.
-That is redundant and idempotent rather than a lost helm.
+That is redundant and idempotent rather than a lost conn.
 
 ### omp
 

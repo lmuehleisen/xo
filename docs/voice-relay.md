@@ -178,7 +178,7 @@ Two whole classes of record are excluded at every scope, and excluded by constru
   file in front of them, and they are where commercial detail gets quoted.
 
 Only open work and this home's own runtime records are ever assembled.
-A task keeps its runtime record until teardown, so the count of workers on deck
+A task keeps its runtime record until teardown, so the count of workers on watch
 and the states beside it still include one whose item is already done; both are a
 number and a state word, never anything written in a record.
 Verified against the captain's live records on 2026-08-21: every occurrence of

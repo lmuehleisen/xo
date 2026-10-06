@@ -5,9 +5,9 @@
 # modes:
 #   off      no Lavish: boards stay static local files and every answer stays in
 #            chat. This is the default.
-#   view     Stage A: /bearings lavish opens its read-only board in Lavish, and a
+#   view     Stage A: /ops lavish opens its read-only board in Lavish, and a
 #            scout may host a crew Lavish review loop for a visual deliverable.
-#   answers  view plus Stage B: the /bearings lavish board's decision cards take
+#   answers  view plus Stage B: the /ops lavish board's decision cards take
 #            answers in the page, fed through bin/fm-captain-hold.sh's one
 #            keyed-answer intake. Chat stays the primary answer path.
 # The home toggle is the optional local, gitignored config/lavish holding one of

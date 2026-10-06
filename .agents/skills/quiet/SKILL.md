@@ -80,7 +80,7 @@ Every action the captain asks for or standing authority covers - landing local-o
 ## Must not hide a decision or a failure
 
 Per the issue's own author triage: quiet mode is presentation only.
-Progress, retries, and internal mechanics stay below deck exactly as in away
+Progress, retries, and internal mechanics stay outside the control room exactly as in away
 mode, but review-ready work, findings, decisions, failures, and credentials
 escalate every time, through the same classification policy `/afk` owns.
 Quiet mode is opt-in and never the unconsented default; only an explicit

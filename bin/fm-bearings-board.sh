@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# fm-bearings-board.sh - build the /bearings lavish fleet board.
+# fm-bearings-board.sh - build the /ops lavish fleet board.
 #
-# The board is the captain-facing surface of /bearings lavish: the shipped
+# The board is the captain-facing surface of /ops lavish: the shipped
 # template (.agents/skills/bearings/assets/board-template.html) plus one
 # injected fm-bearings-board.v1 JSON payload. This script owns the mechanics so
 # the invoking agent's per-run work stays "compose the JSON, run build" - the

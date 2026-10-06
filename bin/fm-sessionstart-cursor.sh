@@ -6,7 +6,7 @@
 # single owner of source routing, eligibility, and the digest itself.
 #
 # Cursor injects a hook's `additional_context` string straight into model
-# context, so the digest lands before the first turn and the helm is taken
+# context, so the digest lands before the first turn and the conn is taken
 # without model discretion. Verified live on 2026.08.11-e8db854.
 #
 # Usage: fm-sessionstart-cursor.sh --source <source>

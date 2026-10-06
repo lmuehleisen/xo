@@ -1,4 +1,4 @@
-<h1 align="center">firstmate</h1>
+<h1 align="center">XO</h1>
 <p align="center">
   <a
     href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
@@ -21,7 +21,7 @@
 <h3 align="center">Talk to one agent. Ship with a crew.</h3>
 
 <p align="center">
-  <img alt="firstmate - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
+  <img alt="XO command hub coordinating a crew across isolated worktrees" src="assets/xo-banner.png" width="100%" />
 </p>
 
 ## Fork: what differs
@@ -30,15 +30,16 @@ This is [lmuehleisen/xo](https://github.com/lmuehleisen/xo), a project derived f
 It prioritizes reliable local use, familiar tools, and less prescriptive workflows.
 Use this repository when cloning for these changes; the upstream project overview and setup below are otherwise retained.
 
+- **XO identity:** FirstMate remains a supported alias; `/report` and `/ops` are preferred, while `/ahoy` and `/bearings` retain the same behavior and modes.
 - **No required `gh-axi`:** GitHub operations use the standard `gh` CLI, including compatible merge handling, to avoid an extra wrapper.
 - **No required `chrome-devtools-axi`:** browser work uses harness browser tools or Playwright, leaving the browser tool choice flexible.
-- **Optional `lavish-axi`:** off by default, so decisions and reports use chat and `/bearings lavish` produces a read-only local HTML snapshot; a home can turn on Lavish viewing, or answering decision cards on the board, with a pinned, hook-free install that serves on loopback by default and can be viewed from your other devices over Tailscale or ssh ([optional Lavish](docs/lavish.md)).
+- **Optional `lavish-axi`:** off by default, so decisions and reports use chat and `/ops lavish` produces a read-only local HTML snapshot; a home can turn on Lavish viewing, or answering decision cards on the board, with a pinned, hook-free install that serves on loopback by default and can be viewed from your other devices over Tailscale or ssh ([optional Lavish](docs/lavish.md)).
 - **No required `no-mistakes`:** workers run relevant tests and lint directly, then deliver through `direct-PR` or `local-only`; legacy no-mistakes delivery tokens map to `direct-PR` unless a home opts in through `config/no-mistakes`, so local work needs no pipeline.
 - **Reviewed worker permissions:** Claude and Codex launches default to automatic permission review, with a manual-review option, instead of bypassing permissions or the sandbox; see [worker permission modes](docs/configuration.md#worker-permission-mode-configcrew-permissions).
   agy workers default to accept-edits mode and run bypass only under a policed permission hook, and Devin workers run in reviewed mode behind the same kind of hook, never in bypass.
 - **Remote-less local work:** explicit `local-only` ship tasks can start from local `main` or `master` without a remote, while rejecting dirty or divergent task bases.
 - **Away watchdog outside tmux:** while away, a detached watchdog alarms through the [wedge-alarm channels](docs/wedge-alarm.md) if the fleet's tmux server or the away watcher stops, and the return brief names what stopped and when.
-- **Durable approval waits:** completed ship work awaiting merge approval remains tracked and visible in Bearings, with quiet supervision after the finished worker is verified stopped.
+- **Durable approval waits:** completed ship work awaiting merge approval remains tracked and visible in Ops, with quiet supervision after the finished worker is verified stopped.
 
 Maintainers: the [fork divergences ledger](docs/fork-divergences.md) records every deliberate difference from upstream, with its seam and guard test.
 
@@ -50,30 +51,34 @@ The [updater](.agents/skills/updatefirstmate/SKILL.md) fetches this fork's `orig
 
 ## What it is
 
+The Captain sets intent.
+XO has the conn: coordinating the crew, supervising work in flight, and bringing command only the outcomes, risks, and decisions that require attention.
+"FirstMate", "Firstmate", and "first mate" remain supported aliases; technical `firstmate` names and `fm-*` commands stay unchanged.
+
 You can run one coding agent easily.
 But the moment you want three project tasks done in parallel - fixes, investigations, plans, audits - you become a tab-juggler: babysitting sessions, copy-pasting context between repos, forgetting which terminal had the failing test.
 
 firstmate flips the model.
-You talk to a single agent - the first mate - and it runs the crew for you: spawning autonomous agents in a visible session backend, giving each a clean git worktree, supervising them to completion, and handing you finished PRs, approved local merges, or standalone investigation reports.
+You talk to a single agent - XO (Executive Officer), historically known as FirstMate - and it runs the crew for you: spawning autonomous agents in a visible session backend, giving each a clean git worktree, supervising them to completion, and handing you finished PRs, approved local merges, or standalone investigation reports.
 For larger fleets, you can opt in to persistent secondmates: second mates that are still ordinary direct reports, but run from their own isolated firstmate homes on this machine or another SSH-reachable host.
 
 firstmate is not a model, not a harness, not a skill, not an MCP server, and not a CLI.
 firstmate is an agent distro for running a crew of agents.
 An agent distro is a portable directory of instructions, skills, tooling, policies, and state conventions that turns a general-purpose agent into a specialized one.
 There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
-Launching a supported harness inside it for your primary session instantiates your first mate - and makes you the captain.
+Launching a supported harness inside it for your primary session instantiates your XO - and makes you the captain.
 
 ## Features
 
-- **One liaison** - you talk only to the first mate; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
-- **A visible crew** - every crewmate works in its own tmux window or Herdr tab, or in an experimental Zellij tab, experimental cmux workspace, or experimental Orca terminal you can watch or type into; the first mate reconciles.
+- **One liaison** - you talk only to XO; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
+- **A visible crew** - every crewmate works in its own tmux window or Herdr tab, or in an experimental Zellij tab, experimental cmux workspace, or experimental Orca terminal you can watch or type into; XO reconciles.
 - **Disposable worktrees** - each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) git worktree, or an Orca-managed worktree when `backend=orca`, so parallel work on one repo never collides.
 - **Two task shapes** - ship tasks deliver authorized changes; scout tasks leave standalone investigation reports when the intake contract warrants separate research.
 - **Explicit project modes** - each project ships via `direct-PR` or `local-only`, with an optional `+yolo` merge-autonomy flag, an optional `branch=<prefix>` override for the default `fm/` ship-branch prefix, and an optional `forge=gerrit` binding under which the worker publishes a Gerrit change instead of opening a pull request; legacy `no-mistakes` registry tokens map to direct-PR.
 - **Optional secondmates** - opt in to persistent second mates that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, either locally or as a whole home on an SSH-reachable host, with guarded updates and recovery that never turns an unavailable remote route into a local replacement.
-- **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
+- **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes XO only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
 - **Optional Relay** - opt in with one local `.env` pairing token so firstmate can answer your public mentions on X and Discord alike, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-Relay behavior; a final reply promised in a thread becomes durable state that is reconciled from disk, so a restart or a compacted conversation cannot lose it; dry-run preview records would-be replies and dismissals locally before go-live.
-- **Strict project boundary** - the first mate is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
+- **Strict project boundary** - XO is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
 - **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
 
 Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
@@ -153,7 +158,7 @@ Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning
 ### Talk to it
 
 ```sh
-> ahoy! look at my github project xyz, then fix the flaky login test and add dark mode
+> look at my github project xyz, then fix the flaky login test and add dark mode
 
 # firstmate checks its toolchain (asking your consent before installing anything),
 # clones the project under projects/ and spawns two isolated workers in the active backend.
@@ -176,8 +181,8 @@ Setup guides for tmux (the default) and every other supported backend (herdr, ze
                   │  chat: requests, decisions, "merge it"
                   ▼
  ┌─────────────────────────────────────┐
- │ firstmate            (this repo)    │
- │ reads projects/ + firstmate routes  │
+ │ XO                   (this repo)    │
+ │ reads projects/ + XO routes         │
  │ writes guarded backlog/briefs/state │
  └──┬──────────────┬───────────────┬───┘
     │ backend sends / status files │
@@ -194,7 +199,7 @@ Setup guides for tmux (the default) and every other supported backend (herdr, ze
      └─ scout: report at data/<id>/report.md ► decision inventory ► relay findings ► teardown
 ```
 
-You chat with the first mate.
+You chat with XO.
 It routes each request to a crewmate in its own session endpoint and git worktree, supervises the fleet with a zero-token event-driven watcher, and brings you finished PRs, approved local merges, or investigation reports.
 Optional secondmates extend this to persistent local or whole-home remote second mates, dispatch profiles let you steer which harness handles which task, and opt-in Relay lets the same fleet answer public mentions.
 `codex-app` is not a runtime backend yet; [docs/codex-app-backend.md](docs/codex-app-backend.md) owns the Codex App boundary.
@@ -210,18 +215,22 @@ Claude and grok use the slash form shown here; codex uses the same names with `$
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/afk`             | Enter away-mode supervision: Pi's in-process branch, a [supervision host](docs/configuration.md#supervision-host-configsupervision-host) beside the other primaries (on by default for Claude), or the daemon handles wakes while you step away; see the [away procedure](.agents/skills/afk/SKILL.md) for the posture and return contract |
 | `/quiet`           | Keep routine wakes off main while staying and chatting; requested actions proceed now rather than waiting for your return. Where Pi's branch or an [attended supervision host](docs/supervision-host.md#quiet-mode) already does this, it only says so; otherwise it starts the quiet daemon, which stays active through ordinary chat until `/quiet off` |
-| `/ahoy`            | Recap visible session events since the prior real captain message plus visibly unanswered captain decisions, then guide the captain through any open decisions one at a time in agent-judged impact order; fall back to Bearings when invoked as the session's first real captain message |
-| `/bearings`        | Generate a concise four-section chat digest from bounded fleet state, including registered remote-home ledgers and measured follow-up for owned contributions; use `/bearings file` to also replace today's dated report in `data/`, and add `include PRs` for live GitHub enrichment |
+| `/report`            | Recap visible session events since the prior real captain message plus visibly unanswered captain decisions, then guide the captain through any open decisions one at a time in agent-judged impact order; fall back to Ops when invoked as the session's first real captain message |
+| `/ops`        | Generate a concise four-section chat digest from bounded fleet state, including registered remote-home ledgers and measured follow-up for owned contributions; use `/ops file` to also replace today's dated report in `data/`, and add `include PRs` for live GitHub enrichment |
 | `/updatefirstmate` | Guardedly update the running firstmate and its secondmates - fast-forward, or reconcile a redundant post-squash-merge divergence - then persist and restart every live mate successfully left on the target commit - including already-current homes - with an honest re-read nudge only when restart cannot be proven |
 | `/stow`            | Sweep the session for uncaptured durable knowledge, persist the open work records this session knows are unfiled or now wrong, curate tiered startup memory with decay and cold archival, enforce each home's budget or surface the required decision, cascade to registered second mates, and report what is safe to reset |
 
-Bearings invocation examples:
+`/ahoy` remains an alias for `/report`; `/bearings` remains an alias for `/ops`, including every file and Lavish mode.
+Use your harness's skill invocation syntax (for example `$report` and `$ops` in Codex).
 
-- `/bearings` returns the fresh four-section digest in chat only.
+Ops invocation examples:
+
+- `/ops` returns the fresh four-section digest in chat only.
 - Owned-contribution follow-up comes from the cached coverage projection; `include PRs` remains the opt-in for repository-wide live PR enrichment.
-- `/bearings include PRs` keeps chat-only mode and opts into live PR enrichment.
-- `/bearings file` replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch and links it from the four-section chat digest.
-- `/bearings file include PRs` combines the dated report with live PR enrichment.
+- `/ops include PRs` keeps chat-only mode and opts into live PR enrichment.
+- `/ops file` replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch and links it from the four-section chat digest.
+- `/ops lavish` adds the fleet board; `off`, `view`, and `answers` keep their existing per-request behavior.
+- `/ops file include PRs` combines the dated report with live PR enrichment.
 
 Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
 

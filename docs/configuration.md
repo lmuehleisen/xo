@@ -88,7 +88,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
 - Enabled extension working namespaces under `state/extensions/`.
 - Parent-side remote ledger copies under `state/secondmate-summary-cache/`.
-- One-shot Bearings reconcile requests under `state/reconcile-notify/`.
+- One-shot Ops reconcile requests under `state/reconcile-notify/`.
 - Private secondmate config-reread generations with their retry and quarantine state.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
@@ -958,8 +958,8 @@ The judge never receives this directory's files, caches each verdict by content 
 The optional local, gitignored `config/lavish` turns on Lavish for this home and is inherited into secondmate homes through the primary-authoritative configuration contract.
 It holds one word:
 
-- `off`, the default when the file is absent: `/bearings lavish` builds a static local HTML board, scouts get no Lavish review loop, and every answer stays in chat.
-- `view`: `/bearings lavish` opens its read-only board in Lavish with its source armed but unbound, so annotations reach firstmate as ordinary review feedback, and scout briefs offer the crew-hosted review loop below for visual deliverables.
+- `off`, the default when the file is absent: `/ops lavish` builds a static local HTML board, scouts get no Lavish review loop, and every answer stays in chat.
+- `view`: `/ops lavish` opens its read-only board in Lavish with its source armed but unbound, so annotations reach firstmate as ordinary review feedback, and scout briefs offer the crew-hosted review loop below for visual deliverables.
 - `answers`: `view`, plus answer controls on the board's decision cards for calls this home's backlog holds open, bound to the keyed-answer intake in `bin/fm-captain-hold.sh` before the board is armed; a secondmate's calls, and merge, credential, and dispatch requests, stay in chat.
 
 A per-request choice wins over the file in both directions for one artifact: `bin/fm-bearings-board.sh build --lavish <mode>` for one board, and `bin/fm-brief.sh --scout --lavish <mode>` for one scout.
@@ -2104,7 +2104,7 @@ Some built-in sources carry the captain's answer to a captain-held task, and wha
 
 **Reconcile selections and handling boundaries**
 
-- An explicitly captured review artifact may use the parallel optional `reconciles` adapter command and binding-verified `reconcile-requests` intake rather than entering keyed answers; the static Bearings board never emits that selection or binds an answer source, and [`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#evidence-backed-reconciliation-is-not-a-board-control) owns the lifecycle semantics.
+- An explicitly captured review artifact may use the parallel optional `reconciles` adapter command and binding-verified `reconcile-requests` intake rather than entering keyed answers; the static Ops board never emits that selection or binds an answer source, and [`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#evidence-backed-reconciliation-is-not-a-board-control) owns the lifecycle semantics.
 - Feeding is independent of handling: it never acknowledges a result and never suppresses a wake, because recording the answer or request is transcription while acting on it is firstmate's judgement.
 - An unbound built-in source, a built-in adapter without the corresponding command, and a failure on either side all leave the capture untouched and still announced.
 - External binding responses never enter either authority-bearing intake.
@@ -2372,7 +2372,7 @@ FM_SNAPSHOT_LOCAL_READ_CONCURRENCY=8   # maximum local tasks whose current-state
 FM_SNAPSHOT_BUDGET=5                # one total seconds budget for all concurrent remote home-ledger reads
 FM_SNAPSHOT_CACHE_DIR=$FM_HOME/state/secondmate-summary-cache   # private parent-side cache of successfully fetched remote home ledgers
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=14  # floored elapsed-day threshold at which an undated captain hold (no hold-until; age from its UTC hold-set timestamp, falling back to since for legacy unstamped holds) is projected as a Charted Next gate instead of a live Captain's Call; 0 applies once the computed age is non-negative
-FM_RECONCILE_REQUEST_MAX_BYTES=1048576   # maximum captured Bearings or fleet snapshot accepted for durable reconcile-notify request publication
+FM_RECONCILE_REQUEST_MAX_BYTES=1048576   # maximum captured Ops or fleet snapshot accepted for durable reconcile-notify request publication
 FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
 FM_INACTIVE_RECONCILE_SECS=900  # 60..1800-second watcher cadence and inactivity threshold; locked session start also requests an immediate scan in the deferred worker

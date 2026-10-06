@@ -7,7 +7,7 @@ This page covers turning it on, the install rules, and viewing Lavish pages from
 
 ## What each mode adds
 
-| Mode | `/bearings lavish` board | Scout review loops |
+| Mode | `/ops lavish` board | Scout review loops |
 | --- | --- | --- |
 | `off` (default) | A static local HTML file; answers in chat | Not offered |
 | `view` | The same read-only board, opened in Lavish; annotations reach Firstmate as review feedback | Offered for visual deliverables |
@@ -44,7 +44,7 @@ Write `view` or `answers` into `config/lavish` in the Firstmate home; delete the
 Secondmate homes inherit the file.
 
 You can also ask for or decline Lavish for one board or one review regardless of the home setting.
-Say so when you ask for it - for example, ask for "/bearings lavish answers", or say "no Lavish this time" - and Firstmate passes that choice for that one artifact.
+Say so when you ask for it - for example, ask for "/ops lavish answers", or say "no Lavish this time" - and Firstmate passes that choice for that one artifact.
 If Lavish is wanted but not installed, Firstmate builds the static board instead and tells you why.
 
 ## View Lavish pages from another computer over Tailscale
@@ -135,9 +135,9 @@ Closing the first session closes the forward, even while other sessions stay ope
 | --- | --- | --- |
 | The browser cannot connect to `127.0.0.1:4387` | No ssh session with the forward is open on this laptop | Open one, or check that the session that owned the forward is still open |
 | ssh prints `bind [127.0.0.1]:4387: Address already in use` | Another session, or another program on the laptop, already holds port 4387 | If it is your earlier ssh session, carry on; otherwise use `LocalForward 14387 127.0.0.1:4387` and change `4387` to `14387` in the link |
-| The connection is reset or the page is empty | The forward works, but the Lavish server on the Firstmate machine is not running; it stops 30 minutes after the last page disconnects | Ask Firstmate to reopen the board (for example `/bearings lavish` again); the link stays the same |
+| The connection is reset or the page is empty | The forward works, but the Lavish server on the Firstmate machine is not running; it stops 30 minutes after the last page disconnects | Ask Firstmate to reopen the board (for example `/ops lavish` again); the link stays the same |
 | `403 Forbidden` | The link was opened with a hostname other than `127.0.0.1` or `localhost` | Use the link exactly as printed |
-| Firstmate reports the board session is not open | You ended that review from the browser | Ask for the board again; a fresh `/bearings lavish` reopens it once |
+| Firstmate reports the board session is not open | You ended that review from the browser | Ask for the board again; a fresh `/ops lavish` reopens it once |
 
 ### What was and was not tested over ssh
 

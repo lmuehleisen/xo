@@ -5,17 +5,17 @@
 # the full digest, a context re-emit, or nothing at all.
 #
 # Why running beats nudging: bin/fm-sessionstart-nudge.sh can only ASK the agent
-# to take the helm, and an agent can defer that, including when a first-command
+# to take the conn, and an agent can defer that, including when a first-command
 # skill has its own read-only path. When the native adapter injects this
 # command's stdout into model context, running the digest here removes that
-# discretion - the helm is taken before the model's first turn, whatever the
+# discretion - the conn is taken before the model's first turn, whatever the
 # first turn is.
 #
 # Usage: fm-sessionstart-run.sh [--source <source>] [--pi-prerequisite]
 #   --source  The harness's own session-open source. When omitted, the source is
 #             read from a Claude/Codex-shaped JSON hook payload on stdin
 #             (the `source` field). An unreadable or unrecognized source is
-#             treated as `startup`, because taking the helm redundantly is
+#             treated as `startup`, because taking the conn redundantly is
 #             cheap and idempotent while not taking it is the whole bug.
 #   --pi-prerequisite
 #             Internal Pi extension mode. An intentional gate/scope stand-down
@@ -24,7 +24,7 @@
 #             invocation retains the always-zero compatibility contract below.
 #
 # Source routing (see docs/sessionstart-nudge.md for the per-harness names):
-#   startup, new            full digest - this process has not taken the helm
+#   startup, new            full digest - this process has not taken the conn
 #   clear, compact          `--reemit` digest only when this lock owner recorded
 #                           a completed full startup; otherwise a full digest,
 #                           so a startup killed mid-sweep is finished first
@@ -44,7 +44,7 @@
 # deferred network result inline or as a wake, for exactly that reason.
 # A fresh clone has no gitignored state dir yet; a root that otherwise
 # qualifies as primary gets one created here before the scope check runs, so
-# the first session takes the helm without a manual `mkdir state`.
+# the first session takes the conn without a manual `mkdir state`.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,7 +69,7 @@ while [ $# -gt 0 ]; do
     --source)
       SOURCE=${2:-}
       # A bare trailing --source leaves the source empty rather than aborting,
-      # so a malformed call still falls through to taking the helm.
+      # so a malformed call still falls through to taking the conn.
       if [ $# -ge 2 ]; then shift 2; else shift; fi
       ;;
     --source=*) SOURCE=${1#--source=}; shift ;;
@@ -123,7 +123,7 @@ if [ -z "$SOURCE" ] && [ ! -t 0 ]; then
   # Cursor loads the tracked Claude settings as well as its own registration,
   # so a Cursor-delivered payload here is the duplicate: bin/fm-sessionstart-
   # cursor.sh already owns that session open and calls this wrapper with an
-  # explicit --source and no payload. Running twice would take the helm twice
+  # explicit --source and no payload. Running twice would take the conn twice
   # and repeat every startup sweep.
   if fm_hook_payload_is_foreign_host "$PAYLOAD"; then
     exit 0

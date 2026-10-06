@@ -432,7 +432,7 @@ Their adapters fail open at the hook boundary to protect the user session.
 When the predicate blocks, they schedule one bounded follow-up.
 omp is the exception among the Pi-derived harnesses: its `session_stop` hook blocks like Codex's `Stop` hook, so no passive latch is needed and the `stop_hook_active` loop guard applies unchanged.
 
-The generated prompts use the canonical `turn-end-guard` kind after the U+2063 `FIRSTMATE_OP: ` prefix, so Ahoy does not treat them as captain messages.
+The generated prompts use the canonical `turn-end-guard` kind after the U+2063 `FIRSTMATE_OP: ` prefix, so Report does not treat them as captain messages.
 Each passive adapter owns a loop latch:
 
 - Pi keeps the latch across internal tool turns and clears it only when the generated follow-up settles or delivery fails.
