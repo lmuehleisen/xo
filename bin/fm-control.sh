@@ -1057,7 +1057,7 @@ do_relaunch() {
   fi
 
   if [ "$TARGET_HARNESS" = opencode ] &&
-    { [ "$spawn_ok" = 0 ] || [ -n "$(fm_meta_get "$META" opencode_launch_failure)" ]; }; then
+    [ -n "$(fm_meta_get "$META" opencode_launch_failure)" ]; then
     die "OpenCode replacement readiness or brief delivery failed; endpoint $T is retained for inspection, not confirmed as relaunched"
   fi
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {

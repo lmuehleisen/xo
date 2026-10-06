@@ -1070,6 +1070,61 @@ SH
   pass "OpenCode direct restart inherits its model, honors overrides, and submits through V2 readiness"
 }
 
+test_opencode_direct_relaunch_inherits_and_overrides_effort() {
+  local dir id out rc effort override model=anthropic/claude-sonnet-4-5
+  for override in inherit named; do
+    id="oc-effort-$override"
+    dir=$(new_case "$id" "$id")
+    add_ship_task "$dir" "$id" opencode
+    printf zsh > "$dir/fake/command"
+    printf opencode > "$dir/fake/becomes"
+    printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+    chmod +x "$dir/fakebin/opencode"
+    sed "s|^model=default$|model=$model|; s/^effort=default$/effort=high/" \
+      "$dir/home/state/$id.meta" > "$dir/meta.new"
+    mv "$dir/meta.new" "$dir/home/state/$id.meta"
+    effort=high
+    local args=("$id" --relaunch)
+    if [ "$override" = named ]; then
+      effort=max
+      args+=(--effort max)
+    fi
+    out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 run_spawn "$dir" "${args[@]}"); rc=$?
+    expect_code 0 "$rc" "OpenCode direct effort restart failed: $out"
+    [ "$(meta_field "$dir" "$id" model)" = "$model" ] || fail "effort override changed model"
+    [ "$(meta_field "$dir" "$id" effort)" = "$effort" ] || fail "restart lost effort override=$override"
+    assert_contains "$(cat "$dir/fake/literal")" "\"build\":{\"model\":\"$model#$effort\"}" "launch config lost effort variant"
+  done
+  pass "OpenCode direct restart inherits effort and honors explicit variant overrides"
+}
+
+test_opencode_late_backlog_failure_confirms_the_running_replacement() {
+  local dir id=oc-late-backlog out rc
+  command -v tasks-axi >/dev/null 2>&1 && fm_tasks_axi_compatible || {
+    pass "skipped: compatible tasks-axi is required for the late backlog failure fixture"
+    return 0
+  }
+  dir=$(new_case "$id" "$id")
+  add_ship_task "$dir" "$id" opencode
+  printf zsh > "$dir/fake/command"
+  printf opencode > "$dir/fake/becomes"
+  printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+  chmod +x "$dir/fakebin/opencode"
+  seed_backlog "$dir" "$id" queued
+  break_tasks_axi_start "$dir"
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 \
+    run_control "$dir" "$id" relaunch --note "continue preserved work"); rc=$?
+  assert_contains "$out" 'backlog item could not be moved to In flight' "fixture did not reach the late backlog failure"
+  assert_contains "$(cat "$dir/fake/literal")" 'Read the brief at' "fixture did not deliver the brief before backlog failure"
+  [ -z "$(meta_field "$dir" "$id" opencode_launch_failure)" ] || fail "backlog failure was marked as delivery failure"
+  [ "$(backlog_state "$dir" "$id")" = queued ] || fail "fixture did not retain the failed transition"
+  expect_code 0 "$rc" "a working OpenCode replacement must survive a late backlog error: $out"
+  assert_contains "$out" 'the agent came up on opencode' "late failure did not confirm the running agent"
+  assert_not_contains "$out" 'readiness or brief delivery failed' "late backlog error was mislabeled as delivery failure"
+  [ "$(journal_field "$dir" "$id" phase)" = complete ] || fail "late backlog failure stranded the relaunch journal"
+  pass "OpenCode late backlog failure preserves the existing running-agent reconciliation"
+}
+
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
   local dir id out rc failure gen
   for failure in readiness submission; do
@@ -2876,6 +2931,8 @@ test_codex_ultra_relaunch_uses_recorded_worktree_configuration
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_opencode_direct_relaunch_retains_model_and_readies_composer
+test_opencode_direct_relaunch_inherits_and_overrides_effort
+test_opencode_late_backlog_failure_confirms_the_running_replacement
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics
 test_explicit_model_wins_over_the_recorded_one
 test_recorded_launch_optins_refuse_recovery_before_stop
