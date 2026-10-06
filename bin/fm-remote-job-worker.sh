@@ -271,7 +271,7 @@ worker_shutdown_owns_lock() {
   local owner_pid
   [ "$WORKER_LOCK_HELD" -eq 1 ] || return 1
   [ -d "$WORKER_LOCK" ] && [ ! -L "$WORKER_LOCK" ] || return 1
-  owner_pid=$(fm_remote_job_read_single_line "$WORKER_LOCK/pid" 64 2>/dev/null || true)
+  fm_remote_job_read_line "$WORKER_LOCK/pid" 64 owner_pid 2>/dev/null || return 1
   [ "$owner_pid" = "${BASHPID:-$$}" ]
 }
 
