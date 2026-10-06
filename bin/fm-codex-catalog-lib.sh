@@ -12,7 +12,8 @@
 # fm_codex_max_support <model>
 #   Prints true when the catalog advertises max for <model>, false when the
 #   catalog is valid and does not, and unknown when it is unreadable, malformed,
-#   or carries a non-array reasoning-level list for <model>. Requires jq.
+#   carries a non-array reasoning-level list for <model>, or neither CODEX_HOME
+#   nor HOME names a catalog root. Requires jq.
 #
 # fm_codex_max_allowed <model>
 #   Exits 0 when max is accepted for <model>: the catalog advertises it, or the
@@ -23,10 +24,12 @@
 #   models fm_codex_max_allowed accepts, for a jq --argjson consumer.
 
 fm_codex_max_support() {
-  local model=$1 catalog result
-  catalog="${CODEX_HOME:-$HOME/.codex}/models_cache.json"
+  local model=$1 root catalog result
+  root=${CODEX_HOME:-}
+  [ -n "$root" ] || [ -z "${HOME:-}" ] || root=$HOME/.codex
+  catalog=$root/models_cache.json
   result=
-  if [ -f "$catalog" ] && [ -r "$catalog" ]; then
+  if [ -n "$root" ] && [ -f "$catalog" ] && [ -r "$catalog" ]; then
     result=$(jq -r --arg model "$model" '
       if (.models | type) != "array" then error("invalid model catalog")
       else [.models[] | select(.slug == $model)] |

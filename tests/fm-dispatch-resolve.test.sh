@@ -1031,6 +1031,7 @@ for case in advertised:gpt-6-luna:ok not-advertised:gpt-5:bad missing-catalog:gp
   printf '{"rules":[{"when":"x","use":{"harness":"codex","model":"%s","effort":"max"}}]}\n' "$model" > "$RULES"
   CODEX_HOME=$codex_home TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
   if [ "$verdict" = ok ]; then
+    expect_code 0 "$code" "codex max $label resolves without a configuration error"
     assert_not_contains "$err" 'malformed rules file' "codex max $label is well formed"
   else
     assert_contains "$err" 'each use profile effort must be supported by its harness and model' "codex max $label is refused"

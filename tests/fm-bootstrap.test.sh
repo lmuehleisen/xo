@@ -1276,6 +1276,11 @@ missing catalog Luna^gpt-5.6-luna^
 invalid catalog new model^gpt-6-luna^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
 invalid catalog Luna^gpt-5.6-luna^
 ROWS
+  printf '%s\n' '{"rules":[{"when":"a","use":{"harness":"codex","model":"gpt-5.6-luna","effort":"max"}},{"when":"b","use":{"harness":"codex","model":"gpt-6-luna","effort":"max"}}]}' > "$case_dir/home/config/crew-dispatch.json"
+  out=$(env -u HOME -u CODEX_HOME PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>&1 | grep 'crew-dispatch\|unbound')
+  [ "$out" = "CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max" ] \
+    || fail "codex max without HOME or CODEX_HOME must use the Luna-only fallback, got: $out"
   pass "bootstrap accepts Codex max exactly where the installed catalog advertises it"
 }
 
