@@ -73,6 +73,18 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# A finished scout can leave a nested directory without owner write permission,
+# for example a copied Git hooks tree. treehouse return then cleans with
+# `git clean -fd`, which unlinks a child only when that child's parent directory
+# is writable and does not repair the mode, so the return fails and the scratch
+# copy stays checked out. After those report and completion-gate checks and the
+# landed-work check, and after teardown has reaped processes in that copy,
+# scratch scout cleanup restores owner write on real directories there. The
+# walk does not follow symlinks and does not cross onto another filesystem.
+# Ship worktrees are not modified, including a refusal or a forced discard.
+# The scout has stopped and teardown has already reaped worktree processes, so
+# only a concurrent process of the same user could race a directory into or out
+# of the copy during that walk. That race is outside this cleanup trust model.
 # Before destructive cleanup, teardown validates task check artifacts as
 # ordinary single-link files on the state device. It refuses and preserves
 # task state when that proof fails; otherwise it removes the task's check,
@@ -1803,6 +1815,19 @@ cleanup_stale_lock_for_safety_check() {
 
   echo "teardown: worktree safety check blocked by git lock $lock that is not provably stale (may belong to a live process); leaving it in place" >&2
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
+}
+
+# Restore owner write on real directories in a scratch scout copy so the
+# following treehouse return can unlink a tree the scout left non-writable.
+# See the script header. Ships are unchanged.
+prepare_scout_scratch_for_return() {
+  local wt=$1
+  [ "$KIND" = scout ] || return 0
+  [ -n "$wt" ] || return 0
+  [ -d "$wt" ] || return 0
+  # -P does not follow symlinks, so a directory link is not chmod'd.
+  # -xdev stays on this filesystem. -type d skips anything that is not a directory.
+  find -P "$wt" -xdev -type d ! -perm -u+w -exec chmod u+w {} + || return 1
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
@@ -3711,6 +3736,12 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   post_lock_cleanup_check=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
+  fi
+  if [ "$KIND" = scout ]; then
+    prepare_scout_scratch_for_return "$WT" || {
+      echo "error: cannot restore write permission in scratch scout worktree $WT; teardown aborted" >&2
+      exit 1
+    }
   fi
   teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
