@@ -89,7 +89,8 @@
 # The walk visits one real directory at a time and lists only its immediate
 # child directories, without following symlinks. Before the mode change, and
 # before any child is listed, the repair compares the current directory's
-# device and the mount point of its physical path with the scratch copy.
+# device, the mount point of its physical path, and on Linux the mount id of
+# the entered directory, with the scratch copy.
 # Linux reads that mount point from /proc/self/mountinfo, so a bind mount is
 # its own mount. An unreadable table stops the return there, because df cannot
 # separate a same-filesystem bind from the scratch copy. Other systems use the
@@ -100,12 +101,18 @@
 # resolved, so a symlink to a directory whose name ends with a newline is not
 # replaced by the sibling path that lacks it. A test run can supply that
 # table, including an unreadable path, only when FM_TEST_SEAM is set; ordinary
-# cleanup always reads the live table. A scratch root whose mount differs from
-# its parent stops the return, so that mount is not the baseline for the walk.
-# A different device or mount is left unchanged and is not entered,
-# including a same-filesystem bind mount and every directory under it. A
-# failure to list a directory on the
-# scratch copy's own mount aborts the return. A directory the walk cannot descend,
+# cleanup always reads the live table. On Linux the entered directory's mount
+# id is read from the descriptor opened on that directory and compared with
+# the scratch root. The mode change applies to that same directory, so a later
+# path lookup cannot hand the change to a directory the path now names. A
+# missing id stops the return. Other systems have no kernel mount id and keep
+# the path check. A test run can record an id for one exact path, only when
+# FM_TEST_SEAM is set; ordinary cleanup reads the kernel id. A scratch root
+# whose mount differs from its parent stops the return, so that mount is not
+# the baseline for the walk. A different device, mount point, or mount id is
+# left unchanged and is not entered, including a same-filesystem bind mount
+# and every directory under it. A failure to list a directory on the scratch
+# copy's own mount aborts the return. A directory the walk cannot descend,
 # a uchg flag, and a hard link to an outside inode also stay out of this
 # repair, and it does not change files or flags. The kernel walk inside
 # cd -P can observe a symlink that appears during that walk; pwd -P then
@@ -1970,14 +1977,77 @@ scout_mount_point() {
   scout_mount_point_df "$path"
 }
 
+# Kernel mount id of an open directory descriptor. Linux fdinfo carries
+# mnt_id for that descriptor, including after the path that reached it is
+# detached. Other systems have no such file.
+scout_kernel_mount_id() {
+  local fd=$1 id info
+  info=/proc/self/fdinfo/$fd
+  [ -r "$info" ] || return 1
+  id=$(awk '/^mnt_id:/ { print $2; exit }' "$info") || return 1
+  [ -n "$id" ] || return 1
+  printf '%s\n' "$id"
+}
 
+# Mount id of one directory, opened only for this read.
+scout_kernel_mount_id_of_path() {
+  local path=$1 id
+  id=$(
+    exec 8< "$path" || exit 1
+    scout_kernel_mount_id 8
+  ) || return 1
+  [ -n "$id" ] || return 1
+  printf '%s\n' "$id"
+}
+
+# Test mount id for an exact path. The line is the path, a tab, and the id,
+# compared as raw bytes. Returns 2 when a requested table cannot be read.
+scout_recorded_mount_id() {
+  local path=$1 table line rec_path rec_id
+  if [ "${FM_TEST_SEAM:-}" != 1 ] || [ -z "${FM_SCOUT_MOUNT_IDS+x}" ]; then
+    return 1
+  fi
+  table=$FM_SCOUT_MOUNT_IDS
+  if [ ! -r "$table" ]; then
+    return 2
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *$'\t'*) ;;
+      *) continue ;;
+    esac
+    rec_path=${line%%$'\t'*}
+    rec_id=${line#*$'\t'}
+    if [ "$rec_path" = "$path" ]; then
+      printf '%s\n' "$rec_id"
+      return 0
+    fi
+  done <"$table"
+  return 1
+}
+
+# Recorded id when a test names this path; otherwise the kernel id of fd.
+scout_effective_mount_id() {
+  local fd=$1 path=$2 id rc
+  rc=0
+  id=$(scout_recorded_mount_id "$path") || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$id"
+    return 0
+  fi
+  if [ "$rc" -eq 2 ]; then
+    return 2
+  fi
+  scout_kernel_mount_id "$fd"
+}
 
 # Restore owner write on one real directory inside a scratch scout worktree.
 # See the script header. A symlink is skipped. A directory that resolves
 # outside the worktree aborts the return. A directory on a different device
-# or mount is left unchanged.
+# or mount is left unchanged. On Linux the mount id has to come from the
+# entered directory, or the return stops.
 scout_restore_dir_owner_write() {
-  local wt_phys=$1 path=$2 wt_mnt=$3 wt_dev=$4 rc=0
+  local wt_phys=$1 path=$2 wt_mnt=$3 wt_dev=$4 wt_mnt_id=${5:-} rc=0
   [ -n "$path" ] || return 0
   if [ -L "$path" ]; then
     return 0
@@ -1993,6 +2063,11 @@ scout_restore_dir_owner_write() {
   (
     CDPATH=
     cd -P -- "$path" || exit 1
+    # This descriptor is the entered directory. A later path lookup can name
+    # another mount; the id below still belongs to the directory entered here.
+    if [ "$(uname -s)" = Linux ]; then
+      exec 9< . || exit 1
+    fi
     # Command substitution drops every trailing newline, including one that is
     # part of the directory name. The marker keeps those bytes, and one
     # terminator is then removed before the mount comparison.
@@ -2000,6 +2075,21 @@ scout_restore_dir_owner_write() {
     now=${now%x}
     now=${now%$'\n'}
     scout_dir_is_under "$wt_phys" "$now" || exit 2
+    id_rc=0
+    here_id=$(scout_effective_mount_id 9 "$path") || id_rc=$?
+    if [ "$id_rc" -eq 2 ]; then
+      exit 1
+    fi
+    if [ "$(uname -s)" = Linux ] && [ "$id_rc" -ne 0 ]; then
+      exit 1
+    fi
+    if [ "$id_rc" -eq 0 ] && [ -z "$here_id" ]; then
+      exit 1
+    fi
+    if [ "$id_rc" -eq 0 ] && [ "$here_id" != "$wt_mnt_id" ]; then
+      echo "teardown: leaving $now unchanged; it is mounted separately from scratch scout worktree $wt_phys" >&2
+      exit 3
+    fi
     here_dev=$(scout_device_id .) || exit 1
     # One terminator is removed. A newline that belongs to the mount point stays.
     here_mnt=$(scout_mount_point "$now" && printf x) || exit 1
@@ -2011,6 +2101,7 @@ scout_restore_dir_owner_write() {
       fi
       exit 3
     fi
+    # `.` is the entered directory whose mount id was just checked.
     chmod u+w . || exit 1
   ) || rc=$?
   # Exit 3 tells the walk not to list children. A different mount is pruned
@@ -2033,7 +2124,7 @@ scout_restore_dir_owner_write() {
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 wt_phys path wt_dev wt_mnt wt_parent parent_mnt queue next rc failed
+  local wt=$1 wt_phys path wt_dev wt_mnt wt_mnt_id wt_parent parent_mnt queue next rc failed
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
@@ -2074,6 +2165,20 @@ prepare_scout_scratch_for_return() {
     echo "teardown: refusing to change $wt; scratch scout path $wt_phys is its own mount" >&2
     return 1
   fi
+  # The root id is the baseline for every directory that has no recorded id.
+  # On Linux a missing id stops the return before any mode change.
+  wt_mnt_id=$(scout_kernel_mount_id_of_path "$wt_phys") || {
+    if [ "$(uname -s)" = Linux ]; then
+      echo "teardown: cannot identify the mount of scratch scout worktree $wt" >&2
+      return 1
+    fi
+    wt_mnt_id=
+  }
+  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_SCOUT_MOUNT_IDS+x}" ] \
+    && [ ! -r "$FM_SCOUT_MOUNT_IDS" ]; then
+    echo "teardown: cannot identify the mount of scratch scout worktree $wt" >&2
+    return 1
+  fi
   queue=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || return 1
   printf '%s\0' "$wt_phys" >"$queue"
   # One level at a time. A different mount returns 3 and is not entered, so
@@ -2091,7 +2196,7 @@ prepare_scout_scratch_for_return() {
         continue
       fi
       rc=0
-      scout_restore_dir_owner_write "$wt_phys" "$path" "$wt_mnt" "$wt_dev" || rc=$?
+      scout_restore_dir_owner_write "$wt_phys" "$path" "$wt_mnt" "$wt_dev" "$wt_mnt_id" || rc=$?
       case "$rc" in
         0) ;;
         3) continue ;;

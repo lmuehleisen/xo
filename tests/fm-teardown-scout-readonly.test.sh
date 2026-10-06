@@ -11,7 +11,8 @@
 # is repaired at that physical directory. Replacing an ancestor with a
 # symlink at the moment owner write is restored must not change the outside
 # directory.
-# A directory on a different mount is left unchanged. Cases that need a
+# A directory on a different mount, or recorded with a different mount id,
+# is left unchanged. Cases that need a
 # non-writable directory to make git clean fail do not run as the superuser,
 # because the superuser bypasses directory write permission.
 set -u
@@ -556,8 +557,10 @@ test_reported_mount_is_not_made_writable() {
 }
 
 # A directory on the scratch copy's own mount that can be entered but not
-# listed still stops the return. Mode 100 has search and no read, so the
-# listing fails after the mode change. The superuser can read it anyway.
+# listed still stops the return. Mode 100 has search and no read. Where the
+# mount id is read from an opened descriptor, an open failure stops the
+# return before the mode change; otherwise the listing fails after it. The
+# superuser can read it anyway.
 test_unsearchable_directory_on_scratch_mount_aborts_before_return() {
   local case_dir id=scout-sealed rc
   skip_if_directory_mode_is_bypassed "scout-sealed" && return 0
@@ -572,8 +575,10 @@ test_unsearchable_directory_on_scratch_mount_aborts_before_return() {
   rc=0
   run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
   [ "$rc" -ne 0 ] || fail "scout-sealed: teardown returned a scratch copy it could not list"
-  assert_grep "cannot list scratch scout worktree" "$case_dir/stderr" \
-    "scout-sealed: teardown did not report the listing failure"$'\n'"$(cat "$case_dir/stderr")"
+  if ! grep -F "cannot list scratch scout worktree" "$case_dir/stderr" >/dev/null \
+    && ! grep -F "cannot restore write permission" "$case_dir/stderr" >/dev/null; then
+    fail "scout-sealed: teardown did not report why it stopped"$'\n'"$(cat "$case_dir/stderr")"
+  fi
   assert_no_grep "return --force" "$case_dir/treehouse.log" \
     "scout-sealed: teardown returned the worktree after the listing failed"
   [ -f "$case_dir/wt/copied-hooks/nested/commit-msg" ] \
@@ -787,6 +792,71 @@ test_overmounted_scratch_root_is_refused_unchanged() {
   pass "an overmounted scratch root is left unchanged"
 }
 
+# The planted directory is not a separate kernel mount. Cleanup is told its
+# mount id differs from the scratch copy, which is the detach case: the path
+# still names the scratch copy while the entered directory does not.
+test_recorded_mount_id_is_not_made_writable() {
+  local case_dir id=scout-mount-id rc dir_mode wt_phys
+  skip_if_directory_mode_is_bypassed "scout-mount-id" && return 0
+  case_dir=$(make_case scout-mount-id)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  mkdir -p "$case_dir/wt/planted-id"
+  printf 'stay\n' > "$case_dir/wt/planted-id/file"
+  chmod a-w "$case_dir/wt/planted-id" "$case_dir/wt/planted-id/file"
+  dir_mode=$(mode_of "$case_dir/wt/planted-id")
+  wt_phys=$(cd "$case_dir/wt" && pwd -P && printf x)
+  wt_phys=${wt_phys%x}
+  wt_phys=${wt_phys%$'\n'}
+  printf '%s\t%s\n' "$wt_phys/planted-id" "foreign" > "$case_dir/mount-ids"
+
+  rc=0
+  FM_SCOUT_MOUNT_IDS="$case_dir/mount-ids" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-mount-id: cleanup removed a directory with a different mount id (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-mount-id: teardown did not reach the worktree return"$'\n'"$(cat "$case_dir/stderr")"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-mount-id: the same-mount hooks tree was not removed"
+  [ -f "$case_dir/wt/planted-id/file" ] \
+    || fail "scout-mount-id: the different-id tree was removed"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/planted-id")" \
+    "scout-mount-id: different-id directory mode changed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "stay" "$(cat "$case_dir/wt/planted-id/file")" \
+    "scout-mount-id: different-id file contents changed"
+  assert_grep "leaving $wt_phys/planted-id unchanged" "$case_dir/stderr" \
+    "scout-mount-id: the different mount id was not left unchanged"$'\n'"$(cat "$case_dir/stderr")"
+  pass "a directory recorded with a different mount id is not made writable, and the rest of the scratch copy still is"
+}
+
+# An id table that cannot be read is not proof, so the copy is not changed.
+test_unreadable_mount_id_table_refuses_before_return() {
+  local case_dir id=scout-no-mount-id rc dir_mode
+  skip_if_directory_mode_is_bypassed "scout-no-mount-id" && return 0
+  case_dir=$(make_case scout-no-mount-id)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  dir_mode=$(mode_of "$case_dir/wt/copied-hooks")
+
+  rc=0
+  FM_SCOUT_MOUNT_IDS="$case_dir/missing-mount-ids" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-no-mount-id: teardown returned a scratch copy without a mount id"
+  assert_grep "cannot identify the mount" "$case_dir/stderr" \
+    "scout-no-mount-id: teardown did not report the missing mount id"$'\n'"$(cat "$case_dir/stderr")"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-no-mount-id: teardown returned the worktree without a mount id"
+  [ -f "$case_dir/wt/copied-hooks/nested/commit-msg" ] \
+    || fail "scout-no-mount-id: the hooks file was removed"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/copied-hooks")" \
+    "scout-no-mount-id: directory mode changed without a mount id"
+  pass "a scratch copy is not changed when its mount id cannot be read"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -823,4 +893,6 @@ test_reported_mount_with_trailing_newline_is_not_made_writable
 test_newline_scratch_root_does_not_change_sibling
 test_linux_without_mountinfo_refuses_before_return
 test_overmounted_scratch_root_is_refused_unchanged
+test_recorded_mount_id_is_not_made_writable
+test_unreadable_mount_id_table_refuses_before_return
 test_separate_mount_inside_scratch_scout_is_not_made_writable
