@@ -70,6 +70,8 @@
 #   delivery failure retains the endpoint, wiring, and published task record,
 #   marking the replacement as failed for recovery,
 #   and captures diagnostics in tasktmp/opencode-startup-<spawn_gen>.log.
+#   OpenCode delivery failure exits 70 if its durable failure marker could not
+#   be published; control must refuse completion even without that marker.
 #   It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
 #   or herdr), and clears the previous harness's per-task wiring before arming
@@ -4882,6 +4884,7 @@ spawn_delivery_endpoint_cleanup() {
 }
 
 opencode_spawn_fail() { # <detail>
+  local failure_code=1
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
   if [ "$RELAUNCH" -eq 1 ]; then
@@ -4909,10 +4912,11 @@ opencode_spawn_fail() { # <detail>
       fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
       SPAWN_META_TMP=
     else
+      failure_code=70
       echo "error: could not mark OpenCode replacement failure in $STATE/$ID.meta; reconcile endpoint $T before recovery" >&2
     fi
     echo "warning: OpenCode endpoint and replacement wiring are preserved; task record retained; diagnostics=$diagnostic" >&2
-    return 0
+    return "$failure_code"
   fi
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
@@ -4925,6 +4929,7 @@ opencode_spawn_fail() { # <detail>
     RELAUNCH_REPLACEMENT_PENDING=0
     echo "warning: OpenCode endpoint closure is unconfirmed; task record $STATE/$ID.meta and wiring are preserved for recovery" >&2
   fi
+  return "$failure_code"
 }
 
 # Only an additional matching line proves a new acknowledgement. Comparing
@@ -6433,12 +6438,12 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   done
   if [ "$opencode_ready" -ne 1 ]; then
     opencode_spawn_fail "OpenCode V2 composer did not become ready in window $T"
-    exit 1
+    exit $?
   fi
   OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
     "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || {
     opencode_spawn_fail "OpenCode V2 brief encoding failed in window $T"
-    exit 1
+    exit $?
   }
   # Submission may start work even when its verdict is lost or unconfirmed.
   # Keep task ownership from this point, including if submission is interrupted.
@@ -6447,7 +6452,7 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" != empty ]; then
     opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T"
-    exit 1
+    exit $?
   fi
 fi
 if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then

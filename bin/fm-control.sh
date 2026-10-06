@@ -976,7 +976,7 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line spawn_ok
+  local exit_result state note_line spawn_ok spawn_rc=0
   local -a spawn_args
 
   require_state_verified_backend relaunch
@@ -1025,8 +1025,11 @@ do_relaunch() {
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
   spawn_ok=1
-  if ! FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
+  if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
+    :
+  else
+    spawn_rc=$?
     spawn_ok=0
     [ "$(fm_meta_get "$META" control_relaunch_tx)" = "$RELAUNCH_TX" ] \
       || die "the replacement agent for $ID could not be launched on $TARGET_HARNESS"
@@ -1057,7 +1060,7 @@ do_relaunch() {
   fi
 
   if [ "$TARGET_HARNESS" = opencode ] &&
-    [ -n "$(fm_meta_get "$META" opencode_launch_failure)" ]; then
+    { [ "$spawn_rc" = 70 ] || [ -n "$(fm_meta_get "$META" opencode_launch_failure)" ]; }; then
     die "OpenCode replacement readiness or brief delivery failed; endpoint $T is retained for inspection, not confirmed as relaunched"
   fi
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {

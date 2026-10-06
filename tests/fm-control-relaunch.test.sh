@@ -351,6 +351,13 @@ if [ -n "${FM_FAKE_COMPLETE_JOURNAL_MV_FAIL:-}" ]; then
     fi
   done
 fi
+if [ "${FM_FAKE_OPENCODE_MARKER_MV_FAIL:-0}" = 1 ]; then
+  for path in "$@"; do
+    if [ -f "$path" ] && grep -q '^opencode_launch_failure=' "$path"; then
+      exit 1
+    fi
+  done
+fi
 if [ -n "${FM_FAKE_META_PUBLISH_MV_FAIL:-}" ]; then
   for path in "$@"; do
     [ "$path" != "$FM_FAKE_META_PUBLISH_MV_FAIL" ] || exit 1
@@ -1163,6 +1170,28 @@ test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
     fi
   done
   pass "OpenCode failed restart preserves its pane, recovery record, work and captured diagnostics"
+}
+
+test_opencode_marker_publication_failure_refuses_a_false_relaunch_success() {
+  local dir id=oc-marker-fail out rc
+  dir=$(new_case "$id" "$id")
+  add_ship_task "$dir" "$id" opencode
+  printf opencode > "$dir/fake/command"
+  printf opencode > "$dir/fake/becomes"
+  printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+  chmod +x "$dir/fakebin/opencode"
+  make_mv_failure_stub "$dir"
+  out=$(FM_REAL_MV=$(command -v mv) FM_FAKE_OPENCODE_MARKER_MV_FAIL=1 \
+    FM_OPENCODE_READY_POLLS=0 run_control "$dir" "$id" relaunch --note "preserve work"); rc=$?
+  assert_contains "$out" 'could not mark OpenCode replacement failure' "fixture did not fail marker publication"
+  [ -z "$(meta_field "$dir" "$id" opencode_launch_failure)" ] || fail "fixture unexpectedly published the marker"
+  expect_code 1 "$rc" "marker publication failure falsely confirmed relaunch: $out"
+  assert_contains "$out" 'readiness or brief delivery failed' "control lost the delivery failure without its marker"
+  assert_not_contains "$out" 'the relaunch completed' "live endpoint masked marker failure"
+  [ "$(journal_field "$dir" "$id" phase)" = failed:launching ] || fail "marker failure completed the journal"
+  [ "$(cat "$dir/fake/command")" = opencode ] || fail "marker failure removed the agent"
+  [ ! -e "$dir/fake/killed-windows" ] || fail "marker failure removed the pane"
+  pass "OpenCode failure-marker publication errors cannot confirm a live uninstructed replacement"
 }
 
 test_explicit_model_wins_over_the_recorded_one() {
@@ -2940,6 +2969,7 @@ test_opencode_direct_relaunch_retains_model_and_readies_composer
 test_opencode_direct_relaunch_inherits_and_overrides_effort
 test_opencode_late_backlog_failure_confirms_the_running_replacement
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics
+test_opencode_marker_publication_failure_refuses_a_false_relaunch_success
 test_explicit_model_wins_over_the_recorded_one
 test_recorded_launch_optins_refuse_recovery_before_stop
 test_relaunch_onto_an_unverified_harness_is_refused
