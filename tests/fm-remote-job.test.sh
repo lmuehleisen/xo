@@ -115,9 +115,19 @@ git -C "$REMOTE_ROOT" config user.name Test
 git -C "$REMOTE_ROOT" add AGENTS.md bin
 git -C "$REMOTE_ROOT" commit -qm 'remote job fixture'
 
+# Direct lane fixtures represent a dispatch by this live test process.
+record_lane_owner() { # <state-root>
+  local state=$1
+  mkdir -p "$state/worker.lock"
+  printf '%s\n' "$$" > "$state/worker.lock/pid"
+  fm_remote_job_process_start "$$" > "$state/worker.lock/start"
+  fm_remote_job_process_command "$$" > "$state/worker.lock/command"
+}
+
 # Two real serving loops share one queue. Hold the old one, let a replacement
 # own a running job, then resume the old one without TERM. Only the owner may
 # keep serving, and its live claim and readiness must survive the old exit.
+# shellcheck disable=SC2030,SC2031 # Ownership fixture overrides are confined to this subshell.
 lock_takeover_case() (
   local state="$TMP_ROOT/takeover-state" account="$TMP_ROOT/takeover-account"
   local old='' owner='' lane='' old_start job pending i
@@ -158,7 +168,8 @@ lock_takeover_case() (
   done
   assert_present "$FM_REMOTE_JOB_JOBS/$job/.claim/armed" "the owner did not start its command"
   lane=$(cat "$FM_REMOTE_JOB_JOBS/$job/.claim/owner")
-  kill -0 "$old" && kill -0 "$owner" || fail "the takeover fixture did not reproduce two live serving loops"
+  kill -0 "$old" || fail "the old serving loop exited before the takeover check"
+  kill -0 "$owner" || fail "the new serving loop exited before the takeover check"
   kill -CONT "$old"
   for ((i=0; i<100; i++)); do
     kill -0 "$old" 2>/dev/null || break
@@ -195,18 +206,34 @@ lock_takeover_case() (
   [ "$FM_REMOTE_JOB_EXIT" = 0 ] || fail "the owner could not serve the queued work"
   assert_present "$TMP_ROOT/takeover-touched" "the owner did not execute the queued work"
   pass "a delayed lane cannot claim after its serving owner loses ownership"
+
+  # Freeze the serving parent again so it cannot stop its own lane. An active
+  # lane must detect the replaced owner records and stop its command itself.
+  kill -STOP "$owner"
+  for ((i=0; i<100; i++)); do
+    [ "$(ps -o state= -p "$owner" 2>/dev/null | cut -c1)" = T ] && break
+    sleep 0.05
+  done
+  [ "$(ps -o state= -p "$owner" 2>/dev/null | cut -c1)" = T ] || fail "the lane's serving parent did not stop"
+  rm -rf -- "$state/worker.lock"
+  record_lane_owner "$state"
+  for ((i=0; i<100; i++)); do
+    case "$(ps -o state= -p "$lane" 2>/dev/null | cut -c1)" in ''|Z) break ;; esac
+    sleep 0.05
+  done
+  case "$(ps -o state= -p "$lane" 2>/dev/null | cut -c1)" in
+    ''|Z) ;;
+    *) fail "an active lane kept executing after its serving owner lost the lock" ;;
+  esac
+  assert_absent "$TMP_ROOT/takeover-finished" "the ousted lane's command kept running"
+  [ "$(cat "$state/worker.lock/pid")" = "$$" ] || fail "the ousted lane touched the replacement's lock"
+  kill -CONT "$owner"
+  wait "$owner" 2>/dev/null || true
+  owner=''
+  pass "an active lane stops after ownership loss even while its parent is frozen"
 )
 mkdir -p "$TMP_ROOT/another-home"
 lock_takeover_case || exit 1
-
-# Direct lane fixtures represent a dispatch by this live test process.
-record_lane_owner() { # <state-root>
-  local state=$1
-  mkdir -p "$state/worker.lock"
-  printf '%s\n' "$$" > "$state/worker.lock/pid"
-  fm_remote_job_process_start "$$" > "$state/worker.lock/start"
-  fm_remote_job_process_command "$$" > "$state/worker.lock/command"
-}
 
 # Observe the actual sleep executable boundary for the result consumer, a
 # top-level command lane, and the dispatcher. Re-source the public library as
