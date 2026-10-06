@@ -95,7 +95,8 @@
 #   exception: bin/fm-harness.sh validate-native-effort owns its model scope;
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
 #   Direct Codex receives -c model_reasoning_effort="ultra" only when the
-#   installed CLI parser and bundled model catalog prove support.
+#   installed CLI parser and bundled model catalog prove support from the
+#   target project, or the recorded worktree on relaunch, before provisioning.
 #   Native task opt-in probes and launches use the same absolute executable
 #   resolved from PATH for Claude and Codex.
 #   This direct-Codex extension applies only to task workers, not secondmates.
@@ -2866,7 +2867,12 @@ if [ "$EFFORT" = ultra ]; then
     echo "error: --effort ultra requires the canonical --harness pi or pi-signed or codex launch so its native flag cannot be omitted" >&2
     exit 1
   }
-  "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" "$KIND" "$TASK_OPTIN_BIN" || exit 1
+  # Direct Codex loads project configuration while parsing this probe. Defer
+  # task workers until their target directory is resolved; reject every other
+  # unsupported profile here, including secondmates before home mutation.
+  if [ "$HARNESS" != codex ] || [ "$KIND" = secondmate ]; then
+    "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" "$KIND" "$TASK_OPTIN_BIN" || exit 1
+  fi
 fi
 if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
   [ "$RAW_LAUNCH" = 0 ] || { echo "error: --ultracode and --goal require a canonical harness launch" >&2; exit 1; }
@@ -3592,6 +3598,12 @@ fi
 # Account and project resolution precede CLI preflight. Ultracode capability
 # is verified inside the launched session, whose ambient credentials and
 # project-local settings can differ from this spawning process.
+if [ "$HARNESS" = codex ] && [ "$EFFORT" = ultra ] && [ "$KIND" != secondmate ]; then
+  CODEX_ULTRA_PROBE_DIR=$PROJ_ABS
+  [ "$RELAUNCH" = 0 ] || CODEX_ULTRA_PROBE_DIR=$RELAUNCH_WT
+  (cd "$CODEX_ULTRA_PROBE_DIR" && "$SCRIPT_DIR/fm-harness.sh" validate-native-effort \
+    "$HARNESS" "$MODEL" "$EFFORT" "$KIND" "$TASK_OPTIN_BIN") || exit 1
+fi
 if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
   (cd "$PROJ_ABS" && task_launch_optins_validate) || exit 1
 fi

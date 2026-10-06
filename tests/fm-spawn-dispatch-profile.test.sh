@@ -56,6 +56,12 @@ SH
 #!/usr/bin/env bash
 case "$*" in
   *'debug models --bundled'*)
+    [ -z "${FM_FAKE_CODEX_CWD_LOG:-}" ] || pwd -P >> "$FM_FAKE_CODEX_CWD_LOG"
+    # Mirror CLI parsing of project-local configuration, independently of
+    # the model catalog, so caller and target configuration can disagree.
+    if [ -f .codex/config.toml ] && grep -q '^invalid fixture config$' .codex/config.toml; then
+      exit 1
+    fi
     [ "${FM_FAKE_CODEX_PROBE_FAIL:-0}" = 0 ] || exit 1
     if [ -n "${FM_FAKE_CODEX_CATALOG:-}" ]; then
       printf '%s\n' "$FM_FAKE_CODEX_CATALOG"
@@ -1128,6 +1134,37 @@ test_codex_ultra_refuses_unproved_support() {
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "secondmate ultra published metadata"
   [ ! -s "$LAUNCH_LOG" ] || fail "secondmate ultra launched a worker"
   pass "direct codex ultra requires an explicit model and proof from the installed CLI"
+}
+
+test_codex_ultra_uses_target_project_configuration() {
+  local rec id=codex-ultra-context out rc scenario caller
+  for scenario in invalid-caller invalid-target; do
+    rec=$(make_spawn_case "codex-ultra-$scenario" codex "$id")
+    read_case_record "$rec"
+    caller="$CASE_DIR/caller"
+    mkdir -p "$caller/.codex" "$PROJ_DIR/.codex"
+    if [ "$scenario" = invalid-caller ]; then
+      printf '%s\n' 'invalid fixture config' > "$caller/.codex/config.toml"
+    else
+      printf '%s\n' 'invalid fixture config' > "$PROJ_DIR/.codex/config.toml"
+    fi
+    out=$(cd "$caller" && FM_FAKE_CODEX_CWD_LOG="$CASE_DIR/probe-cwd.log" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+    rc=$?
+    if [ "$scenario" = invalid-caller ]; then
+      expect_code 0 "$rc" "caller config wrongly refused valid target Ultra: $out"
+      assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+      assert_contains "$(cat "$LAUNCH_LOG")" 'model_reasoning_effort="ultra"' "target Ultra launch omitted effort"
+    else
+      expect_code 1 "$rc" "invalid target config passed Ultra preflight: $out"
+      [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "invalid target Ultra published metadata"
+      [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "invalid target Ultra armed lifecycle wiring"
+      [ ! -s "$LAUNCH_LOG" ] || fail "invalid target Ultra launched a worker"
+    fi
+    assert_equals "$(cd "$PROJ_DIR" && pwd -P)" "$(cat "$CASE_DIR/probe-cwd.log")" \
+      "Ultra catalog probe did not load target project configuration"
+  done
+  pass "direct Codex Ultra validates target project configuration rather than caller configuration"
 }
 
 test_claude_ultracode_optin() {
@@ -2870,6 +2907,7 @@ test_opencode_omits_variant_when_model_family_lacks_effort
 test_native_effort_validator_keeps_axes_separate
 test_native_pi_ultra_is_explicit_and_model_scoped
 test_codex_ultra_refuses_unproved_support
+test_codex_ultra_uses_target_project_configuration
 test_remote_secondmate_ultra_refuses_before_routing
 test_claude_ultracode_optin
 test_goal_first_native_input

@@ -154,6 +154,10 @@ case "${1:-}" in
       exit 0
     fi
     [ -z "${FM_FAKE_COMPOSER_READ_FAIL:-}" ] || exit 1
+    if [ "$(cat "$D/command")" = codex ]; then
+      printf '› %s\n' "$(cat "$D/composer" 2>/dev/null)"
+      exit 0
+    fi
     if [ -s "$D/composer" ]; then
       printf '╭────╮\n│ %s  │\n╰────╯\n' "$(cat "$D/composer")"
     else
@@ -889,6 +893,62 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
   assert_contains "$(cat "$dir/fake/literal")" "--codex-effort 'ultra'" "relaunch lost native flag"
   assert_not_contains "$(cat "$dir/fake/literal")" "--thinking 'ultra'" "relaunch used an invalid Pi level"
   pass "native Ultra relaunch preserves its profile and rejects an unsupported model before stopping"
+}
+
+test_codex_ultra_relaunch_uses_recorded_worktree_configuration() {
+  local dir out rc scenario id=rl-codex-ultra caller meta brief
+  for scenario in invalid-caller invalid-target; do
+    dir=$(new_case "codex-ultra-$scenario" "$id")
+    add_ship_task "$dir" "$id" codex
+    printf codex > "$dir/fake/command"
+    printf codex > "$dir/fake/becomes"
+    meta="$dir/home/state/$id.meta"
+    brief="$dir/home/data/$id/brief.md"
+    sed 's/^model=default$/model=gpt-6-astra/; s/^effort=default$/effort=ultra/' \
+      "$meta" > "$meta.tmp"
+    mv "$meta.tmp" "$meta"
+    cp "$meta" "$dir/meta.before"
+    cp "$brief" "$dir/brief.before"
+    cat > "$dir/fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *'debug models --bundled'*)
+    pwd -P >> "$FM_HOME/probe-cwd.log"
+    if [ -f .codex/config.toml ] && grep -q '^invalid fixture config$' .codex/config.toml; then exit 1; fi
+    printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+    ;;
+esac
+SH
+    chmod +x "$dir/fakebin/codex"
+    caller="$dir/caller"
+    mkdir -p "$caller/.codex" "$dir/proj/.codex" "$dir/wt/.codex"
+    # The primary checkout is not the relaunch target either.
+    printf '%s\n' 'invalid fixture config' > "$dir/proj/.codex/config.toml"
+    if [ "$scenario" = invalid-caller ]; then
+      printf '%s\n' 'invalid fixture config' > "$caller/.codex/config.toml"
+    else
+      printf '%s\n' 'invalid fixture config' > "$dir/wt/.codex/config.toml"
+    fi
+    out=$(cd "$caller" && run_control "$dir" "$id" relaunch --note "preserve target configuration"); rc=$?
+    if [ "$scenario" = invalid-caller ]; then
+      expect_code 0 "$rc" "caller or primary config wrongly refused valid worktree Ultra: $out"
+      [ "$(meta_field "$dir" "$id" effort)" = ultra ] || fail "relaunch lost Ultra effort"
+      assert_contains "$(cat "$dir/fake/literal")" 'model_reasoning_effort="ultra"' "relaunch omitted native Ultra"
+      # Control's pre-stop probe and spawn's revalidation must both use the WT.
+      assert_equals "$(printf '%s\n%s' "$dir/wt" "$dir/wt")" "$(cat "$dir/home/probe-cwd.log")" \
+        "relaunch probes did not both load the recorded worktree configuration"
+    else
+      expect_code 1 "$rc" "invalid recorded worktree config passed Ultra preflight: $out"
+      assert_contains "$out" 'cannot verify ultra support' "invalid target refusal lost parser failure"
+      cmp -s "$meta" "$dir/meta.before" || fail "invalid target Ultra changed metadata"
+      cmp -s "$brief" "$dir/brief.before" || fail "invalid target Ultra changed instructions"
+      [ "$(cat "$dir/fake/command")" = codex ] || fail "invalid target Ultra stopped its worker"
+      [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "invalid target Ultra sent lifecycle input"
+      [ ! -e "$dir/home/state/$id.control-relaunch" ] || fail "invalid target Ultra opened a relaunch transaction"
+      assert_equals "$dir/wt" "$(cat "$dir/home/probe-cwd.log")" "pre-stop probe did not load recorded worktree"
+    fi
+  done
+  pass "Codex Ultra relaunch validates recorded worktree configuration before stopping and before replacement"
 }
 
 # A fake claude that answers `claude auth status` the way the real runner
@@ -2625,6 +2685,7 @@ test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
+test_codex_ultra_relaunch_uses_recorded_worktree_configuration
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_explicit_model_wins_over_the_recorded_one
