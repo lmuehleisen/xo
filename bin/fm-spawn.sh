@@ -70,8 +70,9 @@
 #   delivery failure retains the endpoint, wiring, and published task record,
 #   marking the replacement as failed for recovery,
 #   and captures diagnostics in tasktmp/opencode-startup-<spawn_gen>.log.
-#   OpenCode delivery failure exits 70 if its durable failure marker could not
-#   be published; control must refuse completion even without that marker.
+#   With FM_CONTROL_RELAUNCH_TX set, OpenCode delivery failure emits
+#   opencode_delivery_failed=<transaction> on stdout for fm-control, independent
+#   of metadata writes and child exit codes.
 #   It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
 #   or herdr), and clears the previous harness's per-task wiring before arming
@@ -4884,7 +4885,6 @@ spawn_delivery_endpoint_cleanup() {
 }
 
 opencode_spawn_fail() { # <detail>
-  local failure_code=1
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
   if [ "$RELAUNCH" -eq 1 ]; then
@@ -4912,11 +4912,12 @@ opencode_spawn_fail() { # <detail>
       fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
       SPAWN_META_TMP=
     else
-      failure_code=70
       echo "error: could not mark OpenCode replacement failure in $STATE/$ID.meta; reconcile endpoint $T before recovery" >&2
     fi
     echo "warning: OpenCode endpoint and replacement wiring are preserved; task record retained; diagnostics=$diagnostic" >&2
-    return "$failure_code"
+    [ -z "${FM_CONTROL_RELAUNCH_TX:-}" ] ||
+      printf 'opencode_delivery_failed=%s\n' "$FM_CONTROL_RELAUNCH_TX"
+    return 1
   fi
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
@@ -4929,7 +4930,7 @@ opencode_spawn_fail() { # <detail>
     RELAUNCH_REPLACEMENT_PENDING=0
     echo "warning: OpenCode endpoint closure is unconfirmed; task record $STATE/$ID.meta and wiring are preserved for recovery" >&2
   fi
-  return "$failure_code"
+  return 1
 }
 
 # Only an additional matching line proves a new acknowledgement. Comparing

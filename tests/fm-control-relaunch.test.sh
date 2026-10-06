@@ -411,14 +411,14 @@ backlog_state() {  # <case-dir> <id>
 # Shadow tasks-axi so every `start` fails and every other verb is real. A
 # relaunch that re-reads the row before acting never calls it; one that assumes
 # it must re-run the transition trips over it.
-break_tasks_axi_start() {  # <case-dir>
-  local dir=$1 real
+break_tasks_axi_start() {  # <case-dir> [exit-code]
+  local dir=$1 real failure_code=${2:-1}
   real=$(command -v tasks-axi)
   cat > "$dir/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
 if [ "\${1:-}" = start ]; then
   echo 'error: "start refused"' >&2
-  exit 1
+  exit "$failure_code"
 fi
 exec "$real" "\$@"
 SH
@@ -1106,29 +1106,32 @@ test_opencode_direct_relaunch_inherits_and_overrides_effort() {
 }
 
 test_opencode_late_backlog_failure_confirms_the_running_replacement() {
-  local dir id=oc-late-backlog out rc
+  local dir id out rc failure_code
   if ! command -v tasks-axi >/dev/null 2>&1 || ! fm_tasks_axi_compatible; then
     pass "skipped: compatible tasks-axi is required for the late backlog failure fixture"
     return 0
   fi
-  dir=$(new_case "$id" "$id")
-  add_ship_task "$dir" "$id" opencode
-  printf zsh > "$dir/fake/command"
-  printf opencode > "$dir/fake/becomes"
-  printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
-  chmod +x "$dir/fakebin/opencode"
-  seed_backlog "$dir" "$id" queued
-  break_tasks_axi_start "$dir"
-  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 \
-    run_control "$dir" "$id" relaunch --note "continue preserved work"); rc=$?
-  assert_contains "$out" 'backlog item could not be moved to In flight' "fixture did not reach the late backlog failure"
-  assert_contains "$(cat "$dir/fake/literal")" 'Read the brief at' "fixture did not deliver the brief before backlog failure"
-  [ -z "$(meta_field "$dir" "$id" opencode_launch_failure)" ] || fail "backlog failure was marked as delivery failure"
-  [ "$(backlog_state "$dir" "$id")" = queued ] || fail "fixture did not retain the failed transition"
-  expect_code 0 "$rc" "a working OpenCode replacement must survive a late backlog error: $out"
-  assert_contains "$out" 'the agent came up on opencode' "late failure did not confirm the running agent"
-  assert_not_contains "$out" 'readiness or brief delivery failed' "late backlog error was mislabeled as delivery failure"
-  [ "$(journal_field "$dir" "$id" phase)" = complete ] || fail "late backlog failure stranded the relaunch journal"
+  for failure_code in 1 70; do
+    id="oc-late-backlog-$failure_code"
+    dir=$(new_case "$id" "$id")
+    add_ship_task "$dir" "$id" opencode
+    printf zsh > "$dir/fake/command"
+    printf opencode > "$dir/fake/becomes"
+    printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+    chmod +x "$dir/fakebin/opencode"
+    seed_backlog "$dir" "$id" queued
+    break_tasks_axi_start "$dir" "$failure_code"
+    out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 \
+      run_control "$dir" "$id" relaunch --note "continue preserved work"); rc=$?
+    assert_contains "$out" 'backlog item could not be moved to In flight' "fixture did not reach the late backlog failure"
+    assert_contains "$(cat "$dir/fake/literal")" 'Read the brief at' "fixture did not deliver the brief before backlog failure"
+    [ -z "$(meta_field "$dir" "$id" opencode_launch_failure)" ] || fail "backlog failure was marked as delivery failure"
+    [ "$(backlog_state "$dir" "$id")" = queued ] || fail "fixture did not retain the failed transition"
+    expect_code 0 "$rc" "a working OpenCode replacement must survive a late backlog error: $out"
+    assert_contains "$out" 'the agent came up on opencode' "late failure did not confirm the running agent"
+    assert_not_contains "$out" 'readiness or brief delivery failed' "late backlog error was mislabeled as delivery failure"
+    [ "$(journal_field "$dir" "$id" phase)" = complete ] || fail "late backlog failure stranded the relaunch journal"
+  done
   pass "OpenCode late backlog failure preserves the existing running-agent reconciliation"
 }
 

@@ -142,6 +142,18 @@ wait_file_text "$FM_HOME/state/$ID.status" 'restarted steer processed'
 wait_idle
 [ "$(find "$FM_HOME/state/$ID.inbox/handled" -name '*.msg' | wc -l)" -gt "$HANDLED_BEFORE" ] || fail "$VERSION: restarted steer was not acknowledged"
 [ "$(fm_backend_agent_state tmux "$TARGET")" = alive ] || fail "$VERSION: restarted pane lost agent"
+# Exercise the control owner's transaction feedback on a real replacement too.
+RELAUNCH_COUNT=$(grep -Fc 'working: relaunched' "$FM_HOME/state/$ID.status")
+bash "$ROOT/bin/fm-control.sh" "$ID" relaunch --note 'Continue the trivial runtime task.'
+i=0
+while [ "$i" -lt 180 ]; do
+  CURRENT_COUNT=$(grep -Fc 'working: relaunched' "$FM_HOME/state/$ID.status")
+  [ "$CURRENT_COUNT" -le "$RELAUNCH_COUNT" ] || break
+  i=$((i + 1)); sleep 0.5
+done
+[ "$i" -lt 180 ] || fail "$VERSION: control replacement did not process its brief"
+wait_idle
+[ "$(sed -n 's/^model=//p' "$FM_HOME/state/$ID.meta")" = "$MODEL" ] || fail "$VERSION: control replacement lost model"
 bash "$ROOT/bin/fm-control.sh" "$ID" exit
 # Force a readiness timeout before brief submission, then prove the real pane
 # and its work survived and that the ordinary control plane can still exit it.
