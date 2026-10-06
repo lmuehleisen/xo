@@ -1953,15 +1953,7 @@ scout_mount_point() {
   scout_mount_point_df "$path"
 }
 
-# Store the mount point of path in the named variable. A trailing newline that
-# is part of the mount point survives; command substitution would drop it.
-scout_assign_mount_point() {
-  local path=$1 dest=$2 marked
-  marked=$(scout_mount_point "$path" && printf x) || return 1
-  marked=${marked%x}
-  marked=${marked%$'\n'}
-  printf -v "$dest" '%s' "$marked"
-}
+
 
 # Restore owner write on one real directory inside a scratch scout worktree.
 # See the script header. A symlink is skipped. A directory that resolves
@@ -1992,7 +1984,10 @@ scout_restore_dir_owner_write() {
     now=${now%$'\n'}
     scout_dir_is_under "$wt_phys" "$now" || exit 2
     here_dev=$(scout_device_id .) || exit 1
-    scout_assign_mount_point "$now" here_mnt || exit 1
+    # One terminator is removed. A newline that belongs to the mount point stays.
+    here_mnt=$(scout_mount_point "$now" && printf x) || exit 1
+    here_mnt=${here_mnt%x}
+    here_mnt=${here_mnt%$'\n'}
     if [ "$here_dev" != "$wt_dev" ] || [ "$here_mnt" != "$wt_mnt" ]; then
       if [ "$here_dev" != "$wt_dev" ] || [ "$here_mnt" = "$now" ]; then
         echo "teardown: leaving $now unchanged; it is mounted separately from scratch scout worktree $wt_phys" >&2
@@ -2039,10 +2034,12 @@ prepare_scout_scratch_for_return() {
     echo "teardown: cannot identify the filesystem of scratch scout worktree $wt" >&2
     return 1
   }
-  scout_assign_mount_point "$wt_phys" wt_mnt || {
+  wt_mnt=$(scout_mount_point "$wt_phys" && printf x) || {
     echo "teardown: cannot identify the mount of scratch scout worktree $wt" >&2
     return 1
   }
+  wt_mnt=${wt_mnt%x}
+  wt_mnt=${wt_mnt%$'\n'}
   queue=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || return 1
   printf '%s\0' "$wt_phys" >"$queue"
   # One level at a time. A different mount returns 3 and is not entered, so
