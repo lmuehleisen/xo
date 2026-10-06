@@ -41,14 +41,33 @@ BASE_PATH="$TOOLS:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Real socket-owner holders for the Darwin birth check: Node blocked on a fifo
 # this test keeps open, with exactly the marker environment each birth needs.
+# Each launches through a short-lived parent and reparents to init, so the
+# production ancestry check never reads this test's own process tree - on a
+# host reached over SSH that ancestry is a real ssh birth, which a
+# marker-only holder must not show.
 NODE=$(command -v node)
 HOLDER_FD=5
 hold() { # <marker-env...> -> HOLDER_PID
-  local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo"
+  local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo" pidfile="$TMP_ROOT/holder-$HOLDER_FD.pid"
+  local launcher ppid i
+  rm -f "$fifo" "$pidfile"
   mkfifo "$fifo"
-  env -i "$@" "$NODE" -e 'process.stdin.resume()' < "$fifo" &
-  HOLDER_PID=$!
+  ( env -i "$@" "$NODE" -e 'process.stdin.resume()' < "$fifo" &
+    printf '%s\n' "$!" > "$pidfile" ) &
+  launcher=$!
+  wait "$launcher" 2>/dev/null || true
+  [ -s "$pidfile" ] || fail "a holder did not report its pid"
+  HOLDER_PID=$(cat "$pidfile")
   HOLDER_PIDS+=("$HOLDER_PID")
+  i=0
+  while [ "$i" -lt 200 ]; do
+    ppid=$(ps -o ppid= -p "$HOLDER_PID" 2>/dev/null | tr -d '[:space:]')
+    [ -n "$ppid" ] && [ "$ppid" != "$launcher" ] && break
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -n "$ppid" ] && [ "$ppid" != "$launcher" ] \
+    || fail "holder $HOLDER_PID still reports the short-lived launcher $launcher as its parent"
   eval "exec ${HOLDER_FD}>\"\$fifo\""
   HOLDER_FD=$((HOLDER_FD + 1))
 }
@@ -73,6 +92,7 @@ new_case() {
   local platform=$1 want_herdr=${2:-with-herdr} want_gui=${3:-gui}
   unset CASE_REMOTE_JOB_ACTIVE
   unset CASE_PLATFORM_OVERRIDE
+  unset CASE_BASE_PATH
   unset CASE_DSCL_FAIL
   unset CASE_DSCL_HANG
   unset CASE_SECOND_LOGIN_SHELL
@@ -303,7 +323,7 @@ doctor() {
   DOCTOR_OUT=$(
     HOME="$CASE_HOME" \
     FM_HOME="$CASE_PROJECT_HOME" \
-    PATH="$CASE_HOME/.local/bin:$CASE_BIN:$BASE_PATH" \
+    PATH="$CASE_HOME/.local/bin:$CASE_BIN:${CASE_BASE_PATH:-$BASE_PATH}" \
     FM_FAKE_STATE="$CASE_STATE" \
     FM_FAKE_LAUNCHCTL_LOG="$CASE_LAUNCHCTL_LOG" \
     FM_FAKE_FORBIDDEN_LOG="$CASE_FORBIDDEN_LOG" \
@@ -784,6 +804,12 @@ pass "a non-darwin host skips launch agents and starts its herdr server directly
 # --- --fix may add only owned wrappers for version-manager tools -------------
 
 new_case Linux with-herdr no-gui
+# This case asserts a managed tool is absent from PATH and, after the claude
+# stub is removed, that no harness resolves; a host may already have those
+# names installed where BASE_PATH resolves, so this case's PATH is rebuilt
+# without them while still resolving everything else.
+CASE_BASE_PATH=$(fm_test_base_path_sans "$BASE_PATH" \
+  tasks-axi claude codex opencode pi pi-signed grok kimi)
 MANAGER_BIN="$CASE_HOME/.nvm/versions/node/v24/bin"
 mkdir -p "$MANAGER_BIN"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$MANAGER_BIN/codex"
