@@ -154,6 +154,11 @@ case "${1:-}" in
       exit 0
     fi
     [ -z "${FM_FAKE_COMPOSER_READ_FAIL:-}" ] || exit 1
+    if [ "$(cat "$D/command")" = codex ]; then
+      # cursor_y above is zero-based row 1, so the composer is the second row.
+      printf 'Codex fixture\n› %s\n' "$(cat "$D/composer" 2>/dev/null)"
+      exit 0
+    fi
     if [ -s "$D/composer" ]; then
       printf '╭────╮\n│ %s  │\n╰────╯\n' "$(cat "$D/composer")"
     else
@@ -275,7 +280,7 @@ run_control() {  # <case-dir> <args...>
   env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH \
     -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
-    HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
+    HOME="$dir/user-home" CODEX_HOME="${FM_TEST_CODEX_HOME-$dir/user-home/.codex}" CLAUDE_CONFIG_DIR='' \
     FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
     FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
     FM_REAL_GIT="${FM_REAL_GIT:-}" FM_FAKE_GIT_FAILURE="${FM_FAKE_GIT_FAILURE:-}" \
@@ -891,6 +896,73 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
   pass "native Ultra relaunch preserves its profile and rejects an unsupported model before stopping"
 }
 
+test_codex_ultra_relaunch_uses_recorded_worktree_configuration() {
+  local dir out rc scenario id=rl-codex-ultra caller meta brief
+  for scenario in invalid-caller invalid-target invalid-root; do
+    dir=$(new_case "codex-ultra-$scenario" "$id")
+    add_ship_task "$dir" "$id" codex
+    printf codex > "$dir/fake/command"
+    printf codex > "$dir/fake/becomes"
+    meta="$dir/home/state/$id.meta"
+    brief="$dir/home/data/$id/brief.md"
+    sed 's/^model=default$/model=gpt-6-astra/; s/^effort=default$/effort=ultra/' \
+      "$meta" > "$meta.tmp"
+    mv "$meta.tmp" "$meta"
+    cp "$meta" "$dir/meta.before"
+    cp "$brief" "$dir/brief.before"
+    cat > "$dir/fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *'debug models --bundled'*)
+    printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+    ;;
+  *'debug prompt-input'*)
+    pwd -P >> "$FM_HOME/probe-cwd.log"
+    printf '%s\n' "$CODEX_HOME" >> "$FM_HOME/probe-root.log"
+    for config in .codex/config.toml "$CODEX_HOME/config.toml"; do
+      if [ -f "$config" ] && grep -q '^invalid fixture config$' "$config"; then exit 1; fi
+    done
+    ;;
+esac
+SH
+    chmod +x "$dir/fakebin/codex"
+    caller="$dir/caller"
+    mkdir -p "$caller/.codex" "$dir/proj/.codex" "$dir/wt/.codex"
+    # The primary checkout is not the relaunch target either.
+    printf '%s\n' 'invalid fixture config' > "$dir/proj/.codex/config.toml"
+    if [ "$scenario" = invalid-caller ]; then
+      printf '%s\n' 'invalid fixture config' > "$caller/.codex/config.toml"
+    elif [ "$scenario" = invalid-target ]; then
+      printf '%s\n' 'invalid fixture config' > "$dir/wt/.codex/config.toml"
+    else
+      mkdir -p "$dir/user-home/.codex"
+      printf '%s\n' 'invalid fixture config' > "$dir/user-home/.codex/config.toml"
+    fi
+    out=$(cd "$caller" && run_control "$dir" "$id" relaunch --note "preserve target configuration"); rc=$?
+    if [ "$scenario" = invalid-caller ]; then
+      expect_code 0 "$rc" "caller or primary config wrongly refused valid worktree Ultra: $out"
+      [ "$(meta_field "$dir" "$id" effort)" = ultra ] || fail "relaunch lost Ultra effort"
+      assert_contains "$(cat "$dir/fake/literal")" 'model_reasoning_effort="ultra"' "relaunch omitted native Ultra"
+      # Control's pre-stop probe and spawn's revalidation must both use the WT.
+      assert_equals "$(printf '%s\n%s' "$dir/wt" "$dir/wt")" "$(cat "$dir/home/probe-cwd.log")" \
+        "relaunch probes did not both load the recorded worktree configuration"
+      assert_equals "$(printf '%s\n%s' "$dir/user-home/.codex" "$dir/user-home/.codex")" "$(cat "$dir/home/probe-root.log")" \
+        "relaunch probes did not use the configuration root pinned into the launch"
+      assert_contains "$(cat "$dir/fake/literal")" "CODEX_HOME='$dir/user-home/.codex'" "relaunch did not pin its validated configuration root"
+    else
+      expect_code 1 "$rc" "invalid recorded worktree config passed Ultra preflight: $out"
+      assert_contains "$out" 'cannot verify ultra support' "invalid target refusal lost parser failure"
+      cmp -s "$meta" "$dir/meta.before" || fail "invalid target Ultra changed metadata"
+      cmp -s "$brief" "$dir/brief.before" || fail "invalid target Ultra changed instructions"
+      [ "$(cat "$dir/fake/command")" = codex ] || fail "invalid target Ultra stopped its worker"
+      [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "invalid target Ultra sent lifecycle input"
+      [ ! -e "$dir/home/state/$id.control-relaunch" ] || fail "invalid target Ultra opened a relaunch transaction"
+      assert_equals "$dir/wt" "$(cat "$dir/home/probe-cwd.log")" "pre-stop probe did not load recorded worktree"
+    fi
+  done
+  pass "Codex Ultra relaunch validates recorded worktree configuration before stopping and before replacement"
+}
+
 # A fake claude that answers `claude auth status` the way the real runner
 # does: signed in only when the selected config root holds a stored login.
 make_claude_auth_stub() {  # <case-dir>
@@ -952,6 +1024,34 @@ test_explicit_model_wins_over_the_recorded_one() {
   [ "$(meta_field "$dir" rl7 model)" = sonnet ] || fail "an explicit model should be recorded"
   [ "$(meta_field "$dir" rl7 effort)" = low ] || fail "an explicit effort should be recorded"
   pass "fm-control relaunch: explicit model and effort win over the recorded ones"
+}
+
+test_recorded_launch_optins_refuse_recovery_before_stop() {
+  local dir out rc scenario harness field id=rl-optin
+  for scenario in 'claude ultracode=on' 'claude goal=smoke' 'codex goal=smoke'; do
+    read -r harness field <<< "$scenario"
+    dir=$(new_case "recorded-optin-$harness-${field%%=*}" "$id")
+    add_ship_task "$dir" "$id" "$harness"
+    printf '%s' "$harness" > "$dir/fake/command"
+    printf '%s\n' "$field" >> "$dir/home/state/$id.meta"
+    cp "$dir/home/state/$id.meta" "$dir/meta.before"
+    cp "$dir/home/data/$id/brief.md" "$dir/brief.before"
+    out=$(run_control "$dir" "$id" relaunch --note "recover recorded native mode"); rc=$?
+    expect_code 1 "$rc" "recorded launch opt-ins must refuse before stopping: $scenario $out"
+    assert_contains "$out" 'native launch opt-ins require a fresh spawn' "recovery refusal omitted the unsupported native state"
+    [ "$(cat "$dir/fake/command")" = "$harness" ] || fail "recovery stopped an opted-in worker"
+    assert_absent "$dir/home/state/$id.control-relaunch" "refused native recovery opened a transaction"
+    # The lower-level launch owner must also preserve recorded opt-ins after
+    # the agent has stopped, rather than publishing a replacement without them.
+    printf bash > "$dir/fake/command"
+    out=$(run_spawn "$dir" "$id" --relaunch --harness "$harness"); rc=$?
+    expect_code 1 "$rc" "direct recovery silently dropped native state: $scenario $out"
+    assert_contains "$out" 'native launch opt-ins require a fresh spawn' "direct recovery refused for an unrelated reason"
+    [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "refused native recovery sent lifecycle input"
+    cmp -s "$dir/meta.before" "$dir/home/state/$id.meta" || fail "recovery changed recorded native state"
+    cmp -s "$dir/brief.before" "$dir/home/data/$id/brief.md" || fail "recovery changed the launch brief"
+  done
+  pass "recorded mode and goal recovery refuses before stop or replacement publication"
 }
 
 test_relaunch_onto_an_unverified_harness_is_refused() {
@@ -1142,6 +1242,43 @@ test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop() {
   [ "$(meta_field "$dir" sm7 harness)" = claude ] \
     || fail "a refused relaunch must leave the durable record on the recorded harness"
   pass "fm-control relaunch: an adapter unverified for this task kind refuses before the agent is stopped"
+}
+
+test_secondmate_codex_ultra_refuses_before_stop() {
+  local dir home out rc source id=sm-ultra
+  for source in explicit configured; do
+    dir=$(new_case "sm-ultra-$source" "$id")
+    add_ship_task "$dir" "$id" claude
+    home="$dir/home"
+    mkdir -p "$home/config" "$dir/wt/state" "$dir/wt/data" "$dir/wt/bin"
+    printf '%s\n' "$id" > "$dir/wt/.fm-secondmate-home"
+    printf '# agents\n' > "$dir/wt/AGENTS.md"
+    sed 's/^kind=ship$/kind=secondmate/; s/^mode=no-mistakes$/mode=secondmate/' \
+      "$home/state/$id.meta" > "$dir/meta.updated"
+    printf 'home=%s\n' "$dir/wt" >> "$dir/meta.updated"
+    mv "$dir/meta.updated" "$home/state/$id.meta"
+    cat > "$dir/fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+SH
+    chmod +x "$dir/fakebin/codex"
+    cp "$home/state/$id.meta" "$dir/meta.before"
+    cp "$home/data/$id/brief.md" "$dir/brief.before"
+    if [ "$source" = explicit ]; then
+      out=$(run_control "$dir" "$id" relaunch --harness codex --model gpt-6-astra --effort ultra); rc=$?
+    else
+      printf 'codex gpt-6-astra ultra\n' > "$home/config/secondmate-harness"
+      out=$(run_control "$dir" "$id" relaunch); rc=$?
+    fi
+    expect_code 1 "$rc" "$source direct Codex Ultra must refuse before stopping a secondmate: $out"
+    assert_contains "$out" 'only to task workers' "the refusal must identify the unsupported kind"
+    [ "$(cat "$dir/fake/command")" = claude ] || fail "refused Ultra stopped the secondmate"
+    [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "refused Ultra sent lifecycle input"
+    cmp -s "$dir/meta.before" "$home/state/$id.meta" || fail "refused Ultra changed metadata"
+    cmp -s "$dir/brief.before" "$home/data/$id/brief.md" || fail "refused Ultra changed the brief"
+    assert_absent "$home/state/$id.control-relaunch" "refused Ultra opened a relaunch transaction"
+  done
+  pass "secondmate direct Codex Ultra refuses both explicit and configured relaunches before stop"
 }
 
 test_explicit_secondmate_harness_ignores_configured_profile_axes() {
@@ -2560,9 +2697,11 @@ test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
+test_codex_ultra_relaunch_uses_recorded_worktree_configuration
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_explicit_model_wins_over_the_recorded_one
+test_recorded_launch_optins_refuse_recovery_before_stop
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm
@@ -2570,6 +2709,7 @@ test_turnend_auth_paths_are_owned_by_the_control_adapter
 test_secondmate_relaunch_picks_up_the_configured_harness_pin
 test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop
 test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop
+test_secondmate_codex_ultra_refuses_before_stop
 test_explicit_secondmate_harness_ignores_configured_profile_axes
 test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one

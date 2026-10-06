@@ -316,6 +316,7 @@ fm_composer_holds_owned_text() {  # <text> <rows> [residue]
 fm_composer_strip_ghost() {
   LC_ALL=C awk -v codex_animation="${1:-}" \
     -v codex_prompt="$FM_COMPOSER_CODEX_PROMPT_GLYPH" \
+    -v codex_prompt_alt='»' \
     -v lumamax="${FM_COMPOSER_GHOST_LUMA_MAX:-128}" '
     function sgr_code(v, b) {
       b = v
@@ -422,8 +423,12 @@ fm_composer_strip_ghost() {
         gsub(/^[ \t]+|[ \t]+$/, "", out)
         clean[NR] = out
         if (NR == 2) {
-          if (substr(out, 1, length(codex_prompt)) != codex_prompt) invalid = 1
-          real = substr(out, length(codex_prompt) + 1)
+          prompt_width = length(codex_prompt)
+          if (substr(out, 1, prompt_width) != codex_prompt) {
+            prompt_width = length(codex_prompt_alt)
+            if (substr(out, 1, prompt_width) != codex_prompt_alt) invalid = 1
+          }
+          real = substr(out, prompt_width + 1)
           gsub(/^[ \t]+|[ \t]+$/, "", real)
           if (ghost == "Ask Codex to do anything") placeholder = 1
           else if (ghost != "") invalid = 1
@@ -566,7 +571,8 @@ fm_busy_lines_match() {  # [harness]
 # consumed by `read` rather than word splitting, so `$`, `%`, and `#` stay
 # literal and no entry is ever exposed to pathname expansion.
 FM_COMPOSER_CODEX_PROMPT_GLYPH='›'
-FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' "$FM_COMPOSER_CODEX_PROMPT_GLYPH" '⟩' '→' '❭')
+# Codex 0.160.0 uses » for the live composer and › in the transcript.
+FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' "$FM_COMPOSER_CODEX_PROMPT_GLYPH" '»' '⟩' '→' '❭')
 FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 
 # The ONE fleet-wide idle-placeholder set: composer text a harness renders in

@@ -39,6 +39,7 @@ make_spawn_fakebin() {
   fakebin=$(fm_test_make_spawn_fakebin "$dir")
   cat > "$fakebin/timeout" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = -k ]; then shift 2; fi
 shift
 exec "$@"
 SH
@@ -51,6 +52,51 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/timeout" "$fakebin/cursor-agent"
+  cat > "$fakebin/codex" <<'SH'
+#!/usr/bin/env bash
+root=${CODEX_HOME:-$HOME/.codex}
+case "$*" in
+  *'debug models --bundled'*)
+    # The real --bundled command skips configuration loading.
+    [ "${FM_FAKE_CODEX_PROBE_FAIL:-0}" = 0 ] || exit 1
+    if [ -n "${FM_FAKE_CODEX_CATALOG:-}" ]; then
+      printf '%s\n' "$FM_FAKE_CODEX_CATALOG"
+    else
+      printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+    fi
+    ;;
+  *'debug prompt-input'*|*'features list'*)
+    [ -z "${FM_FAKE_CODEX_CWD_LOG:-}" ] || pwd -P >> "$FM_FAKE_CODEX_CWD_LOG"
+    [ -z "${FM_FAKE_CODEX_ROOT_LOG:-}" ] || printf '%s\n' "$root" >> "$FM_FAKE_CODEX_ROOT_LOG"
+    [ "${FM_FAKE_CODEX_BOOTSTRAP_FAIL:-0}" = 0 ] || exit 1
+    for config in .codex/config.toml "$root/config.toml"; do
+      if [ -f "$config" ] && grep -q '^invalid fixture config$' "$config"; then exit 1; fi
+    done
+    case "$*" in *'features list'*) printf '%s\n' "${FM_FAKE_CODEX_GOALS:-goals stable true}" ;; esac
+    ;;
+  *)
+    if [ -f "$root/config.toml" ] && grep -q '^invalid fixture config$' "$root/config.toml"; then exit 43; fi
+    printf '%s\n' "$root" > "$(dirname "$0")/native-worker-config-root"
+    [ -z "${FM_FAKE_CODEX_WORKER_LOG:-}" ] || printf '%s\n' "$0" "$@" > "$FM_FAKE_CODEX_WORKER_LOG"
+    ;;
+esac
+SH
+  cat > "$fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "${FM_FAKE_CLAUDE_VERSION:-2.1.289 (Claude Code)}"
+elif [ "${1:-}" = -p ]; then
+  case "$*" in *'--model default'*) exit 1 ;; esac
+  if [ -n "${FM_FAKE_CLAUDE_ULTRACODE:-}" ]; then
+    printf '%s\n' "$FM_FAKE_CLAUDE_ULTRACODE"
+  else
+    printf '%s\n' '{"is_error":false,"local_command":"effort","result":"Current effort level: high · Ultracode on","num_turns":0}'
+  fi
+else
+  [ -z "${FM_FAKE_CLAUDE_WORKER_LOG:-}" ] || printf '%s\n' "$0" "$@" > "$FM_FAKE_CLAUDE_WORKER_LOG"
+fi
+SH
+  chmod +x "$fakebin/codex" "$fakebin/claude"
   make_spawn_pi_probe "$fakebin" pi
   make_spawn_pi_probe "$fakebin" pi-signed
   printf '%s\n' "$fakebin"
@@ -115,7 +161,7 @@ run_spawn() {
     FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
-    CODEX_HOME="${FM_TEST_CODEX_HOME:-$home/codex-home}" \
+    CODEX_HOME="${FM_TEST_CODEX_HOME-$home/codex-home}" \
     GROK_HOME="$home/grok-home" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" "$@"
 }
@@ -619,7 +665,7 @@ test_claude_threads_model_and_effort() {
   expect_code 0 "$status" "claude spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude sonnet high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --model 'sonnet' --effort 'high'" \
+  assert_contains "$launch" "claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --model 'sonnet' --effort 'high'" \
     "claude launch did not thread model and effort flags"
   assert_not_contains "$launch" "--tui-mode" "non-Pi launches must not receive Pi's TUI mode override"
   pass "claude receives --model and --effort profile flags"
@@ -1014,7 +1060,10 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
       --harness "$harness" --model "$model" --effort ultra 2>&1)
     expect_code 1 "$?" "unsupported Ultra profile should refuse: $native_profile"
-    assert_contains "$out" "ultra effort requires pi or pi-signed" "native-only refusal missing"
+    case "$harness" in
+      codex) assert_contains "$out" "catalog does not advertise ultra" "catalog refusal missing" ;;
+      *) assert_contains "$out" "ultra effort requires pi or pi-signed" "native-only refusal missing" ;;
+    esac
     [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unsupported Ultra published metadata"
     [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "unsupported Ultra provisioned lifecycle wiring"
     [ ! -s "$LAUNCH_LOG" ] || fail "unsupported Ultra launched an agent"
@@ -1028,6 +1077,641 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "raw Ultra launch published metadata"
   assert_contains "$out" "canonical --harness pi or pi-signed" "raw launch refusal was not actionable"
   pass "Ultra is explicit for native Pi and Pi-signed, including direct-PR, and refuses unsupported profiles before provisioning"
+}
+
+assert_task_launch_uses_probed_executable() { # <harness> <emitted-launch>
+  local harness=$1 launch=$2 pane_bin
+  pane_bin="$CASE_DIR/older-pane-bin"
+  mkdir -p "$pane_bin" "$CASE_DIR/pane-home"
+  cat > "$pane_bin/$harness" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_FAKE_OLDER_HARNESS_CALLED"
+exit 41
+SH
+  chmod +x "$pane_bin/$harness"
+  mkdir -p "$CASE_DIR/pane-codex-root"
+  printf '%s\n' 'invalid fixture config' > "$CASE_DIR/pane-codex-root/config.toml"
+  env PATH="$pane_bin:$PATH" HOME="$CASE_DIR/pane-home" CODEX_HOME="$CASE_DIR/pane-codex-root" \
+    FM_FAKE_OLDER_HARNESS_CALLED="$CASE_DIR/older-harness-called" \
+    FM_FAKE_CODEX_WORKER_LOG="$CASE_DIR/worker-harness.log" \
+    FM_FAKE_CLAUDE_WORKER_LOG="$CASE_DIR/worker-harness.log" \
+    bash -c "$launch" || fail "opted-in launch failed with an older $harness on the pane PATH"
+  [ ! -e "$CASE_DIR/older-harness-called" ] || fail "opted-in launch substituted the pane's unvalidated $harness"
+  [ "$(sed -n '1p' "$CASE_DIR/worker-harness.log")" = "$(CDPATH='' cd -- "$FAKEBIN_DIR" && pwd -P)/$harness" ] \
+    || fail "opted-in launch did not execute the $harness binary whose capability probe passed"
+  if [ "$harness" = codex ]; then
+    assert_equals "$HOME_DIR/codex-home" "$(cat "$FAKEBIN_DIR/native-worker-config-root")" \
+      "opted-in Codex launch substituted the retained pane's configuration root"
+  fi
+}
+
+test_codex_ultra_refuses_unproved_support() {
+  local rec id=codex-ultra-unproved out model probe launch
+  rec=$(make_spawn_case codex-ultra-supported codex "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+  expect_code 0 "$?" "supported codex ultra should launch: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" 'model_reasoning_effort="ultra"' "direct codex ultra config missing"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+  assert_task_launch_uses_probed_executable codex "$launch"
+  for model in '' default gpt-6-luna; do
+    rec=$(make_spawn_case "codex-ultra-unproved-$RANDOM" codex "$id")
+    read_case_record "$rec"
+    if [ -n "$model" ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort ultra --model "$model")
+    else
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --effort ultra)
+    fi
+    expect_code 1 "$?" "unproved codex ultra should refuse: $model $out"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unproved ultra published metadata"
+    [ ! -s "$LAUNCH_LOG" ] || fail "unproved ultra launched a worker"
+  done
+  for probe in malformed unavailable bootstrap-unavailable; do
+    rec=$(make_spawn_case "codex-ultra-$probe" codex "$id")
+    read_case_record "$rec"
+    if [ "$probe" = malformed ]; then
+      out=$(FM_FAKE_CODEX_CATALOG='{}' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+    elif [ "$probe" = unavailable ]; then
+      out=$(FM_FAKE_CODEX_PROBE_FAIL=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+    else
+      out=$(FM_FAKE_CODEX_BOOTSTRAP_FAIL=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+    fi
+    expect_code 1 "$?" "codex ultra must refuse $probe catalog: $out"
+    [ ! -s "$LAUNCH_LOG" ] || fail "bad ultra probe launched a worker"
+  done
+  rec=$(make_spawn_case codex-ultra-secondmate codex "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --secondmate --model gpt-6-astra --effort ultra)
+  expect_code 1 "$?" "direct Codex ultra must refuse a persistent secondmate: $out"
+  assert_contains "$out" 'only to task workers' "secondmate ultra refusal missing"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "secondmate ultra published metadata"
+  [ ! -s "$LAUNCH_LOG" ] || fail "secondmate ultra launched a worker"
+  pass "direct codex ultra requires an explicit model and proof from the installed CLI"
+}
+
+test_codex_optins_use_finalized_worktree_configuration() {
+  local rec id=codex-optin-context out rc scenario caller optin expected_cwd
+  local args=()
+  for optin in ultra goal both; do
+    args=(--model gpt-6-astra)
+    [ "$optin" = goal ] || args+=(--effort ultra)
+    [ "$optin" = ultra ] || args+=(--goal smoke)
+    for scenario in invalid-caller-and-primary invalid-worktree; do
+      rec=$(make_spawn_case "codex-$optin-$scenario" codex "$id")
+      read_case_record "$rec"
+      if [ "$optin" != ultra ]; then
+        goal_pane_fixture
+        printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+      fi
+      caller="$CASE_DIR/caller"
+      mkdir -p "$caller/.codex" "$PROJ_DIR/.codex" "$WT_DIR/.codex"
+      # Local ignored settings can differ between a dirty primary and a clean
+      # leased slot; the pool's existing dirty-work refusal must remain intact.
+      printf '%s\n' '/.codex/config.toml' >> "$(git -C "$WT_DIR" rev-parse --git-path info/exclude)"
+      if [ "$scenario" = invalid-caller-and-primary ]; then
+        printf '%s\n' 'invalid fixture config' > "$caller/.codex/config.toml"
+        printf '%s\n' 'invalid fixture config' > "$PROJ_DIR/.codex/config.toml"
+      else
+        printf '%s\n' 'invalid fixture config' > "$WT_DIR/.codex/config.toml"
+      fi
+      out=$(cd "$caller" && FM_FAKE_CODEX_CWD_LOG="$CASE_DIR/probe-cwd.log" \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "${args[@]}")
+      rc=$?
+      if [ "$scenario" = invalid-caller-and-primary ]; then
+        expect_code 0 "$rc" "caller or primary config wrongly refused valid worktree $optin: $out"
+        if [ "$optin" != goal ]; then
+          assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+          assert_contains "$(cat "$LAUNCH_LOG")" 'model_reasoning_effort="ultra"' "worktree Ultra launch omitted effort"
+        fi
+        if [ "$optin" != ultra ]; then
+          assert_grep 'goal=smoke' "$HOME_DIR/state/$id.meta" "worktree goal launch omitted opt-in"
+          assert_present "$FAKEBIN_DIR/goal-input" "worktree goal launch omitted native input"
+        fi
+      else
+        expect_code 1 "$rc" "invalid worktree config passed $optin preflight: $out"
+        [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "invalid worktree $optin published metadata"
+        [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "invalid worktree $optin armed lifecycle wiring"
+        [ ! -s "$LAUNCH_LOG" ] || fail "invalid worktree $optin launched a worker"
+        [ ! -e "$FAKEBIN_DIR/goal-input" ] || fail "invalid worktree $optin delivered goal input"
+      fi
+      expected_cwd=$(cd "$WT_DIR" && pwd -P)
+      if [ "$optin" = both ] && [ "$scenario" = invalid-caller-and-primary ]; then
+        expected_cwd=$(printf '%s\n%s' "$expected_cwd" "$expected_cwd")
+      fi
+      assert_equals "$expected_cwd" "$(cat "$CASE_DIR/probe-cwd.log")" \
+        "$optin probes did not load finalized worktree configuration"
+    done
+  done
+  pass "Codex Ultra, goal, and combined opt-ins validate the finalized worktree rather than caller or primary configuration"
+}
+
+test_codex_optins_pin_the_probed_configuration_root() {
+  local scenario optin root_mode allowlist rec id=codex-root-binding caller selected provided out rc expected
+  local args=()
+  for scenario in 'ultra default empty' 'ultra custom listed' 'ultra relative absent' \
+    'goal default listed' 'goal custom empty' 'both relative listed'; do
+    read -r optin root_mode allowlist <<< "$scenario"
+    rec=$(make_spawn_case "codex-root-$optin-$root_mode-$allowlist" codex "$id")
+    read_case_record "$rec"
+    caller="$CASE_DIR/caller"
+    mkdir -p "$caller"
+    case "$root_mode" in
+      default) selected="$HOME_DIR/user-home/.codex"; provided= ;;
+      custom) selected="$CASE_DIR/codex root 'selected"; provided=$selected ;;
+      relative) selected="$caller/codex-root"; provided=codex-root ;;
+    esac
+    mkdir -p "$selected" "$CASE_DIR/pane-home/.codex" "$CASE_DIR/pane-root"
+    [ "$root_mode" != relative ] || selected=$(cd "$selected" && pwd -P)
+    printf '\n' > "$selected/config.toml"
+    printf '%s\n' 'invalid fixture config' > "$CASE_DIR/pane-home/.codex/config.toml"
+    printf '%s\n' 'invalid fixture config' > "$CASE_DIR/pane-root/config.toml"
+    case "$allowlist" in
+      empty) : > "$HOME_DIR/config/launch-env-allowlist" ;;
+      listed) printf '%s\n' CODEX_HOME > "$HOME_DIR/config/launch-env-allowlist" ;;
+    esac
+    args=(--model gpt-6-astra)
+    [ "$optin" = goal ] || args+=(--effort ultra)
+    if [ "$optin" != ultra ]; then
+      args+=(--goal smoke)
+      goal_pane_fixture
+      printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+    fi
+    out=$(cd "$caller" && FM_TEST_CODEX_HOME="$provided" FM_FAKE_CODEX_ROOT_LOG="$CASE_DIR/probe-root.log" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "${args[@]}"); rc=$?
+    expect_code 0 "$rc" "Codex $scenario did not validate its selected root: $out"
+    expected=$selected
+    [ "$optin" != both ] || expected=$(printf '%s\n%s' "$selected" "$selected")
+    assert_equals "$expected" "$(cat "$CASE_DIR/probe-root.log")" "Codex $scenario probed a different configuration root"
+    env PATH="$FAKEBIN_DIR:$PATH" HOME="$CASE_DIR/pane-home" CODEX_HOME="$CASE_DIR/pane-root" \
+      bash -c "$(head -1 "$LAUNCH_LOG")" || fail "Codex $scenario inherited invalid pane configuration"
+    assert_equals "$selected" "$(cat "$FAKEBIN_DIR/native-worker-config-root")" \
+      "Codex $scenario launch substituted a configuration root after validation"
+  done
+  for optin in ultra goal; do
+    rec=$(make_spawn_case "codex-root-invalid-$optin" codex "$id")
+    read_case_record "$rec"
+    mkdir -p "$HOME_DIR/codex-home"
+    printf '%s\n' 'invalid fixture config' > "$HOME_DIR/codex-home/config.toml"
+    args=(--model gpt-6-astra)
+    if [ "$optin" = ultra ]; then args+=(--effort ultra); else args+=(--goal smoke); fi
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "${args[@]}"); rc=$?
+    expect_code 1 "$rc" "invalid selected root passed Codex $optin validation: $out"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "invalid root published task metadata"
+    [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "invalid root armed task wiring"
+    [ ! -s "$LAUNCH_LOG" ] || fail "invalid root started a worker"
+  done
+  pass "Codex opt-ins pin the probed absolute configuration root across pane HOME/CODEX_HOME changes and environment filters"
+}
+
+test_claude_ultracode_optin() {
+  local rec id=claude-ultracode out launch
+  rec=$(make_spawn_case "$id" claude "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model opus --effort low)
+  expect_code 0 "$?" "supported ultracode should launch: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_task_launch_uses_probed_executable claude "$(head -1 "$LAUNCH_LOG")"
+  assert_contains "$launch" '"ultracode":true' "ultracode setting missing"
+  assert_contains "$launch" "--effort 'low'" "ultracode changed the explicit effort"
+  assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
+  rec=$(make_spawn_case "$id-default-model" claude "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model default)
+  expect_code 0 "$?" "ultracode's default model probe must match the launch: $out"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" '--model' "default model emitted a literal model flag"
+  for probe in old-version unsupported-model; do
+    rec=$(make_spawn_case "$id-$probe" claude "$id")
+    read_case_record "$rec"
+    if [ "$probe" = old-version ]; then
+      out=$(FM_FAKE_CLAUDE_VERSION=2.1.202 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode)
+    else
+      goal_pane_fixture
+      printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+      out=$(FM_FAKE_CLAUDE_ULTRACODE_RUNTIME='Ultracode unavailable' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model haiku)
+    fi
+    expect_code 1 "$?" "ultracode must refuse $probe: $out"
+    if [ "$probe" = old-version ]; then
+      assert_absent "$HOME_DIR/state/$id.meta" "preflight-refused ultracode published metadata"
+      [ ! -s "$LAUNCH_LOG" ] || fail "unsupported ultracode launched"
+    else
+      assert_present "$HOME_DIR/state/$id.meta" "post-launch ultracode refusal lost task ownership"
+      assert_not_contains "$(cat "$LAUNCH_LOG")" 'FIRSTMATE_OP: v1 operational-input' "unsupported ultracode received its task brief"
+    fi
+  done
+  pass "Claude ultracode is a separate explicit, probed setting and preserves effort"
+}
+
+test_remote_secondmate_ultra_refuses_before_routing() {
+  local rec id=remote-ultra out status verb pin mate
+  for pin in explicit configured; do
+    rec=$(make_spawn_case "remote-ultra-$pin" codex "$id")
+    read_case_record "$rec"
+    printf -- '- %s - remote fixture (host: fixture-host; root: /fixture/root; home: /fixture/home; scope: fixture; projects: alpha; added 2026-10-05)\n' "$id" > "$HOME_DIR/data/secondmates.md"
+    cat > "$FAKEBIN_DIR/ssh-refuse" <<'SH'
+#!/usr/bin/env bash
+printf 'unexpected remote transport\n' >> "${FM_FAKE_LAUNCH_LOG:?}"
+printf 'unexpected remote transport\n' >&2
+exit 99
+SH
+    chmod +x "$FAKEBIN_DIR/ssh-refuse"
+    if [ "$pin" = explicit ]; then
+      out=$(FM_SSH_BIN="$FAKEBIN_DIR/ssh-refuse" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --secondmate --harness codex --model gpt-6-astra --effort ultra)
+    else
+      printf 'codex gpt-6-astra ultra\n' > "$HOME_DIR/config/secondmate-harness"
+      out=$(FM_SSH_BIN="$FAKEBIN_DIR/ssh-refuse" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --secondmate)
+    fi
+    expect_code 1 "$?" "remote secondmate Ultra must refuse before routing: $pin $out"
+    assert_contains "$out" 'only to task workers' "remote parent bypassed the task-only refusal"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a refused remote Ultra published parent metadata"
+    [ ! -s "$LAUNCH_LOG" ] || fail "a refused remote Ultra reached transport"
+  done
+  mate="$CASE_DIR/seeded-mate"
+  make_seeded_secondmate_home "$mate" "$id"
+  mkdir -p "$mate/state/parent-route"
+  printf 'sentinel endpoint\n' > "$mate/state/parent-route/$id.meta"
+  for verb in launch relaunch; do
+    if [ "$verb" = launch ]; then
+      out=$(FM_HOME="$mate" PATH="$FAKEBIN_DIR:$PATH" "$ROOT/bin/fm-remote-secondmate-control.sh" "$verb" "$id" codex gpt-6-astra ultra herdr 2>&1)
+    else
+      out=$(FM_HOME="$mate" PATH="$FAKEBIN_DIR:$PATH" "$ROOT/bin/fm-remote-secondmate-control.sh" "$verb" "$id" codex gpt-6-astra ultra 2>&1)
+    fi
+    status=$?
+    expect_code 1 "$status" "host-local remote control must refuse Ultra before endpoint access: $verb $out"
+    assert_contains "$out" 'only to task workers' "remote control reached the endpoint before refusing Ultra"
+    [ "$(cat "$mate/state/parent-route/$id.meta")" = 'sentinel endpoint' ] || fail "refused Ultra changed endpoint metadata"
+  done
+  pass "remote secondmate Ultra refuses before sync, transport, and endpoint reuse"
+}
+
+goal_pane_fixture() {
+  # This fixture renders synchronously; native UI timing belongs to the live guard.
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
+  mv "$FAKEBIN_DIR/tmux" "$FAKEBIN_DIR/tmux-goal-base"
+  cat > "$FAKEBIN_DIR/tmux" <<'SH'
+#!/usr/bin/env bash
+dir=$(dirname "$0")
+if [ "${1:-}" = new-window ]; then
+  # Each batch task starts in its own fresh composer.
+  rm -f "$dir/goal-input" "$dir/mode-launched" "$dir/optin-launched" "$dir/endpoint-kill-attempted"
+fi
+case "$*" in
+  *'#{cursor_y}'*)
+    row=$((3 + ${FM_FAKE_GOAL_PRIOR_ACK:-0}))
+    [ ! -f "$dir/mode-launched" ] || row=$((row + 1))
+    if [ "${FM_FAKE_GOAL_ECHO:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then
+      row=$((row + 1))
+      [ "${FM_FAKE_GOAL_ECHO_WRAP:-0}" = 0 ] || row=$((row + 2))
+    fi
+    printf '%s\n' "$row"
+    exit 0
+    ;;
+esac
+if [ "${1:-}" = kill-window ] && [ -f "$dir/optin-launched" ]; then
+  : > "$dir/endpoint-kill-attempted"
+fi
+if [ "${FM_FAKE_GOAL_CLOSE_FAIL:-0}" = 1 ]; then
+  case "${1:-}" in
+    kill-window) exit 1 ;;
+    list-windows) [ ! -f "$dir/optin-launched" ] || { printf 'inventory unavailable\n' >&2; exit 1; } ;;
+  esac
+fi
+prior_ack() {
+  if [ "${FM_FAKE_GOAL_COMPLETE_ONLY:-0}" = 1 ]; then
+    printf 'GPT-6.1-Sol ultra · /fixture           Goal achieved (10s)\n'
+  elif [ "$(cat "$dir/goal-harness")" = claude ]; then
+    printf '  ⎿  Goal set: prior\n'
+  else
+    printf '• Goal active Objective: prior\n'
+  fi
+}
+if [ "${1:-}" = capture-pane ]; then
+  if [ -f "$dir/goal-input" ] && [ -n "${FM_FAKE_GOAL_EDIT_PATH:-}" ]; then
+    printf 'native goal worker edit\n' > "$FM_FAKE_GOAL_EDIT_PATH"
+  fi
+  phase=${FM_FAKE_GOAL_SIGNAL_PHASE:-}
+  if [ -n "$phase" ] && [ -f "$dir/optin-launched" ] && [ ! -f "$dir/signal-sent" ] &&
+    { { [ "$phase" = before ] && [ ! -f "$dir/goal-input" ]; } ||
+      { [ "$phase" = after ] && [ -f "$dir/goal-input" ]; }; }; then
+    # Locate only the launcher of this synthetic pane, including capture
+    # subshells, so the signal exercises its actual EXIT cleanup.
+    pid=$PPID
+    launcher=
+    for _ in $(seq 1 12); do
+      case "$pid" in ''|*[!0-9]*|0|1) break ;; esac
+      command=$(ps -o args= -p "$pid")
+      case "$command" in *'/bin/fm-spawn.sh '*) launcher=$pid ;; esac
+      pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+    done
+    [ -n "$launcher" ] || exit 1
+    for generation in "$FM_STATE_OVERRIDE"/*.busy-gen; do
+      [ ! -f "$generation" ] || cp "$generation" "$dir/busy-generation-before"
+    done
+    if [ "${FM_FAKE_GOAL_STATUS_FAIL:-0}" = 1 ]; then
+      # A directory refuses append even when the runner is root.
+      for meta in "$FM_STATE_OVERRIDE"/*.meta; do
+        [ -f "$meta" ] || continue
+        rm -f "${meta%.meta}.status"
+        mkdir -p "${meta%.meta}.status"
+      done
+    fi
+    : > "$dir/signal-sent"
+    kill -"${FM_FAKE_GOAL_SIGNAL:-TERM}" "$launcher" || exit 1
+  fi
+  [ ! -f "$dir/mode-launched" ] || printf 'Current effort level: high · %s\n' "${FM_FAKE_CLAUDE_ULTRACODE_RUNTIME:-Ultracode on}"
+  if [ "${FM_FAKE_GOAL_ECHO:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then
+    if [ "${FM_FAKE_GOAL_ECHO_WRAP:-0}" = 1 ]; then
+      printf '› /goal Reply with these literals:\n  • Goal active Objective: Goal achieved (\n  ⎿ Goal set: ✔ Goal achieved\n'
+    else
+      printf '› %s\n' "$(cat "$dir/goal-input")"
+    fi
+  fi
+  if [ "${FM_FAKE_GOAL_STALE_ONLY:-0}" = 1 ] && [ -f "$dir/goal-input" ]; then
+    # The acknowledgement survives but moves as the retained view scrolls.
+    printf 'Ready\n'
+    prior_ack
+  else
+    [ "${FM_FAKE_GOAL_PRIOR_ACK:-0}" = 0 ] || prior_ack
+    if [ -f "$dir/goal-input" ]; then
+      if [ "${FM_FAKE_GOAL_REJECT:-0}" = 1 ]; then
+        printf 'Unrecognized command /goal\n'
+      elif [ "${FM_FAKE_GOAL_COMPLETE_ONLY:-0}" = 1 ]; then
+        printf 'Ready\n'
+      elif [ "$(cat "$dir/goal-harness")" = claude ]; then
+        printf '  ⎿  Goal set: smoke\n'
+      else
+        printf '• Goal active Objective: smoke\n'
+      fi
+    else
+      printf 'Ready\n'
+    fi
+  fi
+  printf '\n─────────────\n❯ \n─────────────\n'
+  if [ "${FM_FAKE_GOAL_COMPLETE_ONLY:-0}" = 1 ] && [ -f "$dir/goal-input" ] && [ "${FM_FAKE_GOAL_STALE_ONLY:-0}" = 0 ]; then
+    prior_ack
+  fi
+  exit 0
+fi
+if [ "${1:-}" = send-keys ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      /goal*) printf '%s\n' "$arg" > "$dir/goal-input" ;;
+      ". '"*"'")
+        staged=${arg#". '"}
+        staged=${staged%"'"}
+        : > "$dir/optin-launched"
+        if grep -Fq "'/effort current'" "$staged"; then : > "$dir/mode-launched"; fi
+        ;;
+    esac
+  done
+fi
+exec "$dir/tmux-goal-base" "$@"
+SH
+  chmod +x "$FAKEBIN_DIR/tmux"
+}
+
+test_goal_first_native_input() {
+  local harness rec id out launch input envelope role expected expected_role directive
+  for harness in claude codex; do
+    id="goal-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal 'Reply with smoke')
+    expect_code 0 "$?" "native $harness goal launch failed: $out"
+    launch=$(head -1 "$LAUNCH_LOG")
+    assert_task_launch_uses_probed_executable "$harness" "$launch"
+    assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
+    assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
+    input=$(cat "$FAKEBIN_DIR/goal-input")
+    directive="Reply with smoke. Read and follow the launch brief at $HOME_DIR/data/$id/launch-brief.md exactly, including its authority and stop/wait gates."
+    expected="/goal $directive"
+    if [ "$harness" = codex ]; then
+      # The published brief is the worker contract oracle: its first section
+      # must reach the native goal verbatim, ahead of the completion condition.
+      expected_role=$(awk 'NF == 0 {exit} {if (NR > 1) printf " "; printf "%s", $0}' "$HOME_DIR/data/$id/launch-brief.md")
+      expected="/goal $(printf '%s' "$expected_role $directive" | "$ROOT/bin/fm-operational-input.sh" encode launch-brief)"
+    fi
+    assert_equals "$expected" "$input" "native $harness goal input differs from the exact launch contract"
+    if [ "$harness" = codex ]; then
+      envelope=${input#'/goal '}
+      [ "$(printf '%s' "$envelope" | "$ROOT/bin/fm-operational-input.sh" kind)" = launch-brief ] \
+        || fail "Codex goal lost its authenticated launch-brief carrier"
+      role=$(printf '%s' "$envelope" | "$ROOT/bin/fm-operational-input.sh" body)
+      case "$role" in
+        '# Current worker role contract You are a crewmate:'*) ;;
+        *) fail "Codex goal did not establish worker identity before its objective: $role" ;;
+      esac
+      assert_contains "$role" 'follow this brief instead of that supervisor contract' "Codex goal retained the repository supervisor role"
+      assert_contains "$role" "$HOME_DIR/state/$id.inbox" "Codex goal lost its task-owned steering inbox"
+      assert_contains "$role" 'Reply with smoke.' "Codex worker envelope lost the requested goal"
+      assert_not_contains "$input" $'\n' "native Codex goal input must remain a single line"
+    fi
+    assert_grep 'goal=Reply with smoke' "$HOME_DIR/state/$id.meta" "goal metadata missing"
+  done
+  id=goal-codex-unavailable
+  rec=$(make_spawn_case "$id" codex "$id")
+  read_case_record "$rec"
+  out=$(FM_FAKE_CODEX_GOALS='goals removed false' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+  expect_code 1 "$?" "unavailable native goal feature must refuse: $out"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unavailable goal published metadata"
+  [ ! -s "$LAUNCH_LOG" ] || fail "unavailable goal launched a worker"
+  id=goal-native-rejected
+  rec=$(make_spawn_case "$id" claude "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(FM_FAKE_GOAL_REJECT=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+  expect_code 1 "$?" "unacknowledged goal must not report a successful spawn: $out"
+  assert_not_contains "$out" "spawned $id" "native goal rejection was silently omitted"
+  assert_present "$HOME_DIR/state/$id.meta" "a post-launch goal refusal lost task ownership"
+  pass "Claude and Codex goals are the first native input and preserve the brief contract"
+}
+
+test_goal_acknowledgement_is_fresh_and_failure_stays_owned() {
+  local harness rec id out stale
+  for harness in claude codex; do
+    id="goal-fresh-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    out=$(FM_FAKE_GOAL_PRIOR_ACK=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+    expect_code 0 "$?" "a new $harness acknowledgement alongside retained output should confirm: $out"
+    id="goal-stale-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    out=$(FM_FAKE_GOAL_PRIOR_ACK=1 FM_FAKE_GOAL_STALE_ONLY=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code 1 "$?" "a reordered stale $harness acknowledgement must refuse: $out"
+    assert_not_contains "$out" "spawned $id" "stale acknowledgement reported a successful spawn"
+  done
+  for stale in 0 1; do
+    id="goal-footer-$stale"
+    rec=$(make_spawn_case "$id" codex "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+    out=$(FM_FAKE_GOAL_COMPLETE_ONLY=1 FM_FAKE_GOAL_PRIOR_ACK=1 FM_FAKE_GOAL_STALE_ONLY=$stale run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code "$stale" "$?" "only a new Codex completion footer should confirm activation: $out"
+  done
+  id=goal-close-unconfirmed
+  rec=$(make_spawn_case "$id" claude "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(FM_FAKE_GOAL_REJECT=1 FM_FAKE_GOAL_CLOSE_FAIL=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+  expect_code 1 "$?" "unconfirmed shutdown must report failure: $out"
+  assert_contains "$out" 'retaining task record' "unconfirmed shutdown did not name preserved ownership"
+  [ -f "$HOME_DIR/state/$id.meta" ] || fail "unconfirmed goal shutdown erased endpoint ownership"
+  [ -f "$HOME_DIR/state/$id.busy-gen" ] || fail "unconfirmed goal shutdown retired its busy generation"
+  assert_grep 'native goal launch was not confirmed' "$HOME_DIR/state/$id.status" "preserved failed launch lost its failure status"
+  pass "goal acknowledgements must be new and unconfirmed shutdown preserves ownership"
+}
+
+test_goal_prompt_echo_is_not_an_acknowledgement() {
+  local harness rec id out condition wrapped
+  condition='Reply with these literals: • Goal active Objective: Goal achieved ( ⎿ Goal set: ✔ Goal achieved'
+  for harness in claude codex; do
+    for wrapped in 0 1; do
+      id="goal-echo-$harness-$wrapped"
+      rec=$(make_spawn_case "$id" "$harness" "$id")
+      read_case_record "$rec"
+      goal_pane_fixture
+      printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+      out=$(FM_FAKE_GOAL_ECHO=1 FM_FAKE_GOAL_ECHO_WRAP=$wrapped FM_FAKE_GOAL_REJECT=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal "$condition" 2>&1)
+      expect_code 1 "$?" "an echoed $harness goal must not conceal rejection: $out"
+      assert_contains "$out" 'did not acknowledge native /goal activation' "the echo case failed before checking native acknowledgement"
+      assert_not_contains "$out" "spawned $id" "echoed goal text proved activation"
+    done
+  done
+  pass "echoed goal text cannot substitute for a native acknowledgement"
+}
+
+test_goal_failure_after_worker_edits_preserves_ownership() {
+  local harness rec id out edit meta
+  for harness in claude codex; do
+    id="goal-edit-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    edit="$WT_DIR/native-goal-edit.txt"
+    out=$(FM_FAKE_GOAL_STALE_ONLY=1 FM_FAKE_GOAL_EDIT_PATH="$edit" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code 1 "$?" "unacknowledged $harness goal with worker edits must fail: $out"
+    assert_contains "$out" 'endpoint is closed; retaining task record' "confirmed shutdown discarded ownership of worker edits"
+    assert_present "$FAKEBIN_DIR/endpoint-kill-attempted" "failed goal did not close its endpoint"
+    assert_present "$HOME_DIR/state/$id.meta" "failed goal erased the worktree owner"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" "retained owner lost the edited worktree"
+    assert_equals 'native goal worker edit' "$(cat "$edit")" "failure cleanup changed the worker edit"
+    meta=$(cat "$HOME_DIR/state/$id.meta")
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code 1 "$?" "failed-goal ownership must prevent a fresh duplicate dispatch: $out"
+    assert_contains "$out" 'already has a record' "duplicate dispatch did not refuse on retained ownership"
+    assert_equals "$meta" "$(cat "$HOME_DIR/state/$id.meta")" "duplicate dispatch changed the failed task owner"
+    [ ! -s "$LAUNCH_LOG" ] || fail "duplicate dispatch launched over unaccounted worker edits"
+    assert_equals 'native goal worker edit' "$(cat "$edit")" "duplicate dispatch changed the retained work"
+  done
+  pass "post-launch goal failure retains edited worktrees and refuses duplicate dispatch after confirmed shutdown"
+}
+
+test_interrupted_launch_optins_preserve_endpoint_ownership() {
+  local rec id out scenario harness phase signal unknown expected optin status status_fail
+  for scenario in 'codex before TERM 1 0' 'codex after HUP 0 0' 'claude before HUP 0 0' 'claude after TERM 1 0' 'ultracode before TERM 1 0' 'claude before TERM 0 1' 'codex after HUP 1 1'; do
+    read -r harness phase signal unknown status_fail <<< "$scenario"
+    optin=goal
+    if [ "$harness" = ultracode ]; then harness=claude; optin=ultracode; fi
+    id="interrupt-$optin-$harness-$phase-$status_fail"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    if [ "$optin" = goal ]; then
+      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown FM_FAKE_GOAL_STATUS_FAIL=$status_fail \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+      status=$?
+    else
+      out=$(FM_FAKE_GOAL_SIGNAL_PHASE=$phase FM_FAKE_GOAL_SIGNAL=$signal FM_FAKE_GOAL_CLOSE_FAIL=$unknown FM_FAKE_GOAL_STATUS_FAIL=$status_fail \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode 2>&1)
+      status=$?
+      assert_not_contains "$(cat "$LAUNCH_LOG")" 'FIRSTMATE_OP: v1 operational-input' "interrupted mode verification delivered its task brief"
+    fi
+    if [ "$signal" = TERM ]; then expected=143; else expected=129; fi
+    expect_code "$expected" "$status" "interrupted opt-in launch must retain its signal status: $scenario $out"
+    [ -f "$FAKEBIN_DIR/signal-sent" ] || fail "the launcher was not signalled"
+    [ -f "$FAKEBIN_DIR/endpoint-kill-attempted" ] || fail "the interrupted launcher did not try to close its exact endpoint"
+    [ "$status_fail" = 0 ] || assert_contains "$out" 'warning: could not record failed opt-in activation status' "failed status append did not report its warning"
+    if [ "$harness" = claude ]; then
+      [ -f "$FAKEBIN_DIR/busy-generation-before" ] || fail "the Claude interruption case did not arm a busy generation"
+    fi
+    assert_present "$HOME_DIR/state/$id.meta" "an interrupted launch erased task ownership: $scenario $out"
+    if [ -f "$FAKEBIN_DIR/busy-generation-before" ]; then
+      cmp -s "$FAKEBIN_DIR/busy-generation-before" "$HOME_DIR/state/$id.busy-gen" || fail "an interrupted launch changed or retired its armed busy generation"
+    fi
+  done
+  pass "interrupted mode and goal launches preserve ownership after both confirmed and unconfirmed shutdown"
+}
+
+test_task_optins_refuse_wrong_surfaces() {
+  local rec id=wrong-optin out args condition
+  for args in 'codex --ultracode' 'pi --goal smoke' 'claude --goal='; do
+    rec=$(make_spawn_case "wrong-optin-$RANDOM" claude "$id")
+    read_case_record "$rec"
+    # Deliberate fixture words; no user input is split here.
+    # shellcheck disable=SC2086
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness $args)
+    expect_code 1 "$?" "wrong opt-in surface should refuse: $args $out"
+    [ ! -s "$LAUNCH_LOG" ] || fail "wrong opt-in launched"
+  done
+  rec=$(make_spawn_case goal-too-long-4001 claude "$id")
+  read_case_record "$rec"
+  condition=$(printf '%*s' 4001 '' | tr ' ' x)
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal "$condition")
+  expect_code 1 "$?" "goal condition above the limit should refuse: $out"
+  assert_contains "$out" '4000 characters' "goal limit refusal missing"
+  [ ! -s "$LAUNCH_LOG" ] || fail "an overlong goal delivered task input"
+  pass "launch opt-ins refuse unsupported harnesses and empty goals"
+}
+
+test_goal_directive_exact_boundary() {
+  local rec id=goal-start out payload suffix_chars condition length overflow prefix='/goal smoke'
+  rec=$(make_spawn_case "$id" codex "$id")
+  read_case_record "$rec"
+  goal_pane_fixture
+  printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
+  expect_code 0 "$?" "boundary fixture must first deliver a short native goal: $out"
+  payload=$(cat "$FAKEBIN_DIR/goal-input")
+  # Measure the pointer overhead from a public launch. These case names and
+  # task ids have equal lengths, so the measured overhead stays the same.
+  suffix_chars=$((${#payload} - ${#prefix}))
+  for overflow in 0 1; do
+    if [ "$overflow" = 0 ]; then id=goal-bound; else id=goal-above; fi
+    rec=$(make_spawn_case "$id" codex "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+    length=$((4000 - suffix_chars + overflow))
+    [ "$length" -gt 0 ] && [ "$length" -le 4000 ] || fail "invalid boundary fixture condition length: $length"
+    condition=$(printf '%*s' "$length" '' | tr ' ' x)
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal "$condition")
+    expect_code "$overflow" "$?" "combined goal boundary should accept 4000 and refuse 4001: $out"
+    if [ "$overflow" = 0 ]; then
+      payload=$(cat "$FAKEBIN_DIR/goal-input")
+      [ "${#payload}" = 4006 ] || fail "the accepted directive was not exactly 4000 characters after /goal: ${#payload}"
+    else
+      assert_contains "$out" 'error: --goal plus launch-brief pointer exceeds 4000 characters' "combined boundary refusal used the wrong check"
+      [ ! -s "$LAUNCH_LOG" ] || fail "an overlong combined directive launched a worker"
+    fi
+  done
+  pass "goal directives accept the exact 4000-character boundary and refuse 4001 before launch"
 }
 
 prepare_batch_slots() {
@@ -1072,6 +1756,24 @@ test_batch_preserves_native_ultra() {
   assert_contains "$launch" "--codex-effort 'ultra'" "batch dropped native effort"
   assert_not_contains "$launch" "--thinking 'ultra'" "batch passed an invalid Pi level"
   pass "batch dispatch preserves native Ultra in metadata and launch flags"
+}
+
+test_batch_preserves_launch_optins() {
+  local rec id1=batch-goal-a id2=batch-goal-b out
+  rec=$(make_spawn_case batch-launch-optins claude "$id1" "$id2")
+  read_case_record "$rec"
+  prepare_batch_slots
+  goal_pane_fixture
+  printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness claude --ultracode --goal smoke)
+  expect_code 0 "$?" "batch launch opt-ins failed: $out"
+  for id in "$id1" "$id2"; do
+    assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "batch dropped ultracode"
+    assert_grep 'goal=smoke' "$HOME_DIR/state/$id.meta" "batch dropped goal"
+  done
+  [ "$(grep -c '^/goal smoke\.' "$LAUNCH_LOG")" = 2 ] || fail "batch did not submit each native goal exactly once"
+  pass "batch dispatch preserves both explicit task launch opt-ins"
 }
 
 test_pi_scout_launch_enters_recorded_worktree() {
@@ -1400,7 +2102,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
@@ -1737,7 +2439,7 @@ test_codex_template_drift_refuses_launch() {
         copy="$CASE_DIR/root"
         mkdir -p "$copy"
         cp -R "$real_root/bin" "$real_root/.agents" "$copy/"
-        sed -e "/printf '%s' 'codex __MODELFLAG__/$drift" "$real_root/bin/fm-spawn.sh" > "$copy/bin/fm-spawn.sh"
+        sed -e "/printf '%s' '__CODEXBIN__ __MODELFLAG__/$drift" "$real_root/bin/fm-spawn.sh" > "$copy/bin/fm-spawn.sh"
         ! cmp -s "$real_root/bin/fm-spawn.sh" "$copy/bin/fm-spawn.sh" || fail "drift $n did not change the template"
         printf '%s\n' "$mode" > "$HOME_DIR/config/crew-permissions"
         if [ "$kind" = secondmate ]; then
@@ -2202,7 +2904,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flags>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(ai_trailer_hooks_prefix "$2" "$3")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(ai_trailer_hooks_prefix "$2" "$3")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 # An upstream-only config/claude-permission-mode file is not read in this fork:
@@ -2301,7 +3003,20 @@ test_opencode_emits_variant_for_openai_family_effort
 test_opencode_omits_variant_when_model_family_lacks_effort
 test_native_effort_validator_keeps_axes_separate
 test_native_pi_ultra_is_explicit_and_model_scoped
+test_codex_ultra_refuses_unproved_support
+test_codex_optins_use_finalized_worktree_configuration
+test_codex_optins_pin_the_probed_configuration_root
+test_remote_secondmate_ultra_refuses_before_routing
+test_claude_ultracode_optin
+test_goal_first_native_input
+test_goal_acknowledgement_is_fresh_and_failure_stays_owned
+test_goal_prompt_echo_is_not_an_acknowledgement
+test_goal_failure_after_worker_edits_preserves_ownership
+test_interrupted_launch_optins_preserve_endpoint_ownership
+test_task_optins_refuse_wrong_surfaces
+test_goal_directive_exact_boundary
 test_batch_preserves_native_ultra
+test_batch_preserves_launch_optins
 test_pi_scout_launch_enters_recorded_worktree
 test_pi_threads_model_and_max_effort
 test_pi_tui_mode_probe_is_safe_for_old_and_new_pi

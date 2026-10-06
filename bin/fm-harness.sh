@@ -13,12 +13,23 @@
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
-#        fm-harness.sh validate-native-effort <harness> <model> <effort>
-#                                        Refuse ultra unless the harness is pi or
-#                                        pi-signed and the model explicitly names
-#                                        codex-native/<id>. Other efforts retain
-#                                        their adapter's existing policy. Native
-#                                        Codex validates model support at startup.
+#        fm-harness.sh validate-native-effort <harness> <model> <effort> [kind] [codex-bin]
+#                                        Refuse ultra unless Pi/Pi-signed names
+#                                        codex-native/<id>, or direct Codex's
+#                                        installed bundled catalog advertises
+#                                        ultra for the explicit model and its
+#                                        prompt/config bootstrap accepts the
+#                                        launch overrides without a model turn.
+#                                        kind=secondmate refuses direct Codex
+#                                        ultra before probing. Other efforts
+#                                        retain their policy.
+#                                        codex-bin selects the exact executable;
+#                                        default: codex resolved from PATH.
+#        fm-harness.sh codex-config-root  print the absolute CODEX_HOME selected
+#                                        by this caller, defaulting to HOME/.codex.
+#                                        Resolve existing relative roots before
+#                                        changing to a task worktree; refuse
+#                                        missing HOME and control bytes.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.
@@ -78,6 +89,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-gemini-lib.sh"
 # shellcheck source=bin/fm-claude-lib.sh
 . "$SCRIPT_DIR/fm-claude-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 # Print the harness named by a verified environment marker, or nothing when no
 # marker is present. Markers only report what the environment CLAIMS; detect_own
@@ -539,20 +552,68 @@ resolve_secondmate_effort() {
   secondmate_field 3
 }
 
+codex_config_root() {
+  local root=${CODEX_HOME:-}
+  if [ -z "$root" ]; then
+    [ -n "${HOME:-}" ] || { echo "error: Codex task launch opt-ins require CODEX_HOME or HOME" >&2; return 1; }
+    root=$HOME/.codex
+  fi
+  case "$root" in
+    *[[:cntrl:]]*) echo "error: CODEX_HOME contains an invalid control byte" >&2; return 1 ;;
+    /*) printf '%s\n' "$root" ;;
+    *) (CDPATH='' cd -- "$root" && pwd -P) || {
+      echo "error: CODEX_HOME directory cannot be resolved: $root" >&2
+      return 1
+    } ;;
+  esac
+}
+
 validate_native_effort() {
-  local harness=${1:-} model=${2:-} effort=${3:-}
+  local harness=${1:-} model=${2:-} effort=${3:-} kind=${4:-} codex_bin=${5:-codex} catalog
   [ "$effort" = ultra ] || return 0
   case "$harness" in
     pi|pi-signed)
       case "$model" in codex-native/?*) return 0 ;; esac
       ;;
+    codex)
+      if [ "$kind" = secondmate ]; then
+        echo "error: direct Codex ultra applies only to task workers, not secondmates" >&2
+        return 1
+      fi
+      if [ -z "$model" ] || [ "$model" = default ]; then
+        echo "error: codex ultra requires an explicit --model" >&2
+        return 1
+      fi
+      catalog=$(fm_run_timed 15 "$codex_bin" -c 'model_reasoning_effort="ultra"' debug models --bundled </dev/null 2>/dev/null) || {
+        echo "error: installed codex cannot verify ultra support (bundled catalog unavailable)" >&2
+        return 1
+      }
+      if printf '%s\n' "$catalog" | jq -e --arg model "$model" '
+        (.models | type) == "array" and
+        any(.models[]; .slug == $model and
+          (.supported_reasoning_levels | type) == "array" and
+          any(.supported_reasoning_levels[]; .effort == "ultra"))
+      ' >/dev/null 2>&1; then
+        # --bundled does not load user/project config. This separate offline
+        # prompt bootstrap exercises those layers with the launch overrides.
+        fm_run_timed 15 "$codex_bin" --model "$model" -c 'model_reasoning_effort="ultra"' \
+          --disable hooks debug prompt-input </dev/null >/dev/null 2>/dev/null || {
+          echo "error: installed codex cannot verify ultra support (prompt/config bootstrap unavailable)" >&2
+          return 1
+        }
+        return 0
+      fi
+      printf 'error: installed codex catalog does not advertise ultra for model %s\n' "$model" >&2
+      return 1
+      ;;
   esac
-  echo "error: ultra effort requires pi or pi-signed with an explicit codex-native/<model> model" >&2
+  echo "error: ultra effort requires pi or pi-signed with codex-native/<model>, or codex with an explicitly supported model" >&2
   return 1
 }
 
 case "${1:-}" in
   validate-native-effort) shift; validate_native_effort "$@" ;;
+  codex-config-root) codex_config_root ;;
   ancestry)
     case "${2:-}" in
       ''|*[!0-9]*) [ -z "${2:-}" ] || { echo "error: ancestry takes a numeric pid" >&2; exit 2; } ;;

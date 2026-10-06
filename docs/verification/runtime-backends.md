@@ -917,6 +917,54 @@ tests/fm-composer-codex-idle-live-e2e.test.sh
 The verification machine runs its fleet on Herdr and has no tmux installed, so on 2026-09-15 that guard reported `skip: live: tmux absent` there, and the Herdr capture above is this entry's live evidence.
 The guard also notes whether the starfield and the placeholder were actually drawn during its read, because codex need not animate them under every model or mode; a refresh on a tmux host should record that note beside the verdict rather than assume the starfield was exercised.
 
+## Task launch opt-ins
+
+Verified on 2026-10-05 with Claude Code 2.1.289 and codex-cli 0.160.0.
+The installed help advertises `--settings` for Claude and `-c key=value` for Codex; neither advertises a dedicated goal launch flag.
+These token-free probes establish the native surfaces:
+
+```sh
+claude -p --settings '{"ultracode":true}' --output-format json '/effort current'
+codex -c 'model_reasoning_effort="ultra"' debug models --bundled
+codex --model gpt-6-astra -c 'model_reasoning_effort="ultra"' --disable hooks debug prompt-input
+codex --enable goals features list
+```
+
+Claude returned `local_command=effort`, `num_turns=0`, and `Current effort level: medium (Balanced approach with standard implementation and testing) · Ultracode on`.
+The same probe with `--model haiku` omitted `Ultracode on`.
+Codex's bundled catalog advertised `ultra` for `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`, and the two bundled daybreak aliases, while neither Luna variant advertised it.
+Its feature listing returned `goals stable true`.
+Additional configuration probes were verified on 2026-10-06 UTC with codex-cli 0.160.0.
+The bundled catalog command returned exit 0 even with malformed user TOML; `features list` and `debug prompt-input` returned exit 1 for that configuration.
+With valid configuration, the Ultra prompt probe returned exit 0 without a model turn.
+
+Interactive probes used `claude --permission-mode auto --settings '{"ultracode":true}' '/effort current'` and `codex --no-daemon --disable hooks --model gpt-6.1-sol -c 'model_reasoning_effort="ultra"'` on a trivial response-only goal.
+Claude's initial local command reported `Ultracode on` before any model input, confirming the actual interactive session.
+Claude acknowledged `Goal set:` and displayed both `ultracode` and `/goal active`, then `Goal achieved`.
+Codex displayed `GPT-6.1-Sol ultra`; a positional `/goal` prompt produced a reply but subsequent native `/goal` status returned `No goal is currently set`.
+Typing `/goal` after startup produced `Goal active Objective:` and ultimately `Goal achieved`.
+Codex displayed the completion as `Goal achieved (10s)` at the right of its model/path footer; the goal guard recognizes that footer as well as the activation row.
+The native goal also accepted a canonical launch-brief envelope containing the current worker role; its footer displayed `Follow crewmate role contract` and `Goal achieved (2s)`.
+These are CLI surface checks, not proof of a complete fleet dispatch or delegated workflow execution.
+
+Refresh native mode and goal evidence with the opt-in guard below; [`fm-spawn-dispatch-profile.test.sh`](../../tests/fm-spawn-dispatch-profile.test.sh) owns portable validation and emitted-command regressions.
+
+```sh
+FM_WORKER_LAUNCH_OPTINS_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-worker-launch-optins-live-e2e.test.sh
+```
+
+The refresh above passed on 2026-10-05 with the following output:
+
+```text
+ok - claude 2.1.289 (Claude Code): mode launch, native goal acknowledgement and completion
+ok - codex codex-cli 0.160.0: mode launch, native goal acknowledgement and completion
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=22062
+```
+
+The Codex 0.160.0 live composer uses `»`, with `›` retained in the transcript.
+The token-free `bin/fm-test-run.sh tests/fm-composer-codex-idle-live-e2e.test.sh` refresh reported `starfield furniture observed=yes placeholder observed=yes` and `real idle screen classifies empty on the cursor-anchored tmux read and the cursorless styled read`.
+[`fm-composer-lib.test.sh`](../../tests/fm-composer-lib.test.sh) preserves both glyphs and refuses typed input under every applicable styled backend profile.
+
 ## Steering-inbox doorbell
 
 The steering channel's one behavioral assumption - a real worker agent follows the constant self-describing doorbell line (list the inbox, read and act on its records in numeric order, then `mv` each into `handled/`) - was verified on 2026-08-23 against every installed verified harness, on tmux 3.6a, macOS arm64, on an isolated private socket, driving the REAL `bin/fm-send.sh` end to end (durable record plus doorbell, with one mid-wait re-ring playing the watcher's role).

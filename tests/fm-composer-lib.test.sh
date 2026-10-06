@@ -46,7 +46,7 @@ test_stripped_unbordered_content_uses_plain_content() {
   # muse draws `⟩` at luminance ~150, the tightest margin over the 128 ghost
   # threshold in the fleet, so a raised threshold really can strip it to empty
   # and leave only the plain row. This branch is what keeps that pane readable.
-  for plain in '❯' '›' '⟩'; do
+  for plain in '❯' '›' '»' '⟩'; do
     out=$(classify 0 '' '' sensitive "$plain")
     [ "$out" = empty ] \
       || fail "a stripped agent glyph '$plain' must remain empty, got '$out'"
@@ -335,6 +335,15 @@ test_matrix_codex_dim_hint_row() {
   assert_screen "codex idle on zellij" empty "$CAPS_STYLED_NOID" "$styled"
   assert_screen "codex idle on plain backends" unknown "$CAPS_PLAIN" "$plain"
   pass "matrix: codex's dim hint is empty when styling proves it, unknown (never pending) when it cannot"
+}
+
+test_matrix_codex_double_chevron() {
+  local caps
+  for caps in "$CAPS_TMUX" "$CAPS_STYLED" "$CAPS_STYLED_NOID"; do
+    assert_screen "codex 0.160 idle double chevron" empty "$caps" $'banner\n»' 1
+    assert_screen "codex 0.160 typed double chevron" pending "$caps" $'banner\n» fix the bug' 1
+  done
+  pass "Codex's double chevron proves empty only when it holds no real input"
 }
 
 test_matrix_muse_truecolor_glyph_survives_signal_loss() {
@@ -1053,6 +1062,7 @@ test_composer_footer_demotion_needs_a_proven_pair
 test_composer_footer_zone_is_shape_independent
 test_composer_footer_zone_refuses_rather_than_allows
 test_matrix_codex_dim_hint_row
+test_matrix_codex_double_chevron
 test_matrix_muse_truecolor_glyph_survives_signal_loss
 test_matrix_cursor_reverse_video_placeholder_remnant
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap

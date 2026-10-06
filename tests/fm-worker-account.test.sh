@@ -31,6 +31,26 @@ if [ "\${1:-}" = auth ] && [ "\${2:-}" = status ]; then
   [ -f "\${CLAUDE_CONFIG_DIR:-\$HOME/.claude}/.credentials.json" ]
   exit
 fi
+if [ "\${1:-}" = --version ]; then
+  printf '%s\n' '2.1.289 (Claude Code)'
+  exit 0
+fi
+if [ "\${1:-}" = -p ] || [ "\${!#}" = '/effort current' ]; then
+  {
+    printf 'CLAUDE_CONFIG_DIR=%s\n' "\${CLAUDE_CONFIG_DIR-unset}"
+    printf 'ANTHROPIC_API_KEY=%s\n' "\${ANTHROPIC_API_KEY-unset}"
+    printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "\${CLAUDE_CODE_OAUTH_TOKEN-unset}"
+    printf 'CLAUDE_CODE_USE_BEDROCK=%s\n' "\${CLAUDE_CODE_USE_BEDROCK-unset}"
+  } > '$dir/claude-probe'
+  if [ "\${1:-}" = -p ]; then
+    printf '%s\n' '{"is_error":false,"local_command":"effort","result":"Current effort level: medium · Ultracode on","num_turns":0}'
+  elif [ "\${CLAUDE_CODE_OAUTH_TOKEN:-}" = unsupported-pane-token ]; then
+    printf 'Current effort level: medium\n'
+  else
+    printf 'Current effort level: medium · Ultracode on\n'
+  fi
+  exit 0
+fi
 {
   printf 'CLAUDE_CONFIG_DIR=%s\n' "\${CLAUDE_CONFIG_DIR-unset}"
   printf 'ANTHROPIC_API_KEY=%s\n' "\${ANTHROPIC_API_KEY-unset}"
@@ -90,6 +110,44 @@ new_case() {
 signed_in_claude_root() {
   mkdir -p "$1"
   printf '{}\n' > "$1/.credentials.json"
+}
+
+# Drive the real staged launch under the synthetic pane's credentials, then
+# expose its local-command output through the usual backend capture surface.
+enable_account_runtime_fixture() {
+  # The synthetic local command and capture complete synchronously.
+  fm_test_fake_sleep_noop "$FAKEBIN"
+  mv "$FAKEBIN/tmux" "$FAKEBIN/tmux-account-base"
+  cat > "$FAKEBIN/tmux" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *'#{cursor_y}'*)
+    if [ -f '$CASE/runtime-output' ]; then printf '4\n'; else printf '3\n'; fi
+    exit 0
+    ;;
+esac
+if [ "\${1:-}" = capture-pane ]; then
+  [ ! -f '$CASE/runtime-output' ] || cat '$CASE/runtime-output'
+  printf 'Ready\n\n─────────────\n❯ \n─────────────\n'
+  exit 0
+fi
+'$FAKEBIN/tmux-account-base' "\$@" || exit
+if [ "\${1:-}" = send-keys ]; then
+  for arg in "\$@"; do
+    case "\$arg" in
+      ". '"*"'")
+        staged=\${arg#". '"}
+        staged=\${staged%"'"}
+        env -i HOME='$HOME_DIR/user-home' PATH='$FAKEBIN:$PATH' TERM=xterm \\
+          CLAUDE_CONFIG_DIR='$CASE/ambient-claude' ANTHROPIC_API_KEY=ambient-pane-key \\
+          CLAUDE_CODE_OAUTH_TOKEN="\${FM_FAKE_ACCOUNT_RUNTIME_TOKEN:-ambient-pane-token}" CLAUDE_CODE_USE_BEDROCK=1 \\
+          bash -c "\$(cat "\$staged")" > '$CASE/runtime-output'
+        ;;
+    esac
+  done
+fi
+SH
+  chmod +x "$FAKEBIN/tmux"
 }
 
 # spawn_ship <id> [fm-spawn args...]: a ship spawn from HOME_DIR whose invoking
@@ -188,6 +246,49 @@ test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login() {
   assert_refused_before_launch "$id" "$out" "config/claude-account pins Claude workers to $CASE/work, which is not signed in"
   assert_absent "$CASE/work/.claude.json" "a refused spawn must not register trust in the pinned root"
   pass "a Claude pin refuses a signed-out root even when the invoking process has a usable login and API key"
+}
+
+test_ultracode_probe_uses_the_worker_account_environment() {
+  local pin out id expected_root expected_key expected_token expected_provider
+  for pin in pinned ordinary ambient; do
+    id="acct-ultracode-$pin"
+    new_case "ultracode-$pin" claude
+    enable_account_runtime_fixture
+    expected_key='unset'
+    expected_token='unset'
+    expected_provider='unset'
+    case "$pin" in
+      pinned)
+        signed_in_claude_root "$CASE/work"
+        printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
+        expected_root="$CASE/work"
+        ;;
+      ordinary)
+        signed_in_claude_root "$HOME_DIR/user-home/.claude"
+        printf '%s\n' ordinary > "$HOME_DIR/config/claude-account"
+        expected_root='unset'
+        ;;
+      ambient)
+        expected_root="$CASE/ambient-claude"
+        expected_key=ambient-pane-key
+        expected_token=ambient-pane-token
+        expected_provider=1
+        ;;
+    esac
+    out=$(CLAUDE_CODE_OAUTH_TOKEN=ambient-invoker-token CLAUDE_CODE_USE_BEDROCK=1 spawn_ship "$id" --ultracode)
+    expect_code 0 "$?" "ultracode probe under $pin account should succeed: $out"
+    assert_grep "CLAUDE_CONFIG_DIR=$expected_root" "$CASE/claude-probe" "the ultracode probe selected a different root"
+    assert_grep "ANTHROPIC_API_KEY=$expected_key" "$CASE/claude-probe" "the ultracode probe used a different API credential environment"
+    assert_grep "CLAUDE_CODE_OAUTH_TOKEN=$expected_token" "$CASE/claude-probe" "the ultracode probe used a different OAuth environment"
+    assert_grep "CLAUDE_CODE_USE_BEDROCK=$expected_provider" "$CASE/claude-probe" "the ultracode probe used a different provider environment"
+  done
+  new_case ultracode-runtime-unavailable claude
+  enable_account_runtime_fixture
+  out=$(FM_FAKE_ACCOUNT_RUNTIME_TOKEN=unsupported-pane-token spawn_ship acct-ultracode-unavailable --ultracode)
+  expect_code 1 "$?" "an available invoker cannot approve an unavailable worker session: $out"
+  assert_contains "$out" 'did not freshly confirm Ultracode on' "the actual worker session was not checked"
+  assert_not_contains "$(cat "$CASE/launch.log")" 'FIRSTMATE_OP: v1 operational-input' "an unavailable worker received its task brief"
+  pass "ultracode checks the actual pane credentials for ambient and pinned accounts before task delivery"
 }
 
 test_claude_ordinary_pin_unsets_the_config_root() {
@@ -396,6 +497,7 @@ test_local_secondmate_reads_the_launching_home_pin() {
 test_absent_pin_keeps_the_launch_unchanged
 test_claude_pin_selects_the_root_and_sheds_ambient_credentials
 test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login
+test_ultracode_probe_uses_the_worker_account_environment
 test_claude_ordinary_pin_unsets_the_config_root
 test_malformed_pins_refuse_before_launch
 test_pi_pin_selects_the_root_and_the_declared_provider
