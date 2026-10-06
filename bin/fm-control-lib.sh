@@ -44,6 +44,13 @@
 # fm_control_relaunch_resume_flag below: a reference the endpoint's runtime
 # bound as its status authority is returned to a replacement with that adapter.
 
+# Native launch opt-ins require a fresh session and verified first input.
+# Recovery refuses these profiles until it can reconstruct that state, rather
+# than stopping the worker and silently dropping its recorded mode or goal.
+fm_control_relaunch_optins_supported() { # <ultracode> <goal>
+  [ "${1:-}" != on ] && [ -z "${2:-}" ]
+}
+
 # The complete control-plane verb allowlist, one per line.
 fm_control_verbs() {
   cat <<'EOF'

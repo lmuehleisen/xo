@@ -76,7 +76,8 @@
 # so a new inheritable item cannot be accepted by one side and refused by the
 # other. A local and remote code root that disagree about this list must be
 # reconciled by the ordinary remote sync/update path before the transfer
-# succeeds; there is no separate allowlist version negotiation.
+# succeeds; the batch topology must match the complete declaration before any
+# item is applied, and there is no separate allowlist version negotiation.
 #
 # shellcheck source=bin/fm-startup-memory-budget-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-startup-memory-budget-lib.sh"
@@ -128,6 +129,77 @@ fm_config_inherit_items() {
     printf 'config/%s\n' "$item"
   done
   printf '%s\n' "$FM_SHARED_CAPTAIN_REL"
+}
+
+# Remote batch wire format: fm-inherit-batch.v1, then one tab-separated record
+# per declared path in declaration order: command, path, byte count, SHA-256,
+# canonical base64 payload. The entire wire input retains the remote job's
+# 1048576-byte bound. Decode and check topology before applying any item;
+# payload commitments remain the single-item receiver's validation boundary.
+# An error record preserves a source that failed inspection/validation, while
+# skip is reserved for session-scoped config in live convergence.
+fm_config_inherit_batch_record() { # <command> <relative-path> <bytes> <hash> <payload-file>
+  local encoded
+  encoded=$(perl -MMIME::Base64=encode_base64 -e '
+    local $/; open my $in, "<", $ARGV[0] or die "cannot read inheritance snapshot\n";
+    binmode $in; print encode_base64(<$in> // "", "");
+  ' -- "$5") || return 1
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$encoded"
+}
+
+fm_config_inherit_batch_unpack() { # <wire-file> <private-directory> <launch|live>
+  local wire=$1 dir=$2 mode=$3 items session_items item
+  items=$(fm_config_inherit_items) || return 1
+  session_items=""
+  for item in $FM_SESSION_SCOPED_INHERITABLE_CONFIG; do
+    session_items="$session_items config/$item"
+  done
+  perl -MMIME::Base64=decode_base64,encode_base64 -e '
+    use strict; use warnings;
+    my ($wire, $dir, $mode, $items, $session) = @ARGV;
+    my @items = split /\n/, $items;
+    my %session = map { $_ => 1 } split / +/, $session;
+    open my $in, "<", $wire or die "cannot read inheritance batch\n";
+    binmode $in;
+    my $header = <$in>;
+    defined $header && $header eq "fm-inherit-batch.v1\n"
+      or die "invalid inheritance batch version\n";
+    open my $manifest, ">", "$dir/manifest" or die "cannot stage inheritance manifest\n";
+    my $index = 0;
+    while (my $line = <$in>) {
+      $line =~ s/\n\z// or die "unterminated inheritance batch record\n";
+      my @fields = split /\t/, $line, -1;
+      @fields == 5 or die "invalid inheritance batch record\n";
+      my ($command, $rel, $bytes, $hash, $encoded) = @fields;
+      $index < @items && $rel eq $items[$index]
+        or die "inheritance batch does not match declared items\n";
+      $command =~ /\A(?:put|absent|error|skip)\z/
+        or die "invalid inheritance batch command\n";
+      $bytes =~ /\A[0-9]{1,10}\z/ && $bytes <= 1048576
+        or die "invalid inheritance batch byte count\n";
+      $hash =~ /\A[0-9a-fA-F]{64}\z/
+        or die "invalid inheritance batch digest\n";
+      my $payload = decode_base64($encoded);
+      encode_base64($payload, "") eq $encoded
+        or die "invalid inheritance batch encoding\n";
+      if ($command ne "put") {
+        $bytes == 0 && $encoded eq ""
+          or die "non-put inheritance record has a payload\n";
+      }
+      if ($command eq "skip") {
+        $mode eq "live" && $session{$rel}
+          or die "inheritance batch skips a non-session item\n";
+      } elsif ($mode eq "live" && $session{$rel}) {
+        die "live inheritance batch changes a session item\n";
+      }
+      open my $out, ">", "$dir/$index" or die "cannot stage inherited payload\n";
+      binmode $out; print {$out} $payload; close $out or die "cannot write inherited payload\n";
+      print {$manifest} join("\t", $command, $rel, $bytes, $hash, $index), "\n";
+      $index++;
+    }
+    $index == @items or die "inheritance batch is missing declared items\n";
+    close $manifest or die "cannot write inheritance manifest\n";
+  ' -- "$wire" "$dir" "$mode" "$items" "$session_items"
 }
 
 fm_config_source_present() {

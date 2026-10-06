@@ -23,7 +23,7 @@ cleanup() {
     FM_REMOTE_JOB_STATE="$TMP_ROOT/remote-jobs"
     fm_remote_job_stop_worker_tree "$pid" 2>/dev/null || true
   fi
-  fm_test_rm_tmproot "${TMP_ROOT:-}"
+  fm_test_cleanup
 }
 trap cleanup EXIT
 LOCAL_HOME="$TMP_ROOT/local-home"
@@ -365,8 +365,14 @@ cat > "$DOCTOR_BIN/uname" <<'SH'
 printf 'Linux\n'
 SH
 chmod +x "$DOCTOR_BIN/uname"
+# The missing-tool case must prove absence even on a host that has the
+# doctor's required tools installed on its base PATH, so the PATH this run
+# sees resolves everything except them.
+DOCTOR_SANS=$(fm_test_base_path_sans "/usr/bin:/bin:/usr/sbin:/sbin" \
+  herdr tasks-axi treehouse claude codex opencode pi pi-signed grok kimi) \
+  || fail "could not build a base PATH without the required tools"
 set +e
-out=$(HOME="$DOCTOR_HOME" PATH="$DOCTOR_BIN:/usr/bin:/bin:/usr/sbin:/sbin" "$ROOT/bin/fm-remote-doctor.sh" 2>&1)
+out=$(HOME="$DOCTOR_HOME" PATH="$DOCTOR_BIN:$DOCTOR_SANS" "$ROOT/bin/fm-remote-doctor.sh" 2>&1)
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || fail "the remote doctor passed with a missing required tool"

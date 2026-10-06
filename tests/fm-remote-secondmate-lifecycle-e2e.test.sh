@@ -156,9 +156,21 @@ command_fields=$(perl -MMIME::Base64=decode_base64 -e '
 IFS=$'\t' read -r command_name _command_action command_rel <<EOF
 $command_fields
 EOF
-case "${FM_FAKE_SSH_MODE:-normal}:$command_name:$command_rel" in
-  inherit-partial:fm-remote-inherit.sh:config/crew-harness) exit 255 ;;
-  inherit-block:fm-remote-inherit.sh:data/captain-shared.md)
+if [ "$command_name" = fm-remote-inherit.sh ]; then
+  printf '%s\n' "$_command_action" >> "$FM_FAKE_INHERIT_CALL_LOG"
+fi
+case "${FM_FAKE_SSH_MODE:-normal}:$command_name" in
+  inherit-partial:fm-remote-inherit.sh)
+    # Fail one committed item inside the one-job batch, then simulate transport
+    # loss after the remote has applied its other items. Completion remains
+    # unknown to the parent, which must retain its reread/reconciliation intent.
+    perl -pe 'if (/^put\tconfig\/crew-harness\t/) {
+      @f = split /\t/; $f[3] = "0" x 64; $_ = join("\t", @f);
+    }' > "$FM_FAKE_INHERIT_PAYLOAD"
+    "$FM_FAKE_REMOTE_ENTRYPOINT" "$@" < "$FM_FAKE_INHERIT_PAYLOAD"
+    exit 255
+    ;;
+  inherit-block:fm-remote-inherit.sh)
     cat > "$FM_FAKE_INHERIT_PAYLOAD"
     touch "$FM_FAKE_INHERIT_ENTERED"
     while [ ! -f "$FM_FAKE_INHERIT_RELEASE" ]; do sleep 0.02; done
@@ -280,6 +292,7 @@ remote_env() {
   FM_FAKE_SEED_RELEASE="$TMP_ROOT/seed.release" \
   FM_FAKE_DOCTOR_LOG="$DOCTOR_LOG" \
   FM_FAKE_DOCTOR_REPAIRED="$TMP_ROOT/doctor.repaired" \
+  FM_FAKE_INHERIT_CALL_LOG="$TMP_ROOT/inherit.calls" \
   FM_FAKE_INHERIT_ENTERED="$TMP_ROOT/inherit.entered" \
   FM_FAKE_INHERIT_RELEASE="$TMP_ROOT/inherit.release" \
   FM_FAKE_INHERIT_PAYLOAD="$TMP_ROOT/inherit.payload" \
@@ -844,7 +857,13 @@ launches_after_inherit=0
 [ "$launches_before_inherit" -eq "$launches_after_inherit" ] \
   || fail "remote spawn reached launch after ambiguous partial inheritance"
 assert_absent "$PARENT/state/ios.meta" "failed remote inheritance published launch metadata"
+inherit_calls_before=$(wc -l < "$TMP_ROOT/inherit.calls" | tr -d ' ')
 out=$(remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate)
+inherit_calls_after=$(wc -l < "$TMP_ROOT/inherit.calls" | tr -d ' ')
+[ "$((inherit_calls_after - inherit_calls_before))" -eq 1 ] \
+  || fail "remote spawn did not propagate all inherited items in one job"
+[ "$(tail -n 1 "$TMP_ROOT/inherit.calls")" = batch ] \
+  || fail "remote spawn did not use the inherited-material batch interface"
 assert_contains "$out" 'remote=remote-mac backend=herdr' "remote spawn did not report separate host and backend dimensions"
 assert_grep 'remote_host=remote-mac' "$PARENT/state/ios.meta" "parent metadata omitted the remote host"
 assert_grep 'remote_backend=herdr' "$PARENT/state/ios.meta" "parent metadata omitted the remote-local backend"
@@ -1039,6 +1058,7 @@ rm -f "$PARENT/state/.wake-queue"
 
 printf '{"revision":2}\n' > "$PARENT/config/crew-dispatch.json"
 printf 'grok\n' > "$PARENT/config/crew-harness"
+config_before_corr=$(newest_remote_inbox_corr)
 set +e
 FM_FAKE_SSH_MODE=inherit-partial remote_env "$ROOT/bin/fm-config-push.sh" \
   > "$TMP_ROOT/config-partial.out" 2>&1
@@ -1050,6 +1070,9 @@ assert_grep '"revision":2' "$REMOTE_HOME/config/crew-dispatch.json" "partial inh
   || fail "partial inheritance unexpectedly applied the failed file"
 NUDGE_MARKER="$PARENT/state/.secondmate-nudge-pending/ios.pending"
 assert_grep 'remote=1' "$NUDGE_MARKER" "partial inheritance left no durable remote reread marker"
+assert_grep 'config-reread: sent' "$TMP_ROOT/config-partial.out" "partial changes did not receive an immediate reread nudge"
+[ "$(newest_remote_inbox_corr)" != "$config_before_corr" ] \
+  || fail "partial inheritance did not enqueue its reread instruction"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$REMOTE_ROOT/bin/fm-watch.sh"
 remote_env "$ROOT/bin/fm-bootstrap.sh" > "$TMP_ROOT/config-partial-retry.out" \
   || fail "bootstrap did not converge partial remote inheritance"

@@ -40,7 +40,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### optional-lavish-axi
 
-- Intent: Lavish is optional, off by default, hook-free, version-pinned, and loopback-only; chat stays the primary answer path, and an answers board carries decision cards only; README "Optional `lavish-axi`".
+- Intent: Lavish is optional, off by default, hook-free, version-pinned, and loopback-only unless the home names one address such as its tailnet address; chat stays the primary answer path, and an answers board carries decision cards only; README "Optional `lavish-axi`".
 - Class: intended.
 - Seam: `bin/fm-lavish-lib.sh` and `bin/fm-lavish.sh` (fork-only), `bin/fm-bearings-board.sh`, `.agents/skills/bearings/assets/board-template.html`, the scout-brief Lavish line and `--lavish` in `bin/fm-brief.sh`, the Lavish install hint and toggle line in `bin/fm-bootstrap.sh` (plus the `lavish-reply-compatible` probe that `bin/fm-procevent-lavish.sh` calls), `bin/fm-config-inherit-lib.sh`, the pinned environment in `bin/fm-procevent-lavish.sh`, fork-only `docs/lavish.md` and `docs/verification/lavish-remote-forward.md`, the live test's family entry in `bin/fm-test-run.sh`, and the Lavish wording in the bearings, bootstrap-diagnostics, captain-hold-lifecycle, operational-home-layout, and process-event-sources skills (shared).
 - Guard: `tests/fm-lavish.test.sh`; `tests/fm-bearings-board.test.sh` `test_build_does_not_invoke_lavish` and the Lavish mode tests; `tests/fm-brief.test.sh` `test_scout_lavish_follows_toggle_and_override`; `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required` and `test_lavish_opt_in_reports_unavailable_cli`; `tests/fm-procevent.test.sh`, whose upstream legacy-reply stand-ins report the pin, with "an off-pin older Lavish is refused before any reply is posted"; live, `tests/fm-bearings-board-lavish-live-e2e.test.sh`.
@@ -355,13 +355,13 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-tmux-submit-busy.test.sh`; `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-control-relaunch.test.sh`.
 - Upstream: does not prove these shell submissions or complete the same late-start transaction; drop once equivalent.
 
-### remote-job-recovery-latency
+### remote-inheritance-batch
 
-- Intent: preserve prompt remote recovery across sequential inheritance jobs without increasing the lifecycle guard's recovery bound.
+- Intent: converge all declared inherited material in one remote job while retaining per-item validation and partial-failure recovery.
 - Class: carried.
-- Seam: the 0.05-second active/result default in `bin/fm-remote-job-lib.sh` and the 20-pass post-activity dispatcher burst in `bin/fm-remote-job-worker.sh`.
-- Guard: `tests/fm-remote-job.test.sh` default/override cadence and idle-worker cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` watcher recovery case with its unchanged bound.
-- Upstream: uses 0.25-second active/result sampling and a four-pass burst; retain the fork's prior defaults at the cost of more sampling during activity, while taking upstream's bounded builtin reads and other polling reductions, until an equivalent preserves the recovery guard.
+- Seam: batch framing and complete-declaration validation in `bin/fm-config-inherit-lib.sh`, snapshot staging in `bin/fm-remote-inherit-push.sh`, batch dispatch through the existing item receiver in `bin/fm-remote-inherit.sh`, and partial-change reread nudges in `bin/fm-config-push.sh` and `bin/fm-bootstrap.sh`; remote-job polling uses upstream defaults.
+- Guard: `tests/fm-shared-captain-inheritance.test.sh` batch byte, failure, quarantine, generation and topology cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` one-job transfer and watcher recovery with its unchanged bound.
+- Upstream: stages one remote job per inherited item; drop once equivalent batching preserves these convergence guarantees.
 
 ### isolated-test-cleanup
 

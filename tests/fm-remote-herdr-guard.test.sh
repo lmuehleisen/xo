@@ -103,17 +103,35 @@ cp "$FAKE/lsof" "$TMP_ROOT/lsof.fake"
 
 # hold <marker-env...> -> HOLDER_PID: a real non-platform process (Node blocked
 # on a fifo this test keeps open) whose environment is exactly the markers.
+# The holder launches through a short-lived parent and reparents to init, so
+# the production ancestry check never reads this test's own process tree - on
+# a host reached over SSH that ancestry is a real ssh birth, which a
+# marker-only holder must not show.
 hold() {
-  local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo"
-  rm -f "$fifo"
+  local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo" pidfile="$TMP_ROOT/holder-$HOLDER_FD.pid"
+  local launcher ppid i
+  rm -f "$fifo" "$pidfile"
   mkfifo "$fifo"
   # Open read-write so this never blocks on the reader; the holder sees EOF
   # only when the descriptor closes at exit.
   eval "exec ${HOLDER_FD}<>\"\$fifo\""
-  env -i "$@" "$NODE" -e 'process.stdin.resume()' < "$fifo" &
-  HOLDER_PID=$!
-  HOLDER_PIDS+=("$HOLDER_PID")
+  ( env -i "$@" "$NODE" -e 'process.stdin.resume()' < "$fifo" &
+    printf '%s\n' "$!" > "$pidfile" ) &
+  launcher=$!
   HOLDER_FD=$((HOLDER_FD + 1))
+  wait "$launcher" 2>/dev/null || true
+  [ -s "$pidfile" ] || fail "a detached holder did not report its pid"
+  HOLDER_PID=$(cat "$pidfile")
+  HOLDER_PIDS+=("$HOLDER_PID")
+  i=0
+  while [ "$i" -lt 200 ]; do
+    ppid=$(ps -o ppid= -p "$HOLDER_PID" 2>/dev/null | tr -d '[:space:]')
+    [ -n "$ppid" ] && [ "$ppid" != "$launcher" ] && break
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -n "$ppid" ] && [ "$ppid" != "$launcher" ] \
+    || fail "holder $HOLDER_PID still reports the short-lived launcher $launcher as its parent"
 }
 
 # hold_under <argv0> <arg...> -- : a marker-free holder whose PARENT process

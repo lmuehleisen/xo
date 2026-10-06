@@ -13,6 +13,25 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
 
+## Task launch opt-ins
+
+Verified on 2026-10-05 with Claude Code 2.1.289.
+Ultracode is a dynamic-workflow orchestration setting, independent of the session's effort level, and permits Claude to plan workflows and coordinate native agents for substantive tasks.
+The [vendor model documentation](https://code.claude.com/docs/en/model-config#adjust-effort-level) documents session-only `--settings '{"ultracode":true}'`; `/effort ultracode` is also available, while `--effort ultracode` additionally sets `xhigh`.
+It is unavailable when workflows are disabled or the model lacks `xhigh` support.
+The zero-token `claude -p --settings '{"ultracode":true}' --output-format json '/effort current'` probe reports `Ultracode on` only when active; selecting `haiku` removes that confirmation.
+The same local command works as an interactive startup argument, returning the current session's mode without starting a model turn.
+
+`/goal <condition>` is a built-in command, not a skill or dedicated launch flag.
+It starts a turn and installs a session-scoped model-evaluated Stop hook that continues until the condition holds; it also works in the initial prompt and print mode.
+The [vendor goal documentation](https://code.claude.com/docs/en/goal) limits conditions to 4000 characters and requires workspace trust and unrestricted hooks.
+An attempted goal under `disableAllHooks` or `allowManagedHooksOnly` refuses rather than starting the loop.
+Native acknowledgements include `Goal set:` and `Goal achieved`.
+
+[`fm-spawn.sh`](../../../../../bin/fm-spawn.sh) owns explicit worker opt-ins, the verified version floor, session settings, and first-input goal delivery.
+Ultracode and goals do not expand the launch brief's delegation, filesystem, publication, or merge authority.
+Refresh live evidence with [`fm-worker-launch-optins-live-e2e.test.sh`](../../../../../tests/fm-worker-launch-optins-live-e2e.test.sh); dated results belong in [`runtime-backends.md`](../../../../../docs/verification/runtime-backends.md#task-launch-opt-ins).
+
 ## Workspace trust
 
 Claude gates a folder it has never seen behind an interactive workspace-trust dialog (titled "Quick safety check: Is this a project you created or one you trust?"), so every fresh task worktree would hit it, and so would every secondmate home no operator has opened by hand.

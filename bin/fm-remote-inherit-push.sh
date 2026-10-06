@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Push the declared inherited-material allowlist to one remote secondmate route.
+# Push the declared inherited-material allowlist in one remote job.
 # Usage: fm-remote-inherit-push.sh <secondmate-id> <generation>
 #
 # The item set is derived from the ONE declared owner
@@ -8,7 +8,9 @@
 # one code revision cannot drift silently. Different local and remote revisions
 # fail closed as documented by that owner. FM_CONFIG_INHERIT_LIVE=1 marks a live
 # convergence push into an already-running home and skips session-scoped items,
-# exactly as the local propagation path does.
+# exactly as the local propagation path does. Each safe source is snapshotted
+# before transfer; source failures preserve that item and still transfer the
+# others. The library owns the batch wire format and its aggregate byte bound.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,15 +45,18 @@ EMPTY="$TMP/empty"
 : > "$EMPTY"
 EMPTY_HASH=$(sha256_file "$EMPTY") || die "cannot hash empty inheritance payload"
 
-ITEMS=$(fm_config_inherit_items)
-while IFS= read -r rel; do
-  [ -n "$rel" ] || continue
-  if [ "${FM_CONFIG_INHERIT_LIVE:-0}" = 1 ]; then
+BATCH="$TMP/batch"
+printf 'fm-inherit-batch.v1\n' > "$BATCH"
+MODE=launch
+[ "${FM_CONFIG_INHERIT_LIVE:-0}" != 1 ] || MODE=live
+stage_item() { # <relative-path>
+  local rel=$1 source source_present snapshot bytes hash missing reason
+  if [ "$MODE" = live ]; then
     case "$rel" in
       config/*)
         if fm_config_inherit_item_session_scoped "${rel#config/}"; then
-          printf 'unchanged: %s\n' "$rel"
-          continue
+          fm_config_inherit_batch_record skip "$rel" 0 "$EMPTY_HASH" "$EMPTY" >> "$BATCH"
+          return
         fi
         ;;
     esac
@@ -60,27 +65,48 @@ while IFS= read -r rel; do
     config/*) source="$CONFIG/${rel#config/}" ;;
     data/*) source="$DATA/${rel#data/}" ;;
   esac
-  source_present=$(fm_config_source_present "$source") || exit 1
+  source_present=$(fm_config_source_present "$source") || return 1
   if [ "$source_present" = 1 ]; then
-    [ -f "$source" ] && [ ! -L "$source" ] || die "inherited source is unsafe: $source"
-    [ "$(file_link_count "$source")" = 1 ] || die "inherited source is hardlinked: $source"
+    [ -f "$source" ] && [ ! -L "$source" ] || { printf 'error: inherited source is unsafe: %s\n' "$source" >&2; return 1; }
+    [ "$(file_link_count "$source")" = 1 ] || { printf 'error: inherited source is hardlinked: %s\n' "$source" >&2; return 1; }
+    snapshot="$TMP/$(printf '%s' "$rel" | tr '/' '_')"
+    cp -p -- "$source" "$snapshot" || return 1
+    [ -f "$snapshot" ] && [ ! -L "$snapshot" ] || return 1
     if [ "$rel" = data/captain-shared.md ]; then
-      if ! missing=$(shared_captain_header_valid "$source"); then
+      if ! missing=$(shared_captain_header_valid "$snapshot"); then
         reason="shared captain preferences have no valid primary-authoritative header"
         [ -z "$missing" ] || reason="$reason: missing \"$missing\""
-        die "$reason"
+        printf 'error: %s\n' "$reason" >&2
+        return 1
       fi
     fi
-    snapshot="$TMP/$(printf '%s' "$rel" | tr '/' '_')"
-    cp -p -- "$source" "$snapshot" || die "cannot snapshot inherited source: $source"
-    [ -f "$snapshot" ] && [ ! -L "$snapshot" ] || die "inherited source snapshot is unsafe: $source"
-    bytes=$(LC_ALL=C wc -c < "$snapshot" | tr -d ' ')
-    hash=$(sha256_file "$snapshot") || die "cannot hash inherited source: $source"
-    "$SCRIPT_DIR/fm-on.sh" --stdin "$ID" fm-remote-inherit.sh put "$rel" "$bytes" "$hash" "$GENERATION" < "$snapshot"
+    bytes=$(LC_ALL=C wc -c < "$snapshot" | tr -d ' ') || return 1
+    [ "$bytes" -le 1048576 ] || { printf 'error: inherited source exceeds the byte bound: %s\n' "$source" >&2; return 1; }
+    hash=$(sha256_file "$snapshot") || return 1
+    fm_config_inherit_batch_record put "$rel" "$bytes" "$hash" "$snapshot" >> "$BATCH"
   else
-    # This loop's heredoc is its control stream, not remote command input.
-    "$SCRIPT_DIR/fm-on.sh" "$ID" fm-remote-inherit.sh absent "$rel" 0 "$EMPTY_HASH" "$GENERATION" < /dev/null
+    fm_config_inherit_batch_record absent "$rel" 0 "$EMPTY_HASH" "$EMPTY" >> "$BATCH"
+  fi
+}
+SOURCE_RC=0
+ITEMS=$(fm_config_inherit_items)
+while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  if ! stage_item "$rel"; then
+    SOURCE_RC=1
+    printf 'error: cannot stage inherited item: %s; destination will be preserved\n' "$rel" >&2
+    fm_config_inherit_batch_record error "$rel" 0 "$EMPTY_HASH" "$EMPTY" >> "$BATCH" \
+      || die "cannot record failed inherited item"
   fi
 done <<EOF
 $ITEMS
 EOF
+BATCH_BYTES=$(LC_ALL=C wc -c < "$BATCH" | tr -d ' ')
+[ "$BATCH_BYTES" -le 1048576 ] || die "inheritance batch exceeds the remote job byte bound"
+# Preserve locally known validation failures even if the remote reports success;
+# otherwise keep its exact status, especially unknown-completion exit 255.
+if "$SCRIPT_DIR/fm-on.sh" --stdin "$ID" fm-remote-inherit.sh batch "$GENERATION" "$MODE" < "$BATCH"; then
+  exit "$SOURCE_RC"
+else
+  exit "$?"
+fi

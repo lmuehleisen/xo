@@ -779,6 +779,8 @@ relaunch_rollback() {
 }
 
 resolve_relaunch_profile() {
+  fm_control_relaunch_optins_supported "$(fm_meta_get "$META" ultracode)" "$(fm_meta_get "$META" goal)" \
+    || die "task $ID's native launch opt-ins require a fresh spawn; refusing relaunch before stopping its worker"
   PRIOR_HARNESS=$HARNESS
   PRIOR_RECORDED_HARNESS=$RECORDED_HARNESS
   PRIOR_MODEL=$(fm_meta_get "$META" model)
@@ -850,7 +852,16 @@ resolve_relaunch_profile() {
     TARGET_EFFORT=default
   fi
   if [ "$TARGET_EFFORT" = ultra ]; then
-    "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$TARGET_HARNESS" "$TARGET_MODEL" "$TARGET_EFFORT" || return 1
+    if [ "$TARGET_HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
+      # Match the replacement's project configuration before stopping the
+      # running worker. The primary project and caller may load other config.
+      local codex_probe_home
+      codex_probe_home=$("$SCRIPT_DIR/fm-harness.sh" codex-config-root) || return 1
+      (cd "$WT" && CODEX_HOME=$codex_probe_home "$SCRIPT_DIR/fm-harness.sh" validate-native-effort \
+        "$TARGET_HARNESS" "$TARGET_MODEL" "$TARGET_EFFORT" "$KIND") || return 1
+    else
+      "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$TARGET_HARNESS" "$TARGET_MODEL" "$TARGET_EFFORT" "$KIND" || return 1
+    fi
   fi
   # The launch owner applies this home's worker account pin too, but only after
   # the old agent has been stopped, so a pin that no longer resolves or is
