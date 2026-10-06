@@ -1875,7 +1875,7 @@ scout_restore_dir_owner_write() {
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 wt_phys list path
+  local wt=$1 wt_phys list path failed=0
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
@@ -1901,11 +1901,12 @@ prepare_scout_scratch_for_return() {
   while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
     if ! scout_restore_dir_owner_write "$wt_phys" "$path"; then
-      rm -f "$list"
-      return 1
+      failed=1
+      break
     fi
   done <"$list"
   rm -f "$list"
+  [ "$failed" -eq 0 ]
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or

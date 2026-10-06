@@ -62,7 +62,8 @@ SH
 }
 
 write_task() {  # <case_dir> <id> <kind> [worktree]
-  local case_dir=$1 id=$2 kind=$3 wt=${4:-$case_dir/wt}
+  local case_dir=$1 id=$2 kind=$3
+  local wt=${4:-$case_dir/wt}
   fm_write_meta "$case_dir/state/$id.meta" \
     "window=firstmate:fm-$id" \
     "endpoint_task_id=$id" \
