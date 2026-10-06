@@ -254,7 +254,7 @@ SH
   [ -z "$legacy" ] || export FM_REMOTE_JOB_POLL_SECONDS="$legacy"
   # shellcheck disable=SC2030,SC2031 # This fixture sets a fresh active override after clearing imported defaults.
   [ -z "$active" ] || export FM_REMOTE_JOB_ACTIVE_POLL_SECONDS="$active"
-  # shellcheck disable=SC2031 # This cadence fixture sets fresh values; takeover exports stay local.
+  # shellcheck disable=SC2030,SC2031 # These fresh root values belong only to this cadence fixture.
   export FM_REMOTE_JOB_STATE_ROOT="$poll_dir/state" FM_ROOT_OVERRIDE="$REMOTE_ROOT"
   # shellcheck disable=SC2030,SC2031 # Fresh cadence bounds do not depend on the takeover subshell.
   export FM_REMOTE_JOB_QUEUE_TIMEOUT=60 FM_REMOTE_JOB_TIMEOUT=30
@@ -1329,7 +1329,9 @@ quiet_stage_completes() { # <state> <account-home> <touched> <label>
   local began=$SECONDS elapsed
   (
     FM_REMOTE_JOB_STATE_ROOT="$1"
+    # shellcheck disable=SC2030 # This staging subshell owns its queue bound.
     FM_REMOTE_JOB_QUEUE_TIMEOUT=60
+    # shellcheck disable=SC2030 # This staging subshell owns its execution bound.
     FM_REMOTE_JOB_TIMEOUT=30
     fm_remote_job_stage "$2" "$REMOTE_ROOT" "$REMOTE_HOME" fm-touch-job.sh "$3" \
       < /dev/null > /dev/null || exit 1
@@ -1791,6 +1793,7 @@ touch -t 200001010000 "$DUP_STATE/worker.ready"
 ! dup_lib fm_remote_job_probe "$DUP_HOME" \
   || fail "the frozen owner's aged heartbeat still read as ready"
 DUP_REPAIRED=$(
+  # shellcheck disable=SC2030 # This command substitution targets only the duplicate-owner fixture.
   FM_REMOTE_JOB_STATE_ROOT="$DUP_STATE"
   FM_REMOTE_JOB_REPAIRED=0
   fm_remote_job_start_linux_worker "$DUP_ROOT" "$DUP_HOME" > /dev/null 2>&1 || exit 1
