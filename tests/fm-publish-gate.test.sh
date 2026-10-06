@@ -1702,7 +1702,8 @@ test_runtime_stdin_adapter() {
   local body="$TMP_ROOT/runtime-body" out marker="$TMP_ROOT/runtime-received"
   cat >"$FAKEBIN/real-gh" <<'SH'
 #!/usr/bin/env bash
-if [ "$1 $2" = 'pr create' ] || [ "$1 $2" = 'pr edit' ]; then
+[ -z "${FM_TEST_ARGV:-}" ] || printf '%s\0' "$@" >"$FM_TEST_ARGV"
+if [ -n "${FM_TEST_RECEIVED:-}" ]; then
   cat >"$FM_TEST_RECEIVED"
 else
   printf 'read passed\n'
@@ -1727,6 +1728,31 @@ SH
   out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" api --method=POST repos/acme/widgets/issues -f title=Example -f body=Example 2>&1) && fail "API write block must refuse"
   assert_contains "$out" 'GitHub writes blocked' 'runtime API write'
   node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" repo fork acme/widgets >/dev/null 2>&1 && fail "unsupported runtime write must refuse"
+  local flag argv_file="$TMP_ROOT/runtime-argv" expected="$TMP_ROOT/runtime-expected" repo_args=()
+  for flag in --repo -R --repo=acme/widgets -Racme/widgets -R=acme/widgets; do
+    repo_args=("$flag")
+    case "$flag" in --repo | -R) repo_args+=(acme/widgets) ;; esac
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_ARGV="$argv_file" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" pr view 3) || fail "inherited repo read must pass: $out"
+    printf '%s\0' "${repo_args[@]}" pr view 3 >"$expected"
+    cmp -s "$expected" "$argv_file" || fail "inherited read argv changed"
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr "${repo_args[@]}" view 3) || fail "repo flags before verb must pass: $out"
+    printf 'Exact inherited stdin.\r\nNo final newline.' >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_TEST_ARGV="$argv_file" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" pr create --title Fix --body-file - <"$body" 2>&1) || fail "inherited stdin create must pass: $out"
+    cmp -s "$body" "$marker" || fail "inherited stdin bytes changed"
+    printf '%s\0' "${repo_args[@]}" pr create --title Fix --body-file - >"$expected"
+    cmp -s "$expected" "$argv_file" || fail "inherited create argv changed"
+    rm -f "$marker"
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" pr create --title Fix --body-file - <"$body" 2>&1) && fail "inherited create must honor write block"
+    assert_contains "$out" 'GitHub writes blocked' 'inherited write classification'
+    [ ! -e "$marker" ] || fail "blocked inherited create executed"
+    printf '%s\n' "$PRIVATE_TERM" >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr "${repo_args[@]}" edit 3 --body-file=- <"$body" 2>&1) && fail "inherited private stdin edit must refuse"
+    assert_contains "$out" denylist 'inherited edit scan'
+    [ ! -e "$marker" ] || fail "private inherited body reached gh"
+    node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" repo fork acme/widgets >/dev/null 2>&1 && fail "inherited unsupported write must refuse"
+  done
+  node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" --unknown pr view 3 >/dev/null 2>&1 && fail "unknown leading flag must refuse"
+  node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" --repo >/dev/null 2>&1 && fail "missing inherited repo must refuse"
   pass "runtime gh snapshots and checks exact stdin, preserves reads, and refuses unsupported or blocked writes"
 }
 
@@ -1828,6 +1854,71 @@ test_local_gate_transport_preserves_hooks() {
   out=$(NM_HOME="$TMP_ROOT/pilot-nm" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --no-verify origin main 2>&1) && fail "gate-only options must refuse other destinations"
   assert_contains "$out" 'gate options require' 'local gate boundary'
   pass "pinned local gate intake removes hook bypass, preserves client and receive hooks, and refuses gate options elsewhere"
+}
+
+test_git_adapter_refuses_indirect_publication() {
+  local repo out command marker="$TMP_ROOT/git-bypass" real_git
+  repo=$(fresh_repo indirect-publication)
+  real_git=$(command -v git)
+  # Configured aliases must never reach real Git, including shell aliases.
+  git -C "$repo" config alias.fm-publish "!printf bypass > '$marker'"
+  for command in send-pack http-push fm-publish; do
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" "$command" "$TMP_ROOT/public.git" main 2>&1) && fail "publishing plumbing or alias must refuse"
+    assert_contains "$out" 'unsupported git command' 'indirect command refusal'
+  done
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c alias.fm-publish=send-pack fm-publish "$TMP_ROOT/public.git" main 2>&1) && fail "global config alias must refuse"
+  assert_contains "$out" 'unsupported global options' 'global alias refusal'
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" --git-dir="$repo/.git" send-pack "$TMP_ROOT/public.git" main 2>&1) && fail "bare-dir publishing plumbing must refuse"
+  [ ! -e "$marker" ] || fail "shell alias executed"
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" --git-dir="$repo/.git" rev-parse HEAD 2>&1) || fail "pinned bare-directory reads must pass: $out"
+  assert_equals "$(git -C "$repo" rev-parse HEAD)" "$out" 'bare read argv preserved'
+  mkdir -p "$repo/.git/remotes"
+  printf 'URL: %s\nPush: main:main\n' "$TMP_ROOT/public.git" >"$repo/.git/remotes/legacy"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push legacy main 2>&1) && fail "legacy remote must refuse"
+  assert_contains "$out" 'legacy remote refused' 'legacy destination refusal'
+  git -C "$repo" config remote.origin.mirror true
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "implicit mirror must refuse"
+  assert_contains "$out" 'implicit mirror' 'implicit refs refusal'
+  git -C "$repo" config --unset remote.origin.mirror
+  git -C "$repo" config push.followTags true
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "implicit tag publication must refuse"
+  assert_contains "$out" 'implicit tag' 'implicit tags refusal'
+  git -C "$repo" config --unset push.followTags
+  git -C "$repo" config remote.origin.vcs hg
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "remote helper override must refuse"
+  git -C "$repo" config --unset remote.origin.vcs
+  pass "Git publishing plumbing, aliases, global indirection and implicit extra refs cannot bypass the adapter"
+}
+
+test_git_adapter_checks_rewritten_destination() {
+  local repo out mode alias_url="$TMP_ROOT/unlisted-rewrite.git" real_git
+  repo=$(fresh_repo rewritten-publication)
+  real_git=$(command -v git)
+  # Pipeline evidence worktrees need not have the source checkout's hooks.
+  # The adapter itself must scan the actual target even without that backstop.
+  rm -f "$TMP_ROOT/rewritten-publication.hooks/pre-push"
+  git -C "$repo" branch clean
+  commit_file "$repo" fixture.txt "$PRIVATE_TERM" 'Add fixture' || fail "fixture commit failed"
+  git -C "$repo" remote set-url origin "$alias_url"
+  for mode in insteadOf pushInsteadOf; do
+    git -C "$repo" config "url.$TMP_ROOT/public.git.$mode" "$alias_url"
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" main 2>&1) && fail "explicit rewritten public destination must be checked"
+    if [ "$mode" = insteadOf ]; then
+      assert_contains "$out" denylist 'explicit rewrite content refusal'
+    else
+      assert_contains "$out" 'explicit URL rewrite' 'explicit push rewrite refusal'
+    fi
+    assert_no_secret_echo "$out" 'rewritten destination refusal'
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "named rewritten public destination must be checked"
+    assert_contains "$out" denylist 'named rewrite content refusal'
+    git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "refused rewritten push changed remote"
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin clean:refs/heads/clean 2>&1) || fail "clean rewritten local push must pass: $out"
+    assert_equals "$(git -C "$repo" rev-parse clean)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse clean)" 'checked rewritten local push'
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" clean:refs/heads/explicit 2>&1) && fail "rewritten explicit clean target must require configured remote"
+    assert_contains "$out" 'explicit URL rewrite' 'explicit rewritten target boundary'
+    git -C "$repo" config --unset "url.$TMP_ROOT/public.git.$mode"
+  done
+  pass "named rewritten destinations are checked and explicit rewrite or legacy indirection fails closed"
 }
 
 test_upstream_issue_and_reply_limits() {
@@ -1959,6 +2050,8 @@ test_runtime_stdin_adapter
 test_no_mistakes_body_scope
 test_contribution_poison_and_evidence_adapter
 test_local_gate_transport_preserves_hooks
+test_git_adapter_refuses_indirect_publication
+test_git_adapter_checks_rewritten_destination
 test_upstream_issue_and_reply_limits
 
 echo "# all fm-publish-gate tests passed"

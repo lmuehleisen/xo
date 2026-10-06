@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { decision, runtimeOperation } from "./fm-gh-publish-policy.mjs";
+import { decision, runtimeOperation, runtimeCommand } from "./fm-gh-publish-policy.mjs";
 
 const [real, ...original] = process.argv.slice(2);
 let dir;
@@ -20,9 +20,10 @@ try {
   if (operation === "unsupported") throw new Error("unsupported gh operation");
   const args = [...original];
   let input;
-  if (["pr create", "pr edit"].includes(args.slice(0, 2).join(" "))) {
+  const command = runtimeCommand(original);
+  if (command?.group === "pr" && ["create", "edit"].includes(command.verb)) {
     const stdinFlags = [];
-    for (let i = 2; i < args.length; i += 1) {
+    for (let i = command.verbIndex + 1; i < args.length; i += 1) {
       if (["--body-file", "-F"].includes(args[i]) && args[i + 1] === "-") stdinFlags.push([i + 1, false]);
       else if (/^(?:--body-file=|-F=?)-$/.test(args[i])) stdinFlags.push([i, true]);
     }

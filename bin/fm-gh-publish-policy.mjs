@@ -895,6 +895,40 @@ function runGate(target) {
   }
 }
 
+// Shared inherited repository grammar for the shell policy and argv wrapper.
+function ghRepoFlagWidth(words, i) {
+  const value = words[i]?.value || "";
+  if (REPO_FLAGS.includes(value)) return words[i + 1] ? 2 : -1;
+  if (value.startsWith("--repo=") || (value.startsWith("-R") && !value.startsWith("--"))) return 1;
+  return 0;
+}
+
+// Locate group/verb without changing argv; the stdin adapter uses these same
+// positions so inherited flags cannot hide a generated PR body from scanning.
+function runtimeCommand(argv) {
+  const words = argv.map((value) => ({ value }));
+  let groupIndex = 0;
+  while (argv[groupIndex]?.startsWith("-")) {
+    const width = ghRepoFlagWidth(words, groupIndex);
+    if (width > 0) { groupIndex += width; continue; }
+    if (["--help", "--version"].includes(argv[groupIndex]) && groupIndex === 0) {
+      return { group: argv[groupIndex], groupIndex, verbIndex: -1 };
+    }
+    return null;
+  }
+  const group = argv[groupIndex];
+  if (!group) return null;
+  if (group === "api") return groupIndex === 0 ? { group, groupIndex, verbIndex: -1 } : null;
+  let verbIndex = groupIndex + 1;
+  while (argv[verbIndex]?.startsWith("-")) {
+    const width = ghRepoFlagWidth(words, verbIndex);
+    if (width > 0) { verbIndex += width; continue; }
+    if (argv[verbIndex] === "--help" || argv[verbIndex].startsWith("--help=")) { verbIndex += 1; continue; }
+    return null;
+  }
+  return { group, groupIndex, verb: argv[verbIndex], verbIndex };
+}
+
 function checkGh(position, tokens, cwd, context) {
   const all = position.words.slice(position.index + 1);
   // gh also takes the inherited --repo/-R before the command group
@@ -906,15 +940,10 @@ function checkGh(position, tokens, cwd, context) {
   while (start < all.length) {
     const value = all[start].value;
     if (!value.startsWith("-") || value === "-") break;
-    if (REPO_FLAGS.includes(value)) {
-      if (!all[start + 1]) break;
-      lifted.push(all[start], all[start + 1]);
-      start += 2;
-      continue;
-    }
-    if (value.startsWith("--repo=") || (value.startsWith("-R") && !value.startsWith("--"))) {
-      lifted.push(all[start]);
-      start += 1;
+    const width = ghRepoFlagWidth(all, start);
+    if (width > 0) {
+      lifted.push(...all.slice(start, start + width));
+      start += width;
       continue;
     }
     return all.slice(start + 1).some((word) => PUBLISH_GROUPS.has(word.value))
@@ -938,11 +967,8 @@ function checkGh(position, tokens, cwd, context) {
   let verbIndex = -1;
   for (let i = 0; i < rest.length; i += 1) {
     const value = rest[i].value;
-    if (REPO_FLAGS.includes(value)) {
-      i += 1;
-      continue;
-    }
-    if (value.startsWith("--repo=") || (value.startsWith("-R") && !value.startsWith("--"))) continue;
+    const width = ghRepoFlagWidth(rest, i);
+    if (width > 0) { i += width - 1; continue; }
     if (value === "--help" || value.startsWith("--help=")) continue;
     if (value.startsWith("-")) return deny("gh-unparsed", `(option ${value} before the gh ${group} verb)`);
     verbIndex = i;
@@ -1159,10 +1185,12 @@ function runtimeOperation(argv) {
   const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
   const tokens = new Lexer(argv.map(quote).join(" ")).tokenize().tokens;
   const words = tokens.filter((t) => t.type === "word");
-  const [group, verb] = argv;
+  const selected = runtimeCommand(argv);
+  if (!selected) return "unsupported";
+  const { group, verb, groupIndex } = selected;
   if (["--version", "--help", "help", "version"].includes(group)) return "read";
   if (group === "api") {
-    const parsed = parseOptions(words.slice(1), API_VALUED, (name) => API_VALUED.has(name) || API_BOOLS.has(name));
+    const parsed = parseOptions(words.slice(groupIndex + 1), API_VALUED, (name) => API_VALUED.has(name) || API_BOOLS.has(name));
     if (parsed.unknown) return "unsupported";
     const method = parsed.flags.filter((f) => ["-X", "--method"].includes(f.name)).at(-1)?.value;
     const fields = parsed.flags.some((f) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(f.name));
@@ -1178,4 +1206,4 @@ function runtimeOperation(argv) {
   return SPECS[`${group} ${verb}`] ? "write" : "unsupported";
 }
 
-export { decision, runtimeOperation };
+export { decision, runtimeOperation, runtimeCommand };
