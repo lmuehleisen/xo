@@ -2688,6 +2688,16 @@ Concurrent intake can refuse the home or project lock before allocation; the gua
 Separate surface probes verify an empty composer in a new window and a true split, plus refusal of typed delivery at a real manual permission prompt without accepting the permission.
 The legacy primary modules remain V1-only and can display plugin-load notifications when V2 discovers them; worker lifecycle events come from the independent per-task V2 plugin.
 This guard does not verify native resume or rate-limit recovery.
+The exact successful result lines were:
+
+```text
+ok - opencode v2.0.18: fresh shared-workspace spawn, long brief, native busy/idle and turn-end
+ok - opencode v2.0.18: durable steer acknowledgement, interrupt, exit and control relaunch preserve work/model
+ok - opencode v2.0.18: real fresh readiness rollback removes its lease receipt
+ok - opencode v2.0.18: concurrent intake refuses lock contention before allocation; sequential retry processes both briefs
+ok - opencode v2.0.18: fresh new-window and true split-pane composers are readable
+ok - opencode v2.0.18: manual permission prompt refuses typed delivery; no permission accepted
+```
 
 The authoritative migration references are [V2 migration](https://opencode.ai/v2/docs/migrate-v1), [plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1), and the [tagged 2.0.18 source](https://github.com/anomalyco/opencode/tree/v2.0.18).
 Model config content and private-server environment inheritance are established by `packages/core/src/config.ts`, `packages/cli/src/server-process.ts`, and `packages/cli/src/services/standalone.ts` at that tag.

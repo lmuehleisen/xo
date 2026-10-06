@@ -765,6 +765,7 @@ test_matrix_opencode_leftbar_signals() {
   assert_screen "V2 left-aligned version text refuses" unknown "$CAPS_PLAIN" "${home/                        2.0.18/2.0.18}"
   assert_screen "V2 contiguous version text refuses" unknown "$CAPS_PLAIN" "$sidebar"$'\n                        2.0.18'
   assert_screen "V2 version-like popup refuses" unknown "$CAPS_PLAIN" "${home/2.0.18/2.0.18 Update Available}"
+  # shellcheck disable=SC2088 # The literal tilde is harness-rendered furniture.
   local shortened alert relative_path="~/project"
   shortened=${home/\/tmp\/project/…\/long-project…\/worktree}
   assert_screen "V2 shortened home path on plain capture" empty "$CAPS_PLAIN" "$shortened"

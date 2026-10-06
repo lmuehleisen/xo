@@ -78,9 +78,11 @@ MODEL=${FM_OPENCODE_LIVE_MODEL:-opencode/muse-spark-1.3-contributor-free}
 case "$MODEL" in opencode/*free*|opencode/*contributor*) ;; *) fail 'Herdr live guard requires a free/contributor model' ;; esac
 STATUS=$(PATH="$ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" status --json)
 printf '%s\n' "$STATUS" > "$LAB/version.txt"
-export HERDR_SOCKET_PATH=$(printf '%s' "$STATUS" | jq -r '.server.socket')
+HERDR_SOCKET_PATH=$(printf '%s' "$STATUS" | jq -r '.server.socket')
+export HERDR_SOCKET_PATH
 WS=$(PATH="$ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" workspace create --cwd "$LAB/project" --label firstmate --no-focus)
-export HERDR_PANE_ID=$(printf '%s' "$WS" | jq -r '.result.root_pane.pane_id') HERDR_ENV=1
+HERDR_PANE_ID=$(printf '%s' "$WS" | jq -r '.result.root_pane.pane_id')
+export HERDR_PANE_ID HERDR_ENV=1
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source herdr
