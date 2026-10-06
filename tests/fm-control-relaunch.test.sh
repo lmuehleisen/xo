@@ -1079,7 +1079,7 @@ SH
 
 test_opencode_direct_relaunch_inherits_and_overrides_effort() {
   local dir id out rc effort override model=anthropic/claude-sonnet-4-5
-  for override in inherit named; do
+  for override in inherit named default; do
     id="oc-effort-$override"
     dir=$(new_case "$id" "$id")
     add_ship_task "$dir" "$id" opencode
@@ -1095,12 +1095,19 @@ test_opencode_direct_relaunch_inherits_and_overrides_effort() {
     if [ "$override" = named ]; then
       effort=max
       args+=(--effort max)
+    elif [ "$override" = default ]; then
+      effort=default
+      args+=(--effort default)
     fi
     out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 run_spawn "$dir" "${args[@]}"); rc=$?
     expect_code 0 "$rc" "OpenCode direct effort restart failed: $out"
     [ "$(meta_field "$dir" "$id" model)" = "$model" ] || fail "effort override changed model"
     [ "$(meta_field "$dir" "$id" effort)" = "$effort" ] || fail "restart lost effort override=$override"
-    assert_contains "$(cat "$dir/fake/literal")" "\"build\":{\"model\":\"$model#$effort\"}" "launch config lost effort variant"
+    if [ "$effort" = default ]; then
+      assert_contains "$(cat "$dir/fake/literal")" "\"build\":{\"model\":\"$model\"}" "default effort retained a variant"
+    else
+      assert_contains "$(cat "$dir/fake/literal")" "\"build\":{\"model\":\"$model#$effort\"}" "launch config lost effort variant"
+    fi
   done
   pass "OpenCode direct restart inherits effort and honors explicit variant overrides"
 }
@@ -1173,6 +1180,44 @@ test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
     fi
   done
   pass "OpenCode failed restart preserves its pane, recovery record, work and captured diagnostics"
+}
+
+test_opencode_control_relaunch_honors_explicit_default_profile_resets() {
+  local dir id out rc axis model effort
+  for axis in model effort both; do
+    id="oc-control-default-$axis"
+    dir=$(new_case "$id" "$id")
+    add_ship_task "$dir" "$id" opencode
+    printf opencode > "$dir/fake/command"
+    printf opencode > "$dir/fake/becomes"
+    printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+    chmod +x "$dir/fakebin/opencode"
+    model=anthropic/claude-sonnet-4-5
+    effort=high
+    sed "s|^model=default$|model=$model|; s/^effort=default$/effort=high/" \
+      "$dir/home/state/$id.meta" > "$dir/meta.new"
+    mv "$dir/meta.new" "$dir/home/state/$id.meta"
+    local args=("$id" relaunch --note "continue preserved work")
+    if [ "$axis" = model ] || [ "$axis" = both ]; then
+      model=default
+      args+=(--model default)
+    fi
+    if [ "$axis" = effort ] || [ "$axis" = both ]; then
+      effort=default
+      args+=(--effort default)
+    fi
+    out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 run_control "$dir" "${args[@]}"); rc=$?
+    expect_code 0 "$rc" "OpenCode control default reset failed: $out"
+    [ "$(meta_field "$dir" "$id" model)" = "$model" ] || fail "control lost explicit default model reset"
+    [ "$(meta_field "$dir" "$id" effort)" = "$effort" ] || fail "control lost explicit default effort reset"
+    if [ "$model" = default ]; then
+      assert_not_contains "$(cat "$dir/fake/literal")" '"model":' "default model reset retained its config pin"
+    else
+      assert_contains "$(cat "$dir/fake/literal")" "\"build\":{\"model\":\"$model\"}" "default effort reset retained a variant"
+    fi
+    [ "$(journal_field "$dir" "$id" phase)" = complete ] || fail "default reset did not complete control"
+  done
+  pass "OpenCode control replacement honors explicit default model and effort resets"
 }
 
 test_opencode_marker_publication_failure_refuses_a_false_relaunch_success() {
@@ -2973,6 +3018,7 @@ test_opencode_direct_relaunch_inherits_and_overrides_effort
 test_opencode_late_backlog_failure_confirms_the_running_replacement
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics
 test_opencode_marker_publication_failure_refuses_a_false_relaunch_success
+test_opencode_control_relaunch_honors_explicit_default_profile_resets
 test_explicit_model_wins_over_the_recorded_one
 test_recorded_launch_optins_refuse_recovery_before_stop
 test_relaunch_onto_an_unverified_harness_is_refused

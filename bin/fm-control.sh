@@ -1022,8 +1022,13 @@ do_relaunch() {
   RELAUNCH_TX="${BASHPID:-$$}.$(date -u +%Y%m%dT%H%M%SZ).$RANDOM"
   journal_write launching "${CHECKPOINT_LINES[@]}" "$note_line" "relaunch_tx=$RELAUNCH_TX"
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
-  [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
-  [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  if [ "$TARGET_HARNESS" = opencode ]; then
+    # Spawn inherits omitted axes; pass control's resolved defaults explicitly.
+    spawn_args+=(--model "$TARGET_MODEL" --effort "$TARGET_EFFORT")
+  else
+    [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
+    [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  fi
   spawn_ok=1
   if spawn_feedback=$(FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}"); then

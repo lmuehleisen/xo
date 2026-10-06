@@ -66,8 +66,9 @@
 #   positional, and batch pairs are all refused alongside it; only harness,
 #   model, and effort may change, which is what makes a harness switch one
 #   ordinary relaunch. Same-adapter OpenCode replacements inherit recorded
-#   model and effort unless explicitly supplied. OpenCode restart readiness or
-#   delivery failure retains the endpoint, wiring, and published task record,
+#   model and effort unless explicitly supplied; --effort default resets an
+#   OpenCode replacement to its provider's default variant. OpenCode restart
+#   readiness or delivery failure retains the endpoint, wiring, and published task record,
 #   marking the replacement as failed for recovery,
 #   and captures diagnostics in tasktmp/opencode-startup-<spawn_gen>.log.
 #   With FM_CONTROL_RELAUNCH_TX set, OpenCode delivery failure emits
@@ -961,6 +962,12 @@ if [ "$TRACEPARENT_SET" -eq 1 ]; then
   }
 fi
 case "$EFFORT" in
+default)
+  [ "$RELAUNCH" -eq 1 ] || {
+    echo "error: --effort default applies only to an OpenCode relaunch" >&2
+    exit 1
+  }
+  ;;
 '' | low | medium | high | xhigh | max | ultra) ;;
 *)
   echo "error: --effort must be one of low, medium, high, xhigh, max, ultra" >&2
@@ -2247,6 +2254,10 @@ else
   ARG3=${POS[2]:-}
 fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
+if [ "$EFFORT_SET" -eq 1 ] && [ "$EFFORT" = default ] && [ "$ARG3" != opencode ]; then
+  echo "error: --effort default applies only to an OpenCode relaunch" >&2
+  exit 1
+fi
 
 shell_quote() {
   printf "'"
