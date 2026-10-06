@@ -163,5 +163,10 @@ while [ "$i" -lt 60 ]; do
   i=$((i + 1)); sleep 0.5
 done
 [ "$i" -lt 60 ] || fail "$VERSION: retained failed-restart composer did not settle"
+CURRENT=$(bash "$ROOT/bin/fm-crew-state.sh" "$ID")
+case "$CURRENT" in
+  'state: failed '*) ;;
+  *) fail "$VERSION: failed restart reconciled incorrectly: $CURRENT" ;;
+esac
 bash "$ROOT/bin/fm-control.sh" "$ID" exit
 pass "$VERSION: fresh spawn, bare relaunch model, preserved work, brief/status, busy/idle, turn-end, cursorless composer, durable steer, interrupt, exit and failed-restart retention"

@@ -1126,11 +1126,14 @@ test_opencode_late_backlog_failure_confirms_the_running_replacement() {
 }
 
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
-  local dir id out rc failure gen
+  local dir id out rc failure gen current
   for failure in readiness submission; do
     id="oc-restart-fail-$failure"
     dir=$(new_case "$id" "$id")
     add_ship_task "$dir" "$id" opencode
+    # A scout exercises pane/status reconciliation without a pipeline lookup.
+    sed 's/^kind=ship$/kind=scout/' "$dir/home/state/$id.meta" > "$dir/meta.new"
+    mv "$dir/meta.new" "$dir/home/state/$id.meta"
     printf zsh > "$dir/fake/command"
     printf opencode > "$dir/fake/becomes"
     printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
@@ -1149,6 +1152,9 @@ test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
     assert_contains "$out" 'endpoint and replacement wiring are preserved' "failure must identify retained endpoint"
     assert_grep 'OpenCode V2' "$dir/home/state/$id.status" "failure must notify supervisor"
     assert_contains "$(cat "$dir/home/state/$id.status")" 'failed [at=' "failure status must be stamped"
+    current=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+      HOME="$dir/user-home" "$ROOT/bin/fm-crew-state.sh" "$id")
+    assert_contains "$current" 'state: failed' "failed restart reconciled as working: $current"
     gen=$(cat "$dir/home/state/$id.busy-gen")
     [ -f "/tmp/fm-$id/opencode-plugin-$gen/index.mjs" ] || fail "retained agent lost plugin wiring"
     assert_grep 'Build auto' "/tmp/fm-$id"/opencode-startup-*.log "failure must retain captured terminal evidence"

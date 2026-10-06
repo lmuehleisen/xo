@@ -4885,6 +4885,13 @@ opencode_spawn_fail() { # <detail>
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
   if [ "$RELAUNCH" -eq 1 ]; then
+    # The launch seed assumes brief submission. A failed gate must settle it
+    # so current-state reconciliation can read the failed status declaration.
+    # Keep the generation armed for lifecycle events from the retained pane.
+    if ! "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE_REAL" "$ID" idle \
+      --gen "$BUSY_GEN" --source fm-spawn --event launch-failed; then
+      echo "error: could not settle OpenCode replacement busy state for $ID; reconcile endpoint $T before recovery" >&2
+    fi
     local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
     if ! {
       printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
