@@ -2652,6 +2652,7 @@ The displayed model was `Build auto · Muse Spark 1.3 Free OpenCode Zen`.
 The exact terminal result was:
 
 ```text
+ok - opencode v2.0.18: fresh home version label, cursorless styled/plain readiness and draft refusal
 ok - opencode v2.0.18: fresh spawn, bare relaunch model, preserved work, brief/status, busy/idle, turn-end, cursorless composer, durable steer, interrupt, exit and failed-restart retention
 ```
 
@@ -2660,7 +2661,10 @@ It also forces a restart readiness timeout and requires the real pane, uncommitt
 Only scratch allocation is stubbed; fresh endpoint creation, launch, readiness, plugin events, and replacement submission use production code.
 The control command reports `cancel=unconfirmed`; the live guard separately requires the plugin's idle event before proceeding.
 [Supervision verification](supervision.md#opencode-v2-primary-boundary) owns the separate portable evidence that primary modules preserve their legacy V1 exports.
-The V2 composer includes `Build auto`, a location/shortcut strip below its half-block floor, and sidebar content alongside the input rows.
+The V2 composer includes `Build auto`, a location/status strip below its half-block floor, and sidebar content alongside the input rows.
+The guard exercises the fresh home screen before submitting a prompt, requiring both styled and plain cursorless readiness and preserving a typed draft as pending.
+Its separated, indented version label is furniture only behind the proven composer and shortcut strip; extra output still refuses.
+The running-turn strip can pair `esc interrupt` with `ctrl+p commands` without a path, and the guard verifies cursorless readiness during a real running turn.
 Its location strip can put the path before or after `ctrl+p commands`; cursorless classification requires the bounded floor and mode/model footer for either order.
 Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-control-relaunch.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-sessionstart-nudge.test.sh`.
 This run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.
