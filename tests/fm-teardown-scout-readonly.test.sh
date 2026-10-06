@@ -11,6 +11,9 @@
 # is repaired at that physical directory. Replacing an ancestor with a
 # symlink at the moment owner write is restored must not change the outside
 # directory.
+# A directory on a different mount is left unchanged. Cases that need a
+# non-writable directory to make git clean fail do not run as the superuser,
+# because the superuser bypasses directory write permission.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -20,8 +23,20 @@ fm_git_identity fmtest fmtest@example.invalid
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 TMP_ROOT=$(fm_test_tmproot fm-teardown-scout-readonly)
 
+# GNU stat accepts -c. BSD stat accepts -f. GNU stat -f is a filesystem
+# query and exits 0, so the GNU form has to be tried first.
 mode_of() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+# git clean treats a directory as writable for the superuser even when its
+# mode has no write bit. Cases that need the opposite do not run as root.
+skip_if_directory_mode_is_bypassed() {
+  if [ "$(id -u)" -eq 0 ]; then
+    pass "$1 skipped: the superuser bypasses directory write permission"
+    return 0
+  fi
+  return 1
 }
 
 make_case() {  # <name> -> echoes the case dir
@@ -137,6 +152,7 @@ write_scout_report() {  # <case_dir> <id>
 
 test_scout_readonly_tree_is_deleted_and_outside_directory_link_survives() {
   local case_dir id=scout-ro rc file_mode dir_mode nested_mode root_mode root_file_mode
+  skip_if_directory_mode_is_bypassed "scout-readonly" && return 0
   case_dir=$(make_case scout-readonly)
   write_task "$case_dir" "$id" scout
   write_scout_report "$case_dir" "$id"
@@ -201,6 +217,7 @@ test_scout_readonly_tree_is_deleted_and_outside_directory_link_survives() {
 
 test_root_alias_readonly_tree_is_deleted_without_following_outside_links() {
   local case_dir id=scout-alias rc file_mode dir_mode
+  skip_if_directory_mode_is_bypassed "scout-alias" && return 0
   case_dir=$(make_case scout-alias)
   ln -s wt "$case_dir/wt-alias"
   write_task "$case_dir" "$id" scout "$case_dir/wt-alias"
@@ -300,6 +317,7 @@ test_ancestor_swap_at_chmod_does_not_change_outside_directory() {
 
 test_ship_worktree_readonly_tree_is_not_modified() {
   local case_dir id=ship-ro rc dir_mode file_mode exclude
+  skip_if_directory_mode_is_bypassed "ship-readonly" && return 0
   case_dir=$(make_case ship-readonly)
   write_task "$case_dir" "$id" ship
   plant_readonly_hooks "$case_dir"
@@ -352,6 +370,7 @@ test_ship_with_unlanded_readonly_tree_is_refused_unchanged() {
 
 test_forced_ship_discard_does_not_chmod_readonly_tree() {
   local case_dir id=ship-force rc dir_mode file_mode
+  skip_if_directory_mode_is_bypassed "ship-force" && return 0
   case_dir=$(make_case ship-force)
   write_task "$case_dir" "$id" ship
   plant_readonly_hooks "$case_dir"
@@ -429,6 +448,84 @@ test_scout_without_completion_gate_is_refused_unchanged() {
   pass "a scout that has not passed the completion gate is refused without changing its non-writable tree"
 }
 
+# Drop mounts before the temp-root cleanup. The lib trap is replaced only in
+# the inner process, so this also runs that cleanup.
+scout_mount_cleanup() {
+  if [ -n "${SCOUT_UMOUNT_TMPFS:-}" ]; then
+    umount "$SCOUT_UMOUNT_TMPFS" || true
+  fi
+  if [ -n "${SCOUT_UMOUNT_BIND:-}" ]; then
+    umount "$SCOUT_UMOUNT_BIND" || true
+  fi
+  fm_test_cleanup
+}
+
+# Runs where this process can mount. A tmpfs is the mount-point directory
+# find -xdev still lists. A bind mount is the same-filesystem tree -xdev
+# walks through. Neither directory may gain owner write.
+test_separate_mount_inner() {
+  local case_dir id=scout-mount rc tmpfs_mode bind_mode
+  SCOUT_UMOUNT_TMPFS=
+  SCOUT_UMOUNT_BIND=
+  trap scout_mount_cleanup EXIT
+  case_dir=$(make_case scout-mount)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+
+  mkdir -p "$case_dir/wt/extra-mnt" "$case_dir/outside/bound/nested" "$case_dir/wt/bound"
+  printf 'bound\n' > "$case_dir/outside/bound/nested/file"
+  if ! mount -t tmpfs tmpfs "$case_dir/wt/extra-mnt" 2>"$case_dir/mount.err"; then
+    pass "separate scout mounts skipped: tmpfs mount was refused"
+    return 0
+  fi
+  SCOUT_UMOUNT_TMPFS="$case_dir/wt/extra-mnt"
+  printf 'mounted\n' > "$case_dir/wt/extra-mnt/file"
+  if ! mount --bind "$case_dir/outside/bound" "$case_dir/wt/bound" 2>>"$case_dir/mount.err"; then
+    pass "separate scout mounts skipped: bind mount was refused"
+    return 0
+  fi
+  SCOUT_UMOUNT_BIND="$case_dir/wt/bound"
+  chmod a-w "$case_dir/wt/extra-mnt" "$case_dir/wt/extra-mnt/file" \
+    "$case_dir/outside/bound" "$case_dir/outside/bound/nested" \
+    "$case_dir/outside/bound/nested/file"
+  tmpfs_mode=$(mode_of "$case_dir/wt/extra-mnt")
+  bind_mode=$(mode_of "$case_dir/outside/bound")
+
+  rc=0
+  run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  assert_equals "$tmpfs_mode" "$(mode_of "$case_dir/wt/extra-mnt")" \
+    "scout-mount: tmpfs mount-point mode changed (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "$bind_mode" "$(mode_of "$case_dir/outside/bound")" \
+    "scout-mount: bind-mount source mode changed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "leaving $case_dir/wt/extra-mnt unchanged" "$case_dir/stderr" \
+    "scout-mount: tmpfs mount point was not reported as a separate mount"
+  assert_grep "leaving $case_dir/wt/bound unchanged" "$case_dir/stderr" \
+    "scout-mount: bind mount was not reported as a separate mount"
+  pass "a mount point and a same-filesystem bind mount inside a scratch scout are not made writable"
+}
+
+test_separate_mount_inside_scratch_scout_is_not_made_writable() {
+  local rc=0
+  if [ "$(uname -s)" != Linux ]; then
+    pass "separate scout mounts skipped: mount namespaces are checked on Linux"
+    return 0
+  fi
+  if ! command -v unshare >/dev/null 2>&1 \
+    || ! unshare --user --map-root-user --mount true >/dev/null 2>&1; then
+    pass "separate scout mounts skipped: this user cannot create a mount namespace"
+    return 0
+  fi
+  unshare --user --map-root-user --mount bash "$0" --mount-inner || rc=$?
+  [ "$rc" -eq 0 ] || fail "separate scout mount case failed (rc=$rc)"
+}
+
+if [ "${1:-}" = --mount-inner ]; then
+  test_separate_mount_inner
+  exit 0
+fi
+
 test_scout_readonly_tree_is_deleted_and_outside_directory_link_survives
 test_root_alias_readonly_tree_is_deleted_without_following_outside_links
 test_ancestor_swap_at_chmod_does_not_change_outside_directory
@@ -437,3 +534,4 @@ test_ship_with_unlanded_readonly_tree_is_refused_unchanged
 test_forced_ship_discard_does_not_chmod_readonly_tree
 test_scout_without_report_is_refused_unchanged
 test_scout_without_completion_gate_is_refused_unchanged
+test_separate_mount_inside_scratch_scout_is_not_made_writable

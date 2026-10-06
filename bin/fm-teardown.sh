@@ -86,12 +86,22 @@
 # planted on an ancestor after the check cannot redirect the mode change. A
 # path that resolves outside the worktree aborts the return and is not changed.
 # Ship worktrees are not modified, including a --force discard.
-# The walk lists real directories on one filesystem. A directory it cannot
-# descend, a uchg flag, a hard link to an outside inode, and a same-filesystem
-# bind mount of an outside directory stay out of this repair, and it does not
-# change files or flags. The kernel walk inside cd -P can observe a symlink
-# that appears during that walk; pwd -P then refuses an outside result before
-# any mode change.
+# The walk lists real directories with find -P -xdev -type d. That listing
+# still includes a mount-point directory, and -xdev does not stop a
+# same-filesystem bind mount: its device matches the scratch copy and its
+# pwd -P path stays inside that copy. Before the mode change, the repair
+# compares the current directory's device and the mount point of its
+# physical path with the scratch copy. Linux reads that mount point from
+# /proc/self/mountinfo, so a bind mount is its own mount; other systems use
+# the mount point POSIX df reports for that path. A different device or
+# mount is left unchanged, including the mount-point directory itself and
+# every directory under a bind mount. A directory the walk cannot descend,
+# a uchg flag, and a hard link to an outside inode also stay out of this
+# repair, and it does not change files or flags. The kernel walk inside
+# cd -P can observe a symlink that appears during that walk; pwd -P then
+# refuses an outside result before any mode change. A mount stacked on the
+# directory after the process has entered it is not what gets changed,
+# because the mode change applies to the current directory inode.
 # Before destructive cleanup, teardown validates task check artifacts as
 # ordinary single-link files on the state device. It refuses and preserves
 # task state when that proof fails; otherwise it removes the task's check,
@@ -1835,11 +1845,97 @@ scout_dir_is_under() {
   [ "$rest" != "$path" ]
 }
 
+# Decimal device id. GNU stat is tried first because GNU stat -f is a
+# filesystem query and exits 0.
+scout_device_id() {
+  local path=$1 id
+  if id=$(stat -c %d -- "$path" 2>/dev/null); then
+    [ -n "$id" ] || return 1
+    printf '%s\n' "$id"
+    return 0
+  fi
+  id=$(stat -f '%d' "$path" 2>/dev/null) || return 1
+  [ -n "$id" ] || return 1
+  printf '%s\n' "$id"
+}
+
+# Mount point covering an absolute path, from Linux mountinfo. The longest
+# matching mount wins, so a bind mount is not reported as its parent.
+scout_mount_point_mountinfo() {
+  local path=$1 mp
+  mp=$(awk -v path="$path" '
+    function unescape(s,    out, i, n, c, esc) {
+      out = ""
+      n = length(s)
+      i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i + 3 <= n) {
+          esc = substr(s, i + 1, 3)
+          if (esc == "040") { out = out " "; i += 4; continue }
+          if (esc == "011") { out = out "\t"; i += 4; continue }
+          if (esc == "012") { out = out "\n"; i += 4; continue }
+          if (esc == "134") { out = out "\\"; i += 4; continue }
+        }
+        out = out c
+        i++
+      }
+      return out
+    }
+    function covers(mp, p) {
+      if (mp == p) return 1
+      if (mp == "/") return index(p, "/") == 1
+      return index(p, mp "/") == 1
+    }
+    BEGIN { best = ""; bestlen = -1 }
+    {
+      mp = unescape($5)
+      if (mp !~ /^\//) next
+      if (covers(mp, path) && length(mp) > bestlen) {
+        best = mp
+        bestlen = length(mp)
+      }
+    }
+    END {
+      if (bestlen < 0) exit 1
+      printf "%s\n", best
+    }
+  ' /proc/self/mountinfo) || return 1
+  [ -n "$mp" ] || return 1
+  printf '%s\n' "$mp"
+}
+
+# Mount point POSIX df reports. The text after the capacity field is the
+# mount point, including a mount point that contains spaces.
+scout_mount_point_df() {
+  local path=$1 mp
+  mp=$(df -P "$path" 2>/dev/null | awk '
+    NR > 1 && match($0, /[0-9]+%[[:space:]]+/) {
+      mp = substr($0, RSTART + RLENGTH)
+      sub(/[[:space:]]+$/, "", mp)
+      print mp
+      exit
+    }
+  ') || return 1
+  [ -n "$mp" ] || return 1
+  printf '%s\n' "$mp"
+}
+
+scout_mount_point() {
+  local path=$1
+  if [ -r /proc/self/mountinfo ]; then
+    scout_mount_point_mountinfo "$path"
+    return $?
+  fi
+  scout_mount_point_df "$path"
+}
+
 # Restore owner write on one real directory inside a scratch scout worktree.
 # See the script header. A symlink is skipped. A directory that resolves
-# outside the worktree aborts the return.
+# outside the worktree aborts the return. A directory on a different device
+# or mount is left unchanged.
 scout_restore_dir_owner_write() {
-  local wt_phys=$1 path=$2 rc=0
+  local wt_phys=$1 path=$2 wt_mnt=$3 wt_dev=$4 rc=0
   [ -n "$path" ] || return 0
   if [ -L "$path" ]; then
     return 0
@@ -1850,16 +1946,25 @@ scout_restore_dir_owner_write() {
     return 1
   fi
   # Enter the directory and chmod `.` only after pwd -P still names a path
-  # inside the worktree. chmod of `.` does not walk ancestors again.
+  # inside the worktree and the inode is on the scratch copy's own mount.
+  # chmod of `.` does not walk ancestors again.
   (
     CDPATH=
     cd -P -- "$path" || exit 1
     now=$(pwd -P) || exit 1
     scout_dir_is_under "$wt_phys" "$now" || exit 2
+    here_dev=$(scout_device_id .) || exit 1
+    here_mnt=$(scout_mount_point "$now") || exit 1
+    if [ "$here_dev" != "$wt_dev" ] || [ "$here_mnt" != "$wt_mnt" ]; then
+      if [ "$here_dev" != "$wt_dev" ] || [ "$here_mnt" = "$now" ]; then
+        echo "teardown: leaving $now unchanged; it is mounted separately from scratch scout worktree $wt_phys" >&2
+      fi
+      exit 3
+    fi
     chmod u+w . || exit 1
   ) || rc=$?
   case "$rc" in
-    0) ;;
+    0|3) ;;
     2)
       echo "teardown: refusing to change $path; it resolves outside scratch scout worktree $wt_phys" >&2
       return 1
@@ -1875,7 +1980,7 @@ scout_restore_dir_owner_write() {
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 wt_phys list path failed=0
+  local wt=$1 wt_phys list path failed=0 wt_dev wt_mnt
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
@@ -1889,10 +1994,19 @@ prepare_scout_scratch_for_return() {
     echo "teardown: refusing to change $wt; its scratch scout path is not a repairable directory" >&2
     return 1
   fi
+  wt_dev=$(scout_device_id "$wt_phys") || {
+    echo "teardown: cannot identify the filesystem of scratch scout worktree $wt" >&2
+    return 1
+  }
+  wt_mnt=$(scout_mount_point "$wt_phys") || {
+    echo "teardown: cannot identify the mount of scratch scout worktree $wt" >&2
+    return 1
+  }
   list=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || return 1
   # -P is stated so this walk cannot follow a symlink into a directory outside
-  # the worktree. -xdev stays on the worktree filesystem. -type d excludes
-  # symlinks, including a link to a directory.
+  # the worktree. -xdev does not descend into a different filesystem, but it
+  # still prints that filesystem's mount point, and it does not stop a
+  # same-filesystem bind mount. The restore below drops both.
   if ! find -P "$wt_phys" -xdev -type d -print0 >"$list"; then
     rm -f "$list"
     echo "teardown: cannot list scratch scout worktree $wt to restore write permission" >&2
@@ -1900,7 +2014,7 @@ prepare_scout_scratch_for_return() {
   fi
   while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
-    if ! scout_restore_dir_owner_write "$wt_phys" "$path"; then
+    if ! scout_restore_dir_owner_write "$wt_phys" "$path" "$wt_mnt" "$wt_dev"; then
       failed=1
       break
     fi
