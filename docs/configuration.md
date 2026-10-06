@@ -1284,7 +1284,7 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 
 The shared quota library owns the reviewed scope mapping used by the resolver and worker helper.
 Agy's own bounded `agy models` catalog must list the model (or its selected effort alias) before its Gemini or Claude/GPT family binds the `gemini` or `claude_gpt` bucket.
-An unknown model family or unavailable catalog leaves that relation unmeasured.
+An unknown model family or unavailable catalog leaves that candidate eligible but unranked, even beside known generic or exact-model quota.
 An explicit Pi `provider: kiro` binds `included:credit_monthly` as one included pool; insufficient included capacity stays eligible but unranked because other pools or overage remain unmeasured.
 Pools are never summed, and Devin's included allowance has no implicit whole-provider binding.
 
@@ -1307,7 +1307,7 @@ Every result above exits 0.
 **Firstmate retains the dispatch decision**
 
 The tool never replaces firstmate's judgment, `quota-array-dispatch`, the captain-approval gate, or `fm-spawn.sh` validation; `AGENTS.md` section 4 owns what firstmate does with each outcome.
-By accepted design, a `clear` result does not enforce catalog/authentication, reasoning-class, or completion-runway gates.
+A `clear` result applies the quota and completion-runway checks above; firstmate still owns the full catalog/authentication and reasoning-class gates.
 
 Firstmate passes its profile line unless it states a reason to override, such as the brief's reasoning class or an eligible-unranked-candidate note; every non-clear result returns to the full existing intake.
 

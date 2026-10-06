@@ -431,8 +431,10 @@ cat > "$RESPONSE" <<'JSON'
 JSON
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
-assert_contains "$out" 'candidate: agy:-  provider=agy  scope=all_models  remaining=64%  spendPriority=0.4  runway=through_reset  -> eligible' "agy uses its resolver-only authoritative quota provider"
-assert_contains "$out" "  profile: --harness 'agy'" "provider-less agy rule resolves"
+assert_contains "$out" 'candidate: agy:-  provider=agy' "agy uses its resolver-only authoritative quota provider"
+assert_contains "$out" 'status: escalate' "implicit Agy model has no catalog-backed family relation"
+assert_contains "$out" 'catalog-backed family quota is unmeasured' "unknown Agy family is disclosed"
+assert_not_contains "$out" '  profile:' "implicit Agy model remains unranked"
 
 GEMINI_RULE="$TMP_ROOT/gemini-rule.json"
 printf '%s\n' '{"rules":[{"when":"Gemini work.","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$GEMINI_RULE"
@@ -1124,6 +1126,17 @@ done
 printf '{"rules":[{"when":"Coding","use":{"harness":"agy","model":"gemini-3.8-flash-high","effort":"max"}}]}\n' > "$RULES"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/capped-agy.json" run code out err "$BRIEF"
 assert_contains "$out" 'runway exhausted_now at gemini' "catalog-listed suffixed model retains precedence"
+# Missing family knowledge cannot be replaced by healthy generic/exact rows.
+jq '.providers[0].quotaSemantics.effectiveAvailability += [
+  (.providers[0].quotaSemantics.effectiveAvailability[1] | .scope = "model:gemini-3.8-flash-high"),
+  (.providers[0].quotaSemantics.effectiveAvailability[1] | .scope = "product:gemini-3.8-flash-high")
+]' "$TMP_ROOT/capped-agy.json" > "$TMP_ROOT/unknown-agy.json"
+TYPESAFE_API_KEY=$KEY FAKE_AGY_FAIL=1 QUOTA_AXI_FIXTURE="$TMP_ROOT/unknown-agy.json" run code out err "$BRIEF"
+assert_contains "$out" 'status: escalate' "failed catalog cannot rank generic or exact evidence around an unknown family bound"
+assert_contains "$out" 'unranked' "catalog failure remains disclosed uncertainty"
+printf '{"rules":[{"when":"Coding","use":{"harness":"agy","model":"future-family"}}]}\n' > "$RULES"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/unknown-agy.json" run code out err "$BRIEF"
+assert_contains "$out" 'status: escalate' "catalog-listed unknown family cannot rank generic evidence"
 pass "Agy catalog establishes the reviewed bucket mapping, including effort aliases"
 
 cat > "$RULES" <<'JSON'

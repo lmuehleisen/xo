@@ -55,11 +55,13 @@ FM_QUOTA_ROW_JQ='
   # Kiro included credits are one pool, never a whole-provider hard bound.
   def quota_applicable($provider; $model; $agy_scope):
     ($model | split("/") | last // "" | sub("^model:"; "")) as $bare |
+    # Unknown Agy family bounds cannot be replaced by generic/exact evidence.
+    ($provider != "agy" or $agy_scope != "") and (
     .scope == "all_models" or .scope == "all_products" or
     ($bare != "" and $bare != "default" and
       (.scope == ("model:" + $bare) or .scope == ("product:" + $bare))) or
     ($provider == "agy" and $agy_scope != "" and .scope == $agy_scope) or
-    ($provider == "kiro" and .scope == "included:credit_monthly");
+    ($provider == "kiro" and .scope == "included:credit_monthly"));
   def quota_hard_bound($provider):
     ($provider == "kiro" and .scope == "included:credit_monthly") | not;
   def quota_selection_known:

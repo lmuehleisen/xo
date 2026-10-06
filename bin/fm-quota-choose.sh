@@ -34,7 +34,8 @@
 # and checks quota for that
 # family only. Agy additionally uses its own bounded catalog to bind the
 # reviewed Gemini and Claude/GPT buckets; unsupported model families stay
-# unknown. Included Kiro pools are handled only by the typed resolver.
+# unknown even beside known generic or exact-model quota. Included Kiro pools
+# are handled only by the typed resolver.
 # Some harnesses can run models from several providers - for
 # example, Pi and OpenCode may dispatch xAI, Anthropic, or other models - so a
 # candidate whose established provider differs from the harness's primary family

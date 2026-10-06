@@ -570,9 +570,11 @@ ok "Muse uses Meta quota"
 
 jq '.providers += [{"provider":"agy","windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":25,"runway":{"status":"through_reset"}}]}}]' \
   "$LAB/captured.json" > "$AGY_POSITIVE"
-out=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:default)
-[ "$out" = "agy default" ] || fail "Agy provider-wide quota returned: $out"
-ok "Agy uses its own quota provider"
+if out=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:default); then
+  fail "implicit Agy model ranked without a catalog-backed family relation"
+fi
+[ "$out" = "none" ] || fail "unmapped Agy default returned: $out"
+ok "implicit Agy model stays unranked even with provider-wide quota"
 
 jq '.providers += [.providers[] | select(.provider == "claude")]' "$LAB/captured.json" > "$DUPLICATE"
 if err=$(call_choose --snapshot "$DUPLICATE" --candidate claude:default 2>&1); then
@@ -813,6 +815,20 @@ done
 if FAKE_AGY_FAIL=1 call_choose --snapshot "$AGY_POSITIVE" --candidate agy:claude-sonnet-4-6 >/dev/null 2>&1; then
   fail "failed Agy catalog fabricated a bucket"
 fi
+# A healthy generic/exact scope cannot stand in for an unknown family bound.
+jq '.providers[0].quotaSemantics.effectiveAvailability += [
+  {scope:"all_models",status:"known",effectivePercentRemaining:90,runway:{status:"through_reset"}},
+  {scope:"model:gemini-3.8-flash-high",status:"known",effectivePercentRemaining:90,runway:{status:"through_reset"}},
+  {scope:"product:gemini-3.8-flash-high",status:"known",effectivePercentRemaining:90,runway:{status:"through_reset"}}
+]' "$AGY_POSITIVE" > "$LAB/unknown-agy.json"
+if FAKE_AGY_FAIL=1 call_choose --snapshot "$LAB/unknown-agy.json" --candidate agy:gemini-3.8-flash-high >/dev/null 2>&1; then
+  fail "failed catalog selected generic or exact evidence around an unknown family bound"
+fi
+if call_choose --snapshot "$LAB/unknown-agy.json" --candidate agy:future-family >/dev/null 2>&1; then
+  fail "unmapped catalog family selected generic evidence"
+fi
+out=$(call_choose --snapshot "$LAB/unknown-agy.json" --candidate agy:gemini-3.8-flash-high --candidate agy:claude-sonnet-4-6)
+[ "$out" = "agy claude-sonnet-4-6" ] || fail "mapped family lost its bounding bucket: $out"
 ok "Agy bucket mapping uses its own catalog and fails safely on unknown families"
 
 for state in stale auth_required; do
