@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# fm-agy-lib.sh - the fork's agy worker wiring for bin/fm-spawn.sh and
-# bin/fm-teardown.sh: the executable resolution, the permission posture and
+# fm-agy-lib.sh - shared Agy effort normalization and worker wiring for
+# bin/fm-spawn.sh, bin/fm-teardown.sh, and the quota resolver: executable
+# resolution, the permission posture and
 # its --agy-bypass gates, the worker hook install, the post-launch readiness
 # gate, and the matching retires. Sourced, never executed.
 #
 # Kept out of the upstream-owned spawn and teardown scripts so an upstream
 # merge meets one-line call sites there instead of the whole agy arm.
-# Each function below is the code those scripts ran inline before, moved
+# Launch and quota catalog lookups share agy_effort_level below.
+# Worker functions are the code those scripts ran inline before, moved
 # unchanged. bin/fm-agy-hook.sh owns the worker hooks,
 # bin/fm-agy-permission-policy.sh owns the bypass permission layer, and the
 # harness-adapters agy reference owns the operating facts.
@@ -96,6 +98,19 @@
 # AGY_JUDGE_MODEL; fm_agy_spawn_wire sets AGY_JUDGE_BIN. The validate, wire,
 # and ready-gate functions exit the spawn on a refusal, exactly as the inline
 # code did.
+
+# The level agy receives as --effort for <effort> and <model>, or nothing. A
+# model id already carrying a level wins, and xhigh and max cap at high;
+# effort_flag_for_harness's agy arm records why.
+agy_effort_level() {  # <effort> <model>
+  case "$2" in
+  *-low | *-medium | *-high) return 0 ;;
+  esac
+  case "$1" in
+  low | medium) printf '%s\n' "$1" ;;
+  high | xhigh | max) printf '%s\n' high ;;
+  esac
+}
 
 # agy has no reviewed-auto mode. Its only blanket option is
 # --dangerously-skip-permissions, which auto stays deliberately clear

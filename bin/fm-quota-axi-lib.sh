@@ -3,6 +3,8 @@
 # --json snapshot validator, and the provider-row join dispatch consumers use.
 # Usage: . bin/fm-quota-axi-lib.sh
 #
+# fm_quota_axi_compatible [timeout-seconds] [minimum-version] owns the version
+# comparison; the Kiro feature floor applies only to configured Kiro reads.
 # FM_QUOTA_AXI_MIN follows the axi-family floor policy owned beside the floor
 # constants in bin/fm-bootstrap.sh.
 #
@@ -18,6 +20,8 @@
 # bind a candidate to its row under either schema.
 
 FM_QUOTA_AXI_MIN=0.1.51
+# shellcheck disable=SC2034 # Feature floor read by the scoped quota reader.
+FM_QUOTA_AXI_KIRO_MIN=0.1.58
 FM_QUOTA_PROVIDER_ID_RE='^[a-z0-9]+(-[a-z0-9]+)*\z'
 
 # The eligibility section of .agents/skills/quota-array-dispatch/SKILL.md
@@ -66,7 +70,7 @@ FM_QUOTA_ROW_JQ='
 '
 
 fm_quota_axi_compatible() {
-  local timeout=${1:-} output parts major minor patch extra
+  local timeout=${1:-} minimum=${2:-$FM_QUOTA_AXI_MIN} output parts major minor patch extra
   local min_major min_minor min_patch min_extra
   command -v quota-axi >/dev/null 2>&1 || return 1
   if [ -n "$timeout" ]; then
@@ -85,8 +89,9 @@ fm_quota_axi_compatible() {
   # An unparseable version is incompatible, never assumed current, so a
   # development or vendored build cannot pass a floor it was never checked against.
   [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 1
-  # The floor is compared from FM_QUOTA_AXI_MIN so bumping it needs one edit.
-  IFS='.' read -r min_major min_minor min_patch min_extra <<< "$FM_QUOTA_AXI_MIN"
+  # Shared floor by default; the reader supplies the Kiro feature floor only
+  # when its fully validated configured scope includes Kiro.
+  IFS='.' read -r min_major min_minor min_patch min_extra <<< "$minimum"
   [ -n "$min_major" ] && [ -n "$min_minor" ] && [ -n "$min_patch" ] && [ -z "$min_extra" ] || return 1
   [ "$major" -gt "$min_major" ] && return 0
   [ "$major" -eq "$min_major" ] || return 1

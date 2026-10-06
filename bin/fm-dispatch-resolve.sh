@@ -86,6 +86,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+# shellcheck source=bin/fm-agy-lib.sh
+. "$SCRIPT_DIR/fm-agy-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
@@ -370,15 +372,26 @@ fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an inval
 
 # Agy family bindings come only from its own catalog, never another harness.
 AGY_IDS='[]'
+AGY_LEVELS='{}'
 if jq -e '
   def profiles: if type == "array" then . else [.] end;
   any(([(.rules // [])[] | .use | profiles[]] + ((.default // []) | profiles))[]; .harness == "agy")
 ' "$RULES" >/dev/null; then
   AGY_IDS=$(fm_quota_agy_catalog)
+  while IFS= read -r candidate; do
+    model=$(jq -r '.model // ""' <<< "$candidate")
+    effort=$(jq -r '.effort // ""' <<< "$candidate")
+    level=$(agy_effort_level "$effort" "$model")
+    key=$(jq -c '[.model // "", .effort // ""]' <<< "$candidate")
+    AGY_LEVELS=$(jq -c --arg key "$key" --arg level "$level" '. + {($key): $level}' <<< "$AGY_LEVELS")
+  done < <(jq -c '
+    def profiles: if type == "array" then . else [.] end;
+    ([(.rules // [])[] | .use | profiles[]] + ((.default // []) | profiles))[] | select(.harness == "agy")
+  ' "$RULES")
 fi
 
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson agy_ids "$AGY_IDS" --argjson horizon "$COMPLETION_HORIZON" \
+RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson horizon "$COMPLETION_HORIZON" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_AGY_JQ"'
   ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
@@ -389,7 +402,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def measured($p; $lane):
     (prov($p; $lane) != null and (["known", "partial"] | index(prov($p; $lane).quotaSemantics.status)) != null);
   def applicable($p; $lane; $c):
-    (if $c.harness == "agy" then quota_agy_scope($agy_ids; ($c.model // ""); ($c.effort // "")) else "" end) as $agy_scope |
+    (if $c.harness == "agy" then quota_agy_scope($agy_ids; ($c.model // ""); ($agy_levels[([$c.model // "", $c.effort // ""] | @json)] // "")) else "" end) as $agy_scope |
     [rows($p; $lane)[] | select(quota_applicable($p; ($c.model // ""); $agy_scope))];
   def floor_state($f; $p; $lane):
     if $f == null then "none"

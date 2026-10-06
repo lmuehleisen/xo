@@ -20,12 +20,12 @@ cat > "$FAKEBIN/quota-axi" <<'SH'
 if [ -n "${QUOTA_AXI_ARGV_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$QUOTA_AXI_ARGV_LOG"
 fi
-if [ "${QUOTA_AXI_ECHO_ARGV:-0}" = 1 ]; then
-  printf '<%s>\n' "$@"
+if [ "${1:-}" = "--version" ]; then
+  printf 'quota-axi %s\n' "${QUOTA_AXI_VERSION:-0.1.58}"
   exit 0
 fi
-if [ "${1:-}" = "--version" ]; then
-  printf 'quota-axi 0.1.51\n'
+if [ "${QUOTA_AXI_ECHO_ARGV:-0}" = 1 ]; then
+  printf '<%s>\n' "$@"
   exit 0
 fi
 case "${QUOTA_AXI_MALFORMED:-}" in
@@ -149,6 +149,24 @@ printf 'claude,codex,grok,agy,devin,kiro\n' > "$SCOPE_HOME/config/quota-provider
 [ "$(read_args)" = $'<--provider>\n<claude,codex,grok,agy,devin,kiro>' ] || fail 'TOON scope missing'
 [ "$(read_args --json)" = $'<--json>\n<--provider>\n<claude,codex,grok,agy,devin,kiro>' ] || fail 'JSON scope missing'
 [ "$(read_args auth --json)" = $'<auth>\n<--json>\n<--provider>\n<claude,codex,grok,agy,devin,kiro>' ] || fail 'auth scope missing'
+for version in 0.1.51 0.1.55 0.1.57 development; do
+  for mode in toon json auth; do
+    : > "$LAB/argv"
+    case "$mode" in toon) reader_args=() ;; json) reader_args=(--json) ;; auth) reader_args=(auth --json) ;; esac
+    if QUOTA_AXI_VERSION="$version" QUOTA_AXI_ARGV_LOG="$LAB/argv" read_args ${reader_args[@]+"${reader_args[@]}"} > "$LAB/out" 2> "$LAB/err"; then
+      fail "unsupported Kiro version reached $mode: $version"
+    fi
+    grep -q 'quota-axi 0.1.58 or newer required' "$LAB/err" || fail 'Kiro upgrade diagnostic missing'
+    [ "$(cat "$LAB/argv")" = --version ] || fail 'Kiro version refusal reached a quota or auth read'
+  done
+done
+for version in 0.1.58 0.1.59 0.2.0 1.0.0; do
+  QUOTA_AXI_VERSION="$version" read_args --json >/dev/null || fail "compatible Kiro version refused: $version"
+done
+printf 'claude,codex\n' > "$SCOPE_HOME/config/quota-providers"
+[ "$(QUOTA_AXI_VERSION=0.1.51 read_args --json)" = $'<--json>\n<--provider>\n<claude,codex>' ] || fail 'Kiro feature floor affected other provider scopes'
+printf 'claude,codex,grok,agy,devin,kiro\n' > "$SCOPE_HOME/config/quota-providers"
+ok 'configured Kiro gates old versions while other providers retain compatibility'
 for option in --provider --provider=codex; do
   : > "$LAB/argv"
   if QUOTA_AXI_ARGV_LOG="$LAB/argv" read_args "$option" codex --json > "$LAB/out" 2> "$LAB/err"; then

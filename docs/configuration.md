@@ -1078,7 +1078,8 @@ Per-machine Cursor `cli-config.json` attribution-off is not this contract: it do
 The optional local, gitignored `config/quota-providers` limits every quota and auth read to one nonempty comma-separated line of quota-axi provider ids.
 An absent file preserves quota-axi's default discovery.
 Use lowercase ids without whitespace, empty entries, or duplicates; a trailing newline is allowed.
-Supported ids are `claude`, `codex`, `cursor`, `copilot`, `grok`, `kimi`, `zai`, `agy`, `alibaba`, `opencode-go`, `commandcode`, `minimax`, `mimo`, `deepseek`, `openrouter`, `elevenlabs`, `devin`, and `muse` (quota-axi 0.1.55).
+Supported ids are `claude`, `codex`, `cursor`, `copilot`, `grok`, `kimi`, `zai`, `agy`, `alibaba`, `opencode-go`, `commandcode`, `minimax`, `mimo`, `deepseek`, `openrouter`, `elevenlabs`, `devin`, `muse`, and `kiro` (quota-axi 0.1.58).
+Configured Kiro reads require the feature compatibility floor owned by [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh); older or unparseable versions refuse before any quota or auth read.
 For example, `claude,codex` restricts reads to those two providers.
 [`bin/fm-quota-read.sh`](../bin/fm-quota-read.sh) validates the file and passes its value as `--provider`; an unreadable or malformed file refuses the read with a diagnostic instead of widening discovery.
 Caller-supplied `--provider` options are refused when a scope file exists, preventing quota-axi from unioning extra providers into the configured selection.

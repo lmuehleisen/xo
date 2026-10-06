@@ -3,7 +3,9 @@
 # Usage: fm-quota-read.sh [quota-axi read arguments...]
 # Pass no arguments for default TOON, --json for the defensive snapshot,
 # or auth --json for credential-source evidence. Compatibility/version calls
-# use quota-axi directly. docs/configuration.md owns config/quota-providers.
+# use quota-axi directly. Configured Kiro requires its feature compatibility
+# floor from bin/fm-quota-axi-lib.sh, checked with a five-second version bound.
+# docs/configuration.md owns config/quota-providers.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,6 +13,10 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 FILE="$CONFIG/quota-providers"
+# shellcheck source=bin/fm-quota-axi-lib.sh
+. "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 invalid() {
   printf 'error: malformed config/quota-providers: %s\n' "$1" >&2
@@ -44,6 +50,14 @@ if [ -e "$FILE" ] || [ -L "$FILE" ]; then
     case "$seen" in *",$provider,"*) invalid "duplicate provider id: $provider" ;; esac
     seen+="$provider,"
   done
+  case "$seen" in
+    *,kiro,*)
+      if ! fm_quota_axi_compatible 5 "$FM_QUOTA_AXI_KIRO_MIN"; then
+        printf 'error: quota-axi %s or newer required when kiro is configured\n' "$FM_QUOTA_AXI_KIRO_MIN" >&2
+        exit 1
+      fi
+      ;;
+  esac
   args=(--provider "$list")
 fi
 

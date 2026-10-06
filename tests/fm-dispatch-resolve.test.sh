@@ -1111,6 +1111,19 @@ assert_contains "$out" 'runway exhausted_now at gemini' "Gemini bucket exhaustio
 assert_contains "$out" 'no applicable quota row for provider agy' "unreviewed model family stays unranked"
 TYPESAFE_API_KEY=$KEY FAKE_AGY_FAIL=1 QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
 assert_contains "$out" 'status: escalate' "unavailable catalog does not guess Agy family"
+# A healthy generic scope must not hide exhaustion in the capped family bucket.
+for effort in high xhigh max; do
+  printf '{"rules":[{"when":"Coding","use":{"harness":"agy","model":"gemini-3.8-flash","effort":"%s"}}]}\n' "$effort" > "$RULES"
+  jq '.providers[0].quotaSemantics.effectiveAvailability += [
+    (.providers[0].quotaSemantics.effectiveAvailability[1] | .scope = "all_models")
+  ]' "$HARDENED_MUTATION" > "$TMP_ROOT/capped-agy.json"
+  TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/capped-agy.json" run code out err "$BRIEF"
+  assert_contains "$out" 'runway exhausted_now at gemini' "capped $effort binds and vetoes the Gemini bucket"
+  assert_contains "$out" 'status: escalate' "capped $effort cannot rank healthy generic scope around exhausted bucket"
+done
+printf '{"rules":[{"when":"Coding","use":{"harness":"agy","model":"gemini-3.8-flash-high","effort":"max"}}]}\n' > "$RULES"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/capped-agy.json" run code out err "$BRIEF"
+assert_contains "$out" 'runway exhausted_now at gemini' "catalog-listed suffixed model retains precedence"
 pass "Agy catalog establishes the reviewed bucket mapping, including effort aliases"
 
 cat > "$RULES" <<'JSON'
