@@ -506,11 +506,14 @@ test_separate_mount_inner() {
   pass "a mount point and a same-filesystem bind mount inside a scratch scout are not made writable"
 }
 
-# Mountinfo escapes a space as \040 and a backslash as \134.
+# Mountinfo escapes a space as \040, a tab as \011, a newline as \012, and a
+# backslash as \134.
 scout_mountinfo_escape() {
-  local s=$1
+  local s="$1"
   s=${s//\\/\\134}
   s=${s// /\\040}
+  s=${s//$'\t'/\\011}
+  s=${s//$'\n'/\\012}
   printf '%s\n' "$s"
 }
 
@@ -650,6 +653,44 @@ test_reported_mount_with_backslash_is_not_made_writable() {
   pass "a reported mount whose path contains a backslash is not made writable"
 }
 
+# A trailing newline is part of the directory name. The mount check must keep
+# it, or a mount reported at that path is treated as the parent and made writable.
+test_reported_mount_with_trailing_newline_is_not_made_writable() {
+  local case_dir id=scout-mount-newline rc dir_mode escaped name
+  skip_if_directory_mode_is_bypassed "scout-mount-newline" && return 0
+  case_dir=$(make_case scout-mount-newline)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  name=$'mnt\n'
+  mkdir -p "$case_dir/wt/$name"
+  printf 'stay\n' > "$case_dir/wt/$name/file"
+  chmod a-w "$case_dir/wt/$name" "$case_dir/wt/$name/file"
+  dir_mode=$(mode_of "$case_dir/wt/$name")
+  escaped=$(scout_mountinfo_escape "$case_dir/wt/$name")
+  printf '%s\n' "1 0 1:1 / / rw - ext4 /dev/root rw" > "$case_dir/mountinfo"
+  printf '2 1 1:1 /bound %s rw - ext4 /dev/root rw\n' "$escaped" >> "$case_dir/mountinfo"
+
+  rc=0
+  FM_SCOUT_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-mount-newline: cleanup removed a non-writable mounted tree (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-mount-newline: teardown did not reach the worktree return"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-mount-newline: the same-mount hooks tree was not removed"
+  [ -f "$case_dir/wt/$name/file" ] \
+    || fail "scout-mount-newline: the mounted tree was removed"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/$name")" \
+    "scout-mount-newline: mounted directory mode changed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "stay" "$(cat "$case_dir/wt/$name/file")" \
+    "scout-mount-newline: mounted file contents changed"
+  assert_grep "unchanged; it is mounted separately" "$case_dir/stderr" \
+    "scout-mount-newline: the reported mount was not left unchanged"$'\n'"$(cat "$case_dir/stderr")"
+  pass "a reported mount whose path ends with a newline is not made writable"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -682,4 +723,5 @@ test_reported_mount_is_not_made_writable
 test_unsearchable_directory_on_scratch_mount_aborts_before_return
 test_unsearchable_directory_inside_reported_mount_does_not_block_return
 test_reported_mount_with_backslash_is_not_made_writable
+test_reported_mount_with_trailing_newline_is_not_made_writable
 test_separate_mount_inside_scratch_scout_is_not_made_writable

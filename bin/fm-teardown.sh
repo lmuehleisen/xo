@@ -92,9 +92,11 @@
 # device and the mount point of its physical path with the scratch copy.
 # Linux reads that mount point from /proc/self/mountinfo, so a bind mount is
 # its own mount; other systems use the mount point POSIX df reports for that
-# path. The path is compared as raw bytes, so a backslash in it still selects
-# that mount. A test run can supply that table only when FM_TEST_SEAM is set;
-# ordinary cleanup always reads the live table. A different device or mount
+# path. The path is compared as raw bytes, including a trailing newline that
+# command substitution would otherwise drop, so a backslash or newline in it
+# still selects that mount. A test run can supply that table only when
+# FM_TEST_SEAM is set; ordinary cleanup always reads the live table. A
+# different device or mount
 # is left unchanged and is not entered, including a same-filesystem bind
 # mount and every directory under it. A failure to list a directory on the
 # scratch copy's own mount aborts the return. A directory the walk cannot descend,
@@ -1918,7 +1920,9 @@ scout_mount_point_mountinfo() {
       if (bestlen < 0) exit 1
       printf "%s\n", best
     }
-  ' "$table") || return 1
+  ' "$table" && printf x) || return 1
+  mp=${mp%x}
+  mp=${mp%$'\n'}
   [ -n "$mp" ] || return 1
   printf '%s\n' "$mp"
 }
@@ -1949,6 +1953,16 @@ scout_mount_point() {
   scout_mount_point_df "$path"
 }
 
+# Store the mount point of path in the named variable. A trailing newline that
+# is part of the mount point survives; command substitution would drop it.
+scout_assign_mount_point() {
+  local path=$1 dest=$2 marked
+  marked=$(scout_mount_point "$path" && printf x) || return 1
+  marked=${marked%x}
+  marked=${marked%$'\n'}
+  printf -v "$dest" '%s' "$marked"
+}
+
 # Restore owner write on one real directory inside a scratch scout worktree.
 # See the script header. A symlink is skipped. A directory that resolves
 # outside the worktree aborts the return. A directory on a different device
@@ -1970,10 +1984,15 @@ scout_restore_dir_owner_write() {
   (
     CDPATH=
     cd -P -- "$path" || exit 1
-    now=$(pwd -P) || exit 1
+    # Command substitution drops every trailing newline, including one that is
+    # part of the directory name. The marker keeps those bytes, and one
+    # terminator is then removed before the mount comparison.
+    now=$(pwd -P && printf x) || exit 1
+    now=${now%x}
+    now=${now%$'\n'}
     scout_dir_is_under "$wt_phys" "$now" || exit 2
     here_dev=$(scout_device_id .) || exit 1
-    here_mnt=$(scout_mount_point "$now") || exit 1
+    scout_assign_mount_point "$now" here_mnt || exit 1
     if [ "$here_dev" != "$wt_dev" ] || [ "$here_mnt" != "$wt_mnt" ]; then
       if [ "$here_dev" != "$wt_dev" ] || [ "$here_mnt" = "$now" ]; then
         echo "teardown: leaving $now unchanged; it is mounted separately from scratch scout worktree $wt_phys" >&2
@@ -2020,7 +2039,7 @@ prepare_scout_scratch_for_return() {
     echo "teardown: cannot identify the filesystem of scratch scout worktree $wt" >&2
     return 1
   }
-  wt_mnt=$(scout_mount_point "$wt_phys") || {
+  scout_assign_mount_point "$wt_phys" wt_mnt || {
     echo "teardown: cannot identify the mount of scratch scout worktree $wt" >&2
     return 1
   }
