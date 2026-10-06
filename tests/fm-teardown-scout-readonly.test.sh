@@ -552,6 +552,66 @@ test_reported_mount_is_not_made_writable() {
   pass "a directory reported on another mount is not made writable, and the rest of the scratch copy still is"
 }
 
+# A directory on the scratch copy's own mount that can be entered but not
+# listed still stops the return. Mode 100 has search and no read, so the
+# listing fails after the mode change. The superuser can read it anyway.
+test_unsearchable_directory_on_scratch_mount_aborts_before_return() {
+  local case_dir id=scout-sealed rc
+  skip_if_directory_mode_is_bypassed "scout-sealed" && return 0
+  case_dir=$(make_case scout-sealed)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  mkdir -p "$case_dir/wt/sealed"
+  chmod 100 "$case_dir/wt/sealed"
+
+  rc=0
+  run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-sealed: teardown returned a scratch copy it could not list"
+  assert_grep "cannot list scratch scout worktree" "$case_dir/stderr" \
+    "scout-sealed: teardown did not report the listing failure"$'\n'"$(cat "$case_dir/stderr")"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-sealed: teardown returned the worktree after the listing failed"
+  [ -f "$case_dir/wt/copied-hooks/nested/commit-msg" ] \
+    || fail "scout-sealed: the hooks file was removed"
+  pass "a scratch copy that cannot be listed on its own mount is not returned"
+}
+
+# The reported mount is not a kernel mount. An unsearchable directory inside
+# it would make a full-tree listing fail. The walk must prune that mount and
+# still return the rest of the scratch copy.
+test_unsearchable_directory_inside_reported_mount_does_not_block_return() {
+  local case_dir id=scout-mount-sealed rc hidden_mode escaped
+  skip_if_directory_mode_is_bypassed "scout-mount-sealed" && return 0
+  case_dir=$(make_case scout-mount-sealed)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  mkdir -p "$case_dir/wt/planted-mnt/hidden"
+  printf 'hidden\n' > "$case_dir/wt/planted-mnt/hidden/file"
+  chmod 000 "$case_dir/wt/planted-mnt/hidden"
+  chmod a-w "$case_dir/wt/planted-mnt"
+  hidden_mode=$(mode_of "$case_dir/wt/planted-mnt/hidden")
+  escaped=$(scout_mountinfo_escape "$case_dir/wt/planted-mnt")
+  printf '%s\n' "1 0 1:1 / / rw - ext4 /dev/root rw" > "$case_dir/mountinfo"
+  printf '2 1 1:1 /bound %s rw - ext4 /dev/root rw\n' "$escaped" >> "$case_dir/mountinfo"
+
+  rc=0
+  FM_SCOUT_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-mount-sealed: teardown did not reach the worktree return"$'\n'"$(cat "$case_dir/stderr")"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-mount-sealed: the same-mount hooks tree was not removed"
+  [ -d "$case_dir/wt/planted-mnt/hidden" ] \
+    || fail "scout-mount-sealed: the unsearchable directory inside the reported mount was removed"
+  assert_equals "$hidden_mode" "$(mode_of "$case_dir/wt/planted-mnt/hidden")" \
+    "scout-mount-sealed: the unsearchable directory inside the reported mount changed mode (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  pass "an unsearchable directory inside a reported mount does not stop the scratch copy from being returned"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -581,4 +641,6 @@ test_forced_ship_discard_does_not_chmod_readonly_tree
 test_scout_without_report_is_refused_unchanged
 test_scout_without_completion_gate_is_refused_unchanged
 test_reported_mount_is_not_made_writable
+test_unsearchable_directory_on_scratch_mount_aborts_before_return
+test_unsearchable_directory_inside_reported_mount_does_not_block_return
 test_separate_mount_inside_scratch_scout_is_not_made_writable

@@ -86,18 +86,17 @@
 # planted on an ancestor after the check cannot redirect the mode change. A
 # path that resolves outside the worktree aborts the return and is not changed.
 # Ship worktrees are not modified, including a --force discard.
-# The walk lists real directories with find -P -xdev -type d. That listing
-# still includes a mount-point directory, and -xdev does not stop a
-# same-filesystem bind mount: its device matches the scratch copy and its
-# pwd -P path stays inside that copy. Before the mode change, the repair
-# compares the current directory's device and the mount point of its
-# physical path with the scratch copy. Linux reads that mount point from
-# /proc/self/mountinfo, so a bind mount is its own mount; other systems use
-# the mount point POSIX df reports for that path. A test run can supply
-# that table only when FM_TEST_SEAM is set; ordinary cleanup always reads
-# the live table. A different device or
-# mount is left unchanged, including the mount-point directory itself and
-# every directory under a bind mount. A directory the walk cannot descend,
+# The walk visits one real directory at a time and lists only its immediate
+# child directories, without following symlinks. Before the mode change, and
+# before any child is listed, the repair compares the current directory's
+# device and the mount point of its physical path with the scratch copy.
+# Linux reads that mount point from /proc/self/mountinfo, so a bind mount is
+# its own mount; other systems use the mount point POSIX df reports for that
+# path. A test run can supply that table only when FM_TEST_SEAM is set;
+# ordinary cleanup always reads the live table. A different device or mount
+# is left unchanged and is not entered, including a same-filesystem bind
+# mount and every directory under it. A failure to list a directory on the
+# scratch copy's own mount aborts the return. A directory the walk cannot descend,
 # a uchg flag, and a hard link to an outside inode also stay out of this
 # repair, and it does not change files or flags. The kernel walk inside
 # cd -P can observe a symlink that appears during that walk; pwd -P then
@@ -1977,8 +1976,11 @@ scout_restore_dir_owner_write() {
     fi
     chmod u+w . || exit 1
   ) || rc=$?
+  # Exit 3 tells the walk not to list children. A different mount is pruned
+  # before descent; a listing error on the scratch copy's own mount is not.
   case "$rc" in
-    0|3) ;;
+    0) return 0 ;;
+    3) return 3 ;;
     2)
       echo "teardown: refusing to change $path; it resolves outside scratch scout worktree $wt_phys" >&2
       return 1
@@ -1994,7 +1996,7 @@ scout_restore_dir_owner_write() {
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 wt_phys list path failed=0 wt_dev wt_mnt
+  local wt=$1 wt_phys path wt_dev wt_mnt queue next rc
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
@@ -2016,25 +2018,41 @@ prepare_scout_scratch_for_return() {
     echo "teardown: cannot identify the mount of scratch scout worktree $wt" >&2
     return 1
   }
-  list=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || return 1
-  # -P is stated so this walk cannot follow a symlink into a directory outside
-  # the worktree. -xdev does not descend into a different filesystem, but it
-  # still prints that filesystem's mount point, and it does not stop a
-  # same-filesystem bind mount. The restore below drops both.
-  if ! find -P "$wt_phys" -xdev -type d -print0 >"$list"; then
-    rm -f "$list"
-    echo "teardown: cannot list scratch scout worktree $wt to restore write permission" >&2
-    return 1
-  fi
-  while IFS= read -r -d '' path; do
-    [ -n "$path" ] || continue
-    if ! scout_restore_dir_owner_write "$wt_phys" "$path" "$wt_mnt" "$wt_dev"; then
-      failed=1
-      break
-    fi
-  done <"$list"
-  rm -f "$list"
-  [ "$failed" -eq 0 ]
+  queue=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || return 1
+  printf '%s\0' "$wt_phys" >"$queue"
+  # One level at a time. A different mount returns 3 and is not entered, so
+  # an unsearchable directory inside a bind mount cannot fail this listing.
+  # A listing error on the scratch copy's own mount still aborts the return.
+  while [ -s "$queue" ]; do
+    next=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || {
+      rm -f "$queue"
+      return 1
+    }
+    while IFS= read -r -d '' path; do
+      [ -n "$path" ] || continue
+      if [ -L "$path" ] || [ ! -d "$path" ]; then
+        continue
+      fi
+      rc=0
+      scout_restore_dir_owner_write "$wt_phys" "$path" "$wt_mnt" "$wt_dev" || rc=$?
+      case "$rc" in
+        0) ;;
+        3) continue ;;
+        *)
+          rm -f "$queue" "$next"
+          return 1
+          ;;
+      esac
+      if ! find -P "$path" -mindepth 1 -maxdepth 1 -type d -print0 >>"$next"; then
+        rm -f "$queue" "$next"
+        echo "teardown: cannot list scratch scout worktree $wt to restore write permission" >&2
+        return 1
+      fi
+    done <"$queue"
+    rm -f "$queue"
+    queue=$next
+  done
+  rm -f "$queue"
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
