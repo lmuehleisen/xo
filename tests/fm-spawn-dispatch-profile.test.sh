@@ -1375,6 +1375,50 @@ test_claude_ultracode_optin() {
   pass "Claude ultracode is a separate explicit, probed setting and preserves effort"
 }
 
+test_remote_opencode_secondmate_refuses_before_routing() {
+  local rec id=remote-opencode out pin existing
+  local -a args
+  for pin in explicit positional configured; do
+    for existing in absent alive; do
+      rec=$(make_spawn_case "remote-opencode-$pin-$existing" opencode "$id")
+      read_case_record "$rec"
+      printf -- '- %s - remote fixture (host: fixture-host; root: /fixture/root; home: /fixture/home; scope: fixture; projects: alpha; added 2026-10-05)\n' "$id" > "$HOME_DIR/data/secondmates.md"
+      cat > "$FAKEBIN_DIR/ssh-refuse" <<'SH'
+#!/usr/bin/env bash
+printf 'unexpected remote transport\n' >> "${FM_FAKE_LAUNCH_LOG:?}"
+exit 99
+SH
+      cat > "$FAKEBIN_DIR/opencode" <<'SH'
+#!/usr/bin/env bash
+printf 'unexpected parent version probe\n' >> "${FM_FAKE_LAUNCH_LOG:?}"
+exit 99
+SH
+      chmod +x "$FAKEBIN_DIR/ssh-refuse" "$FAKEBIN_DIR/opencode"
+      if [ "$existing" = alive ]; then
+        printf 'sentinel endpoint\n' > "$HOME_DIR/state/$id.meta"
+      fi
+      args=(--secondmate)
+      case "$pin" in
+        explicit) args+=(--harness opencode) ;;
+        positional) args+=(opencode) ;;
+        configured) printf 'opencode opencode/muse-spark-1.3-contributor-free\n' > "$HOME_DIR/config/secondmate-harness" ;;
+      esac
+      out=$(FM_SSH_BIN="$FAKEBIN_DIR/ssh-refuse" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "${args[@]}")
+      expect_code 1 "$?" "remote OpenCode secondmate must refuse before routing: $pin $existing $out"
+      assert_contains "$out" 'OpenCode secondmate launches are unsupported' "remote refusal was bypassed"
+      [ ! -s "$LAUNCH_LOG" ] || fail "remote refusal reached transport or probed the parent's CLI"
+      if [ "$existing" = alive ]; then
+        [ "$(cat "$HOME_DIR/state/$id.meta")" = 'sentinel endpoint' ] || fail "remote refusal changed existing endpoint metadata"
+      else
+        assert_absent "$HOME_DIR/state/$id.meta" "remote refusal published parent metadata"
+      fi
+      assert_absent "$HOME_DIR/state/.spawn-$id.lock" "remote refusal leaked the task lock"
+      assert_absent "$HOME_DIR/state/.secondmate-registry.lock" "remote refusal leaked the registry lock"
+    done
+  done
+  pass "remote OpenCode secondmate refuses before sync, transport, CLI probes and endpoint reuse"
+}
+
 test_remote_secondmate_ultra_refuses_before_routing() {
   local rec id=remote-ultra out status verb pin mate
   for pin in explicit configured; do
@@ -3079,6 +3123,7 @@ test_native_pi_ultra_is_explicit_and_model_scoped
 test_codex_ultra_refuses_unproved_support
 test_codex_optins_use_finalized_worktree_configuration
 test_codex_optins_pin_the_probed_configuration_root
+test_remote_opencode_secondmate_refuses_before_routing
 test_remote_secondmate_ultra_refuses_before_routing
 test_claude_ultracode_optin
 test_goal_first_native_input

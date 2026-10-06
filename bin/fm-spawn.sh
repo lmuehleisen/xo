@@ -1116,6 +1116,14 @@ spawn_remote_secondmate() {
     return 1
     ;;
   esac
+  # Primary supervision is not supported on V2. Refuse before remote sync,
+  # inheritance or endpoint reuse; the parent's CLI version is irrelevant.
+  if [ "$harness" = opencode ]; then
+    fm_lock_release "$registry_lock" || true
+    fm_lock_release "$SPAWN_TASK_LOCK" || true
+    echo "error: OpenCode secondmate launches are unsupported; select a harness verified for secondmates" >&2
+    return 1
+  fi
   model=${MODEL:--}
   effort=${EFFORT:--}
   if [ -z "$HARNESS_ARG" ] && [ -z "$positional" ]; then
