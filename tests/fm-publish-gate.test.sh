@@ -1697,6 +1697,498 @@ test_policy_text() {
   pass "policy prints the public-text policy"
 }
 
+# Runtime subprocesses use exact stdin bytes, not a shell command's preview.
+test_runtime_stdin_adapter() {
+  local body="$TMP_ROOT/runtime-body" out marker="$TMP_ROOT/runtime-received"
+  cat >"$FAKEBIN/real-gh" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_TEST_ARGV:-}" ] || printf '%s\0' "$@" >"$FM_TEST_ARGV"
+[ -z "${FM_TEST_HOST_RECEIVED:-}" ] || printf '%s' "${GH_HOST:-}" >"$FM_TEST_HOST_RECEIVED"
+if [ -n "${FM_TEST_RECEIVED:-}" ]; then
+  cat >"$FM_TEST_RECEIVED"
+else
+  printf 'read passed\n'
+fi
+SH
+  chmod +x "$FAKEBIN/real-gh"
+  printf 'Fix handling.\r\nExact bytes without final newline.' >"$body"
+  out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) || fail "stdin adapter should pass: $out"
+  cmp -s "$body" "$marker" || fail "stdin bytes changed after review"
+  rm -f "$marker"
+  local host_file="$TMP_ROOT/runtime-host"
+  out=$(GH_HOST=enterprise.example.invalid FM_TEST_HOST_RECEIVED="$host_file" FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" issue create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) || fail "checked writes must pin host: $out"
+  assert_equals github.com "$(cat "$host_file")" 'checked write host'
+  cmp -s "$body" "$marker" || fail "host pin changed checked stdin"
+  rm -f "$marker"
+  out=$(GH_HOST=enterprise.example.invalid FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_HOST_RECEIVED="$host_file" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr view 3 --repo acme/widgets) || fail "read host environment must remain unchanged"
+  assert_equals enterprise.example.invalid "$(cat "$host_file")" 'read host environment'
+  printf '%s\n' "$PRIVATE_TERM" >"$body"
+  out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr edit 3 --repo acme/widgets --body-file=- <"$body" 2>&1) && fail "private stdin body must refuse"
+  [ ! -e "$marker" ] || fail "refused bytes reached gh"
+  assert_no_secret_echo "$out" 'stdin refusal'
+  printf 'Fix handling.\n' >"$body"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) && fail "independent write block must refuse"
+  [ ! -e "$marker" ] || fail "blocked gh executed"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr view 3 --repo acme/widgets) || fail "read must pass"
+  assert_contains "$out" 'read passed' 'runtime read'
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" api --method=GET repos/acme/widgets) || fail "API read must pass"
+  assert_contains "$out" 'read passed' 'runtime API read'
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" api --method=POST repos/acme/widgets/issues -f title=Example -f body=Example 2>&1) && fail "API write block must refuse"
+  assert_contains "$out" 'GitHub writes blocked' 'runtime API write'
+  node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" repo fork acme/widgets >/dev/null 2>&1 && fail "unsupported runtime write must refuse"
+  local flag argv_file="$TMP_ROOT/runtime-argv" expected="$TMP_ROOT/runtime-expected" repo_args=()
+  for flag in --repo -R --repo=acme/widgets -Racme/widgets -R=acme/widgets; do
+    repo_args=("$flag")
+    case "$flag" in --repo | -R) repo_args+=(acme/widgets) ;; esac
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_ARGV="$argv_file" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" pr view 3) || fail "inherited repo read must pass: $out"
+    printf '%s\0' "${repo_args[@]}" pr view 3 >"$expected"
+    cmp -s "$expected" "$argv_file" || fail "inherited read argv changed"
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr "${repo_args[@]}" view 3) || fail "repo flags before verb must pass: $out"
+    printf 'Exact inherited stdin.\r\nNo final newline.' >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_TEST_ARGV="$argv_file" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" pr create --title Fix --body-file - <"$body" 2>&1) || fail "inherited stdin create must pass: $out"
+    cmp -s "$body" "$marker" || fail "inherited stdin bytes changed"
+    printf '%s\0' "${repo_args[@]}" pr create --title Fix --body-file - >"$expected"
+    cmp -s "$expected" "$argv_file" || fail "inherited create argv changed"
+    rm -f "$marker"
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" pr create --title Fix --body-file - <"$body" 2>&1) && fail "inherited create must honor write block"
+    assert_contains "$out" 'GitHub writes blocked' 'inherited write classification'
+    [ ! -e "$marker" ] || fail "blocked inherited create executed"
+    printf '%s\n' "$PRIVATE_TERM" >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr "${repo_args[@]}" edit 3 --body-file=- <"$body" 2>&1) && fail "inherited private stdin edit must refuse"
+    assert_contains "$out" denylist 'inherited edit scan'
+    [ ! -e "$marker" ] || fail "private inherited body reached gh"
+    node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${repo_args[@]}" repo fork acme/widgets >/dev/null 2>&1 && fail "inherited unsupported write must refuse"
+  done
+  node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" --unknown pr view 3 >/dev/null 2>&1 && fail "unknown leading flag must refuse"
+  node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" --repo >/dev/null 2>&1 && fail "missing inherited repo must refuse"
+  local invocation case_args=()
+  for invocation in 'pr comment 3' 'pr review 3 --comment' 'pr merge 3 --squash' 'issue create --title Fix' 'issue edit 3' 'issue comment 3' 'release create v1' 'release edit v1'; do
+    read -r -a case_args <<<"$invocation"
+    flag=--body-file
+    case "$invocation" in release*) flag=--notes-file ;; esac
+    printf 'Exact supported stdin.\r\nNo final newline.' >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_TEST_ARGV="$argv_file" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${case_args[@]}" --repo acme/widgets "$flag=-" <"$body" 2>&1) || fail "supported stdin invocation must pass: $invocation: $out"
+    cmp -s "$body" "$marker" || fail "supported stdin bytes changed: $invocation"
+    printf '%s\0' "${case_args[@]}" --repo acme/widgets "$flag=-" >"$expected"
+    cmp -s "$expected" "$argv_file" || fail "supported stdin argv changed: $invocation"
+    rm -f "$marker"
+    printf '%s\n' "$PRIVATE_TERM" >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${case_args[@]}" --repo acme/widgets -F- <"$body" 2>&1) && fail "supported stdin private body must refuse: $invocation"
+    assert_contains "$out" denylist 'supported stdin content scan'
+    [ ! -e "$marker" ] || fail "private supported stdin reached gh"
+    printf 'Fix handling.\n' >"$body"
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${case_args[@]}" --repo acme/widgets -F - <"$body" 2>&1) && fail "supported stdin must honor independent block: $invocation"
+    assert_contains "$out" 'GitHub writes blocked' 'supported stdin write block'
+    [ ! -e "$marker" ] || fail "blocked supported stdin reached gh"
+  done
+  pass "runtime gh snapshots and checks exact stdin, preserves reads, and refuses unsupported or blocked writes"
+}
+
+test_no_mistakes_body_scope() {
+  local body="$TMP_ROOT/attestation.md" out head
+  head=$(printf '%040d' 7)
+  printf 'public acme/upstream\n' >>"$CFG/allowlist"
+  printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-submissions"
+  export FM_TEST_ATTESTED_HEAD="$head"
+  cat >"$FAKEBIN/gh" <<'SH'
+#!/usr/bin/env bash
+[ "$1 $2 $3" = 'api --hostname github.com' ] || exit 1
+case "$4" in
+repos/acme/widgets) printf '{"fork":true,"private":false,"full_name":"acme/widgets","parent":{"full_name":"acme/upstream"}}\n' ;;
+repos/acme/widgets/git/ref/heads/contrib/fixture) printf '{"object":{"type":"commit","sha":"%s"}}\n' "$FM_TEST_ATTESTED_HEAD" ;;
+repos/acme/upstream/pulls/3) printf '{"base":{"ref":"main"},"head":{"repo":{"full_name":"acme/widgets"},"ref":"contrib/fixture","sha":"%s"}}\n' "$FM_TEST_ATTESTED_HEAD" ;;
+*) exit 1 ;;
+esac
+SH
+  chmod +x "$FAKEBIN/gh"
+  {
+    printf 'Technical test results.\n\n## Pipeline\n'
+    printf 'Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n'
+    printf '<!-- no-mistakes-pipeline-attestation:v1 {"head_sha":"%s","steps":[{"step":"review","status":"completed"},{"step":"test","status":"completed"},{"step":"document","status":"completed"}]} -->\n' "$head"
+    local i=0
+    while [ "$i" -lt 100 ]; do printf 'Targeted fixture test passed with expected output.\n'; i=$((i + 1)); done
+  } >"$body"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) || fail "scoped generated body should pass: $out"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body" 2>&1) || fail "live PR edit should qualify: $out"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/other "body:$body" 2>&1) && fail "unapproved branch must retain ordinary limits"
+  out=$(FM_TEST_ATTESTED_HEAD=$(printf '%040d' 8) "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "stale attestation must refuse"
+  printf '%s\n' "$PRIVATE_TERM" >>"$body"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "extended body must retain literal scan"
+  assert_contains "$out" 'denylist' 'generated body literal scan'
+  assert_no_secret_echo "$out" 'generated body refusal'
+  sed '$d' "$body" >"$body.clean"
+  mv "$body.clean" "$body"
+  sed 's/"completed"/"skipped"/g' "$body" >"$body.bad"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body.bad" 2>&1) && fail "incomplete required steps must refuse"
+  if [ "$REAL_GITLEAKS" = 1 ]; then
+    printf 'token = "ghp_%s"\n' "$(printf 'Z%.0s' $(seq 1 16))9a8b7c6d5e4f3a2b1c0d" >>"$body"
+    out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "generated secrets must refuse"
+    assert_contains "$out" 'gitleaks' 'generated secret scan'
+  fi
+  printf 'bad row\n' >"$CFG/no-mistakes-submissions"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "malformed scope must refuse"
+  assert_contains "$out" 'malformed no-mistakes-submissions' 'scope format'
+  rm -f "$CFG/no-mistakes-submissions"
+  reset_trusted_gh
+  pass "generated body exception binds destination, fork, branch, head and required steps while retaining literal and secret checks"
+}
+
+test_contribution_poison_and_evidence_adapter() {
+  local repo sha tree out remote="$TMP_ROOT/public.git" real_git
+  repo=$(fresh_repo outgoing-evidence)
+  ln -s "$(command -v git)" "$FAKEBIN/git-real"
+  real_git="$FAKEBIN/git-real"
+  # Evidence uses commit-tree and bypasses commit hooks; the outgoing adapter
+  # must still check the orphan's entire reachable history and message.
+  tree=$(git -C "$repo" rev-parse 'HEAD^{tree}')
+  sha=$(printf 'Clean evidence\n' | pinned git -C "$repo" commit-tree "$tree")
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$remote" "$sha:refs/heads/no-mistakes/evidence" 2>&1) || fail "clean orphan evidence should pass: $out"
+  assert_equals "$sha" "$(git --git-dir="$remote" rev-parse refs/heads/no-mistakes/evidence)" 'orphan evidence was checked and pushed locally'
+  sha=$(printf '%s\n' "$PRIVATE_TERM" | pinned git -C "$repo" commit-tree "$tree")
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$remote" "$sha:refs/heads/no-mistakes/evidence" 2>&1) && fail "private orphan evidence must refuse"
+  assert_contains "$out" 'denylist' 'orphan message checked'
+  sha=$(git -C "$repo" rev-parse HEAD)
+  printf 'acme/widgets %s\n' "$sha" >"$CFG/contribution-poison-commits"
+  out=$(cd "$repo" && printf 'main %s refs/heads/contrib/fixture %040d\n' "$sha" 0 | "$GATE" pre-push fork https://github.com/acme/widgets.git --config "$CFG" 2>&1) && fail "contribution-scoped poison must refuse matching destination"
+  assert_contains "$out" 'old-history commit' 'scoped poison check'
+  push_expect "$repo" 0 'scoped poison does not block other destinations'
+  printf 'malformed\n' >"$CFG/contribution-poison-commits"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$remote" main 2>&1) && fail "malformed scoped poison must refuse"
+  assert_contains "$out" 'malformed contribution-poison-commits' 'poison format'
+  rm -f "$CFG/contribution-poison-commits"
+  pass "outgoing adapter checks commit-tree evidence and poison ancestry without replacing repository hooks"
+}
+
+
+test_local_gate_transport_preserves_hooks() {
+  local repo gate="$TMP_ROOT/pilot-nm/repos/gate.git" hooks out real_git
+  repo=$(fresh_repo local-gate-transport)
+  hooks="$TMP_ROOT/local-gate-transport.hooks"
+  real_git=$(command -v git)
+  mkdir -p "$(dirname "$gate")"
+  git init -q --bare "$gate"
+  git --git-dir="$gate" config receive.advertisePushOptions true
+  git -C "$repo" remote add no-mistakes "$gate"
+  printf '#!/bin/sh\nprintf hook >"%s"\nexit 1\n' "$TMP_ROOT/local-client-hook" >"$hooks/pre-push"
+  chmod +x "$hooks/pre-push"
+  out=$(NM_HOME="$TMP_ROOT/pilot-nm" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --no-verify -o no-mistakes.skip=push,pr,ci no-mistakes main 2>&1) && fail "local intake must still honor refusing client hook"
+  [ -e "$TMP_ROOT/local-client-hook" ] || fail "local intake bypassed client hook"
+  printf '#!/bin/sh\nexit 0\n' >"$hooks/pre-push"
+  printf '#!/bin/sh\nprintf admitted >"%s"\n' "$TMP_ROOT/local-receive-hook" >"$gate/hooks/post-receive"
+  chmod +x "$gate/hooks/post-receive"
+  out=$(NM_HOME="$TMP_ROOT/pilot-nm" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --no-verify -o no-mistakes.skip=push,pr,ci no-mistakes main 2>&1) || fail "local gate transport should pass: $out"
+  [ -e "$TMP_ROOT/local-receive-hook" ] || fail "local intake disabled gate admission hook"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$gate" rev-parse main)" 'gate received checked head'
+  out=$(NM_HOME="$TMP_ROOT/pilot-nm" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --no-verify origin main 2>&1) && fail "gate-only options must refuse other destinations"
+  assert_contains "$out" 'gate options require' 'local gate boundary'
+  pass "pinned local gate intake removes hook bypass, preserves client and receive hooks, and refuses gate options elsewhere"
+}
+
+test_git_adapter_refuses_indirect_publication() {
+  local repo out command marker="$TMP_ROOT/git-bypass" real_git
+  repo=$(fresh_repo indirect-publication)
+  real_git=$(command -v git)
+  # Configured aliases must never reach real Git, including shell aliases.
+  git -C "$repo" config alias.fm-publish "!printf bypass > '$marker'"
+  for command in send-pack http-push fm-publish; do
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" "$command" "$TMP_ROOT/public.git" main 2>&1) && fail "publishing plumbing or alias must refuse"
+    assert_contains "$out" 'unsupported git command' 'indirect command refusal'
+  done
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c alias.fm-publish=send-pack fm-publish "$TMP_ROOT/public.git" main 2>&1) && fail "global config alias must refuse"
+  assert_contains "$out" 'unsupported global options' 'global alias refusal'
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" --git-dir="$repo/.git" send-pack "$TMP_ROOT/public.git" main 2>&1) && fail "bare-dir publishing plumbing must refuse"
+  [ ! -e "$marker" ] || fail "shell alias executed"
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" --git-dir="$repo/.git" rev-parse HEAD 2>&1) || fail "pinned bare-directory reads must pass: $out"
+  assert_equals "$(git -C "$repo" rev-parse HEAD)" "$out" 'bare read argv preserved'
+  mkdir -p "$repo/.git/remotes"
+  printf 'URL: %s\nPush: main:main\n' "$TMP_ROOT/public.git" >"$repo/.git/remotes/legacy"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push legacy main 2>&1) && fail "legacy remote must refuse"
+  assert_contains "$out" 'legacy remote refused' 'legacy destination refusal'
+  out=$(node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c core.quotePath=false diff-tree --root --name-only HEAD 2>&1) || fail "trusted scanner formatting setting must pass: $out"
+  git -C "$repo" config remote.origin.mirror true
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "implicit mirror must refuse"
+  assert_contains "$out" 'implicit mirror' 'implicit refs refusal'
+  git -C "$repo" config --unset remote.origin.mirror
+  git -C "$repo" config push.followTags true
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "implicit tag publication must refuse"
+  assert_contains "$out" 'implicit tag' 'implicit tags refusal'
+  git -C "$repo" config --unset push.followTags
+  git -C "$repo" config remote.origin.vcs hg
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "remote helper override must refuse"
+  git -C "$repo" config --unset remote.origin.vcs
+  git --git-dir="$TMP_ROOT/public.git" config receive.advertisePushOptions true
+  printf '#!/bin/sh\nprintf received >"%s"\n' "$marker" >"$TMP_ROOT/public.git/hooks/pre-receive"
+  chmod +x "$TMP_ROOT/public.git/hooks/pre-receive"
+  git -C "$repo" config push.pushOption no-mistakes.skip=push,pr,ci
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "configured skip option must refuse local transport"
+  assert_contains "$out" 'configured push options refused' 'configured gate options refusal'
+  [ ! -e "$marker" ] || fail "configured push option reached receiver"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "configured push option changed remote"
+  git -C "$repo" config push.pushOption ''
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "empty configured push option must also refuse"
+  git -C "$repo" config --unset-all push.pushOption
+  rm "$TMP_ROOT/public.git/hooks/pre-receive"
+  git -C "$repo" remote add executable "$TMP_ROOT/public.git"
+  git -C "$repo" config remote.executable.receivepack "printf bypass > '$marker'; git-receive-pack"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push executable main 2>&1) && fail "configured receive-pack command must refuse"
+  assert_contains "$out" 'configured receive-pack programs refused' 'receive-pack config refusal'
+  [ ! -e "$marker" ] || fail "configured receive-pack shell command executed"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "receive-pack refusal changed remote"
+  git -C "$repo" config remote.executable.receivepack ''
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push executable main 2>&1) && fail "empty configured receive-pack must also refuse"
+  for flag in --receive-pack --exec; do
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$flag=printf bypass" executable main 2>&1) && fail "explicit receive-pack flag must refuse"
+    assert_contains "$out" 'explicit remote and branch refspecs required' 'receive-pack flag refusal'
+  done
+  git -C "$repo" remote add local-file "file://$TMP_ROOT/public.git"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push local-file main 2>&1) || fail "independent network block must allow checked file transport: $out"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse main)" 'checked file transport received exact head'
+  printf 'private example-org/example-project\n' >>"$CFG/allowlist"
+  git -C "$repo" remote add blocked-network https://github.com/example-org/example-project.git
+  install_gh_stub
+  out=$(FM_TEST_GH_REPO=example-org/example-project FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push blocked-network main 2>&1) && fail "network block must still refuse HTTPS"
+  assert_contains "$out" 'network pushes blocked' 'HTTPS remains blocked'
+  pass "Git publishing plumbing, aliases, global indirection and implicit extra refs cannot bypass the adapter"
+}
+
+test_git_adapter_checks_rewritten_destination() {
+  local repo out mode alias_url="$TMP_ROOT/unlisted-rewrite.git" real_git
+  repo=$(fresh_repo rewritten-publication)
+  real_git=$(command -v git)
+  # Pipeline evidence worktrees need not have the source checkout's hooks.
+  # The adapter itself must scan the actual target even without that backstop.
+  rm -f "$TMP_ROOT/rewritten-publication.hooks/pre-push"
+  local wrapped="$TMP_ROOT/wrapped-publisher-bin"
+  mkdir -p "$wrapped"
+  printf '#!/bin/sh\nexec "%s" "%s" "%s" "$@"\n' "$(command -v node)" "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" >"$wrapped/git"
+  chmod +x "$wrapped/git"
+  PATH="$wrapped:$PATH" git -C "$repo" status --short >/dev/null || fail "wrapped publisher read failed"
+  git -C "$repo" branch clean
+  commit_file "$repo" fixture.txt "$PRIVATE_TERM" 'Add fixture' || fail "fixture commit failed"
+  git -C "$repo" remote set-url origin "$alias_url"
+  for mode in insteadOf pushInsteadOf; do
+    git -C "$repo" config "url.$TMP_ROOT/public.git.$mode" "$alias_url"
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" main 2>&1) && fail "explicit rewritten public destination must be checked"
+    if [ "$mode" = insteadOf ]; then
+      assert_contains "$out" denylist 'explicit rewrite content refusal'
+    else
+      assert_contains "$out" 'explicit URL rewrite' 'explicit push rewrite refusal'
+    fi
+    assert_no_secret_echo "$out" 'rewritten destination refusal'
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "named rewritten public destination must be checked"
+    assert_contains "$out" denylist 'named rewrite content refusal'
+    git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "refused rewritten push changed remote"
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin clean:refs/heads/clean 2>&1) || fail "clean rewritten local push must pass: $out"
+    assert_equals "$(git -C "$repo" rev-parse clean)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse clean)" 'checked rewritten local push'
+    out=$(PATH="$wrapped:$PATH" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$alias_url" clean:refs/heads/explicit 2>&1) && fail "rewritten explicit clean target must require configured remote"
+    assert_contains "$out" 'explicit URL rewrite' 'explicit rewritten target boundary'
+    git -C "$repo" config --unset "url.$TMP_ROOT/public.git.$mode"
+  done
+  pass "named rewritten destinations are checked and explicit rewrite or legacy indirection fails closed"
+}
+
+test_git_adapter_checks_branch_objects() {
+  local repo out ref tag_sha real_git marker="$TMP_ROOT/object-receiver"
+  repo=$(fresh_repo branch-objects)
+  real_git=$(command -v git)
+  rm "$TMP_ROOT/branch-objects.hooks/pre-push"
+  pinned git -C "$repo" tag -a annotated -m "$PRIVATE_TERM" || fail "annotated tag fixture failed"
+  tag_sha=$(git -C "$repo" rev-parse annotated)
+  printf '#!/bin/sh\nprintf received >"%s"\n' "$marker" >"$TMP_ROOT/public.git/hooks/pre-receive"
+  chmod +x "$TMP_ROOT/public.git/hooks/pre-receive"
+  for ref in annotated:refs/notes/fixture annotated:refs/tags/fixture annotated:refs/heads/fixture annotated; do
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin "$ref" 2>&1) && fail "unscanned tag object must refuse"
+    [ ! -e "$marker" ] || fail "refused tag reached receive hook"
+    git --git-dir="$TMP_ROOT/public.git" cat-file -e "$tag_sha" >/dev/null 2>&1 && fail "unchecked annotation reached remote"
+  done
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main:refs/notes/fixture 2>&1) && fail "non-branch commit target must refuse"
+  assert_contains "$out" 'branch destinations required' 'branch namespace refusal'
+  [ ! -e "$marker" ] || fail "non-branch target reached receive hook"
+  git -C "$repo" tag lightweight main
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin lightweight:refs/heads/lightweight 2>&1) || fail "commit source should publish the checked branch: $out"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse refs/heads/lightweight)" 'actual target matches checked branch'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/tags/lightweight >/dev/null 2>&1 && fail "implicit source tag namespace was published"
+  git --git-dir="$TMP_ROOT/public.git" cat-file -e "$tag_sha" >/dev/null 2>&1 && fail "unchecked annotation accompanied commit source"
+  rm "$TMP_ROOT/public.git/hooks/pre-receive"
+  pass "outgoing adapter refuses unscanned tag objects and non-branch refs, and forwards only checked commit objects to checked branches"
+}
+
+test_git_adapter_checks_original_objects() {
+  local repo out clean sensitive real_git
+  repo=$(fresh_repo replacement-objects)
+  real_git=$(command -v git)
+  rm "$TMP_ROOT/replacement-objects.hooks/pre-push"
+  clean=$(git -C "$repo" rev-parse main)
+  git -C "$repo" branch clean "$clean"
+  commit_file "$repo" fixture.txt "$PRIVATE_TERM" 'Update fixture' || fail "replacement fixture commit failed"
+  sensitive=$(git -C "$repo" rev-parse main)
+  git -C "$repo" update-ref "refs/replace/$sensitive" "$clean"
+  assert_equals 'initial commit' "$(git -C "$repo" show -s --format=%s main)" 'replacement masks the outgoing commit locally'
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "replacement must not mask sensitive outgoing content"
+  assert_contains "$out" denylist 'original object content is scanned'
+  assert_no_secret_echo "$out" 'replacement refusal'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "masked branch reached receiver"
+  git --git-dir="$TMP_ROOT/public.git" cat-file -e "$sensitive" >/dev/null 2>&1 && fail "original sensitive object reached receiver"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin clean 2>&1) || fail "original clean object should pass: $out"
+  assert_equals "$clean" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse refs/heads/clean)" 'receiver gets checked original clean commit'
+  git --git-dir="$TMP_ROOT/public.git" cat-file -e "$sensitive" >/dev/null 2>&1 && fail "unrelated replacement published sensitive object"
+  pass "outgoing checks ignore replacement objects and validate the original history that Git publishes"
+}
+
+test_git_adapter_refuses_empty_target() {
+  local repo out real_git
+  repo=$(fresh_repo empty-target)
+  real_git=$(command -v git)
+  out=$(git -C "$repo" push origin main: 2>&1) && fail "native Git must refuse the invalid refspec control"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main: 2>&1) && fail "explicit empty destination must refuse"
+  assert_contains "$out" 'unsupported refspec' 'empty target refusal'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "empty target created remote branch"
+  pass "explicit empty push destinations stay invalid instead of becoming publication"
+}
+
+test_git_adapter_preserves_tracking() {
+  local repo out real_git
+  repo=$(fresh_repo branch-tracking)
+  real_git=$(command -v git)
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push -u origin main:refs/heads/tracked 2>&1) || fail "set-upstream push should pass: $out"
+  assert_equals origin/tracked "$(git -C "$repo" rev-parse --abbrev-ref 'main@{upstream}')" 'explicit destination retains tracking'
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --set-upstream origin HEAD 2>&1) || fail "symbolic HEAD push should pass: $out"
+  assert_equals origin/main "$(git -C "$repo" rev-parse --abbrev-ref 'main@{upstream}')" 'symbolic source retains branch tracking'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/HEAD >/dev/null 2>&1 && fail "symbolic HEAD created a different branch"
+  git -C "$repo" tag lightweight main
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin lightweight 2>&1) && fail "implicit non-branch source must refuse"
+  assert_contains "$out" 'explicit branch destination required' 'non-branch implicit target refusal'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/tags/lightweight >/dev/null 2>&1 && fail "implicit tag was published"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/lightweight >/dev/null 2>&1 && fail "implicit tag became unexpected branch"
+  pass "checked branch sources preserve set-upstream tracking and symbolic HEAD targets while non-branches require explicit destinations"
+}
+
+test_git_adapter_disables_recursive_publication() {
+  local repo child="$TMP_ROOT/submodule-source" remote="$TMP_ROOT/submodule-remote.git" before after out real_git
+  repo=$(fresh_repo recursive-publication)
+  real_git=$(command -v git)
+  git init -q -b main "$child"
+  commit_file "$child" fixture.txt 'Initial fixture.' 'Initial fixture' || fail "submodule seed failed"
+  git clone -q --bare "$child" "$remote"
+  before=$(git --git-dir="$remote" rev-parse main)
+  git -C "$repo" -c protocol.file.allow=always submodule add -q "$remote" component || fail "submodule fixture add failed"
+  assert_equals main "$(git -C "$repo/component" branch --show-current)" 'submodule fixture tracks a pushable branch'
+  pinned git -C "$repo" commit -q -m 'Add component' || fail "parent seed failed"
+  commit_file "$repo/component" fixture.txt "$PRIVATE_TERM" 'Update fixture' || fail "private submodule fixture failed"
+  after=$(git -C "$repo/component" rev-parse HEAD)
+  git -C "$repo" add component
+  pinned git -C "$repo" commit -q -m 'Update component' || fail "parent update failed"
+  git -C "$repo" config push.recurseSubmodules on-demand
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) || fail "checked parent push must pass without recursive publication: $out"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse main)" 'checked parent received exact head'
+  assert_equals "$before" "$(git --git-dir="$remote" rev-parse main)" 'private submodule head was not pushed'
+  git --git-dir="$remote" cat-file -e "$after^{commit}" >/dev/null 2>&1 && fail "private submodule object reached unchecked remote"
+  pass "checked parent pushes never publish configured on-demand submodule history"
+}
+
+test_upstream_issue_and_reply_limits() {
+  local out kind verb cap file="$TMP_ROOT/upstream-detail.md"
+  write_config
+  printf 'public kunchenguid/firstmate\n' >>"$CFG/allowlist"
+  # Boundary files count all physical lines and bytes, including newlines.
+  for kind in issue-body reply; do
+    if [ "$kind" = issue-body ]; then cap=60; verb='issue create --title Detail'; else cap=20; verb='pr comment 3'; fi
+    awk -v cap="$cap" 'BEGIN { for (i=0; i<cap; i++) print "Detail." }' >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md" || fail "raised line cap must pass: $POLICY_OUT"
+    printf '\n' >>"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "blank lines above raised cap must refuse"
+    assert_contains "$POLICY_OUT" "longer than $cap lines" 'raised line cap'
+    if [ "$kind" = issue-body ]; then cap=4000; else cap=2000; fi
+    awk -v cap="$cap" 'BEGIN { for (i=0; i<cap; i++) printf "x" }' >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md" || fail "raised character cap must pass: $POLICY_OUT"
+    printf 'x' >>"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "above raised character cap must refuse"
+    assert_contains "$POLICY_OUT" "longer than $cap characters" 'raised character cap'
+    policy "gh $verb --repo acme/widgets --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "other destinations must keep ordinary caps"
+    printf '%s\n' "$PRIVATE_TERM" >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "raised limits must keep literal checks"
+    assert_contains "$POLICY_OUT" denylist 'raised cap literal check'
+    printf 'the captain asked for it\n' >"$file"
+    policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+    [ $? -eq 2 ] || fail "raised limits must keep narrative checks"
+    if [ "$REAL_GITLEAKS" = 1 ]; then
+      printf 'token = "ghp_%s"\n' "$(printf 'Z%.0s' $(seq 1 16))9a8b7c6d5e4f3a2b1c0d" >"$file"
+      policy "gh $verb --repo kunchenguid/firstmate --body-file upstream-detail.md"
+      [ $? -eq 2 ] || fail "extended issues and replies must keep secret scans"
+      assert_contains "$POLICY_OUT" gitleaks 'raised cap secret check'
+    fi
+  done
+  awk 'BEGIN { for (i=0; i<30; i++) print "Precise technical detail." }' >"$file"
+  policy 'gh pr create --repo kunchenguid/firstmate --title Detail --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "ordinary upstream PR description must keep its cap"
+  # gh issue edit and REST issue PATCH can also address PRs. A live issue
+  # fact qualifies; PRs and unavailable facts keep the ordinary body cap.
+  cat >"$FAKEBIN/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'api --hostname github.com repos/kunchenguid/firstmate/issues/3 --jq .number == 3 and (.pull_request == null)') printf '%s\n' "${FM_TEST_IS_ISSUE:-true}" ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$FAKEBIN/gh"
+  printf '%s\n' "$FAKEBIN/gh" >"$CFG/gh"
+  policy 'gh issue edit 3 --repo kunchenguid/firstmate --body-file upstream-detail.md' || fail "verified issue edit must qualify: $POLICY_OUT"
+  printf 'public example-org/example-project\n' >>"$CFG/allowlist"
+  policy 'gh issue edit 3 4 --repo example-org/example-project --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "multi-target issue edit must retain ordinary cap"
+  assert_contains "$POLICY_OUT" 'longer than 20 lines' 'multi-target ordinary cap'
+  policy 'gh issue edit 3 https://github.com/example-org/example-project/pull/4 --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "issue followed by PR URL must retain ordinary cap"
+  assert_contains "$POLICY_OUT" 'longer than 20 lines' 'mixed target ordinary cap'
+  printf 'Short technical update.\n' >"$TMP_ROOT/short-multi-body.md"
+  policy 'gh issue edit 3 4 --repo example-org/example-project --body-file short-multi-body.md' || fail "short multi-target edit must remain supported: $POLICY_OUT"
+  policy 'gh api -X PATCH repos/kunchenguid/firstmate/issues/3 -F body=@upstream-detail.md' || fail "verified REST issue edit must qualify: $POLICY_OUT"
+  policy 'gh api -X POST repos/kunchenguid/firstmate/issues -F title=Detail -F body=@upstream-detail.md' || fail "REST issue creation must qualify: $POLICY_OUT"
+  FM_TEST_IS_ISSUE=false policy 'gh issue edit https://github.com/kunchenguid/firstmate/pull/3 --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "issue edit targeting a PR must not widen its body"
+  FM_TEST_IS_ISSUE=false policy 'gh api -X PATCH repos/kunchenguid/firstmate/issues/3 -F body=@upstream-detail.md'
+  [ $? -eq 2 ] || fail "REST issue edit targeting a PR must not widen its body"
+  reset_trusted_gh
+  policy 'gh issue edit 3 --repo kunchenguid/firstmate --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "unavailable issue fact must retain ordinary limits"
+  printf 'A\nB\nC\nD\nE\nF\n' >"$file"
+  policy 'gh issue comment 3 --repo kunchenguid/firstmate --body-file upstream-detail.md' || fail "issue comments must use scoped reply cap"
+  policy 'gh pr review 3 --repo kunchenguid/firstmate --comment --body-file upstream-detail.md' || fail "review replies must use scoped reply cap"
+  policy 'gh api -X POST repos/kunchenguid/firstmate/issues/3/comments -F body=@upstream-detail.md' || fail "REST comments must use scoped reply cap"
+  pass "upstream issue and reply limits bind destination and target type, count blank lines, and preserve content checks"
+}
+
+test_issue_edit_gate_context() {
+  local boundary="$TMP_ROOT/issue-edit-boundary" selectors expected out
+  mkdir -p "$boundary"
+  cp "$ROOT/bin/fm-gh-publish-policy.mjs" "$ROOT/bin/fm-arm-command-policy.mjs" "$boundary/"
+  # Inspect the executable boundary, not implementation text. The existing
+  # live-type tests cover the gate's extended-cap decision; this fixture
+  # ensures multiple selectors cannot borrow the first selector's number.
+  cat >"$boundary/fm-publish-gate.sh" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = check-text ] && [ "$2" = --dest ] && [ "$3" = example-org/example-project ] || exit 1
+[ "$4" = --issue ] && [ "$5" = "$FM_TEST_EXPECT_ISSUE" ] || exit 1
+SH
+  chmod +x "$boundary/fm-publish-gate.sh"
+  for selectors in '3' '3 4' '3 https://github.com/example-org/example-project/pull/4'; do
+    expected=unknown
+    [ "$selectors" != 3 ] || expected=3
+    out=$(FM_TEST_POLICY="$boundary/fm-gh-publish-policy.mjs" FM_TEST_SELECTORS="$selectors" FM_TEST_EXPECT_ISSUE="$expected" node --input-type=module - <<'JS'
+import { pathToFileURL } from 'node:url';
+const { decision } = await import(pathToFileURL(process.env.FM_TEST_POLICY));
+const result = decision(`gh issue edit ${process.env.FM_TEST_SELECTORS} --repo example-org/example-project --body 'Technical update.'`);
+if (result.decision !== 'allow') process.exit(1);
+JS
+    ) || fail "issue-edit context sent to gate is incorrect: $selectors: $out"
+  done
+  pass "single issue edits qualify by number and multi-target edits send unqualified gate context"
+}
+
 test_identity_file_contract
 test_pin_neutralizes_git_c_user_email
 test_clean_push_passes
@@ -1755,5 +2247,18 @@ test_git_refusals
 test_ci_commits_and_text
 test_permission_fixtures_pass_the_secret_scan
 test_policy_text
+test_runtime_stdin_adapter
+test_no_mistakes_body_scope
+test_contribution_poison_and_evidence_adapter
+test_local_gate_transport_preserves_hooks
+test_git_adapter_refuses_indirect_publication
+test_git_adapter_checks_rewritten_destination
+test_git_adapter_checks_branch_objects
+test_git_adapter_checks_original_objects
+test_git_adapter_refuses_empty_target
+test_git_adapter_preserves_tracking
+test_git_adapter_disables_recursive_publication
+test_upstream_issue_and_reply_limits
+test_issue_edit_gate_context
 
 echo "# all fm-publish-gate tests passed"

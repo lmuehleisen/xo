@@ -181,8 +181,8 @@ const SPECS = {
   "pr reopen": { repoFlags: true, onlyWithText: true, text: { "-c": "reply", "--comment": "reply" }, positional: "target" },
   "issue create": {
     repoFlags: true,
-    text: { "-t": "title", "--title": "title", "-b": "body", "--body": "body" },
-    file: { "-F": "body", "--body-file": "body" },
+    text: { "-t": "title", "--title": "title", "-b": "issue-body", "--body": "issue-body" },
+    file: { "-F": "issue-body", "--body-file": "issue-body" },
     asset: ["--attach"],
     generated: ["-e", "--editor", "-w", "--web", "-T", "--template", "--recover"],
     values: ["-a", "--assignee", "--blocked-by", "--blocking", "-l", "--label", "-m", "--milestone", "--parent", "-p", "--project", "--type", "-T", "--template", "--recover"],
@@ -191,8 +191,8 @@ const SPECS = {
   },
   "issue edit": {
     repoFlags: true,
-    text: { "-t": "title", "--title": "title", "-b": "body", "--body": "body" },
-    file: { "-F": "body", "--body-file": "body" },
+    text: { "-t": "title", "--title": "title", "-b": "issue-body", "--body": "issue-body" },
+    file: { "-F": "issue-body", "--body-file": "issue-body" },
     asset: ["--attach"],
     values: [
       "--add-assignee", "--add-blocked-by", "--add-blocking", "--add-label", "--add-project", "--add-sub-issue", "-m", "--milestone",
@@ -590,6 +590,14 @@ function ghTarget(command, spec, parsed, tokens, cwd, context) {
     }
     target.cwd = cwd;
   }
+  if (command === "issue edit") {
+    // The shared body applies to every selector. Only a single verified
+    // issue may qualify for the extended cap; multi-target edits retain the
+    // ordinary cap rather than borrowing the first target's issue type.
+    const selector = positional.length === 1 ? literalValue(positional[0]) : null;
+    target.issueNumber = selector?.match(/^(?:#)?(\d+)$/)?.[1]
+      || selector?.match(/\/(?:issues|pull)\/(\d+)(?:[/?#]|$)/)?.[1] || "unknown";
+  }
   return target;
 }
 
@@ -827,7 +835,7 @@ function ghApiTarget(words, tokens, cwd, context) {
   const replyEndpoint = /(^|\/)(comments|reviews)(\/|$)/.test(rest);
   const kindOf = (field) => {
     if (field === "title") return "title";
-    if (field === "body") return replyEndpoint ? "reply" : "body";
+    if (field === "body") return replyEndpoint ? "reply" : /^issues(?:\/\d+)?$/.test(rest) ? "issue-body" : "body";
     return "other";
   };
   // A visibility change, a repository generated from this one as a template
@@ -840,6 +848,7 @@ function ghApiTarget(words, tokens, cwd, context) {
     if (changed) return changed;
   }
   const target = { repo, texts: [], files: [], unscannable: [] };
+  if (/^issues\/\d+$/.test(rest)) target.issueNumber = rest.split("/")[1];
   // A contents or git-data write creates commits or refs the pre-push gate
   // never sees, from content the text scan cannot read.
   const writeKind = /^(contents|git)(\/|$)/.exec(rest);
@@ -866,6 +875,7 @@ function runGate(target) {
   try {
     const withKind = (kind, file) => (kind === "other" ? file : `${kind}:${file}`);
     const args = ["check-text", "--dest", target.repo];
+    if (target.issueNumber) args.push("--issue", target.issueNumber);
     if (target.prBase) args.push("--pr-base", target.prBase);
     if (target.prHead) args.push("--pr-head", target.prHead);
     if (target.prNumber) args.push("--pr", target.prNumber);
@@ -888,6 +898,40 @@ function runGate(target) {
   }
 }
 
+// Shared inherited repository grammar for the shell policy and argv wrapper.
+function ghRepoFlagWidth(words, i) {
+  const value = words[i]?.value || "";
+  if (REPO_FLAGS.includes(value)) return words[i + 1] ? 2 : -1;
+  if (value.startsWith("--repo=") || (value.startsWith("-R") && !value.startsWith("--"))) return 1;
+  return 0;
+}
+
+// Locate group/verb without changing argv; the stdin adapter uses these same
+// positions so inherited flags cannot hide a generated PR body from scanning.
+function runtimeCommand(argv) {
+  const words = argv.map((value) => ({ value }));
+  let groupIndex = 0;
+  while (argv[groupIndex]?.startsWith("-")) {
+    const width = ghRepoFlagWidth(words, groupIndex);
+    if (width > 0) { groupIndex += width; continue; }
+    if (["--help", "--version"].includes(argv[groupIndex]) && groupIndex === 0) {
+      return { group: argv[groupIndex], groupIndex, verbIndex: -1 };
+    }
+    return null;
+  }
+  const group = argv[groupIndex];
+  if (!group) return null;
+  if (group === "api") return groupIndex === 0 ? { group, groupIndex, verbIndex: -1 } : null;
+  let verbIndex = groupIndex + 1;
+  while (argv[verbIndex]?.startsWith("-")) {
+    const width = ghRepoFlagWidth(words, verbIndex);
+    if (width > 0) { verbIndex += width; continue; }
+    if (argv[verbIndex] === "--help" || argv[verbIndex].startsWith("--help=")) { verbIndex += 1; continue; }
+    return null;
+  }
+  return { group, groupIndex, verb: argv[verbIndex], verbIndex };
+}
+
 function checkGh(position, tokens, cwd, context) {
   const all = position.words.slice(position.index + 1);
   // gh also takes the inherited --repo/-R before the command group
@@ -899,15 +943,10 @@ function checkGh(position, tokens, cwd, context) {
   while (start < all.length) {
     const value = all[start].value;
     if (!value.startsWith("-") || value === "-") break;
-    if (REPO_FLAGS.includes(value)) {
-      if (!all[start + 1]) break;
-      lifted.push(all[start], all[start + 1]);
-      start += 2;
-      continue;
-    }
-    if (value.startsWith("--repo=") || (value.startsWith("-R") && !value.startsWith("--"))) {
-      lifted.push(all[start]);
-      start += 1;
+    const width = ghRepoFlagWidth(all, start);
+    if (width > 0) {
+      lifted.push(...all.slice(start, start + width));
+      start += width;
       continue;
     }
     return all.slice(start + 1).some((word) => PUBLISH_GROUPS.has(word.value))
@@ -931,11 +970,8 @@ function checkGh(position, tokens, cwd, context) {
   let verbIndex = -1;
   for (let i = 0; i < rest.length; i += 1) {
     const value = rest[i].value;
-    if (REPO_FLAGS.includes(value)) {
-      i += 1;
-      continue;
-    }
-    if (value.startsWith("--repo=") || (value.startsWith("-R") && !value.startsWith("--"))) continue;
+    const width = ghRepoFlagWidth(rest, i);
+    if (width > 0) { i += width - 1; continue; }
     if (value === "--help" || value.startsWith("--help=")) continue;
     if (value.startsWith("-")) return deny("gh-unparsed", `(option ${value} before the gh ${group} verb)`);
     verbIndex = i;
@@ -1146,4 +1182,39 @@ if (invokedDirectly()) {
   }
 }
 
-export { decision };
+// A runtime wrapper cannot treat unknown verbs as reads: unlike the agent
+// shell hook, it is the last checkpoint for unattended subprocess writes.
+function runtimeOperation(argv) {
+  const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
+  const tokens = new Lexer(argv.map(quote).join(" ")).tokenize().tokens;
+  const words = tokens.filter((t) => t.type === "word");
+  const selected = runtimeCommand(argv);
+  if (!selected) return "unsupported";
+  const { group, verb, groupIndex } = selected;
+  if (["--version", "--help", "help", "version"].includes(group)) return "read";
+  if (group === "api") {
+    const parsed = parseOptions(words.slice(groupIndex + 1), API_VALUED, (name) => API_VALUED.has(name) || API_BOOLS.has(name));
+    if (parsed.unknown) return "unsupported";
+    const method = parsed.flags.filter((f) => ["-X", "--method"].includes(f.name)).at(-1)?.value;
+    const fields = parsed.flags.some((f) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(f.name));
+    return method ? (["GET", "HEAD"].includes(method.toUpperCase()) ? "read" : "write") : (fields ? "write" : "read");
+  }
+  const reads = {
+    auth: ["status", "token"], pr: ["view", "list", "status", "checks", "diff"],
+    issue: ["view", "list", "status"], repo: ["view", "list"],
+    release: [...RELEASE_READ_VERBS], gist: ["view", "list"],
+    run: ["view", "list", "watch", "download"], workflow: ["view", "list"],
+  };
+  if (reads[group]?.includes(verb)) return "read";
+  return SPECS[`${group} ${verb}`] ? "write" : "unsupported";
+}
+
+// These documented file flags accept '-' as stdin. Derive supported verbs
+// from the policy grammar so runtime snapshots cannot omit a checked verb.
+function runtimeStdinFlags(argv) {
+  const selected = runtimeCommand(argv);
+  const spec = selected && SPECS[`${selected.group} ${selected.verb}`];
+  return Object.keys(spec?.file || {}).filter((flag) => ["-F", "--body-file", "--notes-file"].includes(flag));
+}
+
+export { decision, runtimeOperation, runtimeCommand, runtimeStdinFlags };

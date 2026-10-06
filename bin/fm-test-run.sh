@@ -1743,7 +1743,7 @@ families_for_changed_path() {
       printf '%s\n' live-harness-optin
       ;;
     bin/fm-publish-gate.sh|bin/fm-gh-publish-policy.mjs|bin/fm-install-gitleaks.sh|\
-    bin/fm-publish-judge.sh)
+    bin/fm-publish-judge.sh|bin/fm-gh-publish-exec.mjs|bin/fm-git-publish-exec.mjs|bin/fm-no-mistakes-body.mjs)
       # The publish gate, its PreToolUse policy, its pinned scanner, and its
       # semantic judge: the seeded validation corpus, the judge's plumbing, the
       # per-task hook wiring that runs the gate, and the spawn identity pin that
