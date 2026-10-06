@@ -231,6 +231,9 @@
 #   the slot (including a wiring path already present when it was leased), an
 #   unavailable lock, or a failed return retains the lease and receipt for
 #   inspection. This script never edits Treehouse's own state directly.
+#   OpenCode readiness failure before brief submission uses those same guarded
+#   abort checks after closing its endpoint, and captures the screen first.
+#   Once brief submission is attempted, ownership remains for guarded recovery.
 #   The exact returned path is checked for isolation and competing local-home
 #   claims before a child shell enters it with its own TREEHOUSE_DIR, replacing
 #   any inherited parent-slot value. The pane's outer shell stays in the project,
@@ -4899,6 +4902,15 @@ opencode_spawn_fail() { # <detail>
   local failure_state=${2:-idle}
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
+  local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
+  if ! {
+    printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
+      "$1" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
+    fm_backend_capture "$BACKEND" "$T" 100 "$W"
+  } >"$diagnostic"; then
+    echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
+  fi
+  echo "spawn: OpenCode startup diagnostics=$diagnostic" >&2
   if [ "$RELAUNCH" -eq 1 ]; then
     # Readiness failure settles an unchanged launch seed; submission ambiguity
     # makes it unknown. Never replace newer native activity with either verdict.
@@ -4906,14 +4918,6 @@ opencode_spawn_fail() { # <detail>
     if ! "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE_REAL" "$ID" "$failure_state" \
       --gen "$BUSY_GEN" --source fm-spawn --event launch-failed --if-seq 1; then
       echo "error: could not settle OpenCode replacement busy state for $ID; reconcile endpoint $T before recovery" >&2
-    fi
-    local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
-    if ! {
-      printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
-        "$1" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
-      fm_backend_capture "$BACKEND" "$T" 100 "$W"
-    } >"$diagnostic"; then
-      echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
     fi
     # Publication already bound this replacement to the endpoint. Keep that
     # record and plugin generation, including when the previous pane was gone.
@@ -4934,6 +4938,13 @@ opencode_spawn_fail() { # <detail>
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
     SPAWN_ENDPOINT_CLOSED=1
+    if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+      # No brief was attempted. Reuse the abort guards, which still refuse a
+      # return when startup plugins wrote content or record rollback fails.
+      SPAWN_PRELAUNCH_WIRING=1
+      SPAWN_PRELAUNCH_LEASE=1
+      SPAWN_PRELAUNCH_ENDPOINT_GONE=1
+    fi
   else
     # Preserve the endpoint's owner and wiring when closure is uncertain.
     # A successful kill call alone is not proof that the worker is gone.

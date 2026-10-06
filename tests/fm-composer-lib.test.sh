@@ -765,6 +765,21 @@ test_matrix_opencode_leftbar_signals() {
   assert_screen "V2 left-aligned version text refuses" unknown "$CAPS_PLAIN" "${home/                        2.0.18/2.0.18}"
   assert_screen "V2 contiguous version text refuses" unknown "$CAPS_PLAIN" "$sidebar"$'\n                        2.0.18'
   assert_screen "V2 version-like popup refuses" unknown "$CAPS_PLAIN" "${home/2.0.18/2.0.18 Update Available}"
+  local shortened alert relative_path="~/project"
+  shortened=${home/\/tmp\/project/…\/long-project…\/worktree}
+  assert_screen "V2 shortened home path on plain capture" empty "$CAPS_PLAIN" "$shortened"
+  assert_screen "V2 shortened home path on styled capture" empty "$CAPS_STYLED_NOID" "$shortened"
+  assert_screen "V2 home-relative path" empty "$CAPS_PLAIN" "${home/\/tmp\/project/$relative_path}"
+  alert=${shortened/                        2.0.18/  ⊙ 10 plugins failed \/plugins                        2.0.18}
+  assert_screen "V2 plugin notification and version furniture" empty "$CAPS_PLAIN" "$alert"
+  assert_screen "V2 plugin notification styled furniture" empty "$CAPS_STYLED_NOID" "$alert"
+  assert_screen "V2 notification cannot hide a draft" pending "$CAPS_STYLED_NOID" "${alert/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}"
+  assert_screen "V2 notification without model proof refuses" unknown "$CAPS_PLAIN" "${alert/Build auto/Review auto}"
+  assert_screen "V2 notification without floor refuses" unknown "$CAPS_PLAIN" "${alert/╹$floor/}"
+  assert_screen "V2 notification cannot hide later output" unknown "$CAPS_PLAIN" "$alert"$'\nnew output'
+  assert_screen "V2 notification popup refuses" unknown "$CAPS_PLAIN" "${alert/plugins failed/plugins require consent}"
+  assert_screen "V2 notification without separate version refuses" unknown "$CAPS_PLAIN" "${alert/                        2.0.18/ 2.0.18}"
+  assert_screen "V2 arbitrary shortened footer refuses" unknown "$CAPS_PLAIN" "${shortened/…\/long-project…\/worktree/…unclaimed output}"
   local running
   running=${sidebar/\/tmp\/project                    9.7K (1%)  ctrl+p commands/⬝⬝⬝⬝ esc interrupt                    9.6K (1%)  ctrl+p commands}
   assert_screen "V2 running status strip proves cursorless readiness" empty "$CAPS_PLAIN" "$running"

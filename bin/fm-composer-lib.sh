@@ -1573,7 +1573,8 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 }
 
 # V2 home-screen tail after the proven location strip: blanks, optionally
-# ending in one indented version label. A contiguous row is never furniture.
+# ending in one version row, optionally with V2's plugin-load notification.
+# A contiguous row is never furniture.
 _fm_composer_leftbar_tail_is_furniture() {  # <tail>
   local tail=$1 trimmed nonblank first
   trimmed=$tail
@@ -1584,7 +1585,7 @@ _fm_composer_leftbar_tail_is_furniture() {  # <tail>
   [ -z "$first" ] || return 1
   nonblank=$(printf '%s\n' "$tail" | LC_ALL=C grep -vE '^[[:space:]]*$')
   case "$nonblank" in *$'\n'*) return 1 ;; esac
-  printf '%s\n' "$nonblank" | LC_ALL=C grep -qE '^[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$'
+  printf '%s\n' "$nonblank" | LC_ALL=C grep -qE '^([[:space:]]{8,}|[[:space:]]*⊙ [1-9][0-9]* plugins? failed /plugins[[:space:]]{8,})[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$'
 }
 
 # _fm_composer_row_is_composer_furniture: 0 when <trimmed-row> is DEMONSTRABLY
@@ -1790,7 +1791,7 @@ _fm_composer_select_cursorless() {
       # Require both the mode/model footer and the bounded floor before
       # treating this exact strip as furniture; later text still invalidates it.
       if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] && [ "$boundary" -eq "$((FM_COMPOSER_SELECTED_LAST + 1))" ] &&
-        printf '%s\n' "$trimmed" | LC_ALL=C grep -qE '^(/.+[[:space:]]{2,}.*ctrl\+p commands|.*[[:space:]]{2,}ctrl\+p commands[[:space:]]{2,}/[^[:cntrl:]]+|.*esc interrupt[[:space:]]{2,}.*ctrl\+p commands)$'; then
+        printf '%s\n' "$trimmed" | LC_ALL=C grep -qE '^((/|…/|~/).+[[:space:]]{2,}.*ctrl\+p commands|.*[[:space:]]{2,}ctrl\+p commands[[:space:]]{2,}(/|…/|~/)[^[:cntrl:]]+|.*esc interrupt[[:space:]]{2,}.*ctrl\+p commands)$'; then
         raw=$(_fm_composer_screen_row "$FM_COMPOSER_SELECTED_LAST" "$plain")
         trimmed=$(_fm_composer_row_content "$raw" 0)
         trimmed=${trimmed#┃}

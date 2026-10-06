@@ -231,6 +231,65 @@ EOF
   pass "fm-spawn.sh: every agy launch checks its audit dependency before acquiring an endpoint"
 }
 
+test_opencode_readiness_failure_returns_clean_slot() {
+  local id="rb-opencode-$$" fields case_dir home proj wt fakebin out status
+  fields=$(make_case opencode "$id")
+  IFS='|' read -r case_dir home proj wt fakebin <<EOF
+$fields
+EOF
+  cat > "$fakebin/opencode" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'opencode v2.0.18\n'; exit 0; fi
+printf 'READINESS_CAPTURE_PROOF\n'
+while :; do sleep 1; done
+SH
+  chmod +x "$fakebin/opencode"
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode \
+    --model opencode/muse-spark-1.3-contributor-free); status=$?
+  [ "$status" -ne 0 ] || fail "OpenCode readiness failure must refuse: $out"
+  case "$out" in *'composer did not become ready'*) ;; *) fail "wrong failure: $out" ;; esac
+  assert_rolled_back opencode "$home" "$wt" "$fakebin" "$id" "$out"
+  grep -q 'READINESS_CAPTURE_PROOF' /tmp/fm-"$id"/opencode-startup-*.log ||
+    fail "fresh OpenCode failure lost its pre-close screen"
+  # The exact same ID must reach acquisition again, rather than a stale receipt
+  # refusing the retry before it can launch.
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode); status=$?
+  [ "$status" -ne 0 ] || fail "second readiness failure must refuse"
+  [ "$(grep -c '^get --lease ' "$fakebin/treehouse-calls")" -eq 2 ] || fail "stale receipt blocked retry: $out"
+  assert_rolled_back opencode-retry "$home" "$wt" "$fakebin" "$id" "$out"
+  rm -rf "/tmp/fm-$id"
+  pass "fm-spawn.sh: OpenCode readiness failure captures its screen, returns its clean slot and permits retry"
+}
+
+test_opencode_readiness_failure_keeps_startup_content() {
+  local id="rb-opencode-dirty-$$" fields case_dir home proj wt fakebin out status
+  fields=$(make_case opencode-dirty "$id")
+  IFS='|' read -r case_dir home proj wt fakebin <<EOF
+$fields
+EOF
+  cat > "$fakebin/opencode" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'opencode v2.0.18\n'; exit 0; fi
+printf 'startup content\n' > startup.txt
+while :; do sleep 1; done
+SH
+  chmod +x "$fakebin/opencode"
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode); status=$?
+  [ "$status" -ne 0 ] || fail "dirty readiness failure must refuse"
+  ! window_present "fm-$id" || fail "dirty readiness failure left an endpoint"
+  [ -f "$wt/startup.txt" ] || fail "startup content was discarded"
+  [ -f "$home/state/$id.treehouse-lease" ] || fail "dirty slot lost receipt"
+  ! grep -q '^return ' "$fakebin/treehouse-calls" || fail "dirty slot was returned"
+  case "$out" in *'holds content this spawn did not write'*) ;; *) fail "no retention diagnostic: $out" ;; esac
+  rm -rf "/tmp/fm-$id"
+  pass "fm-spawn.sh: OpenCode startup content prevents automatic lease return"
+}
+
+test_opencode_readiness_failure_returns_clean_slot
+test_opencode_readiness_failure_keeps_startup_content
 test_agy_audit_dependency_refuses_before_launch
 test_bypass_hooks_refusal_rolls_back
 test_post_publication_prelaunch_refusal_rolls_back
