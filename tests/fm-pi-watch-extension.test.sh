@@ -4409,11 +4409,11 @@ EOF
 }
 
 test_opencode_turnend_guard_early_child_exit_keeps_result() {
-  local guard_plugin out status
-  guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
-  out=$(GUARD_PLUGIN="$guard_plugin" node 2>&1 <<'EOF'
+  local runner out status
+  runner="$ROOT/.opencode/plugins/lib/fm-process.js"
+  out=$(PROCESS_RUNNER="$runner" node 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
-const mod = await import(pathToFileURL(process.env.GUARD_PLUGIN).href);
+const mod = await import(pathToFileURL(process.env.PROCESS_RUNNER).href);
 // The input exceeds every pipe buffer, so the child - which prints and exits
 // without ever reading stdin - is still being written to when its read end
 // closes. The stdin EPIPE is deterministic, not a scheduler race.

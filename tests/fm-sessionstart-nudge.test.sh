@@ -213,7 +213,7 @@ for (const name of ["sessionstart-nudge", "turnend-guard", "watch-arm", "pretool
 
 EOF
   ) || status=$?
-  expect_code 0 "$status" "OpenCode exact nudge delivery"
+  expect_code 0 "$status" "OpenCode exact nudge delivery: $out"
   [ -z "$out" ] || fail "OpenCode exact nudge delivery printed output: $out"
   pass "OpenCode V1 primary exports load legacy hooks without V2 definitions"
 }
