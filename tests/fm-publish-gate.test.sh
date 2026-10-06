@@ -1697,6 +1697,139 @@ test_policy_text() {
   pass "policy prints the public-text policy"
 }
 
+# Runtime subprocesses use exact stdin bytes, not a shell command's preview.
+test_runtime_stdin_adapter() {
+  local body="$TMP_ROOT/runtime-body" out marker="$TMP_ROOT/runtime-received"
+  cat >"$FAKEBIN/real-gh" <<'SH'
+#!/usr/bin/env bash
+if [ "$1 $2" = 'pr create' ] || [ "$1 $2" = 'pr edit' ]; then
+  cat >"$FM_TEST_RECEIVED"
+else
+  printf 'read passed\n'
+fi
+SH
+  chmod +x "$FAKEBIN/real-gh"
+  printf 'Fix handling.\r\nExact bytes without final newline.' >"$body"
+  out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) || fail "stdin adapter should pass: $out"
+  cmp -s "$body" "$marker" || fail "stdin bytes changed after review"
+  rm -f "$marker"
+  printf '%s\n' "$PRIVATE_TERM" >"$body"
+  out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr edit 3 --repo acme/widgets --body-file=- <"$body" 2>&1) && fail "private stdin body must refuse"
+  [ ! -e "$marker" ] || fail "refused bytes reached gh"
+  assert_no_secret_echo "$out" 'stdin refusal'
+  printf 'Fix handling.\n' >"$body"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) && fail "independent write block must refuse"
+  [ ! -e "$marker" ] || fail "blocked gh executed"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr view 3 --repo acme/widgets) || fail "read must pass"
+  assert_contains "$out" 'read passed' 'runtime read'
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" api --method=GET repos/acme/widgets) || fail "API read must pass"
+  assert_contains "$out" 'read passed' 'runtime API read'
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" api --method=POST repos/acme/widgets/issues -f title=Example -f body=Example 2>&1) && fail "API write block must refuse"
+  assert_contains "$out" 'GitHub writes blocked' 'runtime API write'
+  node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" repo fork acme/widgets >/dev/null 2>&1 && fail "unsupported runtime write must refuse"
+  pass "runtime gh snapshots and checks exact stdin, preserves reads, and refuses unsupported or blocked writes"
+}
+
+test_no_mistakes_body_scope() {
+  local body="$TMP_ROOT/attestation.md" out head
+  head=$(printf '%040d' 7)
+  printf 'public acme/upstream\n' >>"$CFG/allowlist"
+  printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-submissions"
+  export FM_TEST_ATTESTED_HEAD="$head"
+  cat >"$FAKEBIN/gh" <<'SH'
+#!/usr/bin/env bash
+[ "$1 $2 $3" = 'api --hostname github.com' ] || exit 1
+case "$4" in
+repos/acme/widgets) printf '{"fork":true,"private":false,"full_name":"acme/widgets","parent":{"full_name":"acme/upstream"}}\n' ;;
+repos/acme/widgets/git/ref/heads/contrib/fixture) printf '{"object":{"type":"commit","sha":"%s"}}\n' "$FM_TEST_ATTESTED_HEAD" ;;
+repos/acme/upstream/pulls/3) printf '{"base":{"ref":"main"},"head":{"repo":{"full_name":"acme/widgets"},"ref":"contrib/fixture","sha":"%s"}}\n' "$FM_TEST_ATTESTED_HEAD" ;;
+*) exit 1 ;;
+esac
+SH
+  chmod +x "$FAKEBIN/gh"
+  {
+    printf 'Technical test results.\n\n## Pipeline\n'
+    printf 'Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n'
+    printf '<!-- no-mistakes-pipeline-attestation:v1 {"head_sha":"%s","steps":[{"step":"review","status":"completed"},{"step":"test","status":"completed"},{"step":"document","status":"completed"}]} -->\n' "$head"
+    local i=0
+    while [ "$i" -lt 100 ]; do printf 'Targeted fixture test passed with expected output.\n'; i=$((i + 1)); done
+  } >"$body"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) || fail "scoped generated body should pass: $out"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body" 2>&1) || fail "live PR edit should qualify: $out"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/other "body:$body" 2>&1) && fail "unapproved branch must retain ordinary limits"
+  out=$(FM_TEST_ATTESTED_HEAD=$(printf '%040d' 8) "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "stale attestation must refuse"
+  printf '%s\n' "$PRIVATE_TERM" >>"$body"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "extended body must retain literal scan"
+  assert_contains "$out" 'denylist' 'generated body literal scan'
+  assert_no_secret_echo "$out" 'generated body refusal'
+  sed '$d' "$body" >"$body.clean"
+  mv "$body.clean" "$body"
+  sed 's/"completed"/"skipped"/g' "$body" >"$body.bad"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body.bad" 2>&1) && fail "incomplete required steps must refuse"
+  if [ "$REAL_GITLEAKS" = 1 ]; then
+    printf 'token = "ghp_%s"\n' "$(printf 'Z%.0s' $(seq 1 16))9a8b7c6d5e4f3a2b1c0d" >>"$body"
+    out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "generated secrets must refuse"
+    assert_contains "$out" 'gitleaks' 'generated secret scan'
+  fi
+  printf 'bad row\n' >"$CFG/no-mistakes-submissions"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "malformed scope must refuse"
+  assert_contains "$out" 'malformed no-mistakes-submissions' 'scope format'
+  rm -f "$CFG/no-mistakes-submissions"
+  reset_trusted_gh
+  pass "generated body exception binds destination, fork, branch, head and required steps while retaining literal and secret checks"
+}
+
+test_contribution_poison_and_evidence_adapter() {
+  local repo sha tree out remote="$TMP_ROOT/public.git" real_git
+  repo=$(fresh_repo outgoing-evidence)
+  ln -s "$(command -v git)" "$FAKEBIN/git-real"
+  real_git="$FAKEBIN/git-real"
+  # Evidence uses commit-tree and bypasses commit hooks; the outgoing adapter
+  # must still check the orphan's entire reachable history and message.
+  tree=$(git -C "$repo" rev-parse 'HEAD^{tree}')
+  sha=$(printf 'Clean evidence\n' | pinned git -C "$repo" commit-tree "$tree")
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$remote" "$sha:refs/heads/no-mistakes/evidence" 2>&1) || fail "clean orphan evidence should pass: $out"
+  assert_equals "$sha" "$(git --git-dir="$remote" rev-parse refs/heads/no-mistakes/evidence)" 'orphan evidence was checked and pushed locally'
+  sha=$(printf '%s\n' "$PRIVATE_TERM" | pinned git -C "$repo" commit-tree "$tree")
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$remote" "$sha:refs/heads/no-mistakes/evidence" 2>&1) && fail "private orphan evidence must refuse"
+  assert_contains "$out" 'denylist' 'orphan message checked'
+  sha=$(git -C "$repo" rev-parse HEAD)
+  printf 'acme/widgets %s\n' "$sha" >"$CFG/contribution-poison-commits"
+  out=$(cd "$repo" && printf 'main %s refs/heads/contrib/fixture %040d\n' "$sha" 0 | "$GATE" pre-push fork https://github.com/acme/widgets.git --config "$CFG" 2>&1) && fail "contribution-scoped poison must refuse matching destination"
+  assert_contains "$out" 'old-history commit' 'scoped poison check'
+  push_expect "$repo" 0 'scoped poison does not block other destinations'
+  printf 'malformed\n' >"$CFG/contribution-poison-commits"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$remote" main 2>&1) && fail "malformed scoped poison must refuse"
+  assert_contains "$out" 'malformed contribution-poison-commits' 'poison format'
+  rm -f "$CFG/contribution-poison-commits"
+  pass "outgoing adapter checks commit-tree evidence and poison ancestry without replacing repository hooks"
+}
+
+
+test_local_gate_transport_preserves_hooks() {
+  local repo gate="$TMP_ROOT/pilot-nm/repos/gate.git" hooks out real_git
+  repo=$(fresh_repo local-gate-transport)
+  hooks="$TMP_ROOT/local-gate-transport.hooks"
+  real_git=$(command -v git)
+  mkdir -p "$(dirname "$gate")"
+  git init -q --bare "$gate"
+  git --git-dir="$gate" config receive.advertisePushOptions true
+  git -C "$repo" remote add no-mistakes "$gate"
+  printf '#!/bin/sh\nprintf hook >"%s"\nexit 1\n' "$TMP_ROOT/local-client-hook" >"$hooks/pre-push"
+  chmod +x "$hooks/pre-push"
+  out=$(NM_HOME="$TMP_ROOT/pilot-nm" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --no-verify -o no-mistakes.skip=push,pr,ci no-mistakes main 2>&1) && fail "local intake must still honor refusing client hook"
+  [ -e "$TMP_ROOT/local-client-hook" ] || fail "local intake bypassed client hook"
+  printf '#!/bin/sh\nexit 0\n' >"$hooks/pre-push"
+  printf '#!/bin/sh\nprintf admitted >"%s"\n' "$TMP_ROOT/local-receive-hook" >"$gate/hooks/post-receive"
+  chmod +x "$gate/hooks/post-receive"
+  out=$(NM_HOME="$TMP_ROOT/pilot-nm" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --no-verify -o no-mistakes.skip=push,pr,ci no-mistakes main 2>&1) || fail "local gate transport should pass: $out"
+  [ -e "$TMP_ROOT/local-receive-hook" ] || fail "local intake disabled gate admission hook"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$gate" rev-parse main)" 'gate received checked head'
+  out=$(NM_HOME="$TMP_ROOT/pilot-nm" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --no-verify origin main 2>&1) && fail "gate-only options must refuse other destinations"
+  assert_contains "$out" 'gate options require' 'local gate boundary'
+  pass "pinned local gate intake removes hook bypass, preserves client and receive hooks, and refuses gate options elsewhere"
+}
+
 test_identity_file_contract
 test_pin_neutralizes_git_c_user_email
 test_clean_push_passes
@@ -1755,5 +1888,9 @@ test_git_refusals
 test_ci_commits_and_text
 test_permission_fixtures_pass_the_secret_scan
 test_policy_text
+test_runtime_stdin_adapter
+test_no_mistakes_body_scope
+test_contribution_poison_and_evidence_adapter
+test_local_gate_transport_preserves_hooks
 
 echo "# all fm-publish-gate tests passed"

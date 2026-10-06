@@ -1146,4 +1146,29 @@ if (invokedDirectly()) {
   }
 }
 
-export { decision };
+// A runtime wrapper cannot treat unknown verbs as reads: unlike the agent
+// shell hook, it is the last checkpoint for unattended subprocess writes.
+function runtimeOperation(argv) {
+  const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
+  const tokens = new Lexer(argv.map(quote).join(" ")).tokenize().tokens;
+  const words = tokens.filter((t) => t.type === "word");
+  const [group, verb] = argv;
+  if (["--version", "--help", "help", "version"].includes(group)) return "read";
+  if (group === "api") {
+    const parsed = parseOptions(words.slice(1), API_VALUED, (name) => API_VALUED.has(name) || API_BOOLS.has(name));
+    if (parsed.unknown) return "unsupported";
+    const method = parsed.flags.filter((f) => ["-X", "--method"].includes(f.name)).at(-1)?.value;
+    const fields = parsed.flags.some((f) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(f.name));
+    return method ? (["GET", "HEAD"].includes(method.toUpperCase()) ? "read" : "write") : (fields ? "write" : "read");
+  }
+  const reads = {
+    auth: ["status", "token"], pr: ["view", "list", "status", "checks", "diff"],
+    issue: ["view", "list", "status"], repo: ["view", "list"],
+    release: [...RELEASE_READ_VERBS], gist: ["view", "list"],
+    run: ["view", "list", "watch", "download"], workflow: ["view", "list"],
+  };
+  if (reads[group]?.includes(verb)) return "read";
+  return SPECS[`${group} ${verb}`] ? "write" : "unsupported";
+}
+
+export { decision, runtimeOperation };

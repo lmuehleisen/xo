@@ -97,6 +97,13 @@
 #                   <line number>".
 #   poison-commits  one full commit id per line: old history that must never
 #                   reach a public destination.
+#   contribution-poison-commits  optional rows "<owner/repo> <full commit id>";
+#                   additional forbidden ancestry only for that destination.
+#   no-mistakes-submissions  optional approved "<upstream> <fork> <contrib/branch>"
+#                   rows; fm-no-mistakes-body.mjs owns eligibility validation.
+#                   Live fork/head facts and completed review/test/document
+#                   assertions permit 300 lines/24000 bytes, with all content
+#                   checks, gitleaks and semantic review retained.
 #   upstream        optional; one exact GitHub owner/repo or absolute local
 #                   path per line: public repositories whose advertised
 #                   branches and tags a public push treats as already
@@ -864,6 +871,7 @@ PR_NUMBER=""
 PR_BRANCH=""
 PR_UPSTREAM=""
 INTEGRATION_SOURCES=""
+NO_MISTAKES_BODY=0
 
 # Use the same trusted executable and environment isolation as privacy reads.
 integration_gh() {
@@ -1004,6 +1012,16 @@ check_shape() {
         break
       fi
     done <<<"$INTEGRATION_SOURCES"
+    if [ "$CMD" = check-text ] && [ -f "$(config_dir)/no-mistakes-submissions" ]; then
+      local gh rc
+      gh=$(trusted_gh) || gh=""
+      node "$ROOT/bin/fm-no-mistakes-body.mjs" "$(config_dir)" "$gh" "$DEST_KEY" "$PR_BASE" "$PR_HEAD" "$PR_NUMBER" "$PR_BRANCH" "$file"
+      rc=$?
+      case "$rc" in
+      0) body_lines=300 body_chars=24000; chars=$(wc -c <"$file" | tr -d ' '); lines=$(awk 'END { print NR + 0 }' "$file"); NO_MISTAKES_BODY=1 ;;
+      2) refuse "malformed no-mistakes-submissions config" "correct the approved upstream, fork and contribution branch rows" ;;
+      esac
+    fi
     [ "$lines" -le "$body_lines" ] || finding "shape: a description longer than $body_lines lines" "text $n"
     [ "$chars" -le "$body_chars" ] || finding "shape: a description longer than $body_chars characters" "text $n"
     ;;
@@ -1272,7 +1290,20 @@ cmd_pre_push() {
   git rev-list --stdin <"$PG_TMP/tips.txt" >"$PG_TMP/reach.txt" ||
     refuse "cannot list the commits the pushed refs reach" "git fsck --connectivity-only  # names the missing objects"
   sort -u "$PG_TMP/reach.txt" -o "$PG_TMP/reach.txt"
-  config_lines "$(config_dir)/poison-commits" | cut -f2 | sort -u >"$PG_TMP/poison.txt"
+  config_lines "$(config_dir)/poison-commits" | cut -f2 >"$PG_TMP/poison.txt"
+  local scoped row key sha extra
+  scoped="$(config_dir)/contribution-poison-commits"
+  if [ -f "$scoped" ]; then
+    while IFS= read -r row; do
+      read -r key sha extra <<<"$row"
+      if [ -n "${extra:-}" ] || ! printf '%s\n' "$key" | grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' ||
+        ! printf '%s\n' "$sha" | grep -qE '^[0-9a-f]{40}([0-9a-f]{24})?$'; then
+        refuse "malformed contribution-poison-commits config" "use one exact owner/repo and full commit id per row"
+      fi
+      [ "$(lower "$key")" != "$DEST_KEY" ] || printf '%s\n' "$sha" >>"$PG_TMP/poison.txt"
+    done < <(config_lines "$scoped" | cut -f2-)
+  fi
+  sort -u "$PG_TMP/poison.txt" -o "$PG_TMP/poison.txt"
   out=$(comm -12 "$PG_TMP/reach.txt" "$PG_TMP/poison.txt")
   POISON_HIT=""
   if [ -n "$out" ]; then
@@ -1422,6 +1453,19 @@ cmd_check_text() {
   add_texts ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
   scan_corpus 1
   scan_corpus_emails
+  if [ "$NO_MISTAKES_BODY" = 1 ]; then
+    command -v gitleaks >/dev/null 2>&1 || refuse "gitleaks is required for generated no-mistakes text" "install the pinned scanner before retrying"
+    local rc
+    mkdir -p "$PG_TMP/text-scan" "$PG_TMP/text-ignore"
+    cp "$PG_TMP/corpus.txt" "$PG_TMP/text-scan/body.txt"
+    env -u GITLEAKS_CONFIG -u GITLEAKS_CONFIG_TOML gitleaks dir --no-banner --redact --ignore-gitleaks-allow -i "$PG_TMP/text-ignore" --exit-code 3 "$PG_TMP/text-scan" >/dev/null 2>&1
+    rc=$?
+    case "$rc" in
+    0) ;;
+    3) finding "gitleaks secret in generated text" "text" ;;
+    *) refuse "gitleaks could not scan generated text" "repair the scanner before retrying" ;;
+    esac
+  fi
   [ "$FINDINGS" -eq 0 ] ||
     refuse "$FINDINGS finding(s) in text for public destination $DEST_KEY (see '$(basename "$SELF") policy')" "rewrite the flagged text (the rule and line are named above) and run the gh command again"
   judge_public text ${TEXT_ARGS[@]+"${TEXT_ARGS[@]}"}
@@ -1654,6 +1698,11 @@ in a description or reply, what the operator asked or decided or the shape of
 incident evidence: a process id with its number (pid 4242), a tmux pane id
 (%12), or a clock time (14:05). Everyday words such as pid, pane, timeline, or
 incident are fine on their own.
+Approved no-mistakes upstream submissions may use 300 lines and 24000 bytes
+only with an exact private upstream/fork/contribution-branch scope, live final
+head verification and complete v1 review/test/document assertions.
+The assertions are author-editable, not cryptographic proof.
+These bodies still pass the full literal, email, gitleaks and semantic checks.
 Integration descriptions stay a technical record: no machine names, runner
 details, logs, or full hunk audit. Only the body length cap changes; the whole
 description still passes content checks and semantic review. Unverifiable
