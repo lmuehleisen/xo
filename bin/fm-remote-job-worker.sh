@@ -669,8 +669,9 @@ worker_publish_result() { # <job-dir> <exit>
   tmp=$(umask 077; mktemp "$job/.exit.XXXXXX") || return 1
   printf '%s\n' "$exit_status" > "$tmp" || { rm -f -- "$tmp"; return 1; }
   chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  worker_lane_owner_matches || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$job/exit" || { rm -f -- "$tmp"; return 1; }
-  fm_remote_job_write_state "$job" 'done' || return 1
+  fm_remote_job_write_state "$job" 'done' worker_lane_owner_matches || return 1
   if fm_remote_job_cancelled "$job"; then
     account_home=$(worker_account_home 2>/dev/null || true)
     if [ -n "$account_home" ]; then

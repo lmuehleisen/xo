@@ -494,13 +494,19 @@ fm_remote_job_remove_claim_records() { # <claim-dir>
   done
 }
 
-fm_remote_job_write_state() { # <job-dir> queued|running|done
-  local job=$1 value=$2 tmp
+# An optional caller-owned guard is checked after staging and immediately before
+# committing the state rename; a failed guard leaves the prior state intact.
+fm_remote_job_write_state() { # <job-dir> queued|running|done [commit-guard]
+  local job=$1 value=$2 guard=${3:-} tmp
   case "$value" in queued|running|done) ;; *) return 1 ;; esac
   [ -d "$job" ] && [ ! -L "$job" ] || return 1
   tmp=$(umask 077; mktemp "$job/.state.XXXXXX") || return 1
   printf '%s\n' "$value" > "$tmp" || { rm -f -- "$tmp"; return 1; }
   chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  if [ -n "$guard" ] && ! "$guard"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
   mv -f -- "$tmp" "$job/state"
 }
 
@@ -1205,6 +1211,8 @@ fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
     # A verified owner with no code identity yet is still initializing.
     identity=$(fm_remote_job_worker_identity_path)
     if [ ! -e "$identity" ] && [ ! -L "$identity" ]; then return 0; fi
+    # A predecessor's identity is not publication by this lock generation.
+    if [ ! -L "$identity" ] && [ "$identity" -ot "$(fm_remote_job_worker_lock_path)/pid" ]; then return 0; fi
     if fm_remote_job_worker_identity_matches "$root" "$account_home"; then return 0; fi
     # The owner pid is the serving child; its restart supervisor sits above it
     # and would immediately replace a lone process kill, so stop the whole

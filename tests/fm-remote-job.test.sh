@@ -250,9 +250,9 @@ SH
   chmod +x "$poll_dir/bin/sleep"
   trap '[ -z "$pid" ] || { kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }' EXIT
   unset FM_REMOTE_JOB_POLL_SECONDS FM_REMOTE_JOB_ACTIVE_POLL_SECONDS
-  # shellcheck disable=SC2030 # The legacy override is local to this cadence fixture.
+  # shellcheck disable=SC2030,SC2031 # This fixture sets a fresh legacy override after clearing imported defaults.
   [ -z "$legacy" ] || export FM_REMOTE_JOB_POLL_SECONDS="$legacy"
-  # shellcheck disable=SC2030 # The active override is local to this cadence fixture.
+  # shellcheck disable=SC2030,SC2031 # This fixture sets a fresh active override after clearing imported defaults.
   [ -z "$active" ] || export FM_REMOTE_JOB_ACTIVE_POLL_SECONDS="$active"
   # shellcheck disable=SC2031 # This cadence fixture sets fresh values; takeover exports stay local.
   export FM_REMOTE_JOB_STATE_ROOT="$poll_dir/state" FM_ROOT_OVERRIDE="$REMOTE_ROOT"
@@ -1699,12 +1699,16 @@ fi
 exec "$FM_TEST_INIT_REAL_MV" "$@"
 SH
 chmod +x "$DUP_INIT_SHIM/mv"
-dup_initialization_case() { # <public-pid-state> [barrier-file]
-  local public_pid_state=$1 barrier=${2:-worker.pid} repaired groups
+dup_initialization_case() { # <public-pid-state> [barrier-file] [identity-state]
+  local public_pid_state=$1 barrier=${2:-worker.pid} identity_state=${3:-absent} repaired groups
   rm -f -- "$DUP_INIT_GATE/blocked" "$DUP_INIT_GATE/release"
   dup_lib fm_remote_job_prepare_state "$DUP_HOME" || fail "cannot prepare initialization fixture"
   if [ "$public_pid_state" = stale ]; then
     printf '%s\n' "$$" > "$DUP_STATE/worker.pid"
+  fi
+  if [ "$identity_state" = stale ]; then
+    printf 'predecessor-code-identity\n' > "$DUP_STATE/worker.identity"
+    touch -t 200001010000 "$DUP_STATE/worker.identity"
   fi
   (
     # shellcheck disable=SC2030,SC2031 # This PATH override is confined to the initializing worker fixture.
@@ -1724,7 +1728,12 @@ dup_initialization_case() { # <public-pid-state> [barrier-file]
   dup_lib fm_remote_job_lock_owner_matches_process "$DUP_HOME" \
     || fail "the initializing fixture lacks verified live ownership"
   if [ "$barrier" = worker.identity ]; then
-    assert_absent "$DUP_STATE/worker.identity" "the initializing fixture already published its code identity"
+    if [ "$identity_state" = stale ]; then
+      [ "$(cat "$DUP_STATE/worker.identity")" = predecessor-code-identity ] \
+        || fail "the initializing worker replaced the predecessor identity before its barrier"
+    else
+      assert_absent "$DUP_STATE/worker.identity" "the initializing fixture already published its code identity"
+    fi
   else
     dup_lib fm_remote_job_worker_identity_matches "$DUP_ROOT" "$DUP_HOME" \
       || fail "the initializing fixture has not published its code identity"
@@ -1762,6 +1771,7 @@ dup_initialization_case() { # <public-pid-state> [barrier-file]
 dup_initialization_case absent
 dup_initialization_case stale
 dup_initialization_case absent worker.identity
+dup_initialization_case absent worker.identity stale
 
 dup_lib fm_remote_job_start_linux_worker "$DUP_ROOT" "$DUP_HOME" \
   || fail "the duplicate-owner fixture worker did not start"
@@ -1801,5 +1811,83 @@ pass "a live lock owner with an aged heartbeat is never duplicated"
 fm_remote_job_stop_worker_tree "$DUP_OWNER" || fail "the duplicate-owner fixture worker did not stop"
 DUP_OWNER=
 DUP_GROUP=
+
+# Hold result staging after the initial ownership check, then replace the
+# lock records. Neither the exit rename nor the final done-state rename may
+# commit using the lane's earlier observation of ownership.
+# shellcheck disable=SC2030,SC2031 # This terminal fixture owns its private queue overrides.
+result_commit_case() (
+  local target=$1 state="$TMP_ROOT/result-$1-state" account="$TMP_ROOT/result-$1-account"
+  local shim="$TMP_ROOT/result-$1-shim" gate="$TMP_ROOT/result-$1-gate"
+  local lane='' foreign='' job i real_chmod
+  mkdir -p "$account" "$shim" "$gate"
+  export FM_REMOTE_JOB_STATE_ROOT="$state" FM_ROOT_OVERRIDE="$REMOTE_ROOT"
+  # shellcheck source=bin/fm-remote-job-lib.sh
+  . "$ROOT/bin/fm-remote-job-lib.sh"
+  trap '[ -z "$lane" ] || { kill -KILL "$lane" 2>/dev/null || true; wait "$lane" 2>/dev/null || true; }; [ -z "$foreign" ] || { kill "$foreign" 2>/dev/null || true; wait "$foreign" 2>/dev/null || true; }' EXIT
+  fm_remote_job_stage "$account" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh </dev/null >/dev/null \
+    || fail "$FM_REMOTE_JOB_ERROR"
+  job=$FM_REMOTE_JOB_ID
+  record_lane_owner "$state"
+  real_chmod=$(command -v chmod)
+  cat > "$shim/chmod" <<'SH'
+#!/bin/bash
+last=${!#}
+block=0
+case "$last" in
+  "$FM_TEST_RESULT_JOB"/.exit.*) [ "$FM_TEST_RESULT_TARGET" != exit ] || block=1 ;;
+  "$FM_TEST_RESULT_JOB"/.state.*)
+    if [ "$FM_TEST_RESULT_TARGET" = state ] && [ "$(cat "$last")" = done ]; then block=1; fi
+    ;;
+esac
+if [ "$block" = 1 ]; then
+  : > "$FM_TEST_RESULT_GATE/blocked"
+  deadline=$((SECONDS + 120))
+  while [ ! -f "$FM_TEST_RESULT_GATE/release" ]; do
+    [ "$SECONDS" -lt "$deadline" ] || exit 1
+    /bin/sleep 0.05
+  done
+fi
+exec "$FM_TEST_RESULT_CHMOD" "$@"
+SH
+  chmod +x "$shim/chmod"
+  HOME="$account" PATH="$shim:$PATH" FM_TEST_RESULT_JOB="$FM_REMOTE_JOB_JOBS/$job" \
+    FM_TEST_RESULT_TARGET="$target" FM_TEST_RESULT_GATE="$gate" FM_TEST_RESULT_CHMOD="$real_chmod" \
+    "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$job" "$$" "$(cat "$state/worker.lock/start")" \
+    > "$gate/lane.out" 2> "$gate/lane.err" &
+  lane=$!
+  for ((i=0; i<200; i++)); do
+    [ -f "$gate/blocked" ] && break
+    sleep 0.05
+  done
+  assert_present "$gate/blocked" "the result lane did not reach its $target staging barrier"
+  [ "$(fm_remote_job_read_state "$FM_REMOTE_JOB_JOBS/$job")" = running ] \
+    || fail "the result lane committed before its staging barrier"
+  sleep 60 &
+  foreign=$!
+  fm_remote_job_process_start "$foreign" > "$state/worker.lock/start"
+  fm_remote_job_process_command "$foreign" > "$state/worker.lock/command"
+  printf '%s\n' "$foreign" > "$state/worker.lock/pid"
+  : > "$gate/release"
+  for ((i=0; i<200; i++)); do
+    kill -0 "$lane" 2>/dev/null || break
+    sleep 0.05
+  done
+  ! kill -0 "$lane" 2>/dev/null || fail "the result lane did not exit after ownership loss"
+  wait "$lane" 2>/dev/null || true
+  lane=''
+  [ "$(fm_remote_job_read_state "$FM_REMOTE_JOB_JOBS/$job")" = running ] \
+    || fail "a superseded lane committed done after losing ownership during $target staging"
+  if [ "$target" = exit ]; then
+    assert_absent "$FM_REMOTE_JOB_JOBS/$job/exit" "a superseded lane committed an exit after losing ownership"
+  else
+    assert_present "$FM_REMOTE_JOB_JOBS/$job/exit" "the final-state fixture did not exercise a committed exit"
+  fi
+  [ "$(cat "$state/worker.lock/pid")" = "$foreign" ] \
+    || fail "result cancellation rewrote the replacement's ownership"
+  pass "result publication rechecks ownership at the $target commit boundary"
+)
+result_commit_case exit || exit 1
+result_commit_case state || exit 1
 
 echo "ALL TESTS PASSED"
