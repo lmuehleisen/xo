@@ -83,10 +83,12 @@
 # on real directories inside the scratch copy and does not follow symlinks.
 # Each directory is entered and checked with pwd -P. The mode change then
 # looks up that directory by its final name under the parent inode already
-# held, and does not follow a final symlink. A directory renamed out of that
-# parent keeps its mode, and a symlink planted on an ancestor cannot redirect
-# the lookup. A path that resolves outside the worktree aborts the return and
-# is not changed.
+# held. A directory renamed out of that parent keeps its mode, and a symlink
+# planted on an ancestor cannot redirect the lookup. A final symlink is left
+# unchanged when chmod accepts a no-follow flag. A chmod that rejects the flag
+# checks the name again and then changes it without the flag, so a symlink
+# planted in that gap can still be followed. A path that resolves outside the
+# worktree aborts the return and is not changed.
 # Ship worktrees are not modified, including a --force discard.
 # The walk visits one real directory at a time and lists only its immediate
 # child directories, without following symlinks. Before the mode change, and
@@ -2161,7 +2163,27 @@ scout_restore_dir_owner_write() {
         scout_dir_is_under "$wt_phys" "$pnow" || exit 2
       fi
     fi
-    chmod -h u+w "./$base" || exit 1
+    if [ -L "$base" ]; then
+      exit 3
+    fi
+    # -h avoids following a final symlink. GNU chmod before 9.5 rejects it
+    # and leaves the mode unchanged, so that rejection retries without it.
+    err_rc=0
+    err=$(LC_ALL=C chmod -h u+w "./$base" 2>&1) || err_rc=$?
+    if [ "$err_rc" -ne 0 ]; then
+      case "$err" in
+        *"invalid option"*|*"illegal option"*|*"unrecognized option"*)
+          if [ -L "$base" ]; then
+            exit 3
+          fi
+          chmod u+w "./$base" || exit 1
+          ;;
+        *)
+          [ -n "$err" ] && printf '%s\n' "$err" >&2
+          exit 1
+          ;;
+      esac
+    fi
   ) || rc=$?
   # Exit 3 tells the walk not to list children. A different mount is pruned
   # before descent; a listing error on the scratch copy's own mount is not.
