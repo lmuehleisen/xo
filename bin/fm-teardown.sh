@@ -80,7 +80,8 @@
 # copy stays checked out. After those report and completion-gate checks and the
 # landed-work check, and after teardown has reaped processes in that copy,
 # scratch scout cleanup restores owner write on real directories there. The
-# walk does not follow symlinks and does not cross onto another filesystem.
+# walk does not follow symlinks. A directory on another filesystem, including
+# the root of a nested mount, is left unchanged.
 # Ship worktrees are not modified, including a refusal or a forced discard.
 # The scout has stopped and teardown has already reaped worktree processes, so
 # only a concurrent process of the same user could race a directory into or out
@@ -1821,13 +1822,29 @@ cleanup_stale_lock_for_safety_check() {
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1
+  local wt=$1 root_dev
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
-  # -P does not follow symlinks, so a directory link is not chmod'd.
-  # -xdev stays on this filesystem. -type d skips anything that is not a directory.
-  find -P "$wt" -xdev -type d ! -perm -u+w -exec chmod u+w {} + || return 1
+  root_dev=$(stat -c %d -- "$wt" 2>/dev/null) || root_dev=$(stat -f '%d' "$wt") || return 1
+  [ -n "$root_dev" ] || return 1
+  # -P does not follow symlinks. -xdev does not descend into another
+  # filesystem, but the mount root itself would still be chmod'd, so a
+  # different device is skipped before the mode change.
+  find -P "$wt" -xdev -type d ! -perm -u+w -exec sh -c '
+    root_dev=$1
+    shift
+    for dir do
+      if dev=$(stat -c %d -- "$dir" 2>/dev/null); then
+        :
+      else
+        dev=$(stat -f "%d" "$dir") || exit 1
+      fi
+      [ -n "$dev" ] || exit 1
+      [ "$dev" = "$root_dev" ] || continue
+      chmod u+w "$dir" || exit 1
+    done
+  ' sh "$root_dev" {} + || return 1
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or

@@ -150,5 +150,52 @@ test_ship_with_unlanded_readonly_tree_is_refused_unchanged() {
   pass "a ship with an uncommitted non-writable tree is refused and left unchanged"
 }
 
+# A directory whose device is not the scratch copy must keep its mode.
+# find -xdev still matches that directory; the device check is what skips it.
+test_other_device_directory_is_not_made_writable() {
+  local case_dir id=scout-dev rc dir_mode real_stat
+  skip_if_directory_mode_is_bypassed "scout-other-device" && return 0
+  case_dir=$(make_case scout-other-device)
+  write_task "$case_dir" "$id" scout
+  mkdir -p "$case_dir/data/$id"
+  printf 'findings\n' > "$case_dir/data/$id/report.md"
+  plant_readonly_tree "$case_dir"
+  mkdir -p "$case_dir/wt/mnt"
+  printf 'mounted\n' > "$case_dir/wt/mnt/secret"
+  chmod a-w "$case_dir/wt/mnt" "$case_dir/wt/mnt/secret"
+  dir_mode=$(mode_of "$case_dir/wt/mnt")
+  real_stat=$(command -v stat)
+  cat > "$case_dir/fakebin/stat" <<SH
+#!/usr/bin/env bash
+set -u
+path=
+for arg in "\$@"; do
+  case "\$arg" in
+    -*) ;;
+    *) path=\$arg ;;
+  esac
+done
+if [ "\$path" = "$case_dir/wt/mnt" ]; then
+  printf '%s\n' 999999999
+  exit 0
+fi
+exec "$real_stat" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/stat"
+
+  rc=0
+  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-other-device: teardown did not reach the worktree return (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/mnt")" \
+    "scout-other-device: directory on another device was made writable"
+  assert_equals "mounted" "$(cat "$case_dir/wt/mnt/secret")" \
+    "scout-other-device: file on another device was removed"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-other-device: the same-device hooks tree was not cleaned up"$'\n'"$(cat "$case_dir/stderr")"
+  pass "a directory on another device keeps its mode while the scratch copy is still cleaned up"
+}
+
 test_scout_readonly_tree_is_deleted_and_outside_directory_stays
 test_ship_with_unlanded_readonly_tree_is_refused_unchanged
+test_other_device_directory_is_not_made_writable
