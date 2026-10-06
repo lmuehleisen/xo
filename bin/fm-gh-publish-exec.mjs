@@ -9,6 +9,10 @@
 // Reads pass; unsupported operations fail closed. Never evaluates argv as shell.
 // FM_PUBLISH_EXEC_BLOCK=1 independently refuses all supported GitHub writes.
 // Checked writes pin GH_HOST to github.com; read environments stay unchanged.
+// Client-side checks provide detection and friction, not a sandbox.
+// Host-user processes and file-backed inputs are trusted; callers keep checked
+// files stable until gh finishes. Adversarial host-user replacement is outside
+// this adapter's trust boundary.
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
