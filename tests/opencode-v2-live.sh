@@ -2,6 +2,7 @@
 # V2 branch of fm-opencode-primary-live-e2e.test.sh. Uses only a private tmux
 # socket, disposable profile, and independently initialized scratch repositories.
 set -eu
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fm_live_gate opt-in FM_OPENCODE_LIVE_E2E opencode tmux git jq node
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
