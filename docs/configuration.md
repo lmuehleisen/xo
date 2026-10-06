@@ -314,11 +314,11 @@ Both choices are local to each Firstmate home and are not part of secondmate inh
 Two optional local, gitignored files control the supervision host for this home: `config/supervision-host-off` opts the home out, and `config/supervision-host` opts a home in and selects its engine.
 The host runs the supervision branch's contract on a headless engine session beside a non-Pi primary.
 [docs/supervision-host.md](supervision-host.md) defines its design, current scope, and verified engines.
-A Claude, Cursor, OpenCode, omp, Grok, or Codex primary can run the host.
+A Claude, Cursor, OpenCode V1, omp, Grok, or Codex primary can run the host.
 
 A present `config/supervision-host-off`, whatever it holds, opts the home out on every primary.
 Otherwise a Claude primary runs the host by default: with no `config/supervision-host` it runs exactly as with an empty one, at the Claude engine's default model.
-A Cursor, OpenCode, omp, Grok, or Codex primary runs the host only while `config/supervision-host` exists and the home is not opted out.
+A Cursor, OpenCode V1, omp, Grok, or Codex primary runs the host only while `config/supervision-host` exists and the home is not opted out.
 A home that does not run the host behaves exactly as it does without it, and a Pi primary keeps its in-process supervision branch whatever either file says.
 `fm_supervision_host_enabled` in `bin/fm-supervision-engine-lib.sh` implements this gate for every reader.
 
@@ -335,7 +335,7 @@ Grok's arm command is rendered at session start, so a change to its host mode ta
 - empty or `default` selects the primary harness's own engine at that engine's default model (`sonnet` for the Claude engine);
 - `<engine> [<model>]` names a verified engine, currently only `claude`, and optionally the engine's own model name or alias; `default <model>` selects the primary harness's engine with that model.
 
-Only Claude has a verified engine of its own, so a Cursor, OpenCode, omp, Grok, or Codex home names `claude` in the file.
+Only Claude has a verified engine of its own, so a Cursor, OpenCode V1, omp, Grok, or Codex home names `claude` in the file.
 
 ### Failures, when changes apply, and inheritance
 
@@ -778,7 +778,7 @@ Choose the primary's own Auto mode through its CLI or interface rather than chan
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, omp, and agy are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only, and [README requirements](../README.md#requirements) own the set supported for the primary session.
+claude, codex, pi, pi-signed, grok, kimi, cursor, omp, and agy are empirically verified for crewmate and secondmate launches; opencode and gemini are verified for crewmate and scout launches only, and [README requirements](../README.md#requirements) own the set supported for the primary session.
 
 ### Harness restrictions and credentials
 
@@ -813,7 +813,7 @@ Enabled primary-session turn-end guard integrations are tracked as repo-level ho
 Kimi remains outside the primary turn-end guard integrations; [`docs/turnend-guard.md`](turnend-guard.md#compatibility-limits) owns its separate captain-approved crew wake hook.
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 
-Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Grok uses background-notify cycles, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, omp uses its own two tracked `.omp/extensions/` files with a blocking `session_stop` turn-end hook, OpenCode uses its TUI plugin, and Agy uses native Stop continuation and background-task completion.
+Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hook parks on the watcher, Grok uses background-notify cycles, Codex uses bounded foreground checkpoints, Pi and pi-signed use the same two tracked primary extensions, omp uses its own two tracked `.omp/extensions/` files with a blocking `session_stop` turn-end hook, OpenCode V1 uses its TUI plugin, and Agy uses native Stop continuation and background-task completion.
 
 ### Choose the worker harness
 
@@ -1175,7 +1175,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - Profile `ultra` remains scoped to native Pi; direct Codex's per-spawn extension is described under [Per-task high-quota launch modes](#per-task-high-quota-launch-modes), with validation owned by `bin/fm-harness.sh validate-native-effort`.
 - Codex `max` is valid when the profile selects `gpt-5.6-luna`, whose installed catalog entry supports that reasoning level.
 - An omitted model or effort means the selected harness uses its own default for that axis.
-- OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.
+- OpenCode V2 receives effort through the build agent's model reference in its per-spawn config; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns the variant mapping and unsupported-value behavior.
 - Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
 - If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
 - Except for `ultra`, which refuses unsupported profiles under the native-effort contract above, an effort value the chosen harness does not accept is recorded as `effort=` in task meta for traceability but omitted from the launch flags.
@@ -2427,7 +2427,7 @@ FM_CLAUDE_AUTOARM_EPOCH_FRESH=15   # seconds a recorded auto-arm outcome remains
 FM_CLAUDE_TURNEND_BLOCK_BUDGET=3   # consecutive --claude guard re-blocks before the verified one-time attended fail-open; safely below Claude Code's 8-block override
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED; default 30 on Git Bash/MSYS
 FM_ARM_ATTACH_POLL=0.5  # seconds between checks while fm-watch-arm follows an attached watcher cycle (bin/fm-watch-arm.sh header)
-FM_OPENCODE_ARM_READY_TIMEOUT_MS=12000   # milliseconds the OpenCode primary watcher plugin waits for an arm attempt to report started, healthy, wake, or failure; default 35000 on Windows to stay above the MSYS confirm budget
+FM_OPENCODE_ARM_READY_TIMEOUT_MS=12000   # milliseconds the OpenCode V1 primary watcher plugin waits for an arm attempt to report started, healthy, wake, or failure; default 35000 on Windows to stay above the MSYS confirm budget
 FM_PI_ARM_READY_TIMEOUT_MS=12000   # milliseconds the Pi watcher extension waits for a successor arm to report started or attached; default 35000 on Windows to stay above the MSYS confirm budget
 FM_WATCH_ARM_RETIRE_TIMEOUT_MS=1000   # milliseconds Pi/OpenCode wait for an unready successor arm to exit before abandoning retries
 FM_WATCH_REARM_RETRY_BASE_MS=250   # Pi/OpenCode adapter base delay for continuity restoration retries
