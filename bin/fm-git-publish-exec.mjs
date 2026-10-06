@@ -14,6 +14,8 @@
 // Forwarded pushes force --recurse-submodules=no so only checked refs publish.
 // FM_PUBLISH_EXEC_BLOCK=1 blocks network pushes after checks; local gate intake
 // remains possible. Keep a separate pushInsteadOf block during setup pilots.
+// These client-side checks provide detection and friction, not a sandbox.
+// Git proxy/TLS configuration is trusted host configuration, inherited as-is.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
