@@ -81,10 +81,12 @@
 # kind=scout, after those report, completion-gate, and landed-work refusals,
 # immediately before that task's own treehouse return. It restores owner write
 # on real directories inside the scratch copy and does not follow symlinks.
-# Each directory is entered and checked with pwd -P; owner write is then
-# changed on `.`, the directory inode that process is already in, so a symlink
-# planted on an ancestor after the check cannot redirect the mode change. A
-# path that resolves outside the worktree aborts the return and is not changed.
+# Each directory is entered and checked with pwd -P. The mode change then
+# looks up that directory by its final name under the parent inode already
+# held, and does not follow a final symlink. A directory renamed out of that
+# parent keeps its mode, and a symlink planted on an ancestor cannot redirect
+# the lookup. A path that resolves outside the worktree aborts the return and
+# is not changed.
 # Ship worktrees are not modified, including a --force discard.
 # The walk visits one real directory at a time and lists only its immediate
 # child directories, without following symlinks. Before the mode change, and
@@ -103,10 +105,8 @@
 # table, including an unreadable path, only when FM_TEST_SEAM is set; ordinary
 # cleanup always reads the live table. On Linux the entered directory's mount
 # id is read from the descriptor opened on that directory and compared with
-# the scratch root. The mode change applies to that same directory, so a later
-# path lookup cannot hand the change to a directory the path now names. A
-# missing id stops the return. Other systems have no kernel mount id and keep
-# the path check. A test run can record an id for one exact path, only when
+# the scratch root. A different id is left unchanged. A missing id stops the
+# return. Other systems have no kernel mount id and keep the path check. A test run can record an id for one exact path, only when
 # FM_TEST_SEAM is set; ordinary cleanup reads the kernel id. A scratch root
 # whose mount differs from its parent stops the return, so that mount is not
 # the baseline for the walk. A different device, mount point, or mount id is
@@ -117,8 +117,8 @@
 # repair, and it does not change files or flags. The kernel walk inside
 # cd -P can observe a symlink that appears during that walk; pwd -P then
 # refuses an outside result before any mode change. A mount stacked on the
-# directory after the process has entered it is not what gets changed,
-# because the mode change applies to the current directory inode.
+# directory after the process has entered it is left unchanged, because its
+# name under the parent is no longer the entered inode.
 # Before destructive cleanup, teardown validates task check artifacts as
 # ordinary single-link files on the state device. It refuses and preserves
 # task state when that proof fails; otherwise it removes the task's check,
@@ -1880,6 +1880,21 @@ scout_device_id() {
   printf '%s\n' "$id"
 }
 
+# Device and inode, so a renamed directory is not the same object as the name
+# now under its parent. GNU stat is tried first because GNU stat -f is a
+# filesystem query and exits 0.
+scout_inode_id() {
+  local path=$1 id
+  if id=$(stat -c '%d:%i' -- "$path" 2>/dev/null); then
+    [ -n "$id" ] || return 1
+    printf '%s\n' "$id"
+    return 0
+  fi
+  id=$(stat -f '%d:%i' "$path" 2>/dev/null) || return 1
+  [ -n "$id" ] || return 1
+  printf '%s\n' "$id"
+}
+
 # Live mount table, or the test table when FM_TEST_SEAM is set. See the
 # script header.
 scout_mountinfo_file() {
@@ -2057,12 +2072,34 @@ scout_restore_dir_owner_write() {
     echo "teardown: refusing to change $path; it is not inside scratch scout worktree $wt_phys" >&2
     return 1
   fi
-  # Enter the directory and chmod `.` only after pwd -P still names a path
-  # inside the worktree and the inode is on the scratch copy's own mount.
-  # chmod of `.` does not walk ancestors again.
+  # Enter from the parent inode. The mode change looks up the final name
+  # there, so a directory renamed out after these checks is not what changes.
   (
     CDPATH=
-    cd -P -- "$path" || exit 1
+    parent=${path%/*}
+    base=${path##*/}
+    [ -n "$base" ] || exit 1
+    case "$base" in
+      .|..) exit 1 ;;
+      */*) exit 1 ;;
+    esac
+    [ -n "$parent" ] || parent=/
+    cd -P -- "$parent" || exit 1
+    if [ "$path" != "$wt_phys" ]; then
+      pnow=$(pwd -P && printf x) || exit 1
+      pnow=${pnow%x}
+      pnow=${pnow%$'\n'}
+      scout_dir_is_under "$wt_phys" "$pnow" || exit 2
+    fi
+    if [ -L "$base" ]; then
+      exit 3
+    fi
+    [ -d "$base" ] || exit 0
+    # This descriptor is the parent. The final name is looked up under it.
+    if [ "$(uname -s)" = Linux ]; then
+      exec 8< . || exit 1
+    fi
+    cd -P -- "$base" || exit 1
     # This descriptor is the entered directory. A later path lookup can name
     # another mount; the id below still belongs to the directory entered here.
     if [ "$(uname -s)" = Linux ]; then
@@ -2101,8 +2138,30 @@ scout_restore_dir_owner_write() {
       fi
       exit 3
     fi
-    # `.` is the entered directory whose mount id was just checked.
-    chmod u+w . || exit 1
+    here_ino=$(scout_inode_id .) || exit 1
+    if [ "$(uname -s)" = Linux ]; then
+      name_ino=$(scout_inode_id "/proc/self/fd/8/$base") || exit 1
+    else
+      name_ino=$(scout_inode_id "$parent/$base") || exit 1
+    fi
+    if [ "$here_ino" != "$name_ino" ]; then
+      echo "teardown: leaving $now unchanged; it is mounted separately from scratch scout worktree $wt_phys" >&2
+      exit 3
+    fi
+    # Look up the final name under the parent inode. chmod of `.` would
+    # change an inode that has since been renamed out of this tree.
+    if [ "$(uname -s)" = Linux ]; then
+      cd -P -- /proc/self/fd/8 || exit 1
+    else
+      cd -P -- "$parent" || exit 1
+      if [ "$path" != "$wt_phys" ]; then
+        pnow=$(pwd -P && printf x) || exit 1
+        pnow=${pnow%x}
+        pnow=${pnow%$'\n'}
+        scout_dir_is_under "$wt_phys" "$pnow" || exit 2
+      fi
+    fi
+    chmod -h u+w "./$base" || exit 1
   ) || rc=$?
   # Exit 3 tells the walk not to list children. A different mount is pruned
   # before descent; a listing error on the scratch copy's own mount is not.

@@ -10,7 +10,8 @@
 # cleanup runs. A recorded path that is a symlink to the real scratch copy
 # is repaired at that physical directory. Replacing an ancestor with a
 # symlink at the moment owner write is restored must not change the outside
-# directory.
+# directory. Renaming the directory aside at that same moment leaves its mode
+# unchanged and stops the return.
 # A directory on a different mount, or recorded with a different mount id,
 # is left unchanged. Cases that need a
 # non-writable directory to make git clean fail do not run as the superuser,
@@ -249,9 +250,9 @@ test_root_alias_readonly_tree_is_deleted_without_following_outside_links() {
 }
 
 # At the chmod of the nested directory, replace its parent with a symlink to
-# an outside directory. A mode change that re-walks the path would change the
-# outside directory. A mode change of the directory inode already entered
-# would not.
+# an outside directory. A mode change that re-walks from the worktree root
+# would change the outside directory. Looking up the final name under the
+# parent inode already held does not.
 install_ancestor_swap_chmod() {  # <case_dir>
   local case_dir=$1
   cat > "$case_dir/fakebin/chmod" <<'SH'
@@ -263,12 +264,28 @@ wt=${FM_CHMOD_WT:?}
 outside=${FM_CHMOD_OUTSIDE:?}
 marker=${FM_CHMOD_MARKER:?}
 printf '%s\n' "cwd=$(pwd -P) args=$*" >> "$log"
-target=${2:-}
+mode=
+target=
+for arg in "$@"; do
+  case "$arg" in
+    --) continue ;;
+    -*) continue ;;
+    *)
+      case "$arg" in
+        [ugoa]*[+-=]*) mode=$arg ;;
+        *) target=$arg ;;
+      esac
+      ;;
+  esac
+done
+target=${target#./}
 swap=0
-if [ "${1:-}" = u+w ] && [ ! -e "$marker" ]; then
+if [ "$mode" = u+w ] && [ ! -e "$marker" ]; then
   if [ "$target" = "$wt/copied-hooks/nested" ]; then
     swap=1
   elif [ "$target" = . ] && [ "$(pwd -P)" = "$wt/copied-hooks/nested" ]; then
+    swap=1
+  elif [ "$target" = nested ] && [ -d "$wt/copied-hooks/nested" ]; then
     swap=1
   fi
 fi
@@ -277,6 +294,50 @@ if [ "$swap" -eq 1 ] && [ -d "$wt/copied-hooks" ] && [ ! -L "$wt/copied-hooks" ]
   ln -s "$outside" "$wt/copied-hooks"
   printf '%s\n' swapped >> "$log"
   : > "$marker"
+fi
+exec "$real" "$@"
+SH
+  chmod +x "$case_dir/fakebin/chmod"
+}
+
+# At the chmod of the planted directory, rename it aside and restore its mode.
+# chmod of the current directory would still change that inode. chmod of the
+# final name under the parent does not, because the name is gone.
+install_rename_at_chmod() {  # <case_dir>
+  local case_dir=$1
+  cat > "$case_dir/fakebin/chmod" <<'SH'
+#!/usr/bin/env bash
+set -u
+real=${FM_REAL_CHMOD:?}
+src=${FM_CHMOD_MOVE_SRC:?}
+dest=${FM_CHMOD_MOVE_DEST:?}
+marker=${FM_CHMOD_MARKER:?}
+log=${FM_CHMOD_LOG:?}
+printf '%s\n' "cwd=$(pwd -P) args=$*" >> "$log"
+mode=
+target=
+for arg in "$@"; do
+  case "$arg" in
+    --) continue ;;
+    -*) continue ;;
+    *)
+      case "$arg" in
+        [ugoa]*[+-=]*) mode=$arg ;;
+        *) target=$arg ;;
+      esac
+      ;;
+  esac
+done
+target=${target#./}
+base=${src##*/}
+if [ "$mode" = u+w ] && [ ! -e "$marker" ]; then
+  if [ "$target" = "$src" ] || [ "$target" = "$base" ] || { [ "$target" = . ] && [ "$(pwd -P)" = "$src" ]; }; then
+    "$real" u+w "$src" || exit 1
+    mv "$src" "$dest" || exit 1
+    "$real" a-w "$dest" || exit 1
+    printf '%s\n' moved >> "$log"
+    : > "$marker"
+  fi
 fi
 exec "$real" "$@"
 SH
@@ -314,6 +375,45 @@ test_ancestor_swap_at_chmod_does_not_change_outside_directory() {
   assert_equals "keep" "$(cat "$case_dir/outside/nested/file")" \
     "scout-swap: outside file contents changed"
   pass "replacing an ancestor with an outside symlink at the mode change does not change that outside directory"
+}
+
+test_directory_renamed_at_chmod_keeps_its_mode() {
+  local case_dir id=scout-rename rc dir_mode src
+  case_dir=$(make_case scout-rename)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  mkdir -p "$case_dir/wt/planted"
+  printf 'stay\n' > "$case_dir/wt/planted/file"
+  chmod a-w "$case_dir/wt/planted" "$case_dir/wt/planted/file"
+  dir_mode=$(mode_of "$case_dir/wt/planted")
+  src=$(cd "$case_dir/wt/planted" && pwd -P)
+  install_rename_at_chmod "$case_dir"
+  : > "$case_dir/chmod.log"
+
+  rc=0
+  FM_REAL_CHMOD="$(command -v chmod)" \
+    FM_CHMOD_MOVE_SRC="$src" \
+    FM_CHMOD_MOVE_DEST="$case_dir/moved-planted" \
+    FM_CHMOD_MARKER="$case_dir/moved" \
+    FM_CHMOD_LOG="$case_dir/chmod.log" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ -f "$case_dir/moved" ] \
+    || fail "scout-rename: the directory was not renamed at the mode change"$'\n'"$(cat "$case_dir/chmod.log")"
+  [ "$rc" -ne 0 ] \
+    || fail "scout-rename: teardown continued after the directory was renamed aside"$'\n'"$(cat "$case_dir/stderr")"$'\n'"$(cat "$case_dir/chmod.log")"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-rename: teardown returned the worktree after the directory left the tree"$'\n'"$(cat "$case_dir/chmod.log")"
+  [ -d "$case_dir/moved-planted" ] \
+    || fail "scout-rename: the renamed directory is missing"$'\n'"$(cat "$case_dir/chmod.log")"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/moved-planted")" \
+    "scout-rename: the renamed directory mode changed (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"$'\n'"$(cat "$case_dir/chmod.log")"
+  assert_equals "stay" "$(cat "$case_dir/moved-planted/file")" \
+    "scout-rename: file contents changed"
+  [ -f "$case_dir/wt/copied-hooks/nested/commit-msg" ] \
+    || fail "scout-rename: the hooks file was removed"
+  pass "a directory renamed aside at the mode change keeps its mode and stops the return"
 }
 
 test_ship_worktree_readonly_tree_is_not_modified() {
@@ -880,6 +980,7 @@ fi
 test_scout_readonly_tree_is_deleted_and_outside_directory_link_survives
 test_root_alias_readonly_tree_is_deleted_without_following_outside_links
 test_ancestor_swap_at_chmod_does_not_change_outside_directory
+test_directory_renamed_at_chmod_keeps_its_mode
 test_ship_worktree_readonly_tree_is_not_modified
 test_ship_with_unlanded_readonly_tree_is_refused_unchanged
 test_forced_ship_discard_does_not_chmod_readonly_tree
