@@ -1703,6 +1703,7 @@ test_runtime_stdin_adapter() {
   cat >"$FAKEBIN/real-gh" <<'SH'
 #!/usr/bin/env bash
 [ -z "${FM_TEST_ARGV:-}" ] || printf '%s\0' "$@" >"$FM_TEST_ARGV"
+[ -z "${FM_TEST_HOST_RECEIVED:-}" ] || printf '%s' "${GH_HOST:-}" >"$FM_TEST_HOST_RECEIVED"
 if [ -n "${FM_TEST_RECEIVED:-}" ]; then
   cat >"$FM_TEST_RECEIVED"
 else
@@ -1714,6 +1715,13 @@ SH
   out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) || fail "stdin adapter should pass: $out"
   cmp -s "$body" "$marker" || fail "stdin bytes changed after review"
   rm -f "$marker"
+  local host_file="$TMP_ROOT/runtime-host"
+  out=$(GH_HOST=enterprise.example.invalid FM_TEST_HOST_RECEIVED="$host_file" FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" issue create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) || fail "checked writes must pin host: $out"
+  assert_equals github.com "$(cat "$host_file")" 'checked write host'
+  cmp -s "$body" "$marker" || fail "host pin changed checked stdin"
+  rm -f "$marker"
+  out=$(GH_HOST=enterprise.example.invalid FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_HOST_RECEIVED="$host_file" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr view 3 --repo acme/widgets) || fail "read host environment must remain unchanged"
+  assert_equals enterprise.example.invalid "$(cat "$host_file")" 'read host environment'
   printf '%s\n' "$PRIVATE_TERM" >"$body"
   out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" pr edit 3 --repo acme/widgets --body-file=- <"$body" 2>&1) && fail "private stdin body must refuse"
   [ ! -e "$marker" ] || fail "refused bytes reached gh"
@@ -1908,6 +1916,18 @@ test_git_adapter_refuses_indirect_publication() {
   git -C "$repo" config remote.origin.vcs hg
   out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "remote helper override must refuse"
   git -C "$repo" config --unset remote.origin.vcs
+  git --git-dir="$TMP_ROOT/public.git" config receive.advertisePushOptions true
+  printf '#!/bin/sh\nprintf received >"%s"\n' "$marker" >"$TMP_ROOT/public.git/hooks/pre-receive"
+  chmod +x "$TMP_ROOT/public.git/hooks/pre-receive"
+  git -C "$repo" config push.pushOption no-mistakes.skip=push,pr,ci
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "configured skip option must refuse local transport"
+  assert_contains "$out" 'configured push options refused' 'configured gate options refusal'
+  [ ! -e "$marker" ] || fail "configured push option reached receiver"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "configured push option changed remote"
+  git -C "$repo" config push.pushOption ''
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "empty configured push option must also refuse"
+  git -C "$repo" config --unset-all push.pushOption
+  rm "$TMP_ROOT/public.git/hooks/pre-receive"
   git -C "$repo" remote add executable "$TMP_ROOT/public.git"
   git -C "$repo" config remote.executable.receivepack "printf bypass > '$marker'; git-receive-pack"
   out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push executable main 2>&1) && fail "configured receive-pack command must refuse"

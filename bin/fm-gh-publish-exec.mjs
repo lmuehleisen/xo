@@ -6,6 +6,7 @@
 // the existing policy, then forwards identical stdin bytes on approval.
 // Reads pass; unsupported operations fail closed. Never evaluates argv as shell.
 // FM_PUBLISH_EXEC_BLOCK=1 independently refuses all supported GitHub writes.
+// Checked writes pin GH_HOST to github.com; read environments stay unchanged.
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,7 +46,8 @@ try {
   const verdict = decision(["gh", ...args].map(quote).join(" "), process.cwd());
   if (verdict.decision !== "allow") throw new Error(`${verdict.code}: ${verdict.reason}`);
   if (operation === "write" && process.env.FM_PUBLISH_EXEC_BLOCK === "1") throw new Error("GitHub writes blocked pending contribution approval");
-  const result = spawnSync(real, original, { argv0: "gh", input, stdio: input === undefined ? "inherit" : ["pipe", "inherit", "inherit"] });
+  const env = operation === "write" ? { ...process.env, GH_HOST: "github.com" } : process.env;
+  const result = spawnSync(real, original, { argv0: "gh", input, env, stdio: input === undefined ? "inherit" : ["pipe", "inherit", "inherit"] });
   if (result.error) throw new Error("real gh execution failed");
   process.exitCode = result.status ?? 1;
 } catch (error) {

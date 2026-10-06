@@ -6,7 +6,7 @@
 // Named remotes resolve URL rewrites through Git before destination checks.
 // Rewritten explicit URLs/legacy remotes refuse; use a configured remote.
 // Implicit mirror/tag/helper publication, receive-pack overrides and
-// unsupported forms fail closed.
+// configured push options or unsupported forms fail closed.
 // Pinned local NM_HOME/repos intake may carry no-mistakes push options; its
 // --no-verify is removed so client hooks run before gate admission.
 // Runs the existing pre-push gate on every tip without overriding hooksPath,
@@ -81,6 +81,9 @@ try {
     const receivepack = spawnSync(real, ["config", "--get-all", `remote.${remote}.receivepack`], { argv0: "git", cwd, encoding: "utf8" });
     if (![0, 1].includes(receivepack.status)) throw new Error("cannot read receive-pack configuration");
     if (receivepack.status === 0) throw new Error("configured receive-pack programs refused");
+    const pushOptions = spawnSync(real, ["config", "--get-all", "push.pushOption"], { argv0: "git", cwd, encoding: "utf8" });
+    if (![0, 1].includes(pushOptions.status)) throw new Error("cannot read configured push options");
+    if (pushOptions.status === 0) throw new Error("configured push options refused; use explicit checked local gate options");
     if (configured("push.followTags", true) === "true") throw new Error("implicit tag publication refused");
     if (named.status === 0) {
       const push = spawnSync(real, ["config", "--get-all", `remote.${remote}.pushurl`], { argv0: "git", cwd, encoding: "utf8" });
