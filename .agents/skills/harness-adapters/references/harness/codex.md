@@ -23,7 +23,8 @@ The decision persists for the repository, so later worktrees of the same project
 ## Task launch opt-ins
 
 Verified on 2026-10-05 with codex-cli 0.160.0.
-`codex -c 'model_reasoning_effort="ultra"' debug models --bundled` both validates the installed configuration parser and returns its shipped model catalog.
+`codex debug models --bundled` returns its shipped model catalog without loading user or project configuration.
+The separate `codex --model gpt-6-astra -c 'model_reasoning_effort="ultra"' --disable hooks debug prompt-input` probe loads configuration and renders prompt input without a model turn; malformed configuration refuses.
 Ultra is advertised in `supported_reasoning_levels` for GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol, GPT-5.6 Sol, and GPT-5.6 Terra; it is absent for the Luna variants.
 Discover support from the installed CLI rather than treating that list as a permanent model allowlist.
 

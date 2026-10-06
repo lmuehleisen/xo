@@ -926,6 +926,7 @@ These token-free probes establish the native surfaces:
 ```sh
 claude -p --settings '{"ultracode":true}' --output-format json '/effort current'
 codex -c 'model_reasoning_effort="ultra"' debug models --bundled
+codex --model gpt-6-astra -c 'model_reasoning_effort="ultra"' --disable hooks debug prompt-input
 codex --enable goals features list
 ```
 
@@ -933,6 +934,9 @@ Claude returned `local_command=effort`, `num_turns=0`, and `Current effort level
 The same probe with `--model haiku` omitted `Ultracode on`.
 Codex's bundled catalog advertised `ultra` for `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`, and the two bundled daybreak aliases, while neither Luna variant advertised it.
 Its feature listing returned `goals stable true`.
+Additional configuration probes were verified on 2026-10-06 UTC with codex-cli 0.160.0.
+The bundled catalog command returned exit 0 even with malformed user TOML; `features list` and `debug prompt-input` returned exit 1 for that configuration.
+With valid configuration, the Ultra prompt probe returned exit 0 without a model turn.
 
 Interactive probes used `claude --permission-mode auto --settings '{"ultracode":true}' '/effort current'` and `codex --no-daemon --disable hooks --model gpt-6.1-sol -c 'model_reasoning_effort="ultra"'` on a trivial response-only goal.
 Claude's initial local command reported `Ultracode on` before any model input, confirming the actual interactive session.

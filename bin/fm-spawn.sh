@@ -95,11 +95,14 @@
 #   exception: bin/fm-harness.sh validate-native-effort owns its model scope;
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
 #   Direct Codex receives -c model_reasoning_effort="ultra" only when the
-#   installed CLI parser and bundled model catalog prove support from the
+#   installed config bootstrap and bundled model catalog prove support from the
 #   finalized task worktree before harness start. Its native goal feature
 #   probe uses that same worktree, including after a leased slot's base refresh.
 #   Native task opt-in probes and launches use the same absolute executable
-#   resolved from PATH for Claude and Codex.
+#   resolved from PATH for Claude and Codex. Codex opt-ins also pin this
+#   caller's absolute CODEX_HOME (default HOME/.codex) for probes and launch,
+#   including through launch-env-allowlist, so a retained pane cannot substitute
+#   a different user configuration or stored login after validation.
 #   This direct-Codex extension applies only to task workers, not secondmates.
 #   --ultracode opts a Claude task worker into dynamic workflow orchestration
 #   via session-only --settings JSON, independently of --effort. It requires
@@ -2848,6 +2851,7 @@ fi
 # Ultra is an explicit native capability, never a Pi thinking-level alias.
 # Pin native opt-in executables before worktree or endpoint provisioning.
 TASK_OPTIN_BIN=
+TASK_CODEX_HOME=
 if [ "$RAW_LAUNCH" = 0 ] && [ "$KIND" != secondmate ] &&
   { [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ] || { [ "$HARNESS" = codex ] && [ "$EFFORT" = ultra ]; }; }; then
   case "$HARNESS" in
@@ -2860,6 +2864,10 @@ if [ "$RAW_LAUNCH" = 0 ] && [ "$KIND" != secondmate ] &&
       # A retained pane may have a different PATH. Probe and launch this same
       # absolute executable so an older pane-local CLI cannot replace it.
       TASK_OPTIN_BIN=$(CDPATH='' cd -- "$(dirname "$TASK_OPTIN_BIN")" && printf '%s/%s' "$(pwd -P)" "$(basename "$TASK_OPTIN_BIN")") || exit 1
+      if [ "$HARNESS" = codex ]; then
+        TASK_CODEX_HOME=$("$SCRIPT_DIR/fm-harness.sh" codex-config-root) || exit 1
+        export CODEX_HOME=$TASK_CODEX_HOME
+      fi
       ;;
   esac
 fi
@@ -6060,6 +6068,9 @@ fi
 # A home's worker account pin replaces that forwarding: the launch names the
 # pinned root (or unsets the variable for the ordinary Claude account) and
 # sheds the environment credentials Claude ranks above the root's login.
+if [ -n "$TASK_CODEX_HOME" ]; then
+  LAUNCH="env CODEX_HOME=$(shell_quote "$TASK_CODEX_HOME") $LAUNCH"
+fi
 if [ -n "$WORKER_ACCOUNT" ]; then
   case "$HARNESS" in
   claude)

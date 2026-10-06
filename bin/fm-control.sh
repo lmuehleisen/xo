@@ -855,7 +855,9 @@ resolve_relaunch_profile() {
     if [ "$TARGET_HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
       # Match the replacement's project configuration before stopping the
       # running worker. The primary project and caller may load other config.
-      (cd "$WT" && "$SCRIPT_DIR/fm-harness.sh" validate-native-effort \
+      local codex_probe_home
+      codex_probe_home=$("$SCRIPT_DIR/fm-harness.sh" codex-config-root) || return 1
+      (cd "$WT" && CODEX_HOME=$codex_probe_home "$SCRIPT_DIR/fm-harness.sh" validate-native-effort \
         "$TARGET_HARNESS" "$TARGET_MODEL" "$TARGET_EFFORT" "$KIND") || return 1
     else
       "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$TARGET_HARNESS" "$TARGET_MODEL" "$TARGET_EFFORT" "$KIND" || return 1

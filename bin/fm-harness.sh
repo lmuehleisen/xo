@@ -18,12 +18,18 @@
 #                                        codex-native/<id>, or direct Codex's
 #                                        installed bundled catalog advertises
 #                                        ultra for the explicit model and its
-#                                        config parser accepts that effort.
+#                                        prompt/config bootstrap accepts the
+#                                        launch overrides without a model turn.
 #                                        kind=secondmate refuses direct Codex
 #                                        ultra before probing. Other efforts
 #                                        retain their policy.
 #                                        codex-bin selects the exact executable;
 #                                        default: codex resolved from PATH.
+#        fm-harness.sh codex-config-root  print the absolute CODEX_HOME selected
+#                                        by this caller, defaulting to HOME/.codex.
+#                                        Resolve existing relative roots before
+#                                        changing to a task worktree; refuse
+#                                        missing HOME and control bytes.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.
@@ -546,6 +552,22 @@ resolve_secondmate_effort() {
   secondmate_field 3
 }
 
+codex_config_root() {
+  local root=${CODEX_HOME:-}
+  if [ -z "$root" ]; then
+    [ -n "${HOME:-}" ] || { echo "error: Codex task launch opt-ins require CODEX_HOME or HOME" >&2; return 1; }
+    root=$HOME/.codex
+  fi
+  case "$root" in
+    *[[:cntrl:]]*) echo "error: CODEX_HOME contains an invalid control byte" >&2; return 1 ;;
+    /*) printf '%s\n' "$root" ;;
+    *) (CDPATH='' cd -- "$root" && pwd -P) || {
+      echo "error: CODEX_HOME directory cannot be resolved: $root" >&2
+      return 1
+    } ;;
+  esac
+}
+
 validate_native_effort() {
   local harness=${1:-} model=${2:-} effort=${3:-} kind=${4:-} codex_bin=${5:-codex} catalog
   [ "$effort" = ultra ] || return 0
@@ -563,7 +585,7 @@ validate_native_effort() {
         return 1
       fi
       catalog=$(fm_run_timed 15 "$codex_bin" -c 'model_reasoning_effort="ultra"' debug models --bundled </dev/null 2>/dev/null) || {
-        echo "error: installed codex cannot verify ultra support (config parser or bundled catalog unavailable)" >&2
+        echo "error: installed codex cannot verify ultra support (bundled catalog unavailable)" >&2
         return 1
       }
       if printf '%s\n' "$catalog" | jq -e --arg model "$model" '
@@ -572,6 +594,13 @@ validate_native_effort() {
           (.supported_reasoning_levels | type) == "array" and
           any(.supported_reasoning_levels[]; .effort == "ultra"))
       ' >/dev/null 2>&1; then
+        # --bundled does not load user/project config. This separate offline
+        # prompt bootstrap exercises those layers with the launch overrides.
+        fm_run_timed 15 "$codex_bin" --model "$model" -c 'model_reasoning_effort="ultra"' \
+          --disable hooks debug prompt-input </dev/null >/dev/null 2>/dev/null || {
+          echo "error: installed codex cannot verify ultra support (prompt/config bootstrap unavailable)" >&2
+          return 1
+        }
         return 0
       fi
       printf 'error: installed codex catalog does not advertise ultra for model %s\n' "$model" >&2
@@ -584,6 +613,7 @@ validate_native_effort() {
 
 case "${1:-}" in
   validate-native-effort) shift; validate_native_effort "$@" ;;
+  codex-config-root) codex_config_root ;;
   ancestry)
     case "${2:-}" in
       ''|*[!0-9]*) [ -z "${2:-}" ] || { echo "error: ancestry takes a numeric pid" >&2; exit 2; } ;;

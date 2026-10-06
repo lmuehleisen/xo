@@ -280,7 +280,7 @@ run_control() {  # <case-dir> <args...>
   env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH \
     -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
-    HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
+    HOME="$dir/user-home" CODEX_HOME="${FM_TEST_CODEX_HOME-$dir/user-home/.codex}" CLAUDE_CONFIG_DIR='' \
     FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
     FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
     FM_REAL_GIT="${FM_REAL_GIT:-}" FM_FAKE_GIT_FAILURE="${FM_FAKE_GIT_FAILURE:-}" \
@@ -898,7 +898,7 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
 
 test_codex_ultra_relaunch_uses_recorded_worktree_configuration() {
   local dir out rc scenario id=rl-codex-ultra caller meta brief
-  for scenario in invalid-caller invalid-target; do
+  for scenario in invalid-caller invalid-target invalid-root; do
     dir=$(new_case "codex-ultra-$scenario" "$id")
     add_ship_task "$dir" "$id" codex
     printf codex > "$dir/fake/command"
@@ -914,9 +914,14 @@ test_codex_ultra_relaunch_uses_recorded_worktree_configuration() {
 #!/usr/bin/env bash
 case "$*" in
   *'debug models --bundled'*)
-    pwd -P >> "$FM_HOME/probe-cwd.log"
-    if [ -f .codex/config.toml ] && grep -q '^invalid fixture config$' .codex/config.toml; then exit 1; fi
     printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
+    ;;
+  *'debug prompt-input'*)
+    pwd -P >> "$FM_HOME/probe-cwd.log"
+    printf '%s\n' "$CODEX_HOME" >> "$FM_HOME/probe-root.log"
+    for config in .codex/config.toml "$CODEX_HOME/config.toml"; do
+      if [ -f "$config" ] && grep -q '^invalid fixture config$' "$config"; then exit 1; fi
+    done
     ;;
 esac
 SH
@@ -927,8 +932,11 @@ SH
     printf '%s\n' 'invalid fixture config' > "$dir/proj/.codex/config.toml"
     if [ "$scenario" = invalid-caller ]; then
       printf '%s\n' 'invalid fixture config' > "$caller/.codex/config.toml"
-    else
+    elif [ "$scenario" = invalid-target ]; then
       printf '%s\n' 'invalid fixture config' > "$dir/wt/.codex/config.toml"
+    else
+      mkdir -p "$dir/user-home/.codex"
+      printf '%s\n' 'invalid fixture config' > "$dir/user-home/.codex/config.toml"
     fi
     out=$(cd "$caller" && run_control "$dir" "$id" relaunch --note "preserve target configuration"); rc=$?
     if [ "$scenario" = invalid-caller ]; then
@@ -938,6 +946,9 @@ SH
       # Control's pre-stop probe and spawn's revalidation must both use the WT.
       assert_equals "$(printf '%s\n%s' "$dir/wt" "$dir/wt")" "$(cat "$dir/home/probe-cwd.log")" \
         "relaunch probes did not both load the recorded worktree configuration"
+      assert_equals "$(printf '%s\n%s' "$dir/user-home/.codex" "$dir/user-home/.codex")" "$(cat "$dir/home/probe-root.log")" \
+        "relaunch probes did not use the configuration root pinned into the launch"
+      assert_contains "$(cat "$dir/fake/literal")" "CODEX_HOME='$dir/user-home/.codex'" "relaunch did not pin its validated configuration root"
     else
       expect_code 1 "$rc" "invalid recorded worktree config passed Ultra preflight: $out"
       assert_contains "$out" 'cannot verify ultra support' "invalid target refusal lost parser failure"

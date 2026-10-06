@@ -54,14 +54,10 @@ SH
   chmod +x "$fakebin/timeout" "$fakebin/cursor-agent"
   cat > "$fakebin/codex" <<'SH'
 #!/usr/bin/env bash
+root=${CODEX_HOME:-$HOME/.codex}
 case "$*" in
   *'debug models --bundled'*)
-    [ -z "${FM_FAKE_CODEX_CWD_LOG:-}" ] || pwd -P >> "$FM_FAKE_CODEX_CWD_LOG"
-    # Mirror CLI parsing of project-local configuration, independently of
-    # the model catalog, so caller and target configuration can disagree.
-    if [ -f .codex/config.toml ] && grep -q '^invalid fixture config$' .codex/config.toml; then
-      exit 1
-    fi
+    # The real --bundled command skips configuration loading.
     [ "${FM_FAKE_CODEX_PROBE_FAIL:-0}" = 0 ] || exit 1
     if [ -n "${FM_FAKE_CODEX_CATALOG:-}" ]; then
       printf '%s\n' "$FM_FAKE_CODEX_CATALOG"
@@ -69,12 +65,18 @@ case "$*" in
       printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
     fi
     ;;
-  *'features list'*)
+  *'debug prompt-input'*|*'features list'*)
     [ -z "${FM_FAKE_CODEX_CWD_LOG:-}" ] || pwd -P >> "$FM_FAKE_CODEX_CWD_LOG"
-    if [ -f .codex/config.toml ] && grep -q '^invalid fixture config$' .codex/config.toml; then exit 1; fi
-    printf '%s\n' "${FM_FAKE_CODEX_GOALS:-goals stable true}"
+    [ -z "${FM_FAKE_CODEX_ROOT_LOG:-}" ] || printf '%s\n' "$root" >> "$FM_FAKE_CODEX_ROOT_LOG"
+    [ "${FM_FAKE_CODEX_BOOTSTRAP_FAIL:-0}" = 0 ] || exit 1
+    for config in .codex/config.toml "$root/config.toml"; do
+      if [ -f "$config" ] && grep -q '^invalid fixture config$' "$config"; then exit 1; fi
+    done
+    case "$*" in *'features list'*) printf '%s\n' "${FM_FAKE_CODEX_GOALS:-goals stable true}" ;; esac
     ;;
   *)
+    if [ -f "$root/config.toml" ] && grep -q '^invalid fixture config$' "$root/config.toml"; then exit 43; fi
+    printf '%s\n' "$root" > "$(dirname "$0")/native-worker-config-root"
     [ -z "${FM_FAKE_CODEX_WORKER_LOG:-}" ] || printf '%s\n' "$0" "$@" > "$FM_FAKE_CODEX_WORKER_LOG"
     ;;
 esac
@@ -159,7 +161,7 @@ run_spawn() {
     FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
-    CODEX_HOME="${FM_TEST_CODEX_HOME:-$home/codex-home}" \
+    CODEX_HOME="${FM_TEST_CODEX_HOME-$home/codex-home}" \
     GROK_HOME="$home/grok-home" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" "$@"
 }
@@ -1087,7 +1089,9 @@ assert_task_launch_uses_probed_executable() { # <harness> <emitted-launch>
 exit 41
 SH
   chmod +x "$pane_bin/$harness"
-  env PATH="$pane_bin:$PATH" HOME="$CASE_DIR/pane-home" \
+  mkdir -p "$CASE_DIR/pane-codex-root"
+  printf '%s\n' 'invalid fixture config' > "$CASE_DIR/pane-codex-root/config.toml"
+  env PATH="$pane_bin:$PATH" HOME="$CASE_DIR/pane-home" CODEX_HOME="$CASE_DIR/pane-codex-root" \
     FM_FAKE_OLDER_HARNESS_CALLED="$CASE_DIR/older-harness-called" \
     FM_FAKE_CODEX_WORKER_LOG="$CASE_DIR/worker-harness.log" \
     FM_FAKE_CLAUDE_WORKER_LOG="$CASE_DIR/worker-harness.log" \
@@ -1095,6 +1099,10 @@ SH
   [ ! -e "$CASE_DIR/older-harness-called" ] || fail "opted-in launch substituted the pane's unvalidated $harness"
   [ "$(sed -n '1p' "$CASE_DIR/worker-harness.log")" = "$(CDPATH='' cd -- "$FAKEBIN_DIR" && pwd -P)/$harness" ] \
     || fail "opted-in launch did not execute the $harness binary whose capability probe passed"
+  if [ "$harness" = codex ]; then
+    assert_equals "$HOME_DIR/codex-home" "$(cat "$FAKEBIN_DIR/native-worker-config-root")" \
+      "opted-in Codex launch substituted the retained pane's configuration root"
+  fi
 }
 
 test_codex_ultra_refuses_unproved_support() {
@@ -1119,13 +1127,15 @@ test_codex_ultra_refuses_unproved_support() {
     [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unproved ultra published metadata"
     [ ! -s "$LAUNCH_LOG" ] || fail "unproved ultra launched a worker"
   done
-  for probe in malformed unavailable; do
+  for probe in malformed unavailable bootstrap-unavailable; do
     rec=$(make_spawn_case "codex-ultra-$probe" codex "$id")
     read_case_record "$rec"
     if [ "$probe" = malformed ]; then
       out=$(FM_FAKE_CODEX_CATALOG='{}' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
-    else
+    elif [ "$probe" = unavailable ]; then
       out=$(FM_FAKE_CODEX_PROBE_FAIL=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
+    else
+      out=$(FM_FAKE_CODEX_BOOTSTRAP_FAIL=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
     fi
     expect_code 1 "$?" "codex ultra must refuse $probe catalog: $out"
     [ ! -s "$LAUNCH_LOG" ] || fail "bad ultra probe launched a worker"
@@ -1194,6 +1204,64 @@ test_codex_optins_use_finalized_worktree_configuration() {
     done
   done
   pass "Codex Ultra, goal, and combined opt-ins validate the finalized worktree rather than caller or primary configuration"
+}
+
+test_codex_optins_pin_the_probed_configuration_root() {
+  local scenario optin root_mode allowlist rec id=codex-root-binding caller selected provided out rc expected
+  local args=()
+  for scenario in 'ultra default empty' 'ultra custom listed' 'ultra relative absent' \
+    'goal default listed' 'goal custom empty' 'both relative listed'; do
+    read -r optin root_mode allowlist <<< "$scenario"
+    rec=$(make_spawn_case "codex-root-$optin-$root_mode-$allowlist" codex "$id")
+    read_case_record "$rec"
+    caller="$CASE_DIR/caller"
+    mkdir -p "$caller"
+    case "$root_mode" in
+      default) selected="$HOME_DIR/user-home/.codex"; provided= ;;
+      custom) selected="$CASE_DIR/codex root 'selected"; provided=$selected ;;
+      relative) selected="$caller/codex-root"; provided=codex-root ;;
+    esac
+    mkdir -p "$selected" "$CASE_DIR/pane-home/.codex" "$CASE_DIR/pane-root"
+    [ "$root_mode" != relative ] || selected=$(cd "$selected" && pwd -P)
+    printf '\n' > "$selected/config.toml"
+    printf '%s\n' 'invalid fixture config' > "$CASE_DIR/pane-home/.codex/config.toml"
+    printf '%s\n' 'invalid fixture config' > "$CASE_DIR/pane-root/config.toml"
+    case "$allowlist" in
+      empty) : > "$HOME_DIR/config/launch-env-allowlist" ;;
+      listed) printf '%s\n' CODEX_HOME > "$HOME_DIR/config/launch-env-allowlist" ;;
+    esac
+    args=(--model gpt-6-astra)
+    [ "$optin" = goal ] || args+=(--effort ultra)
+    if [ "$optin" != ultra ]; then
+      args+=(--goal smoke)
+      goal_pane_fixture
+      printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+    fi
+    out=$(cd "$caller" && FM_TEST_CODEX_HOME="$provided" FM_FAKE_CODEX_ROOT_LOG="$CASE_DIR/probe-root.log" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "${args[@]}"); rc=$?
+    expect_code 0 "$rc" "Codex $scenario did not validate its selected root: $out"
+    expected=$selected
+    [ "$optin" != both ] || expected=$(printf '%s\n%s' "$selected" "$selected")
+    assert_equals "$expected" "$(cat "$CASE_DIR/probe-root.log")" "Codex $scenario probed a different configuration root"
+    env PATH="$FAKEBIN_DIR:$PATH" HOME="$CASE_DIR/pane-home" CODEX_HOME="$CASE_DIR/pane-root" \
+      bash -c "$(head -1 "$LAUNCH_LOG")" || fail "Codex $scenario inherited invalid pane configuration"
+    assert_equals "$selected" "$(cat "$FAKEBIN_DIR/native-worker-config-root")" \
+      "Codex $scenario launch substituted a configuration root after validation"
+  done
+  for optin in ultra goal; do
+    rec=$(make_spawn_case "codex-root-invalid-$optin" codex "$id")
+    read_case_record "$rec"
+    mkdir -p "$HOME_DIR/codex-home"
+    printf '%s\n' 'invalid fixture config' > "$HOME_DIR/codex-home/config.toml"
+    args=(--model gpt-6-astra)
+    if [ "$optin" = ultra ]; then args+=(--effort ultra); else args+=(--goal smoke); fi
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "${args[@]}"); rc=$?
+    expect_code 1 "$rc" "invalid selected root passed Codex $optin validation: $out"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "invalid root published task metadata"
+    [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "invalid root armed task wiring"
+    [ ! -s "$LAUNCH_LOG" ] || fail "invalid root started a worker"
+  done
+  pass "Codex opt-ins pin the probed absolute configuration root across pane HOME/CODEX_HOME changes and environment filters"
 }
 
 test_claude_ultracode_optin() {
@@ -2937,6 +3005,7 @@ test_native_effort_validator_keeps_axes_separate
 test_native_pi_ultra_is_explicit_and_model_scoped
 test_codex_ultra_refuses_unproved_support
 test_codex_optins_use_finalized_worktree_configuration
+test_codex_optins_pin_the_probed_configuration_root
 test_remote_secondmate_ultra_refuses_before_routing
 test_claude_ultracode_optin
 test_goal_first_native_input
