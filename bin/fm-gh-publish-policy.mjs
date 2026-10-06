@@ -591,7 +591,10 @@ function ghTarget(command, spec, parsed, tokens, cwd, context) {
     target.cwd = cwd;
   }
   if (command === "issue edit") {
-    const selector = literalValue(positional[0]);
+    // The shared body applies to every selector. Only a single verified
+    // issue may qualify for the extended cap; multi-target edits retain the
+    // ordinary cap rather than borrowing the first target's issue type.
+    const selector = positional.length === 1 ? literalValue(positional[0]) : null;
     target.issueNumber = selector?.match(/^(?:#)?(\d+)$/)?.[1]
       || selector?.match(/\/(?:issues|pull)\/(\d+)(?:[/?#]|$)/)?.[1] || "unknown";
   }
@@ -1206,4 +1209,12 @@ function runtimeOperation(argv) {
   return SPECS[`${group} ${verb}`] ? "write" : "unsupported";
 }
 
-export { decision, runtimeOperation, runtimeCommand };
+// These documented file flags accept '-' as stdin. Derive supported verbs
+// from the policy grammar so runtime snapshots cannot omit a checked verb.
+function runtimeStdinFlags(argv) {
+  const selected = runtimeCommand(argv);
+  const spec = selected && SPECS[`${selected.group} ${selected.verb}`];
+  return Object.keys(spec?.file || {}).filter((flag) => ["-F", "--body-file", "--notes-file"].includes(flag));
+}
+
+export { decision, runtimeOperation, runtimeCommand, runtimeStdinFlags };

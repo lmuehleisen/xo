@@ -1753,6 +1753,26 @@ SH
   done
   node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" --unknown pr view 3 >/dev/null 2>&1 && fail "unknown leading flag must refuse"
   node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" --repo >/dev/null 2>&1 && fail "missing inherited repo must refuse"
+  local invocation case_args=()
+  for invocation in 'pr comment 3' 'pr review 3 --comment' 'pr merge 3 --squash' 'issue create --title Fix' 'issue edit 3' 'issue comment 3' 'release create v1' 'release edit v1'; do
+    read -r -a case_args <<<"$invocation"
+    flag=--body-file
+    case "$invocation" in release*) flag=--notes-file ;; esac
+    printf 'Exact supported stdin.\r\nNo final newline.' >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_TEST_ARGV="$argv_file" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${case_args[@]}" --repo acme/widgets "$flag=-" <"$body" 2>&1) || fail "supported stdin invocation must pass: $invocation: $out"
+    cmp -s "$body" "$marker" || fail "supported stdin bytes changed: $invocation"
+    printf '%s\0' "${case_args[@]}" --repo acme/widgets "$flag=-" >"$expected"
+    cmp -s "$expected" "$argv_file" || fail "supported stdin argv changed: $invocation"
+    rm -f "$marker"
+    printf '%s\n' "$PRIVATE_TERM" >"$body"
+    out=$(FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${case_args[@]}" --repo acme/widgets -F- <"$body" 2>&1) && fail "supported stdin private body must refuse: $invocation"
+    assert_contains "$out" denylist 'supported stdin content scan'
+    [ ! -e "$marker" ] || fail "private supported stdin reached gh"
+    printf 'Fix handling.\n' >"$body"
+    out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_RECEIVED="$marker" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/real-gh" "${case_args[@]}" --repo acme/widgets -F - <"$body" 2>&1) && fail "supported stdin must honor independent block: $invocation"
+    assert_contains "$out" 'GitHub writes blocked' 'supported stdin write block'
+    [ ! -e "$marker" ] || fail "blocked supported stdin reached gh"
+  done
   pass "runtime gh snapshots and checks exact stdin, preserves reads, and refuses unsupported or blocked writes"
 }
 
@@ -1888,6 +1908,26 @@ test_git_adapter_refuses_indirect_publication() {
   git -C "$repo" config remote.origin.vcs hg
   out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "remote helper override must refuse"
   git -C "$repo" config --unset remote.origin.vcs
+  git -C "$repo" remote add executable "$TMP_ROOT/public.git"
+  git -C "$repo" config remote.executable.receivepack "printf bypass > '$marker'; git-receive-pack"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push executable main 2>&1) && fail "configured receive-pack command must refuse"
+  assert_contains "$out" 'configured receive-pack programs refused' 'receive-pack config refusal'
+  [ ! -e "$marker" ] || fail "configured receive-pack shell command executed"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "receive-pack refusal changed remote"
+  git -C "$repo" config remote.executable.receivepack ''
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push executable main 2>&1) && fail "empty configured receive-pack must also refuse"
+  for flag in --receive-pack --exec; do
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push "$flag=printf bypass" executable main 2>&1) && fail "explicit receive-pack flag must refuse"
+    assert_contains "$out" 'explicit remote and branch refspecs required' 'receive-pack flag refusal'
+  done
+  git -C "$repo" remote add local-file "file://$TMP_ROOT/public.git"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push local-file main 2>&1) || fail "independent network block must allow checked file transport: $out"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse main)" 'checked file transport received exact head'
+  printf 'private example-org/example-project\n' >>"$CFG/allowlist"
+  git -C "$repo" remote add blocked-network https://github.com/example-org/example-project.git
+  install_gh_stub
+  out=$(FM_TEST_GH_REPO=example-org/example-project FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push blocked-network main 2>&1) && fail "network block must still refuse HTTPS"
+  assert_contains "$out" 'network pushes blocked' 'HTTPS remains blocked'
   pass "Git publishing plumbing, aliases, global indirection and implicit extra refs cannot bypass the adapter"
 }
 
@@ -1978,6 +2018,15 @@ SH
   chmod +x "$FAKEBIN/gh"
   printf '%s\n' "$FAKEBIN/gh" >"$CFG/gh"
   policy 'gh issue edit 3 --repo kunchenguid/firstmate --body-file upstream-detail.md' || fail "verified issue edit must qualify: $POLICY_OUT"
+  printf 'public example-org/example-project\n' >>"$CFG/allowlist"
+  policy 'gh issue edit 3 4 --repo example-org/example-project --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "multi-target issue edit must retain ordinary cap"
+  assert_contains "$POLICY_OUT" 'longer than 20 lines' 'multi-target ordinary cap'
+  policy 'gh issue edit 3 https://github.com/example-org/example-project/pull/4 --body-file upstream-detail.md'
+  [ $? -eq 2 ] || fail "issue followed by PR URL must retain ordinary cap"
+  assert_contains "$POLICY_OUT" 'longer than 20 lines' 'mixed target ordinary cap'
+  printf 'Short technical update.\n' >"$TMP_ROOT/short-multi-body.md"
+  policy 'gh issue edit 3 4 --repo example-org/example-project --body-file short-multi-body.md' || fail "short multi-target edit must remain supported: $POLICY_OUT"
   policy 'gh api -X PATCH repos/kunchenguid/firstmate/issues/3 -F body=@upstream-detail.md' || fail "verified REST issue edit must qualify: $POLICY_OUT"
   policy 'gh api -X POST repos/kunchenguid/firstmate/issues -F title=Detail -F body=@upstream-detail.md' || fail "REST issue creation must qualify: $POLICY_OUT"
   FM_TEST_IS_ISSUE=false policy 'gh issue edit https://github.com/kunchenguid/firstmate/pull/3 --body-file upstream-detail.md'
@@ -1992,6 +2041,33 @@ SH
   policy 'gh pr review 3 --repo kunchenguid/firstmate --comment --body-file upstream-detail.md' || fail "review replies must use scoped reply cap"
   policy 'gh api -X POST repos/kunchenguid/firstmate/issues/3/comments -F body=@upstream-detail.md' || fail "REST comments must use scoped reply cap"
   pass "upstream issue and reply limits bind destination and target type, count blank lines, and preserve content checks"
+}
+
+test_issue_edit_gate_context() {
+  local boundary="$TMP_ROOT/issue-edit-boundary" selectors expected out
+  mkdir -p "$boundary"
+  cp "$ROOT/bin/fm-gh-publish-policy.mjs" "$ROOT/bin/fm-arm-command-policy.mjs" "$boundary/"
+  # Inspect the executable boundary, not implementation text. The existing
+  # live-type tests cover the gate's extended-cap decision; this fixture
+  # ensures multiple selectors cannot borrow the first selector's number.
+  cat >"$boundary/fm-publish-gate.sh" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = check-text ] && [ "$2" = --dest ] && [ "$3" = example-org/example-project ] || exit 1
+[ "$4" = --issue ] && [ "$5" = "$FM_TEST_EXPECT_ISSUE" ] || exit 1
+SH
+  chmod +x "$boundary/fm-publish-gate.sh"
+  for selectors in '3' '3 4' '3 https://github.com/example-org/example-project/pull/4'; do
+    expected=unknown
+    [ "$selectors" != 3 ] || expected=3
+    out=$(FM_TEST_POLICY="$boundary/fm-gh-publish-policy.mjs" FM_TEST_SELECTORS="$selectors" FM_TEST_EXPECT_ISSUE="$expected" node --input-type=module - <<'JS'
+import { pathToFileURL } from 'node:url';
+const { decision } = await import(pathToFileURL(process.env.FM_TEST_POLICY));
+const result = decision(`gh issue edit ${process.env.FM_TEST_SELECTORS} --repo example-org/example-project --body 'Technical update.'`);
+if (result.decision !== 'allow') process.exit(1);
+JS
+    ) || fail "issue-edit context sent to gate is incorrect: $selectors: $out"
+  done
+  pass "single issue edits qualify by number and multi-target edits send unqualified gate context"
 }
 
 test_identity_file_contract
@@ -2059,5 +2135,6 @@ test_local_gate_transport_preserves_hooks
 test_git_adapter_refuses_indirect_publication
 test_git_adapter_checks_rewritten_destination
 test_upstream_issue_and_reply_limits
+test_issue_edit_gate_context
 
 echo "# all fm-publish-gate tests passed"

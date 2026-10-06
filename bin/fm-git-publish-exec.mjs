@@ -5,7 +5,8 @@
 // are refused. Pushes accept -C plus an explicit remote and branch refspecs.
 // Named remotes resolve URL rewrites through Git before destination checks.
 // Rewritten explicit URLs/legacy remotes refuse; use a configured remote.
-// Implicit mirror/tag/helper publication and unsupported forms fail closed.
+// Implicit mirror/tag/helper publication, receive-pack overrides and
+// unsupported forms fail closed.
 // Pinned local NM_HOME/repos intake may carry no-mistakes push options; its
 // --no-verify is removed so client hooks run before gate admission.
 // Runs the existing pre-push gate on every tip without overriding hooksPath,
@@ -77,6 +78,9 @@ try {
       if (![0, 1].includes(r.status)) throw new Error("cannot read push configuration");
       return r.status === 0 ? r.stdout.trim() : "";
     };
+    const receivepack = spawnSync(real, ["config", "--get-all", `remote.${remote}.receivepack`], { argv0: "git", cwd, encoding: "utf8" });
+    if (![0, 1].includes(receivepack.status)) throw new Error("cannot read receive-pack configuration");
+    if (receivepack.status === 0) throw new Error("configured receive-pack programs refused");
     if (configured("push.followTags", true) === "true") throw new Error("implicit tag publication refused");
     if (named.status === 0) {
       const push = spawnSync(real, ["config", "--get-all", `remote.${remote}.pushurl`], { argv0: "git", cwd, encoding: "utf8" });
@@ -125,7 +129,7 @@ try {
     const gate = path.join(path.dirname(fileURLToPath(import.meta.url)), "fm-publish-gate.sh");
     const checked = spawnSync(gate, ["pre-push", remote, url], { argv0: "git", cwd, input: `${lines.join("\n")}\n`, stdio: ["pipe", "inherit", "inherit"] });
     if (checked.status !== 0) throw new Error("outgoing publish gate refused");
-    if (process.env.FM_PUBLISH_EXEC_BLOCK === "1" && [rawUrl, url].some((target) => /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(target) && !target.startsWith("file://") || /^[^/]+:/.test(target))) throw new Error("network pushes blocked pending contribution approval");
+    if (process.env.FM_PUBLISH_EXEC_BLOCK === "1" && [rawUrl, url].some((target) => !target.startsWith("file://") && (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(target) || /^[^/]+:/.test(target)))) throw new Error("network pushes blocked pending contribution approval");
     if (rewrittenExplicit) throw new Error("explicit URL rewrite or legacy remote refused; use a configured remote");
   }
   const forwarded = argv[i] === "push" ? argv.filter((arg) => arg !== "--no-verify") : argv;
