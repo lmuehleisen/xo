@@ -2013,6 +2013,28 @@ test_git_adapter_checks_branch_objects() {
   pass "outgoing adapter refuses unscanned tag objects and non-branch refs, and forwards only checked commit objects to checked branches"
 }
 
+test_git_adapter_checks_original_objects() {
+  local repo out clean sensitive real_git
+  repo=$(fresh_repo replacement-objects)
+  real_git=$(command -v git)
+  rm "$TMP_ROOT/replacement-objects.hooks/pre-push"
+  clean=$(git -C "$repo" rev-parse main)
+  git -C "$repo" branch clean "$clean"
+  commit_file "$repo" fixture.txt "$PRIVATE_TERM" 'Update fixture' || fail "replacement fixture commit failed"
+  sensitive=$(git -C "$repo" rev-parse main)
+  git -C "$repo" update-ref "refs/replace/$sensitive" "$clean"
+  assert_equals 'initial commit' "$(git -C "$repo" show -s --format=%s main)" 'replacement masks the outgoing commit locally'
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "replacement must not mask sensitive outgoing content"
+  assert_contains "$out" denylist 'original object content is scanned'
+  assert_no_secret_echo "$out" 'replacement refusal'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "masked branch reached receiver"
+  git --git-dir="$TMP_ROOT/public.git" cat-file -e "$sensitive" >/dev/null 2>&1 && fail "original sensitive object reached receiver"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin clean 2>&1) || fail "original clean object should pass: $out"
+  assert_equals "$clean" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse refs/heads/clean)" 'receiver gets checked original clean commit'
+  git --git-dir="$TMP_ROOT/public.git" cat-file -e "$sensitive" >/dev/null 2>&1 && fail "unrelated replacement published sensitive object"
+  pass "outgoing checks ignore replacement objects and validate the original history that Git publishes"
+}
+
 test_git_adapter_refuses_empty_target() {
   local repo out real_git
   repo=$(fresh_repo empty-target)
@@ -2232,6 +2254,7 @@ test_local_gate_transport_preserves_hooks
 test_git_adapter_refuses_indirect_publication
 test_git_adapter_checks_rewritten_destination
 test_git_adapter_checks_branch_objects
+test_git_adapter_checks_original_objects
 test_git_adapter_refuses_empty_target
 test_git_adapter_preserves_tracking
 test_git_adapter_disables_recursive_publication

@@ -6,6 +6,8 @@
 // Sources must be commit objects; pushes forward explicit checked branch refs.
 // Local branch sources retain tracking; other sources use checked commit SHAs
 // and require an explicit branch destination.
+// Push resolution, gate checks and forwarding disable replacement-object lookup
+// so validation reads the original objects and history that Git publishes.
 // Named remotes resolve URL rewrites through Git before destination checks.
 // Rewritten explicit URLs/legacy remotes refuse; use a configured remote.
 // Implicit mirror/tag/helper publication, receive-pack overrides and
@@ -62,6 +64,7 @@ try {
   };
   let checkedRefs;
   if (argv[i] === "push") {
+    process.env.GIT_NO_REPLACE_OBJECTS = "1";
     const options = new Set(["-u", "--set-upstream", "--force-with-lease", "--force", "--porcelain", "--quiet", "-q"]);
     const args = argv.slice(i + 1);
     let gateOptions = false;
