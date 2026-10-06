@@ -83,6 +83,9 @@ case "${1:-}" in
         ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
       esac
       printf '%s\n' "$payload" >> "$D/literal"
+      if [ "${FM_FAKE_OPENCODE_POST_ENTER_FAILURE:-0}" = 1 ]; then
+        case "$payload" in *'Read the brief at'*) : > "$D/opencode-brief-typed" ;; esac
+      fi
       case "$payload" in
         /exit|/quit)
           printf 'zsh' > "$D/command"
@@ -104,6 +107,15 @@ case "${1:-}" in
       printf '%s\n' "$payload" >> "$D/keys"
       case "$payload" in
         Enter)
+          if [ -f "$D/opencode-brief-typed" ]; then
+            rm -f "$D/opencode-brief-typed"
+            : > "$D/opencode-after-enter"
+            if [ -n "${FM_FAKE_OPENCODE_NATIVE_STATE:-}" ]; then
+              "$FM_FAKE_BUSY_EVENT_WRITER" apply "$FM_HOME/state" "$FM_FAKE_BUSY_EVENT_ID" \
+                "$FM_FAKE_OPENCODE_NATIVE_STATE" --current-gen --source opencode-plugin --event execution-observed
+            fi
+            exit 1
+          fi
           if [ -s "$D/pending-launch" ]; then
             n=0; [ ! -f "$D/launch-enters" ] || n=$(cat "$D/launch-enters")
             n=$((n + 1)); printf '%s' "$n" > "$D/launch-enters"
@@ -158,7 +170,11 @@ case "${1:-}" in
     fi
     [ -z "${FM_FAKE_COMPOSER_READ_FAIL:-}" ] || exit 1
     if [ "$(cat "$D/command")" = opencode ]; then
-      if [ "${FM_FAKE_OPENCODE_PENDING:-0}" = 1 ]; then
+      if [ -f "$D/opencode-after-enter" ]; then
+        printf 'OpenCode turn transition\n'
+        exit 0
+      fi
+      if [ "${FM_FAKE_OPENCODE_PENDING:-0}" = 1 ] || [ -f "$D/opencode-brief-typed" ]; then
         printf '┃\n┃  retained draft\n┃\n┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n╹▀▀▀▀▀▀▀▀\n'
       else
         printf '┃\n┃\n┃\n┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n╹▀▀▀▀▀▀▀▀\n  12.8K (1%%)  ctrl+p commands    /tmp/project:main\n'
@@ -1143,7 +1159,7 @@ test_opencode_late_backlog_failure_confirms_the_running_replacement() {
 }
 
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
-  local dir id out rc failure gen current
+  local dir id out rc failure gen current expected
   for failure in readiness submission; do
     id="oc-restart-fail-$failure"
     dir=$(new_case "$id" "$id")
@@ -1171,7 +1187,9 @@ test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
     assert_contains "$(cat "$dir/home/state/$id.status")" 'failed [at=' "failure status must be stamped"
     current=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
       HOME="$dir/user-home" "$ROOT/bin/fm-crew-state.sh" "$id")
-    assert_contains "$current" 'state: failed' "failed restart reconciled as working: $current"
+    expected=failed
+    [ "$failure" != submission ] || expected=unknown
+    assert_contains "$current" "state: $expected" "failed restart reconciled incorrectly: $current"
     gen=$(cat "$dir/home/state/$id.busy-gen")
     [ -f "/tmp/fm-$id/opencode-plugin-$gen/index.mjs" ] || fail "retained agent lost plugin wiring"
     assert_grep 'Build auto' "/tmp/fm-$id"/opencode-startup-*.log "failure must retain captured terminal evidence"
@@ -1180,6 +1198,36 @@ test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
     fi
   done
   pass "OpenCode failed restart preserves its pane, recovery record, work and captured diagnostics"
+}
+
+test_opencode_ambiguous_submission_preserves_observed_native_activity() {
+  local dir id out rc native current expected
+  for native in busy idle none; do
+    id="oc-ambiguous-$native"
+    dir=$(new_case "$id" "$id")
+    add_ship_task "$dir" "$id" opencode
+    sed 's/^kind=ship$/kind=scout/' "$dir/home/state/$id.meta" > "$dir/meta.new"
+    mv "$dir/meta.new" "$dir/home/state/$id.meta"
+    printf zsh > "$dir/fake/command"
+    printf opencode > "$dir/fake/becomes"
+    printf '#!/usr/bin/env bash\nprintf "opencode v2.0.18\\n"\n' > "$dir/fakebin/opencode"
+    chmod +x "$dir/fakebin/opencode"
+    out=$(FM_FAKE_OPENCODE_POST_ENTER_FAILURE=1 FM_FAKE_BUSY_EVENT_WRITER="$ROOT/bin/fm-busy-event.sh" \
+      FM_FAKE_BUSY_EVENT_ID="$id" FM_FAKE_OPENCODE_NATIVE_STATE="$([ "$native" = none ] || printf '%s' "$native")" \
+      FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 run_spawn "$dir" "$id" --relaunch); rc=$?
+    expect_code 1 "$rc" "ambiguous submission should fail delivery confirmation: $out"
+    assert_contains "$(cat "$dir/fake/keys")" Enter "fixture never attempted Enter"
+    assert_contains "$out" 'brief submission unconfirmed' "fixture did not reach ambiguous submission"
+    current=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+      HOME="$dir/user-home" "$ROOT/bin/fm-crew-state.sh" "$id")
+    case "$native" in busy) expected=working ;; idle) expected=failed ;; none) expected=unknown ;; esac
+    assert_contains "$current" "state: $expected" "ambiguous submission overwrote native state: $current"
+    if [ "$native" != none ]; then
+      assert_contains "$(cat "$dir/home/state/$id.busy-state")" 'source=opencode-plugin' "failure replaced native lifecycle evidence"
+    fi
+    [ ! -e "$dir/fake/killed-windows" ] || fail "ambiguity closed the retained endpoint"
+  done
+  pass "OpenCode ambiguous submission preserves native activity and leaves an unobserved turn unknown"
 }
 
 test_opencode_control_relaunch_honors_explicit_default_profile_resets() {
@@ -3019,6 +3067,7 @@ test_opencode_late_backlog_failure_confirms_the_running_replacement
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics
 test_opencode_marker_publication_failure_refuses_a_false_relaunch_success
 test_opencode_control_relaunch_honors_explicit_default_profile_resets
+test_opencode_ambiguous_submission_preserves_observed_native_activity
 test_explicit_model_wins_over_the_recorded_one
 test_recorded_launch_optins_refuse_recovery_before_stop
 test_relaunch_onto_an_unverified_harness_is_refused

@@ -4896,14 +4896,15 @@ spawn_delivery_endpoint_cleanup() {
 }
 
 opencode_spawn_fail() { # <detail>
+  local failure_state=${2:-idle}
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
   if [ "$RELAUNCH" -eq 1 ]; then
-    # The launch seed assumes brief submission. A failed gate must settle it
-    # so current-state reconciliation can read the failed status declaration.
+    # Readiness failure settles an unchanged launch seed; submission ambiguity
+    # makes it unknown. Never replace newer native activity with either verdict.
     # Keep the generation armed for lifecycle events from the retained pane.
-    if ! "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE_REAL" "$ID" idle \
-      --gen "$BUSY_GEN" --source fm-spawn --event launch-failed; then
+    if ! "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE_REAL" "$ID" "$failure_state" \
+      --gen "$BUSY_GEN" --source fm-spawn --event launch-failed --if-seq 1; then
       echo "error: could not settle OpenCode replacement busy state for $ID; reconcile endpoint $T before recovery" >&2
     fi
     local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
@@ -6463,7 +6464,7 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" != empty ]; then
-    opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T"
+    opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T" unknown
     exit $?
   fi
 fi
