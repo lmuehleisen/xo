@@ -91,14 +91,17 @@
 # before any child is listed, the repair compares the current directory's
 # device and the mount point of its physical path with the scratch copy.
 # Linux reads that mount point from /proc/self/mountinfo, so a bind mount is
-# its own mount; other systems use the mount point POSIX df reports for that
-# path. The path is compared as raw bytes, including a trailing newline that
+# its own mount. An unreadable table stops the return there, because df cannot
+# separate a same-filesystem bind from the scratch copy. Other systems use the
+# mount point POSIX df reports for that path. The path is compared as raw
+# bytes, including a trailing newline that
 # command substitution would otherwise drop, so a backslash or newline in it
 # still selects that mount. The same byte is kept when the scratch root is
 # resolved, so a symlink to a directory whose name ends with a newline is not
 # replaced by the sibling path that lacks it. A test run can supply that
-# table only when FM_TEST_SEAM is set; ordinary cleanup always reads the live
-# table. A different device or mount is left unchanged and is not entered,
+# table, including an unreadable path, only when FM_TEST_SEAM is set; ordinary
+# cleanup always reads the live table. A different device or mount is left
+# unchanged and is not entered,
 # including a same-filesystem bind mount and every directory under it. A
 # failure to list a directory on the
 # scratch copy's own mount aborts the return. A directory the walk cannot descend,
@@ -1872,7 +1875,9 @@ scout_device_id() {
 # Live mount table, or the test table when FM_TEST_SEAM is set. See the
 # script header.
 scout_mountinfo_file() {
-  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_SCOUT_MOUNTINFO:-}" ] && [ -r "${FM_SCOUT_MOUNTINFO}" ]; then
+  # A set test path is used even when it cannot be read, so a run can prove
+  # that a missing table stops the return. Ordinary cleanup leaves this unset.
+  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_SCOUT_MOUNTINFO+x}" ]; then
     printf '%s\n' "$FM_SCOUT_MOUNTINFO"
     return 0
   fi
@@ -1955,6 +1960,11 @@ scout_mount_point() {
   if [ -r "$table" ]; then
     scout_mount_point_mountinfo "$path"
     return $?
+  fi
+  # df cannot separate a same-filesystem bind from its parent. On Linux that
+  # answer has to come from mountinfo, so a missing table stops the return.
+  if [ "$(uname -s)" = Linux ]; then
+    return 1
   fi
   scout_mount_point_df "$path"
 }

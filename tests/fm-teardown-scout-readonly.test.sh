@@ -726,6 +726,37 @@ test_newline_scratch_root_does_not_change_sibling() {
   pass "a symlink to a scratch directory whose name ends with a newline does not change the sibling path"
 }
 
+# df cannot tell a same-filesystem bind from the scratch copy. On Linux a
+# missing mount table must stop the return before any mode change.
+test_linux_without_mountinfo_refuses_before_return() {
+  local case_dir id=scout-no-mountinfo rc dir_mode
+  if [ "$(uname -s)" != Linux ]; then
+    pass "missing mountinfo refusal skipped: Linux is where df cannot replace the mount table"
+    return 0
+  fi
+  skip_if_directory_mode_is_bypassed "scout-no-mountinfo" && return 0
+  case_dir=$(make_case scout-no-mountinfo)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  dir_mode=$(mode_of "$case_dir/wt/copied-hooks")
+
+  rc=0
+  FM_SCOUT_MOUNTINFO="$case_dir/missing-mountinfo" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-no-mountinfo: teardown returned a scratch copy without a mount table"
+  assert_grep "cannot identify the mount" "$case_dir/stderr" \
+    "scout-no-mountinfo: teardown did not report the missing mount table"$'\n'"$(cat "$case_dir/stderr")"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-no-mountinfo: teardown returned the worktree without a mount table"
+  [ -f "$case_dir/wt/copied-hooks/nested/commit-msg" ] \
+    || fail "scout-no-mountinfo: the hooks file was removed"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/copied-hooks")" \
+    "scout-no-mountinfo: directory mode changed without a mount table"
+  pass "a Linux scratch copy is not changed when its mount table cannot be read"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -760,4 +791,5 @@ test_unsearchable_directory_inside_reported_mount_does_not_block_return
 test_reported_mount_with_backslash_is_not_made_writable
 test_reported_mount_with_trailing_newline_is_not_made_writable
 test_newline_scratch_root_does_not_change_sibling
+test_linux_without_mountinfo_refuses_before_return
 test_separate_mount_inside_scratch_scout_is_not_made_writable
