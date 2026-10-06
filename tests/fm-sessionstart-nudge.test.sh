@@ -197,11 +197,25 @@ await hooks.event({ event });
 await hooks.event({ event });
 if (prompts.length !== 1) throw new Error(`expected one prompt, got ${prompts.length}`);
 if (prompts[0] !== process.env.EXPECTED) throw new Error(`unexpected prompt: ${prompts[0]}`);
+// V1 loaders enumerate every exported value. Load each real module as a
+// legacy factory and require its native event/tool hooks, not a V2 definition.
+for (const name of ["sessionstart-nudge", "turnend-guard", "watch-arm", "pretool-check", "cd-check"]) {
+  const plugin = await import(new URL(`./fm-primary-${name}.js`, pathToFileURL(process.env.PLUGIN)));
+  const entries = Object.values(plugin);
+  if (entries.length !== 1) throw new Error(`unexpected legacy exports for ${name}`);
+  for (const factory of entries) {
+    if (typeof factory !== "function") throw new TypeError("Plugin export is not a function");
+    const loaded = await factory({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+    if (typeof loaded.event !== "function" && typeof loaded["tool.execute.before"] !== "function")
+      throw new Error(`V1 factory did not load legacy hooks for ${name}`);
+  }
+}
+
 EOF
   ) || status=$?
-  expect_code 0 "$status" "OpenCode exact nudge delivery"
+  expect_code 0 "$status" "OpenCode exact nudge delivery: $out"
   [ -z "$out" ] || fail "OpenCode exact nudge delivery printed output: $out"
-  pass "OpenCode session.created delivers the exact wrapper nudge once per session"
+  pass "OpenCode V1 primary exports load legacy hooks without V2 definitions"
 }
 
 # --- run tier ----------------------------------------------------------------

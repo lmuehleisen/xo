@@ -947,6 +947,88 @@ test_cursor_failed_catalog_probe_does_not_block_spawn() {
   pass "cursor preserves the requested model when its live catalog is unreachable"
 }
 
+test_opencode_rejects_v1_before_launch() {
+  local rec id=profile-opencode-v1 out status
+  rec=$(make_spawn_case profile-opencode-v1 opencode "$id")
+  read_case_record "$rec"
+  out=$(FM_FAKE_OPENCODE_VERSION='opencode v1.18.33' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "OpenCode V1 must fail before allocation"
+  assert_contains "$out" "requires V2 >= 2.0.18" "version refusal must name the supported floor"
+  [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "unsupported OpenCode must not publish a worker record"
+  pass "OpenCode V1 is refused before launch"
+}
+
+test_opencode_rejects_v2_secondmate_before_launch() {
+  local rec id=profile-opencode-secondmate out status sm
+  rec=$(make_spawn_case profile-opencode-secondmate opencode "$id")
+  read_case_record "$rec"
+  printf '%s\n' opencode > "$HOME_DIR/config/secondmate-harness"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 1 "$status" "OpenCode V2 must refuse a secondmate before launch"
+  assert_contains "$out" 'primary and secondmate support is deferred' "refusal must identify the unsupported role"
+  [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "unsupported secondmate must not publish a worker record"
+  [ ! -s "$LAUNCH_LOG" ] || fail "unsupported secondmate typed a launch command"
+  pass "OpenCode V2 secondmate is refused before launch and publication"
+}
+
+test_opencode_refuses_pending_startup_composer() {
+  local rec id=profile-opencode-pending out status launch
+  rec=$(make_spawn_case profile-opencode-pending opencode "$id")
+  read_case_record "$rec"
+  out=$(FM_FAKE_TMUX_COMPOSER=pending FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "OpenCode must refuse an unproven startup composer"
+  assert_contains "$out" "composer did not become ready" "readiness refusal must identify the failed gate"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "Read the brief at" "no brief may be typed into a pending composer"
+  pass "OpenCode refuses brief submission into a pending startup composer"
+}
+
+test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
+  local rec id out status mode failure endpoint work_file
+  for failure in readiness submission pending unknown; do
+    for mode in closed survives unreadable; do
+      id="profile-opencode-$failure-$mode"
+      rec=$(make_spawn_case "$id" opencode "$id")
+      read_case_record "$rec"
+      endpoint="$CASE_DIR/endpoint"
+      work_file="$WT_DIR/brief-started.txt"
+      out=$(FM_FAKE_TMUX_BRIEF_WORK_FILE="$work_file" FM_FAKE_TMUX_ENDPOINT_STATE="$endpoint" FM_FAKE_TMUX_CLOSE_MODE="$mode" \
+        FM_FAKE_TMUX_COMPOSER="$([ "$failure" != readiness ] || printf pending)" \
+        FM_FAKE_TMUX_BRIEF_SEND_FAIL="$([ "$failure" != submission ] || printf 1)" \
+        FM_FAKE_TMUX_BRIEF_STATE="$CASE_DIR/brief-typed" \
+        FM_FAKE_TMUX_BRIEF_VERDICT="$failure" \
+        FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+      status=$?
+      expect_code 1 "$status" "OpenCode $failure must fail with $mode endpoint cleanup"
+      if [ "$mode" = closed ]; then
+        [ ! -s "$endpoint" ] || fail "failed startup did not close its endpoint"
+      fi
+      if [ "$mode" = closed ] && [ "$failure" = readiness ]; then
+        [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "pre-delivery closure must roll back provisional ownership"
+      else
+        assert_meta_profile "$HOME_DIR/state/$id.meta" opencode default default
+        [ -s "$HOME_DIR/state/$id.busy-gen" ] || fail "possible brief delivery lost busy wiring"
+      fi
+      if [ "$mode" != closed ]; then
+        assert_contains "$out" 'preserved for recovery' "unconfirmed closure must report retained ownership"
+      fi
+      if [ "$failure" = unknown ]; then
+        [ -s "$work_file" ] || fail "unknown post-Enter verdict must exercise work already started"
+      elif [ "$failure" = readiness ]; then
+        [ ! -f "$work_file" ] || fail "readiness failure must not deliver the brief"
+      fi
+    done
+  done
+  pass "OpenCode startup retains task ownership after possible brief delivery, including closed endpoints"
+}
+
 test_opencode_threads_model_and_effort_variant() {
   local rec id out status launch
   id=profile-opencode-z7
@@ -958,17 +1040,14 @@ test_opencode_threads_model_and_effort_variant() {
   expect_code 0 "$status" "opencode spawn with model and effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 high
   launch=$(cat "$LAUNCH_LOG")
-  # opencode 1.18.32's config schema carries per-model reasoning effort as
-  # agent.<name>.variant, so the effort rides the OPENCODE_CONFIG_CONTENT JSON
-  # the launch already writes, keyed to the resolved model on the default
-  # build agent, never as a launch flag.
-  assert_contains "$launch" \
-    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\"},\"agent\":{\"build\":{\"model\":\"anthropic/claude-sonnet-4-5\",\"variant\":\"high\"}}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
-    "opencode launch did not write the effort as the build agent's variant in its config"
+  assert_contains "$launch" "\"agents\":{\"build\":{\"model\":\"anthropic/claude-sonnet-4-5#high\"}}}" \
+    "OpenCode V2 agent model must carry the effort variant"
+  assert_contains "$launch" "opencode --standalone --auto" "OpenCode must use a private server"
+  assert_not_contains "$launch" "--model" "OpenCode V2 does not accept the interactive model flag"
   assert_not_contains "$launch" "--effort" "opencode launch must not pass unsupported --effort"
   assert_not_contains "$launch" "--variant" "opencode launch must not pass run-only --variant"
   assert_not_contains "$launch" "--thinking" "opencode launch must not pass pi thinking flag"
-  pass "opencode receives --model and the effort as its config's agent variant"
+  pass "OpenCode receives model and effort through V2 config"
 }
 
 test_opencode_without_effort_keeps_launch_config_unchanged() {
@@ -983,10 +1062,10 @@ test_opencode_without_effort_keeps_launch_config_unchanged() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 default
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" \
-    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\"}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
-    "opencode launch without effort must keep the permission-only config byte-identical"
+    "\"model\":\"anthropic/claude-sonnet-4-5\"" \
+    "opencode launch without effort must keep the model config byte-identical"
   assert_not_contains "$launch" '"variant"' "opencode launch without effort must not write a variant"
-  pass "opencode without an effort keeps its launch config unchanged"
+  pass "OpenCode without effort still pins the requested model"
 }
 
 test_opencode_emits_variant_for_openai_family_effort() {
@@ -1001,7 +1080,7 @@ test_opencode_emits_variant_for_openai_family_effort() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode openai/gpt-5.6-sol xhigh
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" \
-    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\"},\"agent\":{\"build\":{\"model\":\"openai/gpt-5.6-sol\",\"variant\":\"xhigh\"}}}' opencode --model 'openai/gpt-5.6-sol' --prompt" \
+    "\"agents\":{\"build\":{\"model\":\"openai/gpt-5.6-sol#xhigh\"}}}" \
     "opencode launch did not write the openai family effort as the build agent's variant"
   pass "opencode emits the variant for an effort the openai family exposes"
 }
@@ -1018,8 +1097,8 @@ test_opencode_omits_variant_when_model_family_lacks_effort() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 medium
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" \
-    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\"}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
-    "opencode must keep the permission-only config when the model family lacks the effort"
+    "\"model\":\"anthropic/claude-sonnet-4-5\"" \
+    "opencode must keep the model config when the model family lacks the effort"
   assert_not_contains "$launch" '"variant"' "opencode must omit the variant when the model family lacks the effort"
   pass "opencode omits the variant for an effort outside the model family's list"
 }
@@ -1304,6 +1383,63 @@ test_claude_ultracode_optin() {
     fi
   done
   pass "Claude ultracode is a separate explicit, probed setting and preserves effort"
+}
+
+test_remote_opencode_secondmate_refuses_before_routing() {
+  local rec id=remote-opencode out pin existing mate verb
+  local -a args
+  for pin in explicit positional configured; do
+    for existing in absent alive; do
+      rec=$(make_spawn_case "remote-opencode-$pin-$existing" opencode "$id")
+      read_case_record "$rec"
+      printf -- '- %s - remote fixture (host: fixture-host; root: /fixture/root; home: /fixture/home; scope: fixture; projects: alpha; added 2026-10-05)\n' "$id" > "$HOME_DIR/data/secondmates.md"
+      cat > "$FAKEBIN_DIR/ssh-refuse" <<'SH'
+#!/usr/bin/env bash
+printf 'unexpected remote transport\n' >> "${FM_FAKE_LAUNCH_LOG:?}"
+exit 99
+SH
+      cat > "$FAKEBIN_DIR/opencode" <<'SH'
+#!/usr/bin/env bash
+printf 'unexpected parent version probe\n' >> "${FM_FAKE_LAUNCH_LOG:?}"
+exit 99
+SH
+      chmod +x "$FAKEBIN_DIR/ssh-refuse" "$FAKEBIN_DIR/opencode"
+      if [ "$existing" = alive ]; then
+        printf 'sentinel endpoint\n' > "$HOME_DIR/state/$id.meta"
+      fi
+      args=(--secondmate)
+      case "$pin" in
+        explicit) args+=(--harness opencode) ;;
+        positional) args+=(opencode) ;;
+        configured) printf 'opencode opencode/muse-spark-1.3-contributor-free\n' > "$HOME_DIR/config/secondmate-harness" ;;
+      esac
+      out=$(FM_SSH_BIN="$FAKEBIN_DIR/ssh-refuse" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "${args[@]}")
+      expect_code 1 "$?" "remote OpenCode secondmate must refuse before routing: $pin $existing $out"
+      assert_contains "$out" 'OpenCode secondmate launches are unsupported' "remote refusal was bypassed"
+      [ ! -s "$LAUNCH_LOG" ] || fail "remote refusal reached transport or probed the parent's CLI"
+      if [ "$existing" = alive ]; then
+        [ "$(cat "$HOME_DIR/state/$id.meta")" = 'sentinel endpoint' ] || fail "remote refusal changed existing endpoint metadata"
+      else
+        assert_absent "$HOME_DIR/state/$id.meta" "remote refusal published parent metadata"
+      fi
+      assert_absent "$HOME_DIR/state/.spawn-$id.lock" "remote refusal leaked the task lock"
+      assert_absent "$HOME_DIR/state/.secondmate-registry.lock" "remote refusal leaked the registry lock"
+    done
+  done
+  mate="$CASE_DIR/seeded-mate"
+  make_seeded_secondmate_home "$mate" "$id"
+  mkdir -p "$mate/state/parent-route"
+  printf 'sentinel endpoint\n' > "$mate/state/parent-route/$id.meta"
+  for verb in launch relaunch; do
+    args=("$verb" "$id" opencode - -)
+    [ "$verb" != launch ] || args+=(herdr)
+    out=$(FM_HOME="$mate" PATH="$FAKEBIN_DIR:$PATH" "$ROOT/bin/fm-remote-secondmate-control.sh" "${args[@]}" 2>&1)
+    expect_code 1 "$?" "host-local OpenCode $verb must refuse before endpoint access: $out"
+    assert_contains "$out" 'OpenCode secondmate launches are unsupported' "host-local control bypassed the worker-only gate"
+    [ "$(cat "$mate/state/parent-route/$id.meta")" = 'sentinel endpoint' ] || fail "host-local refusal changed endpoint metadata"
+    [ ! -s "$LAUNCH_LOG" ] || fail "host-local refusal touched the endpoint or launched a harness"
+  done
+  pass "remote OpenCode secondmate refuses before sync, transport, CLI probes and endpoint reuse"
 }
 
 test_remote_secondmate_ultra_refuses_before_routing() {
@@ -2997,6 +3133,10 @@ test_grok_omits_invalid_xhigh_reasoning_effort
 test_cursor_threads_model_workspace_and_omits_effort_axis
 test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
+test_opencode_rejects_v1_before_launch
+test_opencode_rejects_v2_secondmate_before_launch
+test_opencode_refuses_pending_startup_composer
+test_opencode_failed_startup_keeps_only_unconfirmed_endpoints
 test_opencode_threads_model_and_effort_variant
 test_opencode_without_effort_keeps_launch_config_unchanged
 test_opencode_emits_variant_for_openai_family_effort
@@ -3006,6 +3146,7 @@ test_native_pi_ultra_is_explicit_and_model_scoped
 test_codex_ultra_refuses_unproved_support
 test_codex_optins_use_finalized_worktree_configuration
 test_codex_optins_pin_the_probed_configuration_root
+test_remote_opencode_secondmate_refuses_before_routing
 test_remote_secondmate_ultra_refuses_before_routing
 test_claude_ultracode_optin
 test_goal_first_native_input

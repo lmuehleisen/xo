@@ -1,4 +1,5 @@
-Mode: OpenCode TUI plugin background wake.
+Mode: OpenCode V1 TUI plugin background wake.
+OpenCode V2 primary operation is unsupported; use the boundary in `.agents/skills/harness-adapters/references/harness/opencode.md` instead of this protocol.
 
 When this session owns supervision and away mode is not active:
 1. Drain first with `bin/fm-wake-drain.sh`.

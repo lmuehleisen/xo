@@ -27,7 +27,7 @@ The tier is a property of the harness surface, not of the home.
 | Tier | What the adapter does | Used by |
 | --- | --- | --- |
 | Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, Pi / pi-signed, omp, Cursor |
-| Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, OpenCode, and run-tier sources routed to the nudge |
+| Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, OpenCode V1, and run-tier sources routed to the nudge |
 
 Codex's interactive TUI has no tracked session-open, compaction, or re-emit channel and is not covered by either tier.
 
@@ -39,7 +39,7 @@ Codex's interactive TUI has no tracked session-open, compaction, or re-emit chan
 | Codex exec | Run | [Codex exec](#codex-exec) |
 | Codex interactive TUI | Uncovered | [Codex interactive TUI](#codex-interactive-tui) |
 | Pi / pi-signed | Run | [Pi and pi-signed](#pi-and-pi-signed) |
-| OpenCode | Nudge | [OpenCode](#opencode) |
+| OpenCode V1 | Nudge | [OpenCode](#opencode) |
 | Agy | Nudge | [Agy](#agy) |
 | Grok | Nudge | [Grok](#grok) |
 | Cursor | Run | [Cursor](#cursor) |
@@ -307,7 +307,8 @@ Whenever the digest is incomplete, this approved containment keeps the prefix an
 
 ### OpenCode
 
-OpenCode is a nudge-tier harness.
+OpenCode V1 is a nudge-tier harness.
+[The harness reference](../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration) owns the unsupported V2 primary boundary.
 The `.opencode/plugins/fm-primary-sessionstart-nudge.js` plugin does three things:
 
 - It listens for `session.created`.
@@ -440,7 +441,7 @@ It uses a TERM-resistant digest that exceeds its budget and proves that the dige
 
 ### Native startup and Ahoy tests
 
-`tests/fm-pi-primary-live-e2e.test.sh` and `tests/fm-opencode-primary-live-e2e.test.sh` exercise native startup paths with first-message and later-message Ahoy regressions.
+`tests/fm-pi-primary-live-e2e.test.sh` and the V1 branch of `tests/fm-opencode-primary-live-e2e.test.sh` exercise native startup paths with first-message and later-message Ahoy regressions.
 
 ### Cursor tests
 

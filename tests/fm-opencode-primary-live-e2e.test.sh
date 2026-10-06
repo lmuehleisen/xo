@@ -10,6 +10,9 @@ fm_live_gate opt-in FM_OPENCODE_LIVE_E2E opencode tmux sqlite3
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 unset NO_MISTAKES_GATE
+case "$(opencode --version)" in
+  'opencode v2.'*) exec bash "$ROOT/tests/opencode-v2-live.sh" ;;
+esac
 
 fail() {
   printf 'not ok - %s\n' "$1" >&2

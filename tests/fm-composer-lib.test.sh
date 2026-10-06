@@ -725,6 +725,33 @@ test_matrix_opencode_leftbar_signals() {
   assert_screen "opencode 1.18.30 completed-turn idle hint on tmux" empty "$CAPS_TMUX" "$captured_idle" 3
   captured_pending=$'  ▣ Build · Big Pickle · 3.4s\n\n  ┃\n  ┃  '"${ESC}[38;2;255;255;255mReply with OK.${ESC}[38;2;255;255;255m"$'\n  ┃\n  ┃  Build · Big Pickle OpenCode Zen\n  ╹▀▀▀▀▀▀▀▀'
   assert_screen "opencode 1.18.30 completed-turn typed composer on tmux" pending "$CAPS_TMUX" "$captured_pending" 3
+  captured_idle=$'  ┃\n  ┃\n  ┃\n  ┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n  ╹▀▀▀▀▀▀▀▀'
+  assert_screen "OpenCode V2 auto-mode blank composer" empty "$CAPS_TMUX" "$captured_idle" 1
+  assert_screen "OpenCode V2 cursorless auto-mode composer" empty "$CAPS_PLAIN" "$captured_idle"
+  captured_pending=$'  ┃\n  ┃  Reply with OK.\n  ┃\n  ┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n  ╹▀▀▀▀▀▀▀▀'
+  assert_screen "OpenCode V2 auto-mode draft" pending "$CAPS_TMUX" "$captured_pending" 1
+  # Sanitized real V2 columns: the sidebar shares the composer rows, whose
+  # geometry is bounded by its half-block floor rather than the pane width.
+  local floor sidebar
+  floor=$(printf '%96s' '')
+  floor=${floor// /▀}
+  sidebar=$'  ┃                                                                                                     Connect provider /connect\n  ┃\n  ┃\n  ┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n  ╹'"$floor"$'\n  /tmp/project                    9.7K (1%)  ctrl+p commands'
+  assert_screen "V2 sidebar does not pollute composer" empty "$CAPS_TMUX" "$sidebar" 1
+  assert_screen "V2 location strip is cursorless furniture" empty "$CAPS_STYLED_NOID" "$sidebar"
+  local custom_sidebar
+  custom_sidebar=${sidebar/Build auto/Review auto}
+  assert_screen "V2 unknown mode footer stays unknown by default" unknown "$CAPS_STYLED_NOID" "$custom_sidebar"
+  FM_COMPOSER_LEFTBAR_FOOTER_RE='^Review auto · .+$' assert_screen \
+    "V2 configured mode footer proves cursorless furniture" empty "$CAPS_STYLED_NOID" "$custom_sidebar"
+  FM_COMPOSER_LEFTBAR_FOOTER_RE='^Review auto · .+$' assert_screen \
+    "V2 configured footer with later output stays unknown" unknown "$CAPS_STYLED_NOID" "$custom_sidebar"$'\nnew output'
+  local spaced_sidebar
+  spaced_sidebar=${sidebar/\/tmp\/project/\/tmp\/my project}
+  assert_screen "V2 whitespace path is cursorless furniture" empty "$CAPS_STYLED_NOID" "$spaced_sidebar"
+  assert_screen "V2 whitespace path with later output stays unknown" unknown "$CAPS_STYLED_NOID" "$spaced_sidebar"$'\nnew output'
+  assert_screen "V2 extra output below footer invalidates composer" unknown "$CAPS_STYLED_NOID" "$sidebar"$'\nnew output'
+  sidebar=${sidebar/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}
+  assert_screen "V2 sidebar draft remains pending" pending "$CAPS_TMUX" "$sidebar" 0
   # Signal separation: with the idle pattern overridden to something that
   # cannot match, a DIM-styled hint still proves empty through the ghost strip.
   out=$(FM_COMPOSER_IDLE_RE='^NEVER-MATCHES$' fm_composer_classify_screen "$CAPS_TMUX" "$dim_screen" 1)

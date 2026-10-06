@@ -248,6 +248,28 @@ oc_idle() {  # <sessionID>
   printf '{"type":"session.idle","properties":{"sessionID":"%s"}}' "$1"
 }
 
+# Drive the V2 default setup through its public subscription contract.
+drive_oc_v2_plugin() {
+  local plugin=$1
+  shift
+  PLUGIN_PATH="$plugin" node --input-type=module - "$@" 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.PLUGIN_PATH).href);
+let finished;
+const done = new Promise((resolve) => { finished = resolve; });
+const cleanup = await mod.default.setup({
+  location: { directory: "/tmp" },
+  session: { prompt: async () => {} },
+  event: { subscribe: async function* () {
+    try { for (const arg of process.argv.slice(2)) yield JSON.parse(arg); }
+    finally { finished(); }
+  } },
+});
+await done;
+await cleanup();
+EOF
+}
+
 test_opencode_plugin_semantic_lifecycle() {
   local rec id=busy-oc-1 out state plugin
   rec=$(make_spawn_case oc-lifecycle opencode "$id")
@@ -255,7 +277,7 @@ test_opencode_plugin_semantic_lifecycle() {
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
   expect_code 0 $? "opencode spawn should succeed: $out"
   state="$HOME_DIR/state"
-  plugin="$WT_DIR/.opencode/plugins/fm-busy-state.js"
+  plugin="/tmp/fm-$id/opencode-plugin-$(cat "$state/$id.busy-gen")/index.mjs"
   assert_present "$plugin" "opencode spawn did not write the busy-state plugin"
 
   out=$(classify opencode "$id" "$state")
@@ -290,10 +312,23 @@ test_opencode_plugin_semantic_lifecycle() {
   out=$(drive_oc_plugin "$plugin" \
     "$(oc_status ses2 busy)" \
     "$(oc_idle ses_other)") || fail "other-session idle drive failed: $out"
-  [ -f "$state/$id.turn-ended" ] || fail "the marker touch must stay a notification for every session.idle"
+  [ ! -f "$state/$id.turn-ended" ] || fail "a child session must not notify a main-session turn end"
   out=$(classify opencode "$id" "$state")
   [ "$out" = "busy opencode-plugin" ] || fail "another session's idle must not clear the latched busy, got '$out'"
-  pass "opencode plugin classifies from session.status, scoped to the latched worker session"
+  out=$(drive_oc_v2_plugin "$plugin" \
+    '{"type":"session.execution.started","data":{"sessionID":"ses_main"}}' \
+    '{"type":"session.execution.started","data":{"sessionID":"ses_child"}}' \
+    '{"type":"session.execution.succeeded","data":{"sessionID":"ses_child"}}' \
+    '{"type":"session.execution.interrupted","data":{"sessionID":"ses_main","reason":"shutdown"}}') || fail "V2 drive failed: $out"
+  out=$(classify opencode "$id" "$state")
+  [ "$out" = "busy opencode-plugin" ] || fail "V2 child settlement and shutdown must retain main busy, got $out"
+  out=$(drive_oc_v2_plugin "$plugin" \
+    '{"type":"session.execution.started","data":{"sessionID":"ses_main"}}' \
+    '{"type":"session.execution.interrupted","data":{"sessionID":"ses_main","reason":"user"}}') || fail "V2 interrupt drive failed: $out"
+  out=$(classify opencode "$id" "$state")
+  [ "$out" = "idle opencode-plugin" ] || fail "V2 user interrupt must settle main busy, got $out"
+  [ -f "$state/$id.turn-ended" ] || fail "V2 settlement must touch the turn-end signal"
+  pass "OpenCode V2 execution lifecycle settles only the latched worker session"
 }
 
 run_claude_hook() {  # <settings.json> <hook-event>

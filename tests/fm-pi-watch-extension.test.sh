@@ -3348,6 +3348,8 @@ test_opencode_plugin_package_boundary_is_explicit_esm() {
   mkdir -p "$fixture/plugins/lib"
   printf '%s\n' '{"dependencies":{}}' > "$fixture/package.json"
   cp "$ROOT/.opencode/plugins/package.json" "$fixture/plugins/package.json"
+  mkdir -p "$fixture/plugins/lib"
+  cp "$ROOT/.opencode/plugins/lib/fm-v2-plugin.js" "$fixture/plugins/lib/"
   cp "$ROOT/.opencode/plugins/fm-primary-watch-arm.js" "$plugin"
   cp "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$fixture/plugins/lib/fm-operational-input.js"
   out=$(PLUGIN="$plugin" node --input-type=module 2>&1 <<'EOF'
@@ -4401,17 +4403,17 @@ if (!promptBody.includes("TURN WOULD END BLIND")) {
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode watch plugin must not treat external healthy output as an owned arm"
+  expect_code 0 "$status" "OpenCode watch plugin must not treat external healthy output as an owned arm: $out"
   [ -z "$out" ] || fail "OpenCode external-healthy test printed output: $out"
   pass "OpenCode healthy arm output does not suppress the turn-end guard"
 }
 
 test_opencode_turnend_guard_early_child_exit_keeps_result() {
-  local guard_plugin out status
-  guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
-  out=$(GUARD_PLUGIN="$guard_plugin" node 2>&1 <<'EOF'
+  local runner out status
+  runner="$ROOT/.opencode/plugins/lib/fm-process.js"
+  out=$(PROCESS_RUNNER="$runner" node 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
-const mod = await import(pathToFileURL(process.env.GUARD_PLUGIN).href);
+const mod = await import(pathToFileURL(process.env.PROCESS_RUNNER).href);
 // The input exceeds every pipe buffer, so the child - which prints and exits
 // without ever reading stdin - is still being written to when its read end
 // closes. The stdin EPIPE is deterministic, not a scheduler race.

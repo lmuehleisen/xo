@@ -257,7 +257,7 @@ Each enabled primary harness adapts its own turn-end mechanism to the shared gua
 | --- | --- | --- |
 | Claude | Two `Stop` hooks in `.claude/settings.json` | Blocks with exit status 2, cooperating with the Stop auto-arm |
 | Codex | `Stop` hook in `.codex/hooks.json` | Blocks with exit status 2 |
-| OpenCode | `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js` | Passive callback that schedules one follow-up |
+| OpenCode V1 | `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js` | Passive callback that schedules one follow-up |
 | Pi | `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts` | Passive callback that schedules one follow-up |
 | omp | `session_stop` in `.omp/extensions/fm-primary-turnend-guard.ts` | Blocking hook that compels one continuation |
 | Cursor | `stop` hook in `.cursor/hooks.json` | Cannot block, so it parks and returns at most one follow-up |
@@ -274,7 +274,7 @@ The registrations in detail:
   After a usage limit it waits for the reset, after another transient error it waits a bounded backoff, and then it starts one recovery turn whose normal `Stop` re-arms; it stands down in away mode, and the script header owns the full contract.
   A manual Escape interrupt fires neither `Stop` nor `StopFailure`, so an interrupted turn remains unguarded; a person is present by definition there.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
-- OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
+- OpenCode V1 listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
 - Pi listens for `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts`, runs once per logical agent run, and calls `pi.sendUserMessage(..., { deliverAs: "followUp" })` once when the guard returns 2.
 - omp answers its blocking `session_stop` hook in `.omp/extensions/fm-primary-turnend-guard.ts`, passing the payload's own `stop_hook_active` to the shared guard.
   When the guard returns 2, it returns `{ continue: true, additionalContext }`, so the continuation is compelled rather than requested.
@@ -427,7 +427,7 @@ A Claude failure notice describes the automatic mechanism as broken and does not
 
 ### Passive adapters
 
-OpenCode, Pi, and pi-signed expose passive callbacks for this purpose.
+OpenCode V1, Pi, and pi-signed expose passive callbacks for this purpose.
 Their adapters fail open at the hook boundary to protect the user session.
 When the predicate blocks, they schedule one bounded follow-up.
 omp is the exception among the Pi-derived harnesses: its `session_stop` hook blocks like Codex's `Stop` hook, so no passive latch is needed and the `stop_hook_active` loop guard applies unchanged.
@@ -436,7 +436,7 @@ The generated prompts use the canonical `turn-end-guard` kind after the U+2063 `
 Each passive adapter owns a loop latch:
 
 - Pi keeps the latch across internal tool turns and clears it only when the generated follow-up settles or delivery fails.
-- OpenCode's forced follow-up is supported for persistent TUI sessions and remains fail-open in headless `opencode run`.
+- OpenCode V1's forced follow-up is supported for persistent TUI sessions and remains fail-open in headless `opencode run`.
 
 ### Grok capability selection
 
@@ -533,8 +533,8 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - A valid secondmate home is in scope.
   An idle secondmate endpoint with no Relay poll remains healthy because it has no supervision need.
 - The blocking and bounded-follow-up mechanisms are limited to the primary integrations listed above.
-- OpenCode headless mode and untrusted Grok project hooks remain fail-open at the host boundary.
-- Cursor's `stop` step does not fire in headless `cursor-agent -p`, the same class of limit as OpenCode headless; firstmate primaries run interactive.
+- OpenCode V1 headless mode and untrusted Grok project hooks remain fail-open at the host boundary.
+- Cursor's `stop` step does not fire in headless `cursor-agent -p`, the same class of limit as OpenCode V1 headless; firstmate primaries run interactive.
 - A Cursor primary must be launched with `--trust`, or its project hooks never load and the whole integration is inert.
 - Cursor's `preCompact` step is deliberately unregistered.
   Its response can return only `user_message` and it is absent from Cursor's `additional_context` step set, so a post-compaction re-emit needs its own design and is deferred to a follow-up ([`sessionstart-nudge.md`](sessionstart-nudge.md) owns that uncovered surface).

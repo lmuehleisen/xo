@@ -830,6 +830,10 @@ resolve_relaunch_profile() {
   # transaction, where nothing has changed yet.
   fm_control_harness_supports_kind "$TARGET_HARNESS" "$KIND" \
     || die "'$TARGET_HARNESS' is not verified to run a $KIND task, so relaunching $ID onto it would stop the running agent for a launch that must be refused; choose an adapter verified for this kind"
+  # Check the launch owner's OpenCode contract before stopping a live worker.
+  if [ "$TARGET_HARNESS" = opencode ]; then
+    "$SCRIPT_DIR/fm-harness.sh" validate-opencode || return 1
+  fi
   # A model or effort chosen for the previous harness does not transfer to a
   # different one, so an explicit harness change resets both axes unless the
   # caller names them too.

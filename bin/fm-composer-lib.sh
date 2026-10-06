@@ -596,7 +596,7 @@ FM_COMPOSER_AGY_HINT_STYLED=$(printf '\033[90m%s\033[39m' "$FM_COMPOSER_AGY_HINT
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
 # text, and only the run's LAST row is ever matched against it.
-FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT='^(Build|Plan)[[:space:]]+·[[:space:]]+'
+FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT='^(Build|Plan)([[:space:]]+auto)?[[:space:]]+·[[:space:]]+'
 # Claude draws its permission-mode hint on its own row directly below the
 # composer (` ⏵⏵ bypass permissions on (shift+tab to cycle)`, ` ⏵⏵ accept edits
 # on`, ` ⏸ plan mode on`; verified live through Herdr on claude 2.1.236). The
@@ -1516,8 +1516,19 @@ _fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <cursor-row
 # can prove it real, unknown otherwise.
 _fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
   local screen=$1 styled=$2 first=$3 last=$4
-  local row raw content pending_seen=0 footer_re leading_blank=1 placeholder_position=0
+  local row raw content pending_seen=0 footer_re leading_blank=1 placeholder_position=0 floor width=0
   footer_re=${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}
+  floor=$(_fm_composer_screen_row "$((last + 1))" "$screen")
+  floor=$(printf '%s\n' "$floor" | fm_composer_strip_ansi)
+  fm_composer_normalize_trim_var floor
+  # The full-width half-block floor bounds V2's composer independently of its
+  # sidebar. Short legacy fixture floors cannot establish a column boundary.
+  if _fm_composer_leftbar_floor_row "$floor"; then
+    # Count terminal cells without depending on the caller's multibyte locale.
+    floor=${floor//▀/ }
+    floor=${floor//╹/ }
+    [ "${#floor}" -lt 40 ] || width=${#floor}
+  fi
   row=$first
   while [ "$row" -le "$last" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")
@@ -1525,6 +1536,7 @@ _fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
     case "$content" in
       '┃'*) content=${content#┃} ;;
     esac
+    [ "$width" -eq 0 ] || content=${content:0:$((width - 1))}
     fm_composer_normalize_trim_var content
     if [ -z "$content" ]; then row=$((row + 1)); continue; fi
     if [ "$leading_blank" = 1 ] && [ "$row" -gt "$first" ]; then
@@ -1757,8 +1769,25 @@ _fm_composer_select_cursorless() {
     trimmed=$raw
     fm_composer_normalize_trim_var trimmed
     if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed"; then
-      FM_COMPOSER_SELECTED_KIND=
-      return 1
+      # V2 draws its location/shortcut strip directly below the half-block
+      # floor. Require both the mode/model footer and the bounded floor before
+      # treating this exact strip as furniture; later text still invalidates it.
+      if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] && [ "$boundary" -eq "$((FM_COMPOSER_SELECTED_LAST + 1))" ] &&
+        printf '%s\n' "$trimmed" | LC_ALL=C grep -qE '^/.+[[:space:]]{2,}.*ctrl\+p commands'; then
+        raw=$(_fm_composer_screen_row "$FM_COMPOSER_SELECTED_LAST" "$plain")
+        trimmed=$(_fm_composer_row_content "$raw" 0)
+        trimmed=${trimmed#┃}
+        fm_composer_normalize_trim_var trimmed
+        fm_composer_idle_matches "$trimmed" "${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}" sensitive || {
+          FM_COMPOSER_SELECTED_KIND=; return 1;
+        }
+        raw=$(printf '%s\n' "$plain" | tail -n "+$((next + 2))")
+        fm_composer_normalize_trim_var raw
+        [ -z "$raw" ] || { FM_COMPOSER_SELECTED_KIND=; return 1; }
+      else
+        FM_COMPOSER_SELECTED_KIND=
+        return 1
+      fi
     fi
   fi
   [ -n "$FM_COMPOSER_SELECTED_KIND" ]
