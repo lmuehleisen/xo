@@ -690,7 +690,11 @@ EOF
   printf 'default_model = "test"\n' > "$fakehome/.kimi-code/config.toml"
   printf '{"schema_version":1}\n' > "$fakehome/xdgconfig/muse/auth.json"
   for harness in no-mistakes claude codex opencode pi pi-signed grok kimi cursor-agent omp agy muse gemini rovo; do
-    printf '#!/bin/sh\nexit 0\n' > "$fakebin/$harness"
+    if [ "$harness" = opencode ]; then
+      printf '#!/bin/sh\n[ "${1:-}" != --version ] || printf "opencode v2.0.18\\n"\nexit 0\n' > "$fakebin/$harness"
+    else
+      printf '#!/bin/sh\nexit 0\n' > "$fakebin/$harness"
+    fi
     chmod +x "$fakebin/$harness"
   done
   : > "$home/config/no-mistakes"
