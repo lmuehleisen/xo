@@ -1987,6 +1987,29 @@ test_git_adapter_checks_rewritten_destination() {
   pass "named rewritten destinations are checked and explicit rewrite or legacy indirection fails closed"
 }
 
+test_git_adapter_disables_recursive_publication() {
+  local repo child="$TMP_ROOT/submodule-source" remote="$TMP_ROOT/submodule-remote.git" before after out real_git
+  repo=$(fresh_repo recursive-publication)
+  real_git=$(command -v git)
+  git init -q -b main "$child"
+  commit_file "$child" fixture.txt 'Initial fixture.' 'Initial fixture' || fail "submodule seed failed"
+  git clone -q --bare "$child" "$remote"
+  before=$(git --git-dir="$remote" rev-parse main)
+  git -C "$repo" -c protocol.file.allow=always submodule add -q "$remote" component || fail "submodule fixture add failed"
+  assert_equals main "$(git -C "$repo/component" branch --show-current)" 'submodule fixture tracks a pushable branch'
+  pinned git -C "$repo" commit -q -m 'Add component' || fail "parent seed failed"
+  commit_file "$repo/component" fixture.txt "$PRIVATE_TERM" 'Update fixture' || fail "private submodule fixture failed"
+  after=$(git -C "$repo/component" rev-parse HEAD)
+  git -C "$repo" add component
+  pinned git -C "$repo" commit -q -m 'Update component' || fail "parent update failed"
+  git -C "$repo" config push.recurseSubmodules on-demand
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) || fail "checked parent push must pass without recursive publication: $out"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse main)" 'checked parent received exact head'
+  assert_equals "$before" "$(git --git-dir="$remote" rev-parse main)" 'private submodule head was not pushed'
+  git --git-dir="$remote" cat-file -e "$after^{commit}" >/dev/null 2>&1 && fail "private submodule object reached unchecked remote"
+  pass "checked parent pushes never publish configured on-demand submodule history"
+}
+
 test_upstream_issue_and_reply_limits() {
   local out kind verb cap file="$TMP_ROOT/upstream-detail.md"
   write_config
@@ -2154,6 +2177,7 @@ test_contribution_poison_and_evidence_adapter
 test_local_gate_transport_preserves_hooks
 test_git_adapter_refuses_indirect_publication
 test_git_adapter_checks_rewritten_destination
+test_git_adapter_disables_recursive_publication
 test_upstream_issue_and_reply_limits
 test_issue_edit_gate_context
 

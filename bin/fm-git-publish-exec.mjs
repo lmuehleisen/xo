@@ -11,6 +11,7 @@
 // --no-verify is removed so client hooks run before gate admission.
 // Runs the existing pre-push gate on every tip without overriding hooksPath,
 // then calls real Git, whose receive/admission hooks remain authoritative.
+// Forwarded pushes force --recurse-submodules=no so only checked refs publish.
 // FM_PUBLISH_EXEC_BLOCK=1 blocks network pushes after checks; local gate intake
 // remains possible. Keep a separate pushInsteadOf block during setup pilots.
 import { spawnSync } from "node:child_process";
@@ -135,7 +136,10 @@ try {
     if (process.env.FM_PUBLISH_EXEC_BLOCK === "1" && [rawUrl, url].some((target) => !target.startsWith("file://") && (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(target) || /^[^/]+:/.test(target)))) throw new Error("network pushes blocked pending contribution approval");
     if (rewrittenExplicit) throw new Error("explicit URL rewrite or legacy remote refused; use a configured remote");
   }
-  const forwarded = argv[i] === "push" ? argv.filter((arg) => arg !== "--no-verify") : argv;
+  const forwarded = argv[i] === "push" ? [
+    ...argv.slice(0, i + 1), "--recurse-submodules=no",
+    ...argv.slice(i + 1).filter((arg) => arg !== "--no-verify"),
+  ] : argv;
   const result = spawnSync(real, forwarded, { argv0: "git", stdio: "inherit" });
   if (result.error) throw new Error("real git execution failed");
   process.exitCode = result.status ?? 1;
