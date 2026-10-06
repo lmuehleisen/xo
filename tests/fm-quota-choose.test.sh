@@ -823,4 +823,17 @@ for state in stale auth_required; do
 done
 ok "chooser refuses stale/auth-required snapshots that claim known headroom"
 
+# TOON cannot prove absence from folded membership before default fallback.
+cat > "$LAB/alias.toon" <<'TOON'
+quota[2]{provider,accountKey,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  codex,default,all_models,80,1,through_reset,established,weekly,"2030-01-03T00:00:00Z"
+  codex,folded,all_models,0,-1,exhausted_now,established,weekly,"2030-01-03T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+if call_choose --snapshot "$LAB/alias.toon" --candidate codex:default >/dev/null 2>&1; then
+  fail "TOON missing membership chose default evidence without proving lane absence"
+fi
+ok "schema-six TOON lane uncertainty requires the agent-owned JSON fallback"
+
 printf '# all fm-quota-choose tests passed\n'

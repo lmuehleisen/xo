@@ -41,6 +41,7 @@ FM_QUOTA_ROW_JQ='
       ([$rows[] | select(((.accountKeys // [.accountKey]) | index($lane)) != null)]) as $matches |
       if ($matches | length) == 1 then $matches[0]
       elif ($matches | length) > 1 then null
+      elif $snapshot.accountMembershipUnavailable == true and $lane != "" then null
       else ([$rows[] | select(((.accountKeys // [.accountKey]) | index("default")) != null)]) as $defaults |
         if ($defaults | length) == 1 then $defaults[0] else null end
       end

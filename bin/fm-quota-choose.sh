@@ -7,6 +7,10 @@
 # Reads one already-captured quota-axi default TOON or JSON snapshot from the
 # provided file, or from stdin when --snapshot is omitted.
 # bin/fm-quota-axi-lib.sh owns schema compatibility and the shared row join.
+# Schema 6 TOON omits accountKeys: a missing explicit lane stays unknown instead
+# of taking default-account evidence that a JSON membership read could replace.
+# The agent-side quota skill owns that permitted fallback; this helper never
+# takes a second snapshot.
 # For each --candidate in order, it maps <harness> to its primary provider
 # family, then applies the matched row's provider-wide scopes and exact model
 # or product scopes for <model>. A candidate is eligible only when no
@@ -318,7 +322,7 @@ else
           end
         end
       end
-    end
+    end | . + {accountMembershipUnavailable: true}
   ' 2>/dev/null) || die "invalid quota-axi snapshot"
 fi
 
