@@ -1100,10 +1100,10 @@ test_opencode_direct_relaunch_inherits_and_overrides_effort() {
 
 test_opencode_late_backlog_failure_confirms_the_running_replacement() {
   local dir id=oc-late-backlog out rc
-  command -v tasks-axi >/dev/null 2>&1 && fm_tasks_axi_compatible || {
+  if ! command -v tasks-axi >/dev/null 2>&1 || ! fm_tasks_axi_compatible; then
     pass "skipped: compatible tasks-axi is required for the late backlog failure fixture"
     return 0
-  }
+  fi
   dir=$(new_case "$id" "$id")
   add_ship_task "$dir" "$id" opencode
   printf zsh > "$dir/fake/command"
