@@ -28,6 +28,9 @@ STALL_REPLACEMENT_PID=
 STALL_JOB_GROUP=
 QUIET_WORKER_PID=
 SCAN_LANE_PID=
+DUP_OWNER=
+DUP_GROUP=
+DUP_INIT_BASE_PATH=$PATH
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # worker.pid records the serving child, not its restart supervisor, so stopping
 # that pid alone leaves the supervisor to respawn - the leak
@@ -48,6 +51,8 @@ cleanup_remote_job_fixture() {
     wait "$stall_pid" 2>/dev/null || true
   done
   [ -z "$STALL_JOB_GROUP" ] || kill -KILL -- "-$STALL_JOB_GROUP" 2>/dev/null || true
+  [ -z "$DUP_GROUP" ] || kill -CONT -- "-$DUP_GROUP" 2>/dev/null || true
+  [ -z "$DUP_OWNER" ] || fm_remote_job_stop_worker_tree "$DUP_OWNER" || true
   if [ -f "$STATE_ROOT/worker.pid" ]; then
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
   fi
@@ -110,6 +115,126 @@ git -C "$REMOTE_ROOT" config user.name Test
 git -C "$REMOTE_ROOT" add AGENTS.md bin
 git -C "$REMOTE_ROOT" commit -qm 'remote job fixture'
 
+# Direct lane fixtures represent a dispatch by this live test process.
+record_lane_owner() { # <state-root>
+  local state=$1
+  mkdir -p "$state/worker.lock"
+  printf '%s\n' "$$" > "$state/worker.lock/pid"
+  fm_remote_job_process_start "$$" > "$state/worker.lock/start"
+  fm_remote_job_process_command "$$" > "$state/worker.lock/command"
+}
+
+# Two real serving loops share one queue. Hold the old one, let a replacement
+# own a running job, then resume the old one without TERM. Only the owner may
+# keep serving, and its live claim and readiness must survive the old exit.
+# shellcheck disable=SC2030,SC2031 # Ownership fixture overrides are confined to this subshell.
+lock_takeover_case() (
+  local state="$TMP_ROOT/takeover-state" account="$TMP_ROOT/takeover-account"
+  local old='' owner='' lane='' old_start job pending i
+  mkdir -p "$account"
+  export FM_REMOTE_JOB_STATE_ROOT="$state" FM_ROOT_OVERRIDE="$REMOTE_ROOT"
+  export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=30
+  # shellcheck source=bin/fm-remote-job-lib.sh
+  . "$ROOT/bin/fm-remote-job-lib.sh"
+  trap '[ -z "$old" ] || { kill -CONT "$old" 2>/dev/null || true; kill -TERM "$old" 2>/dev/null || true; wait "$old" 2>/dev/null || true; }; [ -z "$owner" ] || { kill -CONT "$owner" 2>/dev/null || true; kill -TERM "$owner" 2>/dev/null || true; wait "$owner" 2>/dev/null || true; }' EXIT
+  HOME="$account" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve > "$TMP_ROOT/takeover-old.log" 2>&1 &
+  old=$!
+  for ((i=0; i<200; i++)); do
+    [ -f "$state/worker.ready" ] && break
+    sleep 0.05
+  done
+  assert_present "$state/worker.ready" "the old takeover worker did not become ready"
+  old_start=$(cat "$state/worker.lock/start")
+  kill -STOP "$old"
+  for ((i=0; i<100; i++)); do
+    [ "$(ps -o state= -p "$old" 2>/dev/null | cut -c1)" = T ] && break
+    sleep 0.05
+  done
+  [ "$(ps -o state= -p "$old" 2>/dev/null | cut -c1)" = T ] || fail "the old takeover worker did not stop"
+  rm -rf -- "$state/worker.lock"
+  HOME="$account" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve > "$TMP_ROOT/takeover-owner.log" 2>&1 &
+  owner=$!
+  for ((i=0; i<200; i++)); do
+    [ "$(cat "$state/worker.ready" 2>/dev/null || true)" = "$owner" ] && break
+    sleep 0.05
+  done
+  [ "$(cat "$state/worker.ready")" = "$owner" ] || fail "the new takeover worker did not become ready"
+  fm_remote_job_stage "$account" "$REMOTE_ROOT" "$REMOTE_HOME" \
+    fm-delay-job.sh 20 "$TMP_ROOT/takeover-finished" </dev/null >/dev/null || fail "$FM_REMOTE_JOB_ERROR"
+  job=$FM_REMOTE_JOB_ID
+  for ((i=0; i<200; i++)); do
+    [ -f "$FM_REMOTE_JOB_JOBS/$job/.claim/armed" ] && break
+    sleep 0.05
+  done
+  assert_present "$FM_REMOTE_JOB_JOBS/$job/.claim/armed" "the owner did not start its command"
+  lane=$(cat "$FM_REMOTE_JOB_JOBS/$job/.claim/owner")
+  kill -0 "$old" || fail "the old serving loop exited before the takeover check"
+  kill -0 "$owner" || fail "the new serving loop exited before the takeover check"
+  kill -CONT "$old"
+  for ((i=0; i<100; i++)); do
+    kill -0 "$old" 2>/dev/null || break
+    sleep 0.05
+  done
+  ! kill -0 "$old" 2>/dev/null || fail "a superseded serving loop kept serving without TERM"
+  wait "$old" 2>/dev/null || true
+  # Keep its identity for the delayed-lane case below.
+  [ "$(cat "$state/worker.lock/pid")" = "$owner" ] || fail "the old loop rewrote the new owner's lock"
+  [ "$(cat "$state/worker.ready")" = "$owner" ] || fail "the old loop overwrote the new owner's readiness"
+  [ "$(cat "$FM_REMOTE_JOB_JOBS/$job/.claim/owner")" = "$lane" ] || fail "the old loop removed the owner's claim"
+  kill -0 "$lane" || fail "the old loop stopped the owner's live lane"
+  [ "$(fm_remote_job_read_state "$FM_REMOTE_JOB_JOBS/$job")" = running ] || fail "the old loop reclaimed the owner's running job"
+  pass "only the recorded owner serves when two real serving loops overlap"
+
+  # A lane dispatched earlier can start after its parent lost ownership. Hold
+  # the replacement so only this delayed lane could claim the new record.
+  kill -STOP "$owner"
+  for ((i=0; i<100; i++)); do
+    [ "$(ps -o state= -p "$owner" 2>/dev/null | cut -c1)" = T ] && break
+    sleep 0.05
+  done
+  [ "$(ps -o state= -p "$owner" 2>/dev/null | cut -c1)" = T ] || fail "the replacement did not stop"
+  fm_remote_job_stage "$account" "$REMOTE_ROOT" "$TMP_ROOT/another-home" \
+    fm-touch-job.sh "$TMP_ROOT/takeover-touched" </dev/null >/dev/null || fail "$FM_REMOTE_JOB_ERROR"
+  pending=$FM_REMOTE_JOB_ID
+  HOME="$account" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$pending" "$old" "$old_start" \
+    > "$TMP_ROOT/takeover-late.log" 2>&1 || fail "the delayed lane did not exit cleanly"
+  assert_absent "$FM_REMOTE_JOB_JOBS/$pending/.claim" "a superseded lane claimed new work"
+  assert_absent "$TMP_ROOT/takeover-touched" "a superseded lane executed new work"
+  old=''
+  kill -CONT "$owner"
+  fm_remote_job_wait "$account" "$pending" || fail "$FM_REMOTE_JOB_ERROR"
+  [ "$FM_REMOTE_JOB_EXIT" = 0 ] || fail "the owner could not serve the queued work"
+  assert_present "$TMP_ROOT/takeover-touched" "the owner did not execute the queued work"
+  pass "a delayed lane cannot claim after its serving owner loses ownership"
+
+  # Freeze the serving parent again so it cannot stop its own lane. An active
+  # lane must detect the replaced owner records and stop its command itself.
+  kill -STOP "$owner"
+  for ((i=0; i<100; i++)); do
+    [ "$(ps -o state= -p "$owner" 2>/dev/null | cut -c1)" = T ] && break
+    sleep 0.05
+  done
+  [ "$(ps -o state= -p "$owner" 2>/dev/null | cut -c1)" = T ] || fail "the lane's serving parent did not stop"
+  rm -rf -- "$state/worker.lock"
+  record_lane_owner "$state"
+  for ((i=0; i<100; i++)); do
+    case "$(ps -o state= -p "$lane" 2>/dev/null | cut -c1)" in ''|Z) break ;; esac
+    sleep 0.05
+  done
+  case "$(ps -o state= -p "$lane" 2>/dev/null | cut -c1)" in
+    ''|Z) ;;
+    *) fail "an active lane kept executing after its serving owner lost the lock" ;;
+  esac
+  assert_absent "$TMP_ROOT/takeover-finished" "the ousted lane's command kept running"
+  [ "$(cat "$state/worker.lock/pid")" = "$$" ] || fail "the ousted lane touched the replacement's lock"
+  kill -CONT "$owner"
+  wait "$owner" 2>/dev/null || true
+  owner=''
+  pass "an active lane stops after ownership loss even while its parent is frozen"
+)
+mkdir -p "$TMP_ROOT/another-home"
+lock_takeover_case || exit 1
+
 # Observe the actual sleep executable boundary for the result consumer, a
 # top-level command lane, and the dispatcher. Re-source the public library as
 # callers may do; its own dispatcher default must not become a legacy override.
@@ -125,12 +250,13 @@ SH
   chmod +x "$poll_dir/bin/sleep"
   trap '[ -z "$pid" ] || { kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }' EXIT
   unset FM_REMOTE_JOB_POLL_SECONDS FM_REMOTE_JOB_ACTIVE_POLL_SECONDS
-  # shellcheck disable=SC2030 # The legacy override is local to this cadence fixture.
+  # shellcheck disable=SC2030,SC2031 # This fixture sets a fresh legacy override after clearing imported defaults.
   [ -z "$legacy" ] || export FM_REMOTE_JOB_POLL_SECONDS="$legacy"
-  # shellcheck disable=SC2030 # The active override is local to this cadence fixture.
+  # shellcheck disable=SC2030,SC2031 # This fixture sets a fresh active override after clearing imported defaults.
   [ -z "$active" ] || export FM_REMOTE_JOB_ACTIVE_POLL_SECONDS="$active"
+  # shellcheck disable=SC2030,SC2031 # These fresh root values belong only to this cadence fixture.
   export FM_REMOTE_JOB_STATE_ROOT="$poll_dir/state" FM_ROOT_OVERRIDE="$REMOTE_ROOT"
-  # shellcheck disable=SC2030 # Each cadence fixture owns its subshell's bounds.
+  # shellcheck disable=SC2030,SC2031 # Fresh cadence bounds do not depend on the takeover subshell.
   export FM_REMOTE_JOB_QUEUE_TIMEOUT=60 FM_REMOTE_JOB_TIMEOUT=30
   # shellcheck disable=SC2030 # The recording executable is local to this fixture.
   export PATH="$poll_dir/bin:$PATH" FM_POLL_SLEEP_LOG="$poll_dir/sleeps"
@@ -160,7 +286,9 @@ SH
   : > "$FM_POLL_SLEEP_LOG"
   fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
     fm-delay-job.sh 0.8 "$poll_dir/ran" </dev/null >/dev/null || fail "$FM_REMOTE_JOB_ERROR"
-  HOME="$ACCOUNT_HOME" "$BASH" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$FM_REMOTE_JOB_ID" &
+  record_lane_owner "$poll_dir/state"
+  HOME="$ACCOUNT_HOME" "$BASH" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" \
+    --lane "$FM_REMOTE_JOB_ID" "$$" "$(cat "$poll_dir/state/worker.lock/start")" &
   pid=$!
   wait "$pid" || fail "$label command lane failed"
   pid=''
@@ -171,6 +299,7 @@ SH
     ! grep -qx 0.05 "$FM_POLL_SLEEP_LOG" || fail "$label lane still sampled at the dispatcher default"
   fi
 
+  rm -rf -- "$poll_dir/state/worker.lock"
   : > "$FM_POLL_SLEEP_LOG"
   HOME="$ACCOUNT_HOME" "$BASH" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" > "$poll_dir/worker.log" 2>&1 &
   pid=$!
@@ -211,6 +340,7 @@ pass "default queue and execution bounds independently cover long polls"
 
 # shellcheck disable=SC2031 # The earlier assignment was confined to DEFAULT_BOUNDS.
 export FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT"
+# shellcheck disable=SC2031 # The parent sets its platform explicitly; takeover exports stay local.
 export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux
 # shellcheck disable=SC2031 # The sourced defaults above were confined to DEFAULT_BOUNDS.
 export FM_REMOTE_JOB_QUEUE_TIMEOUT=5
@@ -856,16 +986,9 @@ done
   || fail "the ownership-loss worker did not stop"
 rm -rf -- "$LOST_STATE/worker.lock"
 kill -CONT "$LOST_TERM_PID"
-LOST_READY_BEFORE=$(file_inode "$LOST_STATE/worker.ready")
-for _ in $(seq 1 100); do
-  LOST_READY_AFTER=$(file_inode "$LOST_STATE/worker.ready")
-  [ -n "$LOST_READY_AFTER" ] && [ "$LOST_READY_AFTER" != "$LOST_READY_BEFORE" ] && break
-  sleep 0.05
-done
-[ -n "${LOST_READY_AFTER:-}" ] && [ "$LOST_READY_AFTER" != "$LOST_READY_BEFORE" ] \
-  || fail "a worker with no ownership lock stopped publishing heartbeats before TERM"
+# Loss of ownership itself stops serving; TERM may arrive after the exit.
 assert_absent "$LOST_STATE/worker.lock" "the ownership lock reappeared before TERM"
-kill -TERM "$LOST_TERM_PID"
+kill -TERM "$LOST_TERM_PID" 2>/dev/null || true
 for _ in $(seq 1 100); do
   kill -0 "$LOST_TERM_PID" 2>/dev/null || break
   sleep 0.05
@@ -1206,7 +1329,9 @@ quiet_stage_completes() { # <state> <account-home> <touched> <label>
   local began=$SECONDS elapsed
   (
     FM_REMOTE_JOB_STATE_ROOT="$1"
+    # shellcheck disable=SC2030 # This staging subshell owns its queue bound.
     FM_REMOTE_JOB_QUEUE_TIMEOUT=60
+    # shellcheck disable=SC2030 # This staging subshell owns its execution bound.
     FM_REMOTE_JOB_TIMEOUT=30
     fm_remote_job_stage "$2" "$REMOTE_ROOT" "$REMOTE_HOME" fm-touch-job.sh "$3" \
       < /dev/null > /dev/null || exit 1
@@ -1387,11 +1512,12 @@ SCAN_OTHER_ID=$(scan_stage "$SCAN_HOME_B" fm-delay-job.sh 1 "$TMP_ROOT/other-ran
 # runs on the stock macOS bash the same way the deployed worker does.
 # Pin this exec-count fixture to 0.05 seconds so its 80-sample scan window fits
 # within the long poll. poll_cadence_case separately proves the default cadence.
+record_lane_owner "$SCAN_STATE"
 HOME="$SCAN_ACCOUNT" PATH="$QUIET_SHIM:/usr/bin:/bin:/usr/sbin:/sbin" \
   FM_TEST_EXEC_LOG="$SCAN_EXEC_LOG" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
   FM_REMOTE_JOB_STATE_ROOT="$SCAN_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
   FM_REMOTE_JOB_ACTIVE_POLL_SECONDS=0.05 \
-  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$SCAN_POLL_ID" \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$SCAN_POLL_ID" "$$" "$(cat "$SCAN_STATE/worker.lock/start")" \
   > "$TMP_ROOT/scan-lane.out" 2> "$TMP_ROOT/scan-lane.err" &
 SCAN_LANE_PID=$!
 for _ in $(seq 1 200); do
@@ -1459,7 +1585,7 @@ HOME="$SCAN_ACCOUNT" PATH="$QUIET_SHIM:/usr/bin:/bin:/usr/sbin:/sbin" \
   FM_TEST_EXEC_LOG="$SCAN_EXEC_LOG" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
   FM_REMOTE_JOB_STATE_ROOT="$SCAN_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
   FM_REMOTE_JOB_MAX_BYTES=4096 LC_ALL="$UTF8_LOCALE" \
-  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$SCAN_BOUND_POLL_ID" \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$SCAN_BOUND_POLL_ID" "$$" "$(cat "$SCAN_STATE/worker.lock/start")" \
   > "$TMP_ROOT/scan-bound-lane.out" 2> "$TMP_ROOT/scan-bound-lane.err" &
 SCAN_LANE_PID=$!
 for _ in $(seq 1 200); do
@@ -1522,5 +1648,249 @@ RESTART_SUPERVISOR_PID=
 assert_grep "remote job worker exited 3 times; stopping the supervisor" "$TMP_ROOT/restart-supervisor.err" \
   "the restart guard did not explain why it stopped"
 pass "barely healthy worker failures remain bounded by the restart guard"
+
+# A live lock owner is never duplicated. On a loaded host the owner's heartbeat
+# can age past the probe's bound while the owner still holds the lock and
+# serves, and the start path used to read that as a dead worker and launch
+# another restart supervisor beside it. Stopping the owner's whole group freezes
+# every writer the way a starved host does without ending the lock owner. The
+# fixture runs from its own root so its processes are distinguishable from the
+# other workers this file started.
+DUP_ROOT="$TMP_ROOT/dup-root"
+DUP_HOME="$TMP_ROOT/dup-account"
+DUP_STATE="$TMP_ROOT/dup-state"
+cp -R "$REMOTE_ROOT" "$DUP_ROOT"
+mkdir -p "$DUP_HOME"
+dup_lib() { # <command> [args...]; runs a library call against the fixture state
+  (
+    FM_REMOTE_JOB_STATE_ROOT="$DUP_STATE"
+    "$@"
+  )
+}
+dup_wait_fresh() { # <label>
+  for _ in $(seq 1 100); do
+    dup_lib fm_remote_job_probe "$DUP_HOME" && return 0
+    sleep 0.05
+  done
+  fail "$1"
+}
+dup_worker_groups() {
+  ps -eo pgid=,command= 2>/dev/null \
+    | awk -v worker="$DUP_ROOT/bin/fm-remote-job-worker.sh" '$3 == worker { print $1 }' | sort -u
+}
+# Pause the real worker at a publication rename after it has published lock
+# ownership: its code identity rename, or its public PID rename after the
+# identity. A concurrent start must accept that owner even when its identity is
+# unpublished or worker.pid is absent or still contains an unclean
+# predecessor's PID.
+DUP_INIT_SHIM="$TMP_ROOT/dup-init-shim"
+DUP_INIT_GATE="$TMP_ROOT/dup-init-gate"
+DUP_INIT_REAL_MV=$(command -v mv)
+mkdir -p "$DUP_INIT_SHIM" "$DUP_INIT_GATE"
+cat > "$DUP_INIT_SHIM/mv" <<'SH'
+#!/bin/bash
+for destination; do :; done
+if [ "$destination" = "$FM_TEST_INIT_STATE/$FM_TEST_INIT_TARGET" ]; then
+  : > "$FM_TEST_INIT_GATE/blocked"
+  deadline=$((SECONDS + ${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}))
+  while [ ! -f "$FM_TEST_INIT_GATE/release" ]; do
+    [ "$SECONDS" -lt "$deadline" ] || exit 1
+    /bin/sleep 0.05
+  done
+fi
+exec "$FM_TEST_INIT_REAL_MV" "$@"
+SH
+chmod +x "$DUP_INIT_SHIM/mv"
+dup_initialization_case() { # <public-pid-state> [barrier-file] [identity-state]
+  local public_pid_state=$1 barrier=${2:-worker.pid} identity_state=${3:-absent} repaired groups
+  rm -f -- "$DUP_INIT_GATE/blocked" "$DUP_INIT_GATE/release"
+  dup_lib fm_remote_job_prepare_state "$DUP_HOME" || fail "cannot prepare initialization fixture"
+  if [ "$public_pid_state" = stale ]; then
+    printf '%s\n' "$$" > "$DUP_STATE/worker.pid"
+  fi
+  if [ "$identity_state" = stale ]; then
+    printf 'predecessor-code-identity\n' > "$DUP_STATE/worker.identity"
+    touch -t 200001010000 "$DUP_STATE/worker.identity"
+  fi
+  (
+    # shellcheck disable=SC2030,SC2031 # This PATH override is confined to the initializing worker fixture.
+    export PATH="$DUP_INIT_SHIM:$DUP_INIT_BASE_PATH"
+    export FM_TEST_INIT_STATE="$DUP_STATE" FM_TEST_INIT_GATE="$DUP_INIT_GATE" FM_TEST_INIT_TARGET="$barrier"
+    export FM_TEST_INIT_REAL_MV="$DUP_INIT_REAL_MV"
+    dup_lib fm_remote_job_start_linux_worker "$DUP_ROOT" "$DUP_HOME"
+  ) || fail "the initializing fixture worker did not start"
+  for _ in $(seq 1 200); do
+    [ -f "$DUP_INIT_GATE/blocked" ] && break
+    sleep 0.05
+  done
+  assert_present "$DUP_INIT_GATE/blocked" "the worker did not reach the $barrier publication barrier"
+  DUP_OWNER=$(cat "$DUP_STATE/worker.lock/pid")
+  DUP_GROUP=$(fm_remote_job_process_pgid "$DUP_OWNER") \
+    || fail "cannot resolve the initializing owner's group"
+  dup_lib fm_remote_job_lock_owner_matches_process "$DUP_HOME" \
+    || fail "the initializing fixture lacks verified live ownership"
+  if [ "$barrier" = worker.identity ]; then
+    if [ "$identity_state" = stale ]; then
+      [ "$(cat "$DUP_STATE/worker.identity")" = predecessor-code-identity ] \
+        || fail "the initializing worker replaced the predecessor identity before its barrier"
+    else
+      assert_absent "$DUP_STATE/worker.identity" "the initializing fixture already published its code identity"
+    fi
+  else
+    dup_lib fm_remote_job_worker_identity_matches "$DUP_ROOT" "$DUP_HOME" \
+      || fail "the initializing fixture has not published its code identity"
+  fi
+  assert_absent "$DUP_STATE/worker.ready" "the initializing fixture published readiness before its PID"
+  if [ "$public_pid_state" = stale ]; then
+    [ "$(cat "$DUP_STATE/worker.pid")" = "$$" ] || fail "the stale public PID was already replaced"
+  else
+    assert_absent "$DUP_STATE/worker.pid" "the initializing fixture already published its PID"
+  fi
+  repaired=$(
+    FM_REMOTE_JOB_STATE_ROOT="$DUP_STATE"
+    FM_REMOTE_JOB_REPAIRED=0
+    fm_remote_job_start_linux_worker "$DUP_ROOT" "$DUP_HOME" || exit 1
+    printf '%s\n' "$FM_REMOTE_JOB_REPAIRED"
+  ) || fail "the start path refused the initializing owner before $barrier publication"
+  groups=$(dup_worker_groups)
+  [ "$repaired" = 0 ] || fail "the start path stopped or duplicated the owner before $barrier publication"
+  [ "$groups" = "$DUP_GROUP" ] || fail "another worker group runs beside the initializing owner"
+  : > "$DUP_INIT_GATE/release"
+  dup_wait_fresh "the initializing owner did not become ready after $barrier publication"
+  [ "$(cat "$DUP_STATE/worker.pid")" = "$DUP_OWNER" ] \
+    || fail "the initializing owner was replaced instead of publishing its PID"
+  dup_lib fm_remote_job_worker_identity_matches "$DUP_ROOT" "$DUP_HOME" \
+    || fail "the initializing owner did not publish its code identity"
+  fm_remote_job_stop_worker_tree "$DUP_OWNER" || fail "the initializing fixture worker did not stop"
+  DUP_OWNER=
+  DUP_GROUP=
+  if [ "$barrier" = worker.identity ]; then
+    pass "a live lock owner is neither stopped nor duplicated before it publishes its code identity"
+  else
+    pass "a live lock owner is never duplicated before $public_pid_state public PID publication"
+  fi
+}
+dup_initialization_case absent
+dup_initialization_case stale
+dup_initialization_case absent worker.identity
+dup_initialization_case absent worker.identity stale
+
+dup_lib fm_remote_job_start_linux_worker "$DUP_ROOT" "$DUP_HOME" \
+  || fail "the duplicate-owner fixture worker did not start"
+for _ in $(seq 1 200); do
+  [ -f "$DUP_STATE/worker.ready" ] && [ -f "$DUP_STATE/worker.pid" ] && break
+  sleep 0.05
+done
+assert_present "$DUP_STATE/worker.ready" "the duplicate-owner fixture worker did not become ready"
+DUP_OWNER=$(cat "$DUP_STATE/worker.pid")
+DUP_GROUP=$(fm_remote_job_process_pgid "$DUP_OWNER") \
+  || fail "the duplicate-owner fixture could not resolve its worker group"
+[ "$(cat "$DUP_STATE/worker.lock/pid")" = "$DUP_OWNER" ] \
+  || fail "the duplicate-owner fixture worker does not hold the ownership lock"
+kill -STOP -- "-$DUP_GROUP"
+sleep 0.2
+touch -t 200001010000 "$DUP_STATE/worker.ready"
+! dup_lib fm_remote_job_probe "$DUP_HOME" \
+  || fail "the frozen owner's aged heartbeat still read as ready"
+DUP_REPAIRED=$(
+  # shellcheck disable=SC2030 # This command substitution targets only the duplicate-owner fixture.
+  FM_REMOTE_JOB_STATE_ROOT="$DUP_STATE"
+  FM_REMOTE_JOB_REPAIRED=0
+  fm_remote_job_start_linux_worker "$DUP_ROOT" "$DUP_HOME" > /dev/null 2>&1 || exit 1
+  printf '%s\n' "$FM_REMOTE_JOB_REPAIRED"
+) || fail "the start path refused a live lock owner with an aged heartbeat"
+DUP_GROUPS=$(dup_worker_groups)
+kill -CONT -- "-$DUP_GROUP"
+[ "$DUP_REPAIRED" = 0 ] \
+  || fail "the start path launched a second supervisor beside a live lock owner with an aged heartbeat"
+[ "$DUP_GROUPS" = "$DUP_GROUP" ] \
+  || fail "a second worker group runs beside the live lock owner: $(printf '%s' "$DUP_GROUPS" | tr '\n' ' ')"
+dup_wait_fresh "the resumed owner did not refresh its heartbeat"
+[ "$(cat "$DUP_STATE/worker.lock/pid")" = "$DUP_OWNER" ] \
+  || fail "the live lock owner lost ownership after an aged heartbeat"
+pass "a live lock owner with an aged heartbeat is never duplicated"
+
+
+fm_remote_job_stop_worker_tree "$DUP_OWNER" || fail "the duplicate-owner fixture worker did not stop"
+DUP_OWNER=
+DUP_GROUP=
+
+# Hold result staging after the initial ownership check, then replace the
+# lock records. Neither the exit rename nor the final done-state rename may
+# commit using the lane's earlier observation of ownership.
+# shellcheck disable=SC2030,SC2031 # This terminal fixture owns its private queue overrides.
+result_commit_case() (
+  local target=$1 state="$TMP_ROOT/result-$1-state" account="$TMP_ROOT/result-$1-account"
+  local shim="$TMP_ROOT/result-$1-shim" gate="$TMP_ROOT/result-$1-gate"
+  local lane='' foreign='' job i real_chmod
+  mkdir -p "$account" "$shim" "$gate"
+  export FM_REMOTE_JOB_STATE_ROOT="$state" FM_ROOT_OVERRIDE="$REMOTE_ROOT"
+  # shellcheck source=bin/fm-remote-job-lib.sh
+  . "$ROOT/bin/fm-remote-job-lib.sh"
+  trap '[ -z "$lane" ] || { kill -KILL "$lane" 2>/dev/null || true; wait "$lane" 2>/dev/null || true; }; [ -z "$foreign" ] || { kill "$foreign" 2>/dev/null || true; wait "$foreign" 2>/dev/null || true; }' EXIT
+  fm_remote_job_stage "$account" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh </dev/null >/dev/null \
+    || fail "$FM_REMOTE_JOB_ERROR"
+  job=$FM_REMOTE_JOB_ID
+  record_lane_owner "$state"
+  real_chmod=$(command -v chmod)
+  cat > "$shim/chmod" <<'SH'
+#!/bin/bash
+last=${!#}
+block=0
+case "$last" in
+  "$FM_TEST_RESULT_JOB"/.exit.*) [ "$FM_TEST_RESULT_TARGET" != exit ] || block=1 ;;
+  "$FM_TEST_RESULT_JOB"/.state.*)
+    if [ "$FM_TEST_RESULT_TARGET" = state ] && [ "$(cat "$last")" = done ]; then block=1; fi
+    ;;
+esac
+if [ "$block" = 1 ]; then
+  : > "$FM_TEST_RESULT_GATE/blocked"
+  deadline=$((SECONDS + 120))
+  while [ ! -f "$FM_TEST_RESULT_GATE/release" ]; do
+    [ "$SECONDS" -lt "$deadline" ] || exit 1
+    /bin/sleep 0.05
+  done
+fi
+exec "$FM_TEST_RESULT_CHMOD" "$@"
+SH
+  chmod +x "$shim/chmod"
+  HOME="$account" PATH="$shim:$PATH" FM_TEST_RESULT_JOB="$FM_REMOTE_JOB_JOBS/$job" \
+    FM_TEST_RESULT_TARGET="$target" FM_TEST_RESULT_GATE="$gate" FM_TEST_RESULT_CHMOD="$real_chmod" \
+    "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$job" "$$" "$(cat "$state/worker.lock/start")" \
+    > "$gate/lane.out" 2> "$gate/lane.err" &
+  lane=$!
+  for ((i=0; i<200; i++)); do
+    [ -f "$gate/blocked" ] && break
+    sleep 0.05
+  done
+  assert_present "$gate/blocked" "the result lane did not reach its $target staging barrier"
+  [ "$(fm_remote_job_read_state "$FM_REMOTE_JOB_JOBS/$job")" = running ] \
+    || fail "the result lane committed before its staging barrier"
+  sleep 60 &
+  foreign=$!
+  fm_remote_job_process_start "$foreign" > "$state/worker.lock/start"
+  fm_remote_job_process_command "$foreign" > "$state/worker.lock/command"
+  printf '%s\n' "$foreign" > "$state/worker.lock/pid"
+  : > "$gate/release"
+  for ((i=0; i<200; i++)); do
+    kill -0 "$lane" 2>/dev/null || break
+    sleep 0.05
+  done
+  ! kill -0 "$lane" 2>/dev/null || fail "the result lane did not exit after ownership loss"
+  wait "$lane" 2>/dev/null || true
+  lane=''
+  [ "$(fm_remote_job_read_state "$FM_REMOTE_JOB_JOBS/$job")" = running ] \
+    || fail "a superseded lane committed done after losing ownership during $target staging"
+  if [ "$target" = exit ]; then
+    assert_absent "$FM_REMOTE_JOB_JOBS/$job/exit" "a superseded lane committed an exit after losing ownership"
+  else
+    assert_present "$FM_REMOTE_JOB_JOBS/$job/exit" "the final-state fixture did not exercise a committed exit"
+  fi
+  [ "$(cat "$state/worker.lock/pid")" = "$foreign" ] \
+    || fail "result cancellation rewrote the replacement's ownership"
+  pass "result publication rechecks ownership at the $target commit boundary"
+)
+result_commit_case exit || exit 1
+result_commit_case state || exit 1
 
 echo "ALL TESTS PASSED"

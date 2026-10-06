@@ -21,6 +21,10 @@
 # supervisor, and runs it to publication. Shutdown stops every tracked lane and
 # its recorded command group, leaving interrupted records for the replacement
 # worker's orphan recovery.
+# Serving checks ownership before heartbeat, scan, reclaim, and lane dispatch.
+# A lane receives its serving owner's PID and start record and verifies them
+# before claiming and during execution; ownership loss stops only its own work.
+# Internal lane invocation: --lane <job-id> <serving-pid> <serving-start>.
 #
 # The serving loop does not busy-poll an idle queue. After a lane starts or is
 # reaped it rescans every FM_REMOTE_JOB_POLL_SECONDS for four passes, so a home
@@ -85,6 +89,8 @@ WORKER_LANE_PIDS=()
 WORKER_LANE_STARTS=()
 WORKER_LANE_JOBS=()
 WORKER_ACTIVITY=0
+WORKER_SERVING_PID=
+WORKER_SERVING_START=
 
 worker_error() { printf 'remote-job-worker: %s\n' "$1" >&2; }
 
@@ -265,8 +271,26 @@ worker_shutdown_owns_lock() {
   local owner_pid
   [ "$WORKER_LOCK_HELD" -eq 1 ] || return 1
   [ -d "$WORKER_LOCK" ] && [ ! -L "$WORKER_LOCK" ] || return 1
-  owner_pid=$(fm_remote_job_read_single_line "$WORKER_LOCK/pid" 64 2>/dev/null || true)
+  fm_remote_job_read_line "$WORKER_LOCK/pid" 64 owner_pid 2>/dev/null || return 1
   [ "$owner_pid" = "${BASHPID:-$$}" ]
+}
+
+# Lanes never acquire account ownership themselves; their dispatching process
+# must still be the recorded live owner. Match the start record as well as PID
+# so a delayed lane cannot follow a reused process ID into a later generation.
+worker_lane_owner_matches() {
+  local pid start actual_start
+  fm_remote_job_read_line "$WORKER_LOCK/pid" 64 pid 2>/dev/null || return 1
+  fm_remote_job_read_line "$WORKER_LOCK/start" 256 start 2>/dev/null || return 1
+  [ "$pid" = "$WORKER_SERVING_PID" ] && [ "$start" = "$WORKER_SERVING_START" ] || return 1
+  actual_start=$(fm_remote_job_process_start "$WORKER_SERVING_PID" 2>/dev/null) || return 1
+  [ "$actual_start" = "$WORKER_SERVING_START" ]
+}
+
+worker_require_lock() {
+  worker_shutdown_owns_lock && return 0
+  worker_error "worker ownership was taken over; stopping the superseded worker"
+  worker_exit_lost_lock
 }
 
 worker_cleanup() {
@@ -460,7 +484,9 @@ worker_stop_active_execution() {
     if worker_lane_identity_matches "$pid" "$start"; then kill -TERM "$pid" 2>/dev/null || true; fi
     if worker_lane_identity_matches "$pid" "$start"; then kill -KILL "$pid" 2>/dev/null || true; fi
     wait "$pid" 2>/dev/null || true
-    if [ -d "$job" ] && [ ! -L "$job" ]; then
+    if [ -d "$job" ] && [ ! -L "$job" ] &&
+      [ "$(fm_remote_job_read_single_line "$job/.claim/owner" 64 2>/dev/null || true)" = "$pid" ] &&
+      [ "$(fm_remote_job_read_single_line "$job/.claim/owner_start" 256 2>/dev/null || true)" = "$start" ]; then
       worker_stop_recorded_execution "$job" || failed=1
     fi
     i=$((i + 1))
@@ -544,6 +570,7 @@ worker_exit_cleanup() {
 worker_claim() { # <job-dir>
   local job=$1 claim pid start pid_tmp start_tmp
   claim="$job/.claim"
+  worker_lane_owner_matches || return 1
   [ ! -e "$claim" ] && [ ! -L "$claim" ] || return 1
   (umask 077; mkdir "$claim") || return 1
   pid=${BASHPID:-$$}
@@ -581,6 +608,7 @@ worker_claim_owner_alive() { # <job-dir>
 
 worker_clear_dead_claim() { # <job-dir>
   local job=$1 claim="$1/.claim"
+  worker_require_lock
   [ -e "$claim" ] || [ -L "$claim" ] || return 0
   worker_claim_owner_alive "$job" && return 1
   [ -d "$claim" ] && [ ! -L "$claim" ] || return 1
@@ -597,6 +625,7 @@ worker_clear_dead_claim() { # <job-dir>
 # crashed single-process worker's job always has.
 worker_reclaim_running_job() { # <job-dir>
   local job=$1 file state
+  worker_require_lock
   worker_stop_recorded_execution "$job" || return 1
   state=$(fm_remote_job_read_state "$job" 2>/dev/null) || return 1
   worker_clear_dead_claim "$job" || return 1
@@ -630,6 +659,7 @@ worker_read_text() { # <job-dir> <field> <max>
 }
 
 worker_publish_result() { # <job-dir> <exit>
+  worker_lane_owner_matches || return 1
   local job=$1 exit_status=$2 tmp account_home
   case "$exit_status" in ''|*[!0-9]*) exit_status=125 ;; esac
   [ "$exit_status" -le 255 ] || exit_status=125
@@ -639,8 +669,9 @@ worker_publish_result() { # <job-dir> <exit>
   tmp=$(umask 077; mktemp "$job/.exit.XXXXXX") || return 1
   printf '%s\n' "$exit_status" > "$tmp" || { rm -f -- "$tmp"; return 1; }
   chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  worker_lane_owner_matches || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$job/exit" || { rm -f -- "$tmp"; return 1; }
-  fm_remote_job_write_state "$job" 'done' || return 1
+  fm_remote_job_write_state "$job" 'done' worker_lane_owner_matches || return 1
   if fm_remote_job_cancelled "$job"; then
     account_home=$(worker_account_home 2>/dev/null || true)
     if [ -n "$account_home" ]; then
@@ -654,6 +685,7 @@ worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
   local group_tmp group_start_tmp rc tmp deadline next_check attempt timed_out=0 cancelled=0
   WORKER_PREEMPTED=0
   shift 2
+  worker_lane_owner_matches || return 125
   group_file="$job/.claim/group"
   group_start_file="$job/.claim/group_start"
   armed_file="$job/.claim/armed"
@@ -716,6 +748,12 @@ worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
       break
     fi
     if [ "$SECONDS" -ge "$next_check" ]; then
+      if ! worker_lane_owner_matches; then
+        worker_signal_process_or_group group TERM "$group_pid"
+        worker_signal_process_or_group group KILL "$group_pid"
+        wait "$group_pid" 2>/dev/null || true
+        return 125
+      fi
       if fm_remote_job_cancelled "$job"; then
         worker_signal_process_or_group group TERM "$group_pid"
         attempt=0
@@ -984,6 +1022,7 @@ worker_lane_execute() { # <account-home> <job-dir>
   local account_home=$1 job=$2 timeout queue_deadline deadline
   local supervisor_pid supervisor_start pid_tmp start_tmp
   worker_claim "$job" || return 0
+  worker_lane_owner_matches || return 0
   supervisor_pid=${BASHPID:-$$}
   supervisor_start=$(fm_remote_job_process_start "$supervisor_pid") || {
     worker_publish_result "$job" 125 || true
@@ -1049,7 +1088,9 @@ worker_lane_execute() { # <account-home> <job-dir>
 # has always run in.
 worker_start_lane() { # <job-dir> <home>
   local job=$1 home=$2 lane_pid lane_start
-  "$SCRIPT_DIR/fm-remote-job-worker.sh" --lane "${job##*/}" &
+  worker_require_lock
+  "$SCRIPT_DIR/fm-remote-job-worker.sh" --lane "${job##*/}" \
+    "$WORKER_SERVING_PID" "$WORKER_SERVING_START" &
   lane_pid=$!
   WORKER_ACTIVITY=1
   lane_start=$(fm_remote_job_process_start "$lane_pid" 2>/dev/null || true)
@@ -1059,12 +1100,18 @@ worker_start_lane() { # <job-dir> <home>
   WORKER_LANE_JOBS+=("$job")
 }
 
-worker_lane_main() { # <job-id>
+worker_lane_main() { # <job-id> <serving-pid> <serving-start>
   local account_home job
   fm_remote_job_safe_id "$1" || { worker_error "invalid lane job id"; exit 2; }
   account_home=$(worker_account_home) || { worker_error "cannot resolve account home"; exit 1; }
   FM_ROOT=$(fm_remote_job_canonical_existing_dir "$FM_ROOT") || { worker_error "configured FM_ROOT is unsafe"; exit 1; }
   fm_remote_job_prepare_state "$account_home" || { worker_error "$FM_REMOTE_JOB_ERROR"; exit 1; }
+  WORKER_LOCK=$(fm_remote_job_worker_lock_path)
+  WORKER_SERVING_PID=$2
+  WORKER_SERVING_START=$3
+  case "$WORKER_SERVING_PID" in ''|*[!0-9]*) exit 2 ;; esac
+  [ "$WORKER_SERVING_PID" -gt 1 ] || exit 2
+  worker_lane_owner_matches || exit 0
   job=$(fm_remote_job_job_dir "$1" 2>/dev/null) || exit 0
   worker_lane_execute "$account_home" "$job"
 }
@@ -1074,7 +1121,9 @@ worker_process_once() { # <account-home>
   local reserved_index reserved_count home_reserved
   local reserved_homes=()
   worker_reap_finished_lanes
+  worker_require_lock
   for job in "$FM_REMOTE_JOB_JOBS"/job-*; do
+    worker_require_lock
     [ -d "$job" ] && [ ! -L "$job" ] || continue
     id=${job##*/}
     fm_remote_job_safe_id "$id" || continue
@@ -1174,6 +1223,8 @@ main() {
     *) worker_error "cannot acquire or safely reclaim worker ownership"; exit 1 ;;
   esac
   trap worker_shutdown HUP INT TERM
+  WORKER_SERVING_PID=${BASHPID:-$$}
+  WORKER_SERVING_START=$(fm_remote_job_read_single_line "$WORKER_LOCK/start" 256) || exit 1
   worker_publish_identity "$account_home" || { worker_error "cannot publish worker code identity"; exit 1; }
   worker_publish_pid || { worker_error "cannot publish worker pid"; exit 1; }
   sweep_interval=$WORKER_SWEEP_SECONDS
@@ -1183,6 +1234,7 @@ main() {
   WORKER_FAST_REMAINING=0
   WORKER_ACTIVITY=1
   while :; do
+    worker_require_lock
     if [ "$SECONDS" -ne "$next_heartbeat" ]; then
       worker_write_heartbeat || { worker_error "cannot update worker heartbeat"; exit 1; }
       next_heartbeat=$SECONDS
@@ -1283,8 +1335,8 @@ case "${1:-}" in
     main
     ;;
   --lane)
-    [ "$#" -eq 2 ] || { worker_error "unexpected worker arguments"; exit 2; }
-    worker_lane_main "$2"
+    [ "$#" -eq 4 ] || { worker_error "unexpected worker arguments"; exit 2; }
+    worker_lane_main "$2" "$3" "$4"
     ;;
   '')
     if [ "$(fm_remote_job_platform)" = linux ]; then worker_supervise_linux; else main; fi
