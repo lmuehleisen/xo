@@ -22,6 +22,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ## Intended
 
+### xo-identity
+
+- Intent: restrained operational identity and preferred report commands; README "XO identity".
+- Class: intended.
+- Seam: identity and voice wording in `AGENTS.md`, `README.md`, `GROK_BOT.md`, `VISION.md`, the ahoy, bearings, quiet, and fmx-respond skills, the Ops board labels, captain-facing startup and inbox wording, and their related documentation (shared); `.agents/skills/report/` and `.agents/skills/ops/` plus their documentation inventory rows (fork-only).
+- Guard: `bin/fm-doc-audience-check.sh` checks skill entry links; `tests/fm-pi-branch-extension.test.sh` preserves the no-op reply boundary; semantic voice and alias equivalence remain instruction-driven.
+- Upstream: Firstmate identity with `/ahoy` and `/bearings`; keep technical identifiers and existing command implementations so integrations need only reconcile wording and the two entry points.
+
 ### gh-not-gh-axi
 
 - Intent: GitHub operations use plain `gh`; README "No required `gh-axi`".

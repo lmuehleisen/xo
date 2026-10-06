@@ -289,7 +289,7 @@ Evidence for 2.1.280 and the record-backed doorbell is also in its [2026-09-25 r
 - Every record write prunes operational-inbox records once they reach about seven days of elapsed age (the boundary is approximate).
   Age alone does not remove a record without a later write.
   Once its record is gone, a doorbell is no longer recognized.
-  It draws as a visible user row after Calm rechecks it (for example on `/calm` toggle or `claude --continue`), and `/ahoy` treats it as a captain boundary.
+  It draws as a visible user row after Calm rechecks it (for example on `/calm` toggle or `claude --continue`), and `/report` treats it as a captain boundary.
 - On the main-screen layout (not the fullscreen alternate screen), a toggle redraws the live screen by clearing and reprinting it.
   The terminal's own scrollback keeps the earlier rendering above it.
   The fullscreen layout has no such stale copy.

@@ -113,6 +113,14 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/report/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/ops/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/ahoy/SKILL.md",
       "audience": "agent-runtime"
     },

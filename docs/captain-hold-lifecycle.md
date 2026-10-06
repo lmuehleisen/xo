@@ -68,7 +68,7 @@ A key that names no task, names a task that is not captain-held, or names a task
 
 The active captain-answer channel in this fork is chat.
 `bin/fm-send.sh --resolve-key` is the chat channel: its status-log close for a key the status log still owns is owned by that script's header, and a key the status log no longer owns is resolved to a still-open captain-held task - the key as a task id, then the legacy derived identity - and fed as one keyed line.
-A Bearings board below the `answers` Lavish mode does not feed this intake, and any answer it prompts returns through chat; an `answers` board feeds it as the bound captured source described below.
+A Ops board below the `answers` Lavish mode does not feed this intake, and any answer it prompts returns through chat; an `answers` board feeds it as the bound captured source described below.
 
 ## Evidence-backed reconciliation is not a board control
 
@@ -89,7 +89,7 @@ Both outcomes require a pre-existing durable request and the operator input that
 A successful normal answer also retires any pending request, because an answered call has no remaining re-check obligation.
 Every retirement is checked: if request removal fails after an answer, close, or note is already durable, the durable outcome stands but the command fails and leaves the pending request visible for retry.
 No path here closes a captain call without either the captain's words through `answer` or the evidence through `reconcile close`.
-A Bearings board below `answers` creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation; an `answers` board offers the reconcile choice on decision cards, and a selection files the same captured-source request above.
+A Ops board below `answers` creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation; an `answers` board offers the reconcile choice on decision cards, and a selection files the same captured-source request above.
 
 ## Card hygiene: a landed subject is not a live call
 
@@ -186,12 +186,12 @@ The shim recognizes an exact replay of a pre-collapse routed resolution by its h
 ## Verification record
 
 The lifecycle suite additionally verifies the plain-done ship transition through both owner `hold` and direct backlog hold followed by owner `complete`, retry idempotence, preserved merge authority, and refusal to cover a later permission event.
-The same end-to-end case verifies that an unmerged, in-flight captain-held ship appears in Bearings' Captain's Call rather than disappearing into a generic gate.
+The same end-to-end case verifies that an unmerged, in-flight captain-held ship appears in Ops' Captain's Call rather than disappearing into a generic gate.
 `tests/fm-watch-triage.test.sh` bridges the real task/hold commands to a real watcher with a synthetic stopped Codex endpoint: the declared wait stays quiet after exit and a pane change, but a subsequent blocked event wakes immediately.
 Its existing stopped/live-gate and deferred-resurface cases retain the bounded recheck and live-permission safety boundaries.
 
 The focused end-to-end regression suite is `tests/fm-captain-hold-lifecycle.test.sh`, using only synthetic `sample` identities and decision text.
-It proves that cleanup of a finished task whose own row is the captain call leaves that call open, queued, held, carrying its deliverable, and visible in Bearings' Captain's Call, leaves no pending record behind, survives a `--force` cleanup, and closes only when `answer` records the captain's words, while an ordinary finished task in the same home still closes with its report link.
+It proves that cleanup of a finished task whose own row is the captain call leaves that call open, queued, held, carrying its deliverable, and visible in Ops' Captain's Call, leaves no pending record behind, survives a `--force` cleanup, and closes only when `answer` records the captain's words, while an ordinary finished task in the same home still closes with its report link.
 It proves that an interrupted cleanup leaves the row In flight and untouched with its pending record, the next session start retains it as queued and held with the deliverable recorded when it remains unanswered, and an answer before replay preserves that record's completed report while closing the call so the next session start retires the satisfied record without losing the delivery from Recently Landed.
 A pending-close record that cannot be validated refuses the answer while naming the record and the reason, and a relocated data directory keeps retention in its one configured backlog.
 Direct PR and local-only merge entrypoint calls refuse a still-held task before reaching the forge or moving local main, while a released pull request passes the guarded PR entrypoint, cleanup records its artifact, and Recently Landed publishes it.

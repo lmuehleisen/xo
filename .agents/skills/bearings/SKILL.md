@@ -2,8 +2,8 @@
 name: bearings
 description: >-
   Generate a "pick up where I left off" fleet digest from firstmate's live fleet state.
-  Use when the captain invokes /bearings or asks for a bearings report, morning brief, status report, catch-up, "where did I leave off", or "what's in the works".
-  Plain /bearings is chat-only by default, /bearings file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /bearings lavish additionally builds the fleet board, static unless the home's or the request's Lavish mode opens it in Lavish; live PR enrichment remains opt-in and composes with the other modes.
+  Use when the captain invokes /ops or its /bearings alias, or asks for an ops or bearings report, morning brief, status report, catch-up, "where did I leave off", or "what's in the works".
+  Plain /ops is chat-only by default, /ops file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /ops lavish additionally builds the fleet board, static unless the home's or the request's Lavish mode opens it in Lavish; live PR enrichment remains opt-in and composes with the other modes.
   Also use on a contributions check wake or when filing work linked to an upstream issue.
   Also load this skill's board-wake handling when a procevent lavish wake's source id matches the source id of the stable bearings board path.
 user-invocable: true
@@ -11,35 +11,38 @@ metadata:
   internal: true
 ---
 
-# bearings
+# Ops (/bearings compatibility implementation)
 
 Generate a complete current snapshot from the fleet's current state, so the captain can resume in one read after a break, a night, or a context reset.
-Plain `/bearings` returns only the concise four-section chat digest.
-Only `/bearings file` writes the dated markdown report artifact and then returns the concise four-section chat digest linked to that report.
-Only `/bearings lavish` builds the fleet board beside that digest, through `bin/fm-bearings-board.sh` (its header owns every board mechanic, the Lavish modes it serves, and the fm-bearings-board.v1 payload contract).
+`/ops` is the preferred name; `/bearings` runs this same procedure with all the same arguments, including `file` and `lavish`.
+The existing bearings paths, scripts, and schemas remain compatibility identifiers.
+
+Plain `/ops` returns only the concise four-section chat digest.
+Only `/ops file` writes the dated markdown report artifact and then returns the concise four-section chat digest linked to that report.
+Only `/ops lavish` builds the fleet board beside that digest, through `bin/fm-bearings-board.sh` (its header owns every board mechanic, the Lavish modes it serves, and the fm-bearings-board.v1 payload contract).
 A digest/build invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, plus the explicit per-mode artifacts: the dated report in file mode, and in lavish mode the board file plus, in view and answers modes, the source registration, and only in answers mode the answer binding, that `build` records through their own owners.
 During that invocation it never tears down a task, merges a PR, dispatches new work, steers a worker, answers a decision, cleans up work, or mutates backlog or task state.
 Chat stays the primary answer path; an answers-mode board only adds decision-card answers through the same keyed-answer intake.
 
 ## Invocation modes
 
-- Plain `/bearings` gathers a fresh bounded snapshot and renders the four-section chat digest without creating, deleting, reading, or replacing `data/status-report-<YYYY-MM-DD>.md`.
-- `/bearings file` gathers a fresh bounded snapshot, replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch, and renders the four-section chat digest with a link or path to that report.
-- `/bearings lavish` gathers a fresh bounded snapshot, rebuilds the fleet board (the "Lavish board mode" section below), and renders the four-section chat digest with the board's path or Lavish link inside it.
-- `/bearings lavish off`, `/bearings lavish view`, and `/bearings lavish answers` choose the Lavish mode for that one board over the home's `config/lavish`; so does the captain plainly asking for or declining Lavish, or board answers, in the same request.
+- Plain `/ops` gathers a fresh bounded snapshot and renders the four-section chat digest without creating, deleting, reading, or replacing `data/status-report-<YYYY-MM-DD>.md`.
+- `/ops file` gathers a fresh bounded snapshot, replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch, and renders the four-section chat digest with a link or path to that report.
+- `/ops lavish` gathers a fresh bounded snapshot, rebuilds the fleet board (the "Lavish board mode" section below), and renders the four-section chat digest with the board's path or Lavish link inside it.
+- `/ops lavish off`, `/ops lavish view`, and `/ops lavish answers` choose the Lavish mode for that one board over the home's `config/lavish`; so does the captain plainly asking for or declining Lavish, or board answers, in the same request.
 - Treat `file` and `lavish` only as explicit invocation options in the slash command.
 - Do not treat natural-language requests such as "write a report", "save this", "persist it", "make a file", or "make a board" as file or lavish mode unless the invocation explicitly includes the standalone option.
 - When the captain asks to include PRs, pass the snapshot command's live-PR opt-in.
-- `/bearings include PRs` remains chat-only and makes the live-PR opt-in.
-- `/bearings file include PRs` and `/bearings lavish include PRs` compose the same way.
+- `/ops include PRs` remains chat-only and makes the live-PR opt-in.
+- `/ops file include PRs` and `/ops lavish include PRs` compose the same way.
 
 ## What it does
 
-For a contribution wake or linked-issue filing, go directly to Contribution follow-up; the digest procedure below applies to Bearings invocations.
+For a contribution wake or linked-issue filing, go directly to Contribution follow-up; the digest procedure below applies to Ops invocations.
 
 1. **Gather live fleet state with one deterministic command.**
    Run `snapshot=$(bin/fm-bearings-snapshot.sh --json)` at invocation time and read that compact output.
-   It is the single bounded, deterministic fleet-state source for Bearings.
+   It is the single bounded, deterministic fleet-state source for Ops.
    Do not create or consult a second fleet-state reader, parser contract, status-event-tail interpretation, visible-session recap, ad-hoc project probe, or ad-hoc `gh` query.
    The command's header and `--help` output own its exact fields, bounds, opt-ins, and output contract.
    The default performs bounded concurrent remote-ledger reads for registered remote homes under one shared snapshot budget and may refresh the parent-side cache.
@@ -84,17 +87,17 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
    If today's file already exists, delete it first, then create a new file from scratch.
    This is the only file-mode write allowed by the skill.
    The detailed report includes:
-   - **Title** - `# Bearings - <day> <YYYY-MM-DD>` (use "Morning status" only when the captain specifically asks for a morning brief), followed by two or three sentences framing where things stand.
+   - **Title** - `# Ops - <day> <YYYY-MM-DD>` (use "Morning status" only when the captain specifically asks for a morning brief), followed by two or three sentences framing where things stand.
    - **Captain's Call** - every unsuppressed open decision summarized with its options from the structured decision record, plus each PR ready to merge and each needed credential or login, every PR with the full `https://...` URL, never a bare `#number`.
    - **Recently Landed** - the bounded current recent-completions baseline from structured state across the main fleet and every registered secondmate home, rendered in full on every run.
    - **Underway** - each live direct report making progress, with its current state, and the plans or main pickup pointers worth reopening (`data/<id>/report.md` files, `.lavish/*.html` boards).
    - **Charted Next** - queued or gated work, including deferred or aged captain-hold safety gates and any main-inventory integrity warning, with each item's blocker, date, age, or integrity reason.
    After writing the file, return the concise four-section chat digest and include the report path or link without adding a fifth section.
-   For a richer review surface, offer `/bearings lavish` when the report has enough structure to deserve one, but only after the required digest is ready.
+   For a richer review surface, offer `/ops lavish` when the report has enough structure to deserve one, but only after the required digest is ready.
 
 ## Lavish board mode
 
-`/bearings lavish` adds one deliverable beside the unchanged chat digest: the fleet board.
+`/ops lavish` adds one deliverable beside the unchanged chat digest: the fleet board.
 Its Lavish mode is the home's `config/lavish` unless the request chose one, and `bin/fm-bearings-board.sh` owns what each mode does:
 
 - `off`, the default: a static local HTML file the captain opens in a browser; every answer stays in chat.
@@ -143,8 +146,8 @@ After handling, rebuild the board from a fresh snapshot so answered items leave 
 
 ## Chat-response contract
 
-This skill is the one owner of the `/bearings` chat-response format; the snapshot and classifier own the data that feeds it, and no other file restates this contract.
-Every `/bearings` chat response renders EXACTLY these four sections, in THIS order, and nothing else structural (there is no At Anchor section):
+This skill is the one owner of the `/ops` chat-response format; the snapshot and classifier own the data that feeds it, and no other file restates this contract.
+Every `/ops` chat response renders EXACTLY these four sections, in THIS order, and nothing else structural (there is no At Anchor section):
 
 1. **Captain's Call** - ONLY unsuppressed items that need the captain's own action now: a decision to make, a PR to approve or merge, a credential or login to provide, or a blocker only the captain can clear.
    Deferred or aged holds follow the presentation safety rule above instead.

@@ -1342,7 +1342,7 @@ if (requests()[2].options.deliverAs !== "nextTurn" || requests()[2].options.trig
 await fire("agent_settled", {});
 if (requests().length !== 3) throw new Error("a duplicate next-turn copy was queued");
 // The captain's next prompt consumes that copy; settling unacknowledged queues one more.
-await runOf(() => mainEntries.push({ type: "message", message: { role: "assistant", content: "Captain, shipshape." } }));
+await runOf(() => mainEntries.push({ type: "message", message: { role: "assistant", content: "Captain, all green." } }));
 if (requests().length !== 4 || requests()[3].options.deliverAs !== "nextTurn") throw new Error("the outcome stopped being re-presented on later prompts");
 if (JSON.stringify(unprocessedSeqs()) !== JSON.stringify([seq])) throw new Error("a paraphrase advanced the processed marker");
 
