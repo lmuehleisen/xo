@@ -69,7 +69,11 @@ case "$*" in
       printf '%s\n' '{"models":[{"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"ultra"}]}]}'
     fi
     ;;
-  *'features list'*) printf '%s\n' "${FM_FAKE_CODEX_GOALS:-goals stable true}" ;;
+  *'features list'*)
+    [ -z "${FM_FAKE_CODEX_CWD_LOG:-}" ] || pwd -P >> "$FM_FAKE_CODEX_CWD_LOG"
+    if [ -f .codex/config.toml ] && grep -q '^invalid fixture config$' .codex/config.toml; then exit 1; fi
+    printf '%s\n' "${FM_FAKE_CODEX_GOALS:-goals stable true}"
+    ;;
   *)
     [ -z "${FM_FAKE_CODEX_WORKER_LOG:-}" ] || printf '%s\n' "$0" "$@" > "$FM_FAKE_CODEX_WORKER_LOG"
     ;;
@@ -1136,35 +1140,60 @@ test_codex_ultra_refuses_unproved_support() {
   pass "direct codex ultra requires an explicit model and proof from the installed CLI"
 }
 
-test_codex_ultra_uses_target_project_configuration() {
-  local rec id=codex-ultra-context out rc scenario caller
-  for scenario in invalid-caller invalid-target; do
-    rec=$(make_spawn_case "codex-ultra-$scenario" codex "$id")
-    read_case_record "$rec"
-    caller="$CASE_DIR/caller"
-    mkdir -p "$caller/.codex" "$PROJ_DIR/.codex"
-    if [ "$scenario" = invalid-caller ]; then
-      printf '%s\n' 'invalid fixture config' > "$caller/.codex/config.toml"
-    else
-      printf '%s\n' 'invalid fixture config' > "$PROJ_DIR/.codex/config.toml"
-    fi
-    out=$(cd "$caller" && FM_FAKE_CODEX_CWD_LOG="$CASE_DIR/probe-cwd.log" \
-      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
-    rc=$?
-    if [ "$scenario" = invalid-caller ]; then
-      expect_code 0 "$rc" "caller config wrongly refused valid target Ultra: $out"
-      assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
-      assert_contains "$(cat "$LAUNCH_LOG")" 'model_reasoning_effort="ultra"' "target Ultra launch omitted effort"
-    else
-      expect_code 1 "$rc" "invalid target config passed Ultra preflight: $out"
-      [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "invalid target Ultra published metadata"
-      [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "invalid target Ultra armed lifecycle wiring"
-      [ ! -s "$LAUNCH_LOG" ] || fail "invalid target Ultra launched a worker"
-    fi
-    assert_equals "$(cd "$PROJ_DIR" && pwd -P)" "$(cat "$CASE_DIR/probe-cwd.log")" \
-      "Ultra catalog probe did not load target project configuration"
+test_codex_optins_use_finalized_worktree_configuration() {
+  local rec id=codex-optin-context out rc scenario caller optin expected_cwd
+  local args=()
+  for optin in ultra goal both; do
+    args=(--model gpt-6-astra)
+    [ "$optin" = goal ] || args+=(--effort ultra)
+    [ "$optin" = ultra ] || args+=(--goal smoke)
+    for scenario in invalid-caller-and-primary invalid-worktree; do
+      rec=$(make_spawn_case "codex-$optin-$scenario" codex "$id")
+      read_case_record "$rec"
+      if [ "$optin" != ultra ]; then
+        goal_pane_fixture
+        printf 'codex\n' > "$FAKEBIN_DIR/goal-harness"
+      fi
+      caller="$CASE_DIR/caller"
+      mkdir -p "$caller/.codex" "$PROJ_DIR/.codex" "$WT_DIR/.codex"
+      # Local ignored settings can differ between a dirty primary and a clean
+      # leased slot; the pool's existing dirty-work refusal must remain intact.
+      printf '%s\n' '/.codex/config.toml' >> "$(git -C "$WT_DIR" rev-parse --git-path info/exclude)"
+      if [ "$scenario" = invalid-caller-and-primary ]; then
+        printf '%s\n' 'invalid fixture config' > "$caller/.codex/config.toml"
+        printf '%s\n' 'invalid fixture config' > "$PROJ_DIR/.codex/config.toml"
+      else
+        printf '%s\n' 'invalid fixture config' > "$WT_DIR/.codex/config.toml"
+      fi
+      out=$(cd "$caller" && FM_FAKE_CODEX_CWD_LOG="$CASE_DIR/probe-cwd.log" \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "${args[@]}")
+      rc=$?
+      if [ "$scenario" = invalid-caller-and-primary ]; then
+        expect_code 0 "$rc" "caller or primary config wrongly refused valid worktree $optin: $out"
+        if [ "$optin" != goal ]; then
+          assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
+          assert_contains "$(cat "$LAUNCH_LOG")" 'model_reasoning_effort="ultra"' "worktree Ultra launch omitted effort"
+        fi
+        if [ "$optin" != ultra ]; then
+          assert_grep 'goal=smoke' "$HOME_DIR/state/$id.meta" "worktree goal launch omitted opt-in"
+          assert_present "$FAKEBIN_DIR/goal-input" "worktree goal launch omitted native input"
+        fi
+      else
+        expect_code 1 "$rc" "invalid worktree config passed $optin preflight: $out"
+        [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "invalid worktree $optin published metadata"
+        [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "invalid worktree $optin armed lifecycle wiring"
+        [ ! -s "$LAUNCH_LOG" ] || fail "invalid worktree $optin launched a worker"
+        [ ! -e "$FAKEBIN_DIR/goal-input" ] || fail "invalid worktree $optin delivered goal input"
+      fi
+      expected_cwd=$(cd "$WT_DIR" && pwd -P)
+      if [ "$optin" = both ] && [ "$scenario" = invalid-caller-and-primary ]; then
+        expected_cwd=$(printf '%s\n%s' "$expected_cwd" "$expected_cwd")
+      fi
+      assert_equals "$expected_cwd" "$(cat "$CASE_DIR/probe-cwd.log")" \
+        "$optin probes did not load finalized worktree configuration"
+    done
   done
-  pass "direct Codex Ultra validates target project configuration rather than caller configuration"
+  pass "Codex Ultra, goal, and combined opt-ins validate the finalized worktree rather than caller or primary configuration"
 }
 
 test_claude_ultracode_optin() {
@@ -2907,7 +2936,7 @@ test_opencode_omits_variant_when_model_family_lacks_effort
 test_native_effort_validator_keeps_axes_separate
 test_native_pi_ultra_is_explicit_and_model_scoped
 test_codex_ultra_refuses_unproved_support
-test_codex_ultra_uses_target_project_configuration
+test_codex_optins_use_finalized_worktree_configuration
 test_remote_secondmate_ultra_refuses_before_routing
 test_claude_ultracode_optin
 test_goal_first_native_input

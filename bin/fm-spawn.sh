@@ -96,7 +96,8 @@
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
 #   Direct Codex receives -c model_reasoning_effort="ultra" only when the
 #   installed CLI parser and bundled model catalog prove support from the
-#   target project, or the recorded worktree on relaunch, before provisioning.
+#   finalized task worktree before harness start. Its native goal feature
+#   probe uses that same worktree, including after a leased slot's base refresh.
 #   Native task opt-in probes and launches use the same absolute executable
 #   resolved from PATH for Claude and Codex.
 #   This direct-Codex extension applies only to task workers, not secondmates.
@@ -2868,7 +2869,7 @@ if [ "$EFFORT" = ultra ]; then
     exit 1
   }
   # Direct Codex loads project configuration while parsing this probe. Defer
-  # task workers until their target directory is resolved; reject every other
+  # task workers until their worktree is finalized; reject every other
   # unsupported profile here, including secondmates before home mutation.
   if [ "$HARNESS" != codex ] || [ "$KIND" = secondmate ]; then
     "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" "$KIND" "$TASK_OPTIN_BIN" || exit 1
@@ -3598,13 +3599,7 @@ fi
 # Account and project resolution precede CLI preflight. Ultracode capability
 # is verified inside the launched session, whose ambient credentials and
 # project-local settings can differ from this spawning process.
-if [ "$HARNESS" = codex ] && [ "$EFFORT" = ultra ] && [ "$KIND" != secondmate ]; then
-  CODEX_ULTRA_PROBE_DIR=$PROJ_ABS
-  [ "$RELAUNCH" = 0 ] || CODEX_ULTRA_PROBE_DIR=$RELAUNCH_WT
-  (cd "$CODEX_ULTRA_PROBE_DIR" && "$SCRIPT_DIR/fm-harness.sh" validate-native-effort \
-    "$HARNESS" "$MODEL" "$EFFORT" "$KIND" "$TASK_OPTIN_BIN") || exit 1
-fi
-if [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; then
+if [ "$HARNESS" = claude ] && { [ "$ULTRACODE" = 1 ] || [ "$GOAL_SET" = 1 ]; }; then
   (cd "$PROJ_ABS" && task_launch_optins_validate) || exit 1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
@@ -5113,6 +5108,21 @@ fi
 # tab's original project directory.
 spawn_enter_recorded_worktree
 spawn_assert_agent_worktree
+
+# Codex's parser and feature probe load project-local configuration. Bind them
+# to the worker's finalized cwd, after lease acquisition/base refresh and before
+# any launch wiring or task metadata is published. The primary checkout's dirty
+# configuration need not match this slot. Relaunch reuses the recorded WT here;
+# fm-control also validates Ultra there before stopping its existing worker.
+if [ "$HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
+  if [ "$EFFORT" = ultra ]; then
+    (cd "$WT" && "$SCRIPT_DIR/fm-harness.sh" validate-native-effort \
+      "$HARNESS" "$MODEL" "$EFFORT" "$KIND" "$TASK_OPTIN_BIN") || exit 1
+  fi
+  if [ "$GOAL_SET" = 1 ]; then
+    (cd "$WT" && task_launch_optins_validate) || exit 1
+  fi
+fi
 
 # Pre-register Claude's workspace trust for the directory this launch starts in,
 # at the first point that directory is known and before any per-task state is
