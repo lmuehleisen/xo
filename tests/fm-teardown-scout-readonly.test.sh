@@ -196,6 +196,59 @@ SH
   pass "a directory on another device keeps its mode while the scratch copy is still cleaned up"
 }
 
+# A same-filesystem bind mount has the copy's device id. stat %m is the mount
+# boundary find -xdev does not prune. The reported mount must keep its mode.
+test_same_filesystem_mount_is_not_made_writable() {
+  local case_dir id=scout-bind rc dir_mode real_stat walk bind
+  skip_if_directory_mode_is_bypassed "scout-bind" && return 0
+  case_dir=$(make_case scout-bind)
+  write_task "$case_dir" "$id" scout
+  mkdir -p "$case_dir/data/$id"
+  printf 'findings\n' > "$case_dir/data/$id/report.md"
+  plant_readonly_tree "$case_dir"
+  walk=$(cd "$case_dir/wt" && pwd -P)
+  bind="$walk/bind"
+  mkdir -p "$bind"
+  printf 'mounted\n' > "$bind/secret"
+  chmod a-w "$bind" "$bind/secret"
+  dir_mode=$(mode_of "$bind")
+  real_stat=$(command -v stat)
+  cat > "$case_dir/fakebin/stat" <<SH
+#!/usr/bin/env bash
+set -u
+path=
+wants_mount=0
+for arg in "\$@"; do
+  case "\$arg" in
+    *%m*) wants_mount=1 ;;
+  esac
+  case "\$arg" in
+    -*) ;;
+    *) path=\$arg ;;
+  esac
+done
+if [ "\$wants_mount" -eq 1 ] && [ "\$path" = "$bind" ]; then
+  printf '%s\n' "\$path"
+  exit 0
+fi
+exec "$real_stat" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/stat"
+
+  rc=0
+  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-bind: teardown did not reach the worktree return (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "$dir_mode" "$(mode_of "$bind")" \
+    "scout-bind: bind mount was made writable"
+  assert_equals "mounted" "$(cat "$bind/secret")" \
+    "scout-bind: file on the bind mount was removed"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-bind: the same-device hooks tree was not cleaned up"$'\n'"$(cat "$case_dir/stderr")"
+  pass "a same-filesystem mount keeps its mode while the scratch copy is still cleaned up"
+}
+
 test_scout_readonly_tree_is_deleted_and_outside_directory_stays
 test_ship_with_unlanded_readonly_tree_is_refused_unchanged
 test_other_device_directory_is_not_made_writable
+test_same_filesystem_mount_is_not_made_writable

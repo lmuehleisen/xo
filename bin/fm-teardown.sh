@@ -80,8 +80,9 @@
 # copy stays checked out. After those report and completion-gate checks and the
 # landed-work check, and after teardown has reaped processes in that copy,
 # scratch scout cleanup restores owner write on real directories there. The
-# walk does not follow symlinks. A directory on another filesystem, including
-# the root of a nested mount, is left unchanged.
+# walk does not follow symlinks. A directory on another filesystem or mount,
+# including a same-filesystem bind mount and a nested mount root, is left
+# unchanged and is not descended into.
 # Ship worktrees are not modified, including a refusal or a forced discard.
 # The scout has stopped and teardown has already reaped worktree processes, so
 # only a concurrent process of the same user could race a directory into or out
@@ -1818,33 +1819,107 @@ cleanup_stale_lock_for_safety_check() {
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
 }
 
+# Print one mount point per line. Linux mount(8) puts " type <fstype>" before
+# the parenthetical options. macOS puts the options immediately after the path.
+scout_mount_points() {
+  local line rest out
+  out=$(mount) || return 1
+  while IFS= read -r line; do
+    case $line in
+      *" on "*) ;;
+      *) continue ;;
+    esac
+    rest=${line#* on }
+    rest=${rest% \(*}
+    case $rest in
+      *" type "*) rest=${rest% type *} ;;
+    esac
+    rest=${rest%" "}
+    [ -n "$rest" ] || continue
+    printf '%s\n' "$rest"
+  done <<< "$out"
+}
+
+# Mount point of one directory. GNU stat %m sees a same-filesystem bind mount.
+# Otherwise the longest listed mount point that contains the directory is used.
+scout_mount_point_of() {
+  local path=$1 points=$2 mp best=
+  if mp=$(stat -c %m -- "$path" 2>/dev/null); then
+    printf '%s\n' "$mp"
+    return 0
+  fi
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    if [ "$path" = "$mp" ] || [ "$mp" = / ] || [ "${path#"$mp"/}" != "$path" ]; then
+      if [ ${#mp} -ge ${#best} ]; then
+        best=$mp
+      fi
+    fi
+  done <<< "$points"
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
 # Restore owner write on real directories in a scratch scout copy so the
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 root_dev
+  local wt=$1 walk root_dev root_mp points err find_rc=0
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
-  root_dev=$(stat -c %d -- "$wt" 2>/dev/null) || root_dev=$(stat -f '%d' "$wt") || return 1
+  walk=$(cd -- "$wt" && pwd -P) || return 1
+  root_dev=$(stat -c %d -- "$walk" 2>/dev/null) || root_dev=$(stat -f '%d' "$walk") || return 1
   [ -n "$root_dev" ] || return 1
+  points=$(scout_mount_points) || return 1
+  root_mp=$(scout_mount_point_of "$walk" "$points") || return 1
+  [ -n "$root_mp" ] || return 1
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mount.XXXXXX") || return 1
   # -P does not follow symlinks. -xdev does not descend into another
-  # filesystem, but the mount root itself would still be chmod'd, so a
-  # different device is skipped before the mode change.
-  find -P "$wt" -xdev -type d ! -perm -u+w -exec sh -c '
-    root_dev=$1
-    shift
-    for dir do
+  # filesystem. A same-filesystem bind mount shares the device, so any mount
+  # point other than this copy is pruned before the mode change.
+  find -P "$walk" -xdev \
+    \( -type d -exec sh -c '
+      root_dev=$1
+      root_mp=$2
+      walk=$3
+      points=$4
+      err=$5
+      dir=$6
       if dev=$(stat -c %d -- "$dir" 2>/dev/null); then
         :
       else
-        dev=$(stat -f "%d" "$dir") || exit 1
+        dev=$(stat -f "%d" "$dir") || { printf x > "$err"; exit 0; }
       fi
-      [ -n "$dev" ] || exit 1
-      [ "$dev" = "$root_dev" ] || continue
-      chmod u+w "$dir" || exit 1
-    done
-  ' sh "$root_dev" {} + || return 1
+      [ -n "$dev" ] || { printf x > "$err"; exit 0; }
+      [ "$dev" = "$root_dev" ] || exit 0
+      [ "$dir" = "$walk" ] && exit 1
+      if mp=$(stat -c %m -- "$dir" 2>/dev/null); then
+        [ "$mp" = "$root_mp" ] && exit 1
+        exit 0
+      fi
+      set -f
+      IFS="
+"
+      for mp in $points; do
+        [ "$mp" = "$dir" ] && exit 0
+      done
+      exit 1
+    ' sh "$root_dev" "$root_mp" "$walk" "$points" "$err" {} \; -prune \) \
+    -o \
+    \( -type d ! -perm -u+w -exec sh -c '
+      err=$1
+      shift
+      for dir do
+        chmod u+w "$dir" || { printf x > "$err"; exit 1; }
+      done
+    ' sh "$err" {} + \) \
+    || find_rc=$?
+  if [ -s "$err" ] || [ "$find_rc" -ne 0 ]; then
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
