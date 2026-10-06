@@ -226,7 +226,7 @@ fm_quota_agy_catalog() {
   local listing
   listing=$(fm_run_timed 5 agy models </dev/null 2>/dev/null) || listing=''
   printf '%s\n' "$listing" | jq -Rsc '
-    split("\n") | map(split("\t")[0] | select(test("^[a-zA-Z0-9.-]+$"))) | unique'
+    split("\n") | map(split("\t")[0] | select(type == "string" and test("^[a-zA-Z0-9.-]+$"))) | unique'
 }
 
 # shellcheck disable=SC2016,SC2034 # jq program used by consumers

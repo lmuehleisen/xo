@@ -124,9 +124,10 @@ while [ $# -gt 0 ]; do
     --completion-horizon)
       [ $# -ge 2 ] || die "--completion-horizon needs seconds"
       COMPLETION_HORIZON=$2
-      [[ "$COMPLETION_HORIZON" =~ ^[0-9]+(\.[0-9]+)?$ ]] &&
-        jq -en --arg n "$COMPLETION_HORIZON" '($n | tonumber) > 0 and ($n | tonumber | isinfinite | not)' >/dev/null 2>&1 \
-        || die "--completion-horizon needs finite positive seconds"
+      if ! [[ "$COMPLETION_HORIZON" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
+          ! jq -en --arg n "$COMPLETION_HORIZON" '($n | tonumber) > 0 and ($n | tonumber | isinfinite | not)' >/dev/null 2>&1; then
+        die "--completion-horizon needs finite positive seconds"
+      fi
       shift 2 ;;
     --project) [ $# -ge 2 ] || die "--project needs a value"; PROJECT=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
