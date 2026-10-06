@@ -1163,7 +1163,7 @@ Typed resolution additively recognizes `gemini` because AGENTS.md section 4 veri
 | `claude`, `codex`, `grok`, `kimi`, `cursor`, `agy`, `muse` | The resolver has an authoritative single-provider mapping. |
 | Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, `omp`, and `opencode`, and unmapped `gemini`, `rovo`, and `devin`; omission is an actionable configuration error before any request. |
 
-This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.
+This single-provider table is separate from the worker helper's narrower mapping in [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh).
 
 **Profile quota floors**
 
@@ -1253,7 +1253,8 @@ After the answer, code applies all remaining checks and ranking:
 
 - The confidence floor and the matched rule's `approval` and `floor`.
 - Each candidate's `provider` and `floor`.
-- Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
+- Every applicable account-wide, model/product, or explicitly mapped provider bucket from one `quota-axi --json` snapshot.
+- The inspectable completion horizon and runway feasibility floor before ranking; the script header owns the input and conservative default.
 - The numeric `spendPriority` argmax over candidates, using each candidate's limiting row.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
@@ -1275,9 +1276,17 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 
 **Candidate eligibility and evidence**
 
-- Any applicable `exhausted_now` row or known zero bound makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
-- Missing or nonnumeric `spendPriority` evidence is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
+- Any applicable hard-bound `exhausted_now` row, known zero bound, or finite projected runway below the completion horizon makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
+- Unknown runway, missing or nonnumeric `spendPriority`, or selection status other than known is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
+
 - On the opted-in path, duplicate concrete profiles with the same harness, model, and effort inside one rule or the default array are configuration errors rather than ties.
+
+The shared quota library owns the reviewed scope mapping used by the resolver and worker helper.
+Agy's own bounded `agy models` catalog must list the model (or its selected effort alias) before its Gemini or Claude/GPT family binds the `gemini` or `claude_gpt` bucket.
+An unknown model family or unavailable catalog leaves that relation unmeasured.
+An explicit Pi `provider: kiro` binds `included:credit_monthly` as one included pool; insufficient included capacity stays eligible but unranked because other pools or overage remain unmeasured.
+Pools are never summed, and Devin's included allowance has no implicit whole-provider binding.
+
 
 **Outcomes and exit status**
 

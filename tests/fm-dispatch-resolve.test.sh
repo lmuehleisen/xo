@@ -79,16 +79,16 @@ write_quota() {  # <path> <cursor spendPriority> [<claude all_models spendPriori
   "schemaVersion": 5,
   "providers": [
     { "provider": "claude", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 79, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": $claude } },
-      { "scope": "model:fable", "status": "known", "effectivePercentRemaining": 15, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -0.79 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 79, "runway": { "status": "projected_exhaustion", "usableRunwaySeconds": 7200 }, "selection": { "status": "known", "spendPriority": $claude } },
+      { "scope": "model:fable", "status": "known", "effectivePercentRemaining": 15, "runway": { "status": "projected_exhaustion", "usableRunwaySeconds": 7200 }, "selection": { "status": "known", "spendPriority": -0.79 } } ] } },
     { "provider": "codex", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 31, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -0.1649 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 31, "runway": { "status": "projected_exhaustion", "usableRunwaySeconds": 7200 }, "selection": { "status": "known", "spendPriority": -0.1649 } } ] } },
     { "provider": "cursor", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 91, "runway": { "status": "through_reset" }, "selection": { "spendPriority": $cursor } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 91, "runway": { "status": "through_reset" }, "selection": { "status": "known", "spendPriority": $cursor } } ] } },
     { "provider": "agy", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 64, "runway": { "status": "through_reset" }, "selection": { "spendPriority": 0.4 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 64, "runway": { "status": "through_reset" }, "selection": { "status": "known", "spendPriority": 0.4 } } ] } },
     { "provider": "google", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 72, "runway": { "status": "through_reset" }, "selection": { "spendPriority": 0.3 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 72, "runway": { "status": "through_reset" }, "selection": { "status": "known", "spendPriority": 0.3 } } ] } },
     { "provider": "kimi", "state": { "status": "unknown" }, "quotaSemantics": { "status": "unknown", "effectiveAvailability": [] } }
   ]
 }
@@ -149,6 +149,15 @@ printf '%s\n' "$*" >> "${QUOTA_AXI_CALLS:?}"
 cat "${QUOTA_AXI_FIXTURE:?}"
 SH
 chmod +x "$FAKEBIN/quota-axi"
+
+cat > "$FAKEBIN/agy" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = models ] || exit 2
+[ "${FAKE_AGY_FAIL:-0}" = 1 ] && exit 1
+printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet\ngpt-5-high\tGPT 5\nfuture-family\tFuture\n'
+SH
+chmod +x "$FAKEBIN/agy"
+
 
 RESPONSE="$TMP_ROOT/response.json"
 export FAKE_CURL_LOG="$LOG" FAKE_CURL_RESPONSE="$RESPONSE" QUOTA_AXI_CALLS="$LOG/quota-axi.calls" QUOTA_AXI_FIXTURE="$QUOTA" CHILD_ENV_LOG="$LOG/child-env"
@@ -637,7 +646,7 @@ assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex/gpt-5.6-
 
 FLOOR_BOUNDS="$TMP_ROOT/floor-bounds.json"
 jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability) += [
-  {"scope":"model:gpt-5.6-sol","status":"known","effectivePercentRemaining":10,"runway":{"status":"projected_exhaustion"},"selection":{"spendPriority":-0.9}}
+  {"scope":"model:gpt-5.6-sol","status":"known","effectivePercentRemaining":10,"runway":{"status":"projected_exhaustion","usableRunwaySeconds":7200},"selection":{"status":"known","spendPriority":-0.9}}
 ]' "$QUOTA" > "$FLOOR_BOUNDS"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$FLOOR_BOUNDS" run code out err "$BRIEF"
 assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=31%  spendPriority=-  runway=projected_exhaustion  bounds=all_models:31%/projected_exhaustion,model:gpt-5.6-sol:10%/projected_exhaustion  -> not eligible: profile floor all_models below 50%' "a failed profile floor reports its named row while retaining all bounds"
@@ -665,7 +674,7 @@ NONNUMERIC="$TMP_ROOT/nonnumeric-spend-priority.json"
 jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models") | .selection.spendPriority) = "high"' "$QUOTA" > "$NONNUMERIC"
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$NONNUMERIC" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=-  runway=through_reset  -> eligible, unranked: spendPriority missing or non-numeric at all_models: not rankable: disclosed uncertainty' "a nonnumeric spendPriority remains eligible but unranked"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=-  runway=through_reset  -> eligible, unranked: spendPriority missing, non-numeric, or selection not known at all_models: not rankable: disclosed uncertainty' "a nonnumeric spendPriority remains eligible but unranked"
 assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "numeric evidence wins without mixed-type ordering"
 pass "nonnumeric spendPriority evidence is never ranked"
 
@@ -706,7 +715,7 @@ assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=curso
 
 NO_APPLICABLE="$TMP_ROOT/no-applicable.json"
 jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability) = [
-  {"scope":"model:other","status":"known","effectivePercentRemaining":91,"runway":{"status":"through_reset"},"selection":{"spendPriority":0.8}}
+  {"scope":"model:other","status":"known","effectivePercentRemaining":91,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":0.8}}
 ]' "$QUOTA" > "$NO_APPLICABLE"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$NO_APPLICABLE" run code out err "$BRIEF"
 assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  -> eligible, unranked: no applicable quota row for provider cursor: disclosed uncertainty' "a candidate without an applicable row remains eligible but unranked"
@@ -717,7 +726,7 @@ pass "partial and missing quota evidence remain eligible but unranked"
 reset_log
 BOUNDED="$TMP_ROOT/bounded.json"
 jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability) += [
-  {"scope":"model:sonnet","status":"known","effectivePercentRemaining":99,"runway":{"status":"through_reset"},"selection":{"spendPriority":0.9}}
+  {"scope":"model:sonnet","status":"known","effectivePercentRemaining":99,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":0.9}}
 ]' "$QUOTA" > "$BOUNDED"
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$BOUNDED" run code out err "$BRIEF"
@@ -789,11 +798,11 @@ cat > "$SCHEMA6" <<'JSON'
   "providers": [
     { "provider": "claude", "accountKey": "default", "quotaSemantics": { "status": "unknown", "effectiveAvailability": [] } },
     { "provider": "codex", "accountKey": "openai-codex", "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 0, "runway": { "status": "exhausted_now" }, "selection": { "spendPriority": -1.4788 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 0, "runway": { "status": "exhausted_now" }, "selection": { "status": "known", "spendPriority": -1.4788 } } ] } },
     { "provider": "codex", "accountKey": "openai-codex-work", "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 11, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -5.6819 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 11, "runway": { "status": "projected_exhaustion", "usableRunwaySeconds": 7200 }, "selection": { "status": "known", "spendPriority": -5.6819 } } ] } },
     { "provider": "cursor", "accountKey": "default", "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 24, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.3917 } } ] } }
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 24, "runway": { "status": "projected_exhaustion", "usableRunwaySeconds": 7200 }, "selection": { "status": "known", "spendPriority": 0.3917 } } ] } }
   ]
 }
 JSON
@@ -1033,5 +1042,88 @@ run code out err --help
 expect_code 0 "$code" "--help exits 0"
 assert_contains "$out" 'Usage:' "--help prints usage"
 pass "configuration errors exit 2 before any network call"
+
+HARDENED_MUTATION="$TMP_ROOT/hardened-mutation.json"
+# Adversarial consumer matrix: all outbound surfaces are PATH stubs.
+cat > "$RULES" <<'JSON'
+{"rules":[{"when":"Coding","use":[{"harness":"claude","model":"opus"},{"harness":"codex","model":"gpt-5"}]}]}
+JSON
+cat > "$RESPONSE" <<'JSON'
+{"answers":{"rule":{"choice":"rule_1","confidence":1,"probabilities":{"rule_1":1,"default":0}}}}
+JSON
+HARDENED="$TMP_ROOT/hardened.json"
+cat > "$HARDENED" <<'JSON'
+{"schemaVersion":5,"providers":[
+ {"provider":"claude","state":{"status":"fresh"},"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":1}}]}},
+ {"provider":"codex","state":{"status":"fresh"},"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":1,"runway":{"status":"projected_exhaustion","usableRunwaySeconds":1},"selection":{"status":"known","spendPriority":100}}]}}
+]}
+JSON
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED" run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'claude'" "one-second high scalar cannot beat viable runway"
+assert_contains "$out" 'completion_horizon_seconds: 3600' "default horizon is inspectable"
+assert_contains "$out" 'runway_seconds=all_models:1' "finite runway is disclosed"
+assert_contains "$out" 'runway 1s below completion horizon 3600s' "runway failure is explained"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED" run code out err "$BRIEF" --completion-horizon 1
+assert_contains "$out" "profile: --harness 'codex'" "exact horizon boundary passes"
+for mutation in '.providers[].quotaSemantics.effectiveAvailability[].runway = {status:"projected_exhaustion",usableRunwaySeconds:145}' '.providers[].quotaSemantics.effectiveAvailability[].runway = {status:"unknown"}' 'del(.providers[].quotaSemantics.effectiveAvailability[].runway.usableRunwaySeconds) | .providers[].quotaSemantics.effectiveAvailability[].runway.status = "projected_exhaustion"'; do
+  jq "$mutation" "$HARDENED" > "$HARDENED_MUTATION"
+  TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
+  assert_contains "$out" 'status: escalate' "insufficient or unknown runway cannot produce clear"
+  assert_not_contains "$out" '  profile:' "no viable horizon emits no route"
+done
+for seconds in 0 -1 1e309 bogus; do
+  TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --completion-horizon "$seconds"
+  expect_code 2 "$code" "invalid horizon rejected: $seconds"
+done
+pass "completion horizon precedes argmax, with finite seconds and unknown uncertainty disclosed"
+
+for mutation in '.providers[1].state.status = "stale"' '.providers[1].state.status = "auth_required"' '.providers[1].state.stale = true' '.providers[1].quotaSemantics.effectiveAvailability[0].selection.spendPriority = 101' '.providers[1].quotaSemantics.effectiveAvailability[0].selection.spendPriority = -101' '.providers[1].quotaSemantics.effectiveAvailability[0].selection.spendPriority = 1e309' '.providers[1].quotaSemantics.effectiveAvailability[0].selection.status = "unknown"' 'del(.providers[1].quotaSemantics.effectiveAvailability[0].selection.status)' '.providers[1].quotaSemantics.effectiveAvailability[0].runway.usableRunwaySeconds = -1' '.providers[1].quotaSemantics.effectiveAvailability[0].runway.usableRunwaySeconds = 1e309'; do
+  jq "$mutation" "$HARDENED" > "$HARDENED_MUTATION"
+  TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF" --completion-horizon 1
+  assert_contains "$out" 'status: error' "contradictory or unbounded snapshot refused: $mutation"
+done
+jq '.providers[1].quotaSemantics.effectiveAvailability[0].selection = {status:"unknown"}' "$HARDENED" > "$HARDENED_MUTATION"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF" --completion-horizon 1
+assert_contains "$out" "profile: --harness 'claude'" "unknown scalar stays unranked beside valid evidence"
+pass "consumer validates state, scalar range, selection status, and finite runway"
+
+jq '.schemaVersion = 6 | .providers[] |= (.accountKey = "default" | .accountKeys = ["default"]) |
+  (.providers[] | select(.provider == "codex")) |= (.accountKey = "codex-home" | .accountKeys = ["codex-home","work-alias"] |
+    .quotaSemantics.effectiveAvailability[0].runway = {status:"through_reset"})' "$HARDENED" > "$HARDENED_MUTATION"
+jq '.rules[0].use[1] = {harness:"pi",model:"work-alias/gpt-5",provider:"codex"}' "$RULES" > "$TMP_ROOT/alias-rules"
+cp "$TMP_ROOT/alias-rules" "$RULES"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'pi' --model 'work-alias/gpt-5'" "folded alias uses membership before fallback"
+jq '.providers += [.providers[1] | .accountKey = "other" | .accountKeys = ["other","work-alias"]]' "$HARDENED_MUTATION" > "$TMP_ROOT/ambiguous.json"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/ambiguous.json" run code out err "$BRIEF"
+assert_contains "$out" 'status: error' "ambiguous membership refuses the snapshot"
+pass "folded account alias binds only one published membership row"
+
+cat > "$RULES" <<'JSON'
+{"rules":[{"when":"Coding","use":[{"harness":"agy","model":"gemini-3.8-flash","effort":"high"},{"harness":"agy","model":"claude-sonnet-4-6"},{"harness":"agy","model":"future-family"}]}]}
+JSON
+jq '.providers = [.providers[0] | .provider = "agy" | .quotaSemantics.effectiveAvailability = [
+  (.quotaSemantics.effectiveAvailability[0] | .scope = "gemini" | .runway.status = "exhausted_now" | .effectivePercentRemaining = 0),
+  (.quotaSemantics.effectiveAvailability[0] | .scope = "claude_gpt")]]' "$HARDENED" > "$HARDENED_MUTATION"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'agy' --model 'claude-sonnet-4-6'" "independent catalog-backed Agy bucket wins"
+assert_contains "$out" 'runway exhausted_now at gemini' "Gemini bucket exhaustion is applied"
+assert_contains "$out" 'no applicable quota row for provider agy' "unreviewed model family stays unranked"
+TYPESAFE_API_KEY=$KEY FAKE_AGY_FAIL=1 QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
+assert_contains "$out" 'status: escalate' "unavailable catalog does not guess Agy family"
+pass "Agy catalog establishes the reviewed bucket mapping, including effort aliases"
+
+cat > "$RULES" <<'JSON'
+{"rules":[{"when":"Coding","use":{"harness":"pi","model":"kiro/claude-sonnet","provider":"kiro"}}]}
+JSON
+jq '.providers = [.providers[0] | .provider = "kiro" | .quotaSemantics.effectiveAvailability[0].scope = "included:credit_monthly"]' "$HARDENED" > "$HARDENED_MUTATION"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'pi'" "explicit Pi Kiro provider binds the included pool"
+jq '.providers[0].quotaSemantics.effectiveAvailability[0] |= (.effectivePercentRemaining = 0 | .runway.status = "exhausted_now")' "$HARDENED_MUTATION" > "$TMP_ROOT/empty-pool.json"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/empty-pool.json" run code out err "$BRIEF"
+assert_contains "$out" 'status: escalate' "depleted included pool is unranked"
+assert_contains "$out" 'not whole-provider exhaustion' "included zero does not fabricate provider exhaustion"
+assert_contains "$out" 'eligible, unranked:' "candidate with other unmeasured pools remains eligible"
+pass "Kiro included pool is bound without summing pools or declaring whole-provider exhaustion"
 
 printf '# all fm-dispatch-resolve tests passed\n'

@@ -93,6 +93,10 @@ if [ "${QUOTA_AXI_UNKNOWN_EXHAUSTED:-0}" = 1 ]; then
   printf '{"schemaVersion":5,"providers":[{"provider":"codex","quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"unknown","runway":{"status":"exhausted_now"}}]}}]}\n'
   exit 0
 fi
+if [ "${QUOTA_AXI_STALE_MIXED:-0}" = 1 ]; then
+  printf '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"status":"stale","stale":true},"quotaSemantics":{"status":"unknown","effectiveAvailability":[{"scope":"all_models","status":"unknown","runway":{"status":"unknown"}}]}},{"provider":"codex","quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"}}]}}]}\n'
+  exit 0
+fi
 count=0
 [ ! -f "$QUOTA_AXI_COUNT" ] || read -r count < "$QUOTA_AXI_COUNT"
 count=$((count + 1))
@@ -141,10 +145,10 @@ read_args() {
 }
 [ "$(read_args --json)" = '<--json>' ] || fail 'absent scope changed argv'
 [ "$(read_args)" = '<>' ] || fail 'absent scope changed default TOON'
-printf 'claude,codex\n' > "$SCOPE_HOME/config/quota-providers"
-[ "$(read_args)" = $'<--provider>\n<claude,codex>' ] || fail 'TOON scope missing'
-[ "$(read_args --json)" = $'<--json>\n<--provider>\n<claude,codex>' ] || fail 'JSON scope missing'
-[ "$(read_args auth --json)" = $'<auth>\n<--json>\n<--provider>\n<claude,codex>' ] || fail 'auth scope missing'
+printf 'claude,codex,grok,agy,devin,kiro\n' > "$SCOPE_HOME/config/quota-providers"
+[ "$(read_args)" = $'<--provider>\n<claude,codex,grok,agy,devin,kiro>' ] || fail 'TOON scope missing'
+[ "$(read_args --json)" = $'<--json>\n<--provider>\n<claude,codex,grok,agy,devin,kiro>' ] || fail 'JSON scope missing'
+[ "$(read_args auth --json)" = $'<auth>\n<--json>\n<--provider>\n<claude,codex,grok,agy,devin,kiro>' ] || fail 'auth scope missing'
 for option in --provider --provider=codex; do
   : > "$LAB/argv"
   if QUOTA_AXI_ARGV_LOG="$LAB/argv" read_args "$option" codex --json > "$LAB/out" 2> "$LAB/err"; then
@@ -240,9 +244,9 @@ ok "aggregate watch blocks until any scope is exhausted"
 
 rm -f "$COUNT"
 out=$(QUOTA_AXI_EMPTY_FIRST=1 QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider '' --timeout 1)
-printf '%s\n' "$out" | grep -qx 'status: exhausted' || fail "empty aggregate quota did not continue polling"
-printf '%s\n' "$out" | grep -qx 'condition_polls: 2' || fail "empty aggregate quota stopped early"
-ok "aggregate watch preserves empty quota uncertainty"
+printf '%s\n' "$out" | grep -qx 'status: error' || fail "empty aggregate quota was not a measurement error"
+printf '%s\n' "$out" | grep -qx 'condition_polls: 1' || fail "empty aggregate measurement error did not stop promptly"
+ok "aggregate watch reports empty quota as a measurement error"
 
 if err=$(QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" arm --provider 2>&1); then
   fail "missing provider value unexpectedly armed a watch"
@@ -345,14 +349,20 @@ ok "the same path still binds a schema 5 row by provider alone"
 
 rm -f "$COUNT"
 out=$(QUOTA_AXI_UNKNOWN_FIRST=1 QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider codex --timeout 1)
-printf '%s\n' "$out" | grep -qx 'status: exhausted' || fail "unknown quota did not continue to exhaustion"
-printf '%s\n' "$out" | grep -qx 'condition_polls: 2' || fail "unknown quota stopped polling"
-ok "poll preserves provider-level unknown quota"
+printf '%s\n' "$out" | grep -qx 'status: error' || fail "unknown quota was not a measurement error"
+printf '%s\n' "$out" | grep -qx 'condition_polls: 1' || fail "unknown measurement error did not stop promptly"
+ok "poll reports provider-level unknown quota as a measurement error"
 
 rm -f "$COUNT"
 out=$(QUOTA_AXI_KNOWN_UNKNOWN_FIRST=1 QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider codex --timeout 1)
-printf '%s\n' "$out" | grep -qx 'status: exhausted' || fail "known semantics with unknown headroom did not continue polling"
-printf '%s\n' "$out" | grep -qx 'condition_polls: 2' || fail "known semantics with unknown headroom stopped early"
-ok "poll preserves unknown headroom under known semantics"
+printf '%s\n' "$out" | grep -qx 'status: error' || fail "unknown headroom was not a measurement error"
+printf '%s\n' "$out" | grep -qx 'condition_polls: 1' || fail "unknown headroom did not stop promptly"
+ok "poll reports unknown headroom as a measurement error"
+
+out=$(QUOTA_AXI_STALE_MIXED=1 PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --interval 1 --threshold 10 --provider claude --timeout 1)
+printf '%s\n' "$out" | grep -qx 'status: error' || fail "healthy sibling masked stale tracked provider"
+printf '%s\n' "$out" | grep -qx 'condition_polls: 1' || fail "stale measurement did not stop promptly"
+printf '%s\n' "$out" | grep -q '"best":null' || fail "unknown capacity fabricated a measured bound"
+ok "scoped observer reports stale capacity as measurement error beside a healthy sibling"
 
 printf '# all fm-procevent-quota tests passed\n'

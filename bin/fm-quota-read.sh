@@ -36,9 +36,9 @@ if [ -e "$FILE" ] || [ -L "$FILE" ]; then
   IFS=',' read -r -a providers <<< "$list"
   seen=,
   for provider in "${providers[@]}"; do
-    # quota-axi 0.1.55 PROVIDER_IDS; new ids require an explicit update.
+    # quota-axi 0.1.58 PROVIDER_IDS; new ids require an explicit update.
     case "$provider" in
-      claude|codex|cursor|copilot|grok|kimi|zai|agy|alibaba|opencode-go|commandcode|minimax|mimo|deepseek|openrouter|elevenlabs|devin|muse) ;;
+      claude|codex|cursor|copilot|grok|kimi|zai|agy|alibaba|opencode-go|commandcode|minimax|mimo|deepseek|openrouter|elevenlabs|devin|muse|kiro) ;;
       *) invalid "unsupported provider id: $provider" ;;
     esac
     case "$seen" in *",$provider,"*) invalid "duplicate provider id: $provider" ;; esac

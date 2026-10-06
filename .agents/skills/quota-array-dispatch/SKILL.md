@@ -49,7 +49,9 @@ It already computes the economics that older instructions reconstructed by hand 
 Do not read `--json` on the normal path, and do not reach for `--full` to rebuild that economics.
 
 After reading the TOON, fall back to one `bin/fm-quota-read.sh --json` call only when that TOON is genuinely ambiguous for the decision, or when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`.
-Ambiguous means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, a real tie still needs extra evidence, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
+Ambiguous includes a schema 6 account lane whose membership cannot be proved from TOON, which omits `accountKeys`, even when a `default` row is present.
+Match that lane with the permitted JSON fallback before using any default-account evidence.
+Ambiguous also means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, a real tie still needs extra evidence, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
 The fallback therefore has an explicit TOON-then-JSON call sequence; reuse its JSON result and do not take any further quota snapshots.
 Below-floor is rare: bootstrap enforces `FM_QUOTA_AXI_MIN` and normally reports `MISSING` before dispatch; if an intake somehow reaches an older build whose TOON lacks `spendPriority`, use the defensive `--json` fallback rather than treating the missing scalar as healthy.
 `--json` is a defensive belt, not a habit; never reach for it because it feels more complete.
@@ -73,7 +75,12 @@ A model the catalog does not list is concrete contradictory evidence: block that
 Apply quota at the granularity the vendor actually supplies.
 A provider-level or `all_models`/`all_products` scope bounds every model you established in that family within the candidate's matched account, including one with no window of its own.
 A named-model or named-product scope is an additional bound for that model alone.
-Match the candidate to its `quota[]` row by that established provider, its `accountKey` when the snapshot is schema 6 (a Pi lane's auth provider id such as `openai-codex-work`, or `codex-home` for native Codex including Pi's `codex-native/` adapter, then the `default` row, else unmeasured; never a row picked by position, never rows summed across accounts), and scope; a stale, auth-required, or unmeasurable scope is named in `attention[]` instead of a fabricated number.
+Match the candidate to its `quota[]` row by that established provider, account membership, and scope.
+For schema 6, bind the candidate lane by membership in published `accountKeys`, or exact `accountKey` on older single-key rows: a Pi lane uses its auth provider id such as `openai-codex-work`, native Codex and Pi `codex-native/` use `codex-home`.
+Only when no row contains the lane may the unique `default` membership row be used; overlapping membership is malformed evidence, never a default fallback.
+Schema 5 continues to bind by provider alone.
+Never pick a row by position or sum rows across accounts; no matched row is unmeasured.
+A stale, auth-required, or unmeasurable scope is named in `attention[]` instead of a fabricated number.
 
 A candidate authenticates through its own tuple's surface; another harness's CLI can never gate it, and `harness=pi` with `model=xai/grok-*` is Pi using xAI rather than the standalone Grok CLI.
 `bin/fm-quota-read.sh auth --json` lists each provider's credential sources independently, so read the one source the candidate actually uses rather than collapsing a provider to a single status.
@@ -115,7 +122,8 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 
 Among candidates that pass all three gates, pick the highest known `spendPriority`.
 A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
-Rank only from comparable known scalars.
+Rank only from comparable known scalars with `selection.status == known` and a finite value in [-100,100].
+Contradictory stale/auth-required state with claimed known headroom is invalid evidence.
 Never treat absent, `unknown`, or unmeasurable `spendPriority` as zero or as healthy; `0` means exact utilization, a different claim from unknown.
 An unknown `spendPriority` keeps the candidate eligible with disclosed uncertainty.
 Prefer known viable evidence when otherwise comparable.

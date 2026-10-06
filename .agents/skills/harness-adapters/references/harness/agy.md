@@ -154,8 +154,8 @@ Composer delivery needs the native footer or accept-edits mode cell as well as t
 An unstyled accept-edits hint, a manual-mode row with no identifying footer, and rendered busy-only acknowledgement of a queued Enter remain unproven; the adapter does not manufacture a successful delivery for them.
 Native background-task observation uses the returned log with `view_file`; delegation-shaped native tools retain the shared pre-tool guard.
 
-Unsupported surfaces remain explicit: headless primary supervision, native SessionStart and compaction refresh, semantic interrupt completion, automatic shell approval, and a quota-provider mapping in the optional `fm-quota-choose.sh` helper are not supported by this integration.
-Use the current Agy catalog and agent-side quota procedure instead of inferring its provider from another Google harness.
+Unsupported surfaces remain explicit: headless primary supervision, native SessionStart and compaction refresh, semantic interrupt completion, and automatic shell approval are not supported by this integration.
+The optional quota helper now uses Agy's own catalog for the reviewed bucket bindings owned by `../../../../../bin/fm-quota-axi-lib.sh`; the agent-side quota procedure remains authoritative.
 Runtime backend lifecycle guarantees remain those of each backend's capability table; the live verification here covers tmux on macOS.
 Remote secondmate launch and relaunch remain unsupported and are refused by `../../../../../bin/fm-remote-secondmate-control.sh`; that Herdr-only path is separate from the verified local secondmate integration.
 

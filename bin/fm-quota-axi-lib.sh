@@ -12,9 +12,9 @@
 #
 # Snapshot schemas: fm_quota_json_valid accepts quota-axi schema 5 (one row per
 # provider, no accountKey) and schema 6 (every row carries accountKey, unique on
-# provider + accountKey; quota-axi emits it once any provider expands to more
-# than one account). Schema 5 keeps its exact pre-schema-6 rules so an older
-# quota-axi keeps working unchanged. FM_QUOTA_ROW_JQ is the one join used to
+# provider + accountKey, with optional accountKeys membership; quota-axi emits
+# it once any provider expands to more than one account). Schema 5 keeps the
+# provider-only join for older quota-axi. FM_QUOTA_ROW_JQ is the one join used to
 # bind a candidate to its row under either schema.
 
 FM_QUOTA_AXI_MIN=0.1.51
@@ -38,10 +38,30 @@ FM_QUOTA_ROW_JQ='
   def quota_row($snapshot; $provider; $lane):
     ([$snapshot.providers[]? | select(.provider == $provider)]) as $rows |
     if $snapshot.schemaVersion == 6 then
-      (([$rows[] | select(.accountKey == $lane)] | first) //
-       ([$rows[] | select(.accountKey == "default")] | first) // null)
+      ([$rows[] | select(((.accountKeys // [.accountKey]) | index($lane)) != null)]) as $matches |
+      if ($matches | length) == 1 then $matches[0]
+      elif ($matches | length) > 1 then null
+      else ([$rows[] | select(((.accountKeys // [.accountKey]) | index("default")) != null)]) as $defaults |
+        if ($defaults | length) == 1 then $defaults[0] else null end
+      end
     else ($rows | first) // null
     end;
+  # Reviewed quota scopes: Agy buckets require a catalog-backed model family.
+  # Kiro included credits are one pool, never a whole-provider hard bound.
+  def quota_applicable($provider; $model; $agy_scope):
+    ($model | split("/") | last // "" | sub("^model:"; "")) as $bare |
+    .scope == "all_models" or .scope == "all_products" or
+    ($bare != "" and $bare != "default" and
+      (.scope == ("model:" + $bare) or .scope == ("product:" + $bare))) or
+    ($provider == "agy" and $agy_scope != "" and .scope == $agy_scope) or
+    ($provider == "kiro" and .scope == "included:credit_monthly");
+  def quota_hard_bound($provider):
+    ($provider == "kiro" and .scope == "included:credit_monthly") | not;
+  def quota_selection_known:
+    .selection.status == "known" and
+    (.selection.spendPriority | type) == "number" and
+    .selection.spendPriority >= -100 and .selection.spendPriority <= 100;
+
 '
 
 fm_quota_axi_compatible() {
@@ -76,6 +96,8 @@ fm_quota_axi_compatible() {
 
 fm_quota_json_valid() {
   jq -se --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" '
+    def key_valid:
+      type == "string" and length > 0 and (test("\\s") | not);
     length == 1 and
     (.[0] | type) == "object" and
     (.[0] |
@@ -84,9 +106,14 @@ fm_quota_json_valid() {
          (([.providers[].provider] | length) == ([.providers[].provider] | unique | length))
        elif .schemaVersion == 6 then
          all(.providers[];
-           (.accountKey | type) == "string" and
-           (.accountKey | length) > 0 and
-           ((.accountKey | test("\\s")) | not)) and
+           (.accountKey | key_valid) and
+           ((has("accountKeys") | not) or
+             ((.accountKeys | type) == "array" and
+              (.accountKeys | length) > 0 and all(.accountKeys[]; key_valid) and
+              (.accountKeys | length) == (.accountKeys | unique | length) and
+              (.accountKey as $key | .accountKeys | index($key)) != null))) and
+         (([.providers[] | .provider as $provider | (.accountKeys // [.accountKey])[] | [$provider, .]] | length) ==
+          ([.providers[] | .provider as $provider | (.accountKeys // [.accountKey])[] | [$provider, .]] | unique | length)) and
          (([.providers[] | [.provider, .accountKey]] | length) ==
           ([.providers[] | [.provider, .accountKey]] | unique | length))
        else false
@@ -95,6 +122,11 @@ fm_quota_json_valid() {
       (.provider | type) == "string" and
       (.provider | test($provider_re)) and
       (.quotaSemantics | type) == "object" and
+      (.state.status as $state_status |
+        if .state.stale == true or (["stale", "auth_required"] | index($state_status)) != null then
+          all(.quotaSemantics.effectiveAvailability[]; .status == "unknown" and
+            ((.selection.spendPriority | type) != "number"))
+        else true end) and
       (.quotaSemantics.status as $semantics_status |
         (["known", "partial", "unknown"] | index($semantics_status)) != null and
         (.quotaSemantics.effectiveAvailability | type) == "array" and
@@ -112,6 +144,13 @@ fm_quota_json_valid() {
           (.scope | type) == "string" and
           (.scope | length) > 0 and
           ((.scope | test("^\\s|\\s$")) | not) and
+          ((.runway | has("usableRunwaySeconds") | not) or
+            ((.runway.usableRunwaySeconds | type) == "number" and
+             .runway.usableRunwaySeconds >= 0 and
+             (.runway.usableRunwaySeconds | isinfinite | not))) and
+          ((.selection.spendPriority | type) != "number" or
+            (.selection.status == "known" and
+             .selection.spendPriority >= -100 and .selection.spendPriority <= 100)) and
           ((.status == "known" and
             (.runway.status as $runway_status |
             ((.effectivePercentRemaining | type) == "number" and
@@ -174,6 +213,29 @@ fm_quota_provider_for_harness() {
     kimi)         printf 'kimi\n' ;;
     cursor)       printf 'cursor\n' ;;
     muse)         printf 'meta\n' ;;
+    agy)          printf 'agy\n' ;;
     *)            return 1 ;;
   esac
 }
+
+# Capture Agy models once, with no quota/credential read. Only an exact catalog
+# id (or catalog-listed effort alias) with a reviewed family prefix gets a
+# bucket. Unknown families, absent models and failed catalogs stay unmapped.
+# Requires fm_run_timed from fm-timeout-lib.sh in the calling executable.
+fm_quota_agy_catalog() {
+  local listing
+  listing=$(fm_run_timed 5 agy models </dev/null 2>/dev/null) || listing=''
+  printf '%s\n' "$listing" | jq -Rsc '
+    split("\n") | map(split("\t")[0] | select(test("^[a-zA-Z0-9.-]+$"))) | unique'
+}
+
+# shellcheck disable=SC2016,SC2034 # jq program used by consumers
+FM_QUOTA_AGY_JQ='
+  def quota_agy_scope($ids; $model; $effort):
+    (if ($ids | index($model)) != null then $model
+     elif $effort != "" and ($ids | index($model + "-" + $effort)) != null
+     then $model + "-" + $effort else "" end) as $listed |
+    if $listed | test("^gemini-[a-zA-Z0-9.-]+$") then "gemini"
+    elif $listed | test("^(claude|gpt)-[a-zA-Z0-9.-]+$") then "claude_gpt"
+    else "" end;
+'
