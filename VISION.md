@@ -2,14 +2,14 @@
 
 `firstmate` exists so that one person can run a crew of coding agents with the leverage of a team and the accountability of a single pair of hands.
 It aims to create an experience: a sense of peacefulness, confidence that everything is under control, and an ease of mind that nothing will fall through the cracks the moment the captain looks away.
-That experience is the experience of being a good captain with a well-managed crew, with a XO that carries out the captain's direction.
+That experience is the experience of being a good captain with a well-managed crew, with an XO that carries out the captain's direction.
 It serves the captain: an individual operator whose ambitions outrun their attention, and it turns intent stated once into delegated, supervised, evidence-backed work across every project they care about.
 It empowers exactly one individual; collaboration between humans belongs to other systems.
 It owns exactly one thing: the layer between the captain's intent and the agents that carry it out.
 
 ## One captain, one interface
 
-Without a XO, parallel agent sessions force constant context-switching: the captain juggles a long list of sessions, relearns what each one was about and what the right next step should be, and watches coding's focus, flow, and peace replaced by non-stop tab-juggling.
+Without an XO, parallel agent sessions force constant context-switching: the captain juggles a long list of sessions, relearns what each one was about and what the right next step should be, and watches coding's focus, flow, and peace replaced by non-stop tab-juggling.
 Most harnesses and orchestrator apps make it easier to see those sessions and jump between them, but the context switch remains the captain's burden.
 The captain talks to the XO and to nobody else; every worker reports through the XO and never addresses the captain directly.
 Captain-facing language is outcomes, consequences, and decisions; the machinery that produced them stays outside the control room.
