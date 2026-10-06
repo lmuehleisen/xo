@@ -1376,7 +1376,7 @@ test_claude_ultracode_optin() {
 }
 
 test_remote_opencode_secondmate_refuses_before_routing() {
-  local rec id=remote-opencode out pin existing
+  local rec id=remote-opencode out pin existing mate verb
   local -a args
   for pin in explicit positional configured; do
     for existing in absent alive; do
@@ -1415,6 +1415,19 @@ SH
       assert_absent "$HOME_DIR/state/.spawn-$id.lock" "remote refusal leaked the task lock"
       assert_absent "$HOME_DIR/state/.secondmate-registry.lock" "remote refusal leaked the registry lock"
     done
+  done
+  mate="$CASE_DIR/seeded-mate"
+  make_seeded_secondmate_home "$mate" "$id"
+  mkdir -p "$mate/state/parent-route"
+  printf 'sentinel endpoint\n' > "$mate/state/parent-route/$id.meta"
+  for verb in launch relaunch; do
+    args=("$verb" "$id" opencode - -)
+    [ "$verb" != launch ] || args+=(herdr)
+    out=$(FM_HOME="$mate" PATH="$FAKEBIN_DIR:$PATH" "$ROOT/bin/fm-remote-secondmate-control.sh" "${args[@]}" 2>&1)
+    expect_code 1 "$?" "host-local OpenCode $verb must refuse before endpoint access: $out"
+    assert_contains "$out" 'OpenCode secondmate launches are unsupported' "host-local control bypassed the worker-only gate"
+    [ "$(cat "$mate/state/parent-route/$id.meta")" = 'sentinel endpoint' ] || fail "host-local refusal changed endpoint metadata"
+    [ ! -s "$LAUNCH_LOG" ] || fail "host-local refusal touched the endpoint or launched a harness"
   done
   pass "remote OpenCode secondmate refuses before sync, transport, CLI probes and endpoint reuse"
 }

@@ -1209,7 +1209,7 @@ test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop() {
 # with no agent at all. The control plane asks the same capability question
 # before it touches anything, so the refusal lands while the agent is still up.
 test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop() {
-  local dir home out rc
+  local dir home out rc harness
   dir=$(new_case smkind sm7)
   home="$dir/home"
   mkdir -p "$home/config" "$home/data/sm7"
@@ -1233,14 +1233,16 @@ test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop() {
   } > "$home/state/sm7.meta"
   printf '%s\n' "fm-sm7" > "$dir/fake/windows"
   printf '%s' "$dir/smhome" > "$dir/fake/cwd"
-  out=$(run_control "$dir" sm7 relaunch --harness muse); rc=$?
-  expect_code 1 "$rc" "a crewmate-only adapter should refuse a secondmate relaunch"
-  assert_contains "$out" "not verified to run a secondmate task" \
-    "the refusal should name the kind the adapter cannot run"
-  [ "$(cat "$dir/fake/command")" = claude ] \
-    || fail "the refusal must land before the running agent is stopped"
-  [ "$(meta_field "$dir" sm7 harness)" = claude ] \
-    || fail "a refused relaunch must leave the durable record on the recorded harness"
+  for harness in muse opencode; do
+    out=$(run_control "$dir" sm7 relaunch --harness "$harness"); rc=$?
+    expect_code 1 "$rc" "a crewmate-only adapter should refuse a secondmate relaunch"
+    assert_contains "$out" "not verified to run a secondmate task" \
+      "the refusal should name the kind the adapter cannot run"
+    [ "$(cat "$dir/fake/command")" = claude ] \
+      || fail "the refusal must land before the running agent is stopped"
+    [ "$(meta_field "$dir" sm7 harness)" = claude ] \
+      || fail "a refused relaunch must leave the durable record on the recorded harness"
+  done
   pass "fm-control relaunch: an adapter unverified for this task kind refuses before the agent is stopped"
 }
 
