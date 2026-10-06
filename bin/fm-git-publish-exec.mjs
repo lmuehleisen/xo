@@ -3,7 +3,9 @@
 // Usage: fm-git-publish-exec.mjs <absolute-real-git> <git-args>...
 // Known ordinary commands preserve argv; aliases and publishing plumbing
 // are refused. Pushes accept -C plus an explicit remote and branch refspecs.
-// Sources must be commit objects; pushes forward checked SHA:refs/heads refs.
+// Sources must be commit objects; pushes forward explicit checked branch refs.
+// Local branch sources retain tracking; other sources use checked commit SHAs
+// and require an explicit branch destination.
 // Named remotes resolve URL rewrites through Git before destination checks.
 // Rewritten explicit URLs/legacy remotes refuse; use a configured remote.
 // Implicit mirror/tag/helper publication, receive-pack overrides and
@@ -128,15 +130,18 @@ try {
     for (const original of refs) {
       const ref = original.replace(/^\+/, "");
       const parts = ref.split(":");
-      if (parts.length > 2 || !parts[0]) throw new Error("unsupported refspec");
+      if (parts.length > 2 || !parts[0] || (parts.length === 2 && !parts[1])) throw new Error("unsupported refspec");
       if (run(["cat-file", "-t", parts[0]]) !== "commit") throw new Error("commit source objects required");
       const sha = run(["rev-parse", "--verify", parts[0]]);
-      let target = parts[1] || parts[0];
+      const symbolic = run(["rev-parse", "--symbolic-full-name", "--verify", parts[0]]);
+      const branchSource = symbolic.startsWith("refs/heads/") ? symbolic : "";
+      if (parts.length === 1 && !branchSource) throw new Error("explicit branch destination required for non-branch source");
+      let target = parts.length === 2 ? parts[1] : branchSource;
       if (!target.startsWith("refs/")) target = `refs/heads/${target}`;
       if (!target.startsWith("refs/heads/")) throw new Error("branch destinations required");
       run(["check-ref-format", target]);
       lines.push(`${parts[0]} ${sha} ${target} ${zero}`);
-      checkedRefs.push(`${original.startsWith("+") ? "+" : ""}${sha}:${target}`);
+      checkedRefs.push(`${original.startsWith("+") ? "+" : ""}${branchSource || sha}:${target}`);
     }
     const gate = path.join(path.dirname(fileURLToPath(import.meta.url)), "fm-publish-gate.sh");
     const checked = spawnSync(gate, ["pre-push", remote, url], { argv0: "git", cwd, input: `${lines.join("\n")}\n`, stdio: ["pipe", "inherit", "inherit"] });

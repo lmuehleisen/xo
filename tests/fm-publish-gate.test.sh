@@ -2005,12 +2005,40 @@ test_git_adapter_checks_branch_objects() {
   assert_contains "$out" 'branch destinations required' 'branch namespace refusal'
   [ ! -e "$marker" ] || fail "non-branch target reached receive hook"
   git -C "$repo" tag lightweight main
-  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin lightweight 2>&1) || fail "commit source should publish the checked branch: $out"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin lightweight:refs/heads/lightweight 2>&1) || fail "commit source should publish the checked branch: $out"
   assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse refs/heads/lightweight)" 'actual target matches checked branch'
   git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/tags/lightweight >/dev/null 2>&1 && fail "implicit source tag namespace was published"
   git --git-dir="$TMP_ROOT/public.git" cat-file -e "$tag_sha" >/dev/null 2>&1 && fail "unchecked annotation accompanied commit source"
   rm "$TMP_ROOT/public.git/hooks/pre-receive"
   pass "outgoing adapter refuses unscanned tag objects and non-branch refs, and forwards only checked commit objects to checked branches"
+}
+
+test_git_adapter_refuses_empty_target() {
+  local repo out real_git
+  repo=$(fresh_repo empty-target)
+  real_git=$(command -v git)
+  out=$(git -C "$repo" push origin main: 2>&1) && fail "native Git must refuse the invalid refspec control"
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main: 2>&1) && fail "explicit empty destination must refuse"
+  assert_contains "$out" 'unsupported refspec' 'empty target refusal'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "empty target created remote branch"
+  pass "explicit empty push destinations stay invalid instead of becoming publication"
+}
+
+test_git_adapter_preserves_tracking() {
+  local repo out real_git
+  repo=$(fresh_repo branch-tracking)
+  real_git=$(command -v git)
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push -u origin main:refs/heads/tracked 2>&1) || fail "set-upstream push should pass: $out"
+  assert_equals origin/tracked "$(git -C "$repo" rev-parse --abbrev-ref 'main@{upstream}')" 'explicit destination retains tracking'
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push --set-upstream origin HEAD 2>&1) || fail "symbolic HEAD push should pass: $out"
+  assert_equals origin/main "$(git -C "$repo" rev-parse --abbrev-ref 'main@{upstream}')" 'symbolic source retains branch tracking'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/HEAD >/dev/null 2>&1 && fail "symbolic HEAD created a different branch"
+  git -C "$repo" tag lightweight main
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin lightweight 2>&1) && fail "implicit non-branch source must refuse"
+  assert_contains "$out" 'explicit branch destination required' 'non-branch implicit target refusal'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/tags/lightweight >/dev/null 2>&1 && fail "implicit tag was published"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/lightweight >/dev/null 2>&1 && fail "implicit tag became unexpected branch"
+  pass "checked branch sources preserve set-upstream tracking and symbolic HEAD targets while non-branches require explicit destinations"
 }
 
 test_git_adapter_disables_recursive_publication() {
@@ -2204,6 +2232,8 @@ test_local_gate_transport_preserves_hooks
 test_git_adapter_refuses_indirect_publication
 test_git_adapter_checks_rewritten_destination
 test_git_adapter_checks_branch_objects
+test_git_adapter_refuses_empty_target
+test_git_adapter_preserves_tracking
 test_git_adapter_disables_recursive_publication
 test_upstream_issue_and_reply_limits
 test_issue_edit_gate_context
