@@ -93,7 +93,9 @@
 # compares the current directory's device and the mount point of its
 # physical path with the scratch copy. Linux reads that mount point from
 # /proc/self/mountinfo, so a bind mount is its own mount; other systems use
-# the mount point POSIX df reports for that path. A different device or
+# the mount point POSIX df reports for that path. A test run can supply
+# that table only when FM_TEST_SEAM is set; ordinary cleanup always reads
+# the live table. A different device or
 # mount is left unchanged, including the mount-point directory itself and
 # every directory under a bind mount. A directory the walk cannot descend,
 # a uchg flag, and a hard link to an outside inode also stay out of this
@@ -1859,10 +1861,21 @@ scout_device_id() {
   printf '%s\n' "$id"
 }
 
+# Live mount table, or the test table when FM_TEST_SEAM is set. See the
+# script header.
+scout_mountinfo_file() {
+  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_SCOUT_MOUNTINFO:-}" ] && [ -r "${FM_SCOUT_MOUNTINFO}" ]; then
+    printf '%s\n' "$FM_SCOUT_MOUNTINFO"
+    return 0
+  fi
+  printf '%s\n' /proc/self/mountinfo
+}
+
 # Mount point covering an absolute path, from Linux mountinfo. The longest
 # matching mount wins, so a bind mount is not reported as its parent.
 scout_mount_point_mountinfo() {
-  local path=$1 mp
+  local path=$1 mp table
+  table=$(scout_mountinfo_file)
   mp=$(awk -v path="$path" '
     function unescape(s,    out, i, n, c, esc) {
       out = ""
@@ -1900,7 +1913,7 @@ scout_mount_point_mountinfo() {
       if (bestlen < 0) exit 1
       printf "%s\n", best
     }
-  ' /proc/self/mountinfo) || return 1
+  ' "$table") || return 1
   [ -n "$mp" ] || return 1
   printf '%s\n' "$mp"
 }
@@ -1922,8 +1935,9 @@ scout_mount_point_df() {
 }
 
 scout_mount_point() {
-  local path=$1
-  if [ -r /proc/self/mountinfo ]; then
+  local path=$1 table
+  table=$(scout_mountinfo_file)
+  if [ -r "$table" ]; then
     scout_mount_point_mountinfo "$path"
     return $?
   fi

@@ -506,6 +506,52 @@ test_separate_mount_inner() {
   pass "a mount point and a same-filesystem bind mount inside a scratch scout are not made writable"
 }
 
+# Mountinfo escapes a space as \040 and a backslash as \134.
+scout_mountinfo_escape() {
+  local s=$1
+  s=${s//\\/\\134}
+  s=${s// /\\040}
+  printf '%s\n' "$s"
+}
+
+# The mounted directory is not a kernel mount. The mount table supplied to
+# cleanup names it as one, which is enough to prove the mode change is
+# skipped when this user cannot create a real mount.
+test_reported_mount_is_not_made_writable() {
+  local case_dir id=scout-mountinfo rc dir_mode escaped
+  skip_if_directory_mode_is_bypassed "scout-mountinfo" && return 0
+  case_dir=$(make_case scout-mountinfo)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  mkdir -p "$case_dir/wt/planted-mnt"
+  printf 'stay\n' > "$case_dir/wt/planted-mnt/file"
+  chmod a-w "$case_dir/wt/planted-mnt" "$case_dir/wt/planted-mnt/file"
+  dir_mode=$(mode_of "$case_dir/wt/planted-mnt")
+  escaped=$(scout_mountinfo_escape "$case_dir/wt/planted-mnt")
+  printf '%s\n' "1 0 1:1 / / rw - ext4 /dev/root rw" > "$case_dir/mountinfo"
+  printf '2 1 1:1 /bound %s rw - ext4 /dev/root rw\n' "$escaped" >> "$case_dir/mountinfo"
+
+  rc=0
+  FM_SCOUT_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-mountinfo: cleanup removed a non-writable mounted tree (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-mountinfo: teardown did not reach the worktree return"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-mountinfo: the same-mount hooks tree was not removed"
+  [ -f "$case_dir/wt/planted-mnt/file" ] \
+    || fail "scout-mountinfo: the mounted tree was removed"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/planted-mnt")" \
+    "scout-mountinfo: mounted directory mode changed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "stay" "$(cat "$case_dir/wt/planted-mnt/file")" \
+    "scout-mountinfo: mounted file contents changed"
+  assert_grep "leaving $case_dir/wt/planted-mnt unchanged" "$case_dir/stderr" \
+    "scout-mountinfo: the reported mount was not left unchanged"$'\n'"$(cat "$case_dir/stderr")"
+  pass "a directory reported on another mount is not made writable, and the rest of the scratch copy still is"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -534,4 +580,5 @@ test_ship_with_unlanded_readonly_tree_is_refused_unchanged
 test_forced_ship_discard_does_not_chmod_readonly_tree
 test_scout_without_report_is_refused_unchanged
 test_scout_without_completion_gate_is_refused_unchanged
+test_reported_mount_is_not_made_writable
 test_separate_mount_inside_scratch_scout_is_not_made_writable
