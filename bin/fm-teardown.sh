@@ -100,8 +100,9 @@
 # resolved, so a symlink to a directory whose name ends with a newline is not
 # replaced by the sibling path that lacks it. A test run can supply that
 # table, including an unreadable path, only when FM_TEST_SEAM is set; ordinary
-# cleanup always reads the live table. A different device or mount is left
-# unchanged and is not entered,
+# cleanup always reads the live table. A scratch root whose mount differs from
+# its parent stops the return, so that mount is not the baseline for the walk.
+# A different device or mount is left unchanged and is not entered,
 # including a same-filesystem bind mount and every directory under it. A
 # failure to list a directory on the
 # scratch copy's own mount aborts the return. A directory the walk cannot descend,
@@ -2032,7 +2033,7 @@ scout_restore_dir_owner_write() {
 # following treehouse return can unlink a tree the scout left non-writable.
 # See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 wt_phys path wt_dev wt_mnt queue next rc failed
+  local wt=$1 wt_phys path wt_dev wt_mnt wt_parent parent_mnt queue next rc failed
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
@@ -2059,6 +2060,20 @@ prepare_scout_scratch_for_return() {
   }
   wt_mnt=${wt_mnt%x}
   wt_mnt=${wt_mnt%$'\n'}
+  # A slot that is its own mount is not the parent tree. Using it as the
+  # baseline would make the mounted tree writable, including a bind over the slot.
+  wt_parent=${wt_phys%/*}
+  [ -n "$wt_parent" ] || wt_parent=/
+  parent_mnt=$(scout_mount_point "$wt_parent" && printf x) || {
+    echo "teardown: cannot identify the mount of scratch scout worktree $wt" >&2
+    return 1
+  }
+  parent_mnt=${parent_mnt%x}
+  parent_mnt=${parent_mnt%$'\n'}
+  if [ "$wt_mnt" != "$parent_mnt" ]; then
+    echo "teardown: refusing to change $wt; scratch scout path $wt_phys is its own mount" >&2
+    return 1
+  fi
   queue=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-scout-writable.XXXXXX") || return 1
   printf '%s\0' "$wt_phys" >"$queue"
   # One level at a time. A different mount returns 3 and is not entered, so

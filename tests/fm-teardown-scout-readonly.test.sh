@@ -757,6 +757,36 @@ test_linux_without_mountinfo_refuses_before_return() {
   pass "a Linux scratch copy is not changed when its mount table cannot be read"
 }
 
+# A mount reported on the scratch root itself must not become the baseline.
+# The non-writable tree stays, and the copy is not returned.
+test_overmounted_scratch_root_is_refused_unchanged() {
+  local case_dir id=scout-overmount rc dir_mode escaped
+  skip_if_directory_mode_is_bypassed "scout-overmount" && return 0
+  case_dir=$(make_case scout-overmount)
+  write_task "$case_dir" "$id" scout
+  write_scout_report "$case_dir" "$id"
+  plant_readonly_hooks "$case_dir"
+  lock_readonly_hooks "$case_dir"
+  dir_mode=$(mode_of "$case_dir/wt/copied-hooks")
+  escaped=$(scout_mountinfo_escape "$case_dir/wt")
+  printf '%s\n' "1 0 1:1 / / rw - ext4 /dev/root rw" > "$case_dir/mountinfo"
+  printf '2 1 1:1 /bound %s rw - ext4 /dev/root rw\n' "$escaped" >> "$case_dir/mountinfo"
+
+  rc=0
+  FM_SCOUT_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-overmount: teardown changed an overmounted scratch root (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "is its own mount" "$case_dir/stderr" \
+    "scout-overmount: teardown did not refuse the overmounted root"$'\n'"$(cat "$case_dir/stderr")"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-overmount: teardown returned the overmounted root"
+  [ -f "$case_dir/wt/copied-hooks/nested/commit-msg" ] \
+    || fail "scout-overmount: the hooks file was removed"
+  assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/copied-hooks")" \
+    "scout-overmount: directory mode changed"$'\n'"$(cat "$case_dir/stderr")"
+  pass "an overmounted scratch root is left unchanged"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -792,4 +822,5 @@ test_reported_mount_with_backslash_is_not_made_writable
 test_reported_mount_with_trailing_newline_is_not_made_writable
 test_newline_scratch_root_does_not_change_sibling
 test_linux_without_mountinfo_refuses_before_return
+test_overmounted_scratch_root_is_refused_unchanged
 test_separate_mount_inside_scratch_scout_is_not_made_writable
