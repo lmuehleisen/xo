@@ -4,6 +4,8 @@
 // Use explicit FM_HOME/FM_CONFIG_OVERRIDE and private FM_STATE_OVERRIDE.
 // Snapshots supported --body-file/--notes-file - bytes privately, checks argv through
 // the existing policy, then forwards identical stdin bytes on approval.
+// Gist creation from stdin (including no filename) and gh api --input - are
+// unsupported runtime forms and refuse; use checked file-backed forms instead.
 // Reads pass; unsupported operations fail closed. Never evaluates argv as shell.
 // FM_PUBLISH_EXEC_BLOCK=1 independently refuses all supported GitHub writes.
 // Checked writes pin GH_HOST to github.com; read environments stay unchanged.
