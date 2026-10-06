@@ -1572,6 +1572,21 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
   [ -z "${blocks//▀/}" ]
 }
 
+# V2 home-screen tail after the proven location strip: blanks, optionally
+# ending in one indented version label. A contiguous row is never furniture.
+_fm_composer_leftbar_tail_is_furniture() {  # <tail>
+  local tail=$1 trimmed nonblank first
+  trimmed=$tail
+  fm_composer_normalize_trim_var trimmed
+  [ -n "$trimmed" ] || return 0
+  first=${tail%%$'\n'*}
+  fm_composer_normalize_trim_var first
+  [ -z "$first" ] || return 1
+  nonblank=$(printf '%s\n' "$tail" | LC_ALL=C grep -vE '^[[:space:]]*$')
+  case "$nonblank" in *$'\n'*) return 1 ;; esac
+  printf '%s\n' "$nonblank" | LC_ALL=C grep -qE '^[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$'
+}
+
 # _fm_composer_row_is_composer_furniture: 0 when <trimmed-row> is DEMONSTRABLY
 # a harness's own furniture drawn below its composer, given <proof-glyph> - the
 # agent glyph that proved the envelope above it. Exactly four things qualify,
@@ -1770,11 +1785,12 @@ _fm_composer_select_cursorless() {
     fm_composer_normalize_trim_var trimmed
     if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed"; then
       # V2 draws its location/shortcut strip directly below the half-block
-      # floor, with the path either before or after the command shortcut.
+      # floor, with a path or the running-turn interrupt hint beside the
+      # command shortcut.
       # Require both the mode/model footer and the bounded floor before
       # treating this exact strip as furniture; later text still invalidates it.
       if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] && [ "$boundary" -eq "$((FM_COMPOSER_SELECTED_LAST + 1))" ] &&
-        printf '%s\n' "$trimmed" | LC_ALL=C grep -qE '^(/.+[[:space:]]{2,}.*ctrl\+p commands|.*[[:space:]]{2,}ctrl\+p commands[[:space:]]{2,}/[^[:cntrl:]]+)$'; then
+        printf '%s\n' "$trimmed" | LC_ALL=C grep -qE '^(/.+[[:space:]]{2,}.*ctrl\+p commands|.*[[:space:]]{2,}ctrl\+p commands[[:space:]]{2,}/[^[:cntrl:]]+|.*esc interrupt[[:space:]]{2,}.*ctrl\+p commands)$'; then
         raw=$(_fm_composer_screen_row "$FM_COMPOSER_SELECTED_LAST" "$plain")
         trimmed=$(_fm_composer_row_content "$raw" 0)
         trimmed=${trimmed#┃}
@@ -1782,9 +1798,14 @@ _fm_composer_select_cursorless() {
         fm_composer_idle_matches "$trimmed" "${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}" sensitive || {
           FM_COMPOSER_SELECTED_KIND=; return 1;
         }
+        # The fresh V2 home screen leaves a right-aligned version label at
+        # the viewport bottom, separated from the location strip by blank
+        # rows. It is furniture only behind this proven composer and strip;
+        # arbitrary later output, including another version row, refuses.
         raw=$(printf '%s\n' "$plain" | tail -n "+$((next + 2))")
-        fm_composer_normalize_trim_var raw
-        [ -z "$raw" ] || { FM_COMPOSER_SELECTED_KIND=; return 1; }
+        _fm_composer_leftbar_tail_is_furniture "$raw" || {
+          FM_COMPOSER_SELECTED_KIND=; return 1;
+        }
       else
         FM_COMPOSER_SELECTED_KIND=
         return 1

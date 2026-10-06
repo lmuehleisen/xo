@@ -12,14 +12,17 @@ ID="oc-v2-probe-$$"
 MODEL=${FM_OPENCODE_LIVE_MODEL:-opencode/muse-spark-1.3-contributor-free}
 REAL_TMUX=$(command -v tmux)
 unset TMUX TMUX_PANE
-export TMUX_TMPDIR="$LAB"
-SOCKET="$TMUX_TMPDIR/lab"
 export FM_HOME="$LAB/home" FM_ROOT_OVERRIDE="$ROOT"
+LAB_HOME_HELPER="$ROOT/bin/fm-lab-home.sh"
+"$LAB_HOME_HELPER" create "$FM_HOME" >/dev/null
+LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$FM_HOME")
+SOCKET="$LAB_TMUX_DIR/tmux-$(id -u)/default"
 export XDG_CONFIG_HOME="$LAB/config" XDG_DATA_HOME="$LAB/data"
 export XDG_STATE_HOME="$LAB/runtime" XDG_CACHE_HOME="$LAB/cache"
 export FM_SPAWN_NO_GUARD=1
 cleanup() {
   "$REAL_TMUX" -S "$SOCKET" kill-server 2>/dev/null || true
+  "$LAB_HOME_HELPER" teardown "$FM_HOME"
   if [ -d "$LAB" ]; then chmod -R u+w "$LAB"; fi
   fm_test_rm_tmproot "$LAB" "/tmp/fm-$ID"
 }
@@ -55,7 +58,7 @@ Your steering inbox is $FM_HOME/state/$ID.inbox.
 Read each *.msg there when instructed and acknowledge it by moving it into handled/.
 If the status file already contains "brief processed", append "working: relaunched" instead.
 BRIEF
-tmux new-session -d -s probe -n anchor -c "$LAB/project" -x 140 -y 40 "bash --noprofile --norc -i"
+TMUX_TMPDIR="$LAB_TMUX_DIR" "$REAL_TMUX" new-session -d -s probe -n anchor -c "$LAB/project" -x 140 -y 40 "bash --noprofile --norc -i"
 # Keep the new endpoint on this private server; production allocation still
 # creates the worker window and enters the independent scratch copy.
 export TMUX="$SOCKET,$$,0"
@@ -79,6 +82,38 @@ wait_idle() {
   fail "$VERSION: busy state did not settle: $verdict"
 }
 . "$ROOT/bin/fm-busy-lib.sh"
+# A tmux cursor can prove readiness while cursorless backends reject the same
+# fresh home screen. Exercise it before submitting a prompt or opening a session.
+. "$ROOT/bin/fm-tmux-lib.sh"
+HOME_CONFIG=$(jq -nc --arg model "$MODEL" '{model:$model,agents:{build:{model:$model}}}')
+tmux new-window -d -t probe: -n home -c "$LAB/wt" \
+  "OPENCODE_CONFIG_CONTENT='$HOME_CONFIG' opencode --standalone --auto"
+i=0
+while [ "$i" -lt 120 ]; do
+  [ "$(fm_tmux_composer_state probe:home)" != empty ] || break
+  i=$((i + 1)); sleep 0.5
+done
+[ "$i" -lt 120 ] || fail "$VERSION: fresh home composer not ready"
+SCREEN=$(tmux capture-pane -p -e -t probe:home)
+PLAIN=$(printf '%s\n' "$SCREEN" | fm_composer_strip_ansi)
+printf '%s\n' "$PLAIN" | grep -Eq '^[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' \
+  || fail "$VERSION: fresh home version-label case absent"
+[ "$(fm_composer_classify_screen styled=1 "$SCREEN")" = empty ] \
+  || fail "$VERSION: fresh home cursorless styled composer unreadable"
+[ "$(fm_composer_classify_screen styled=0 "$PLAIN")" = empty ] \
+  || fail "$VERSION: fresh home cursorless plain composer unreadable"
+tmux send-keys -t probe:home -l 'DRAFT_PROOF'
+i=0
+while [ "$i" -lt 30 ]; do
+  SCREEN=$(tmux capture-pane -p -e -t probe:home)
+  [ "$(fm_composer_classify_screen styled=1 "$SCREEN")" != pending ] || break
+  i=$((i + 1)); sleep 0.1
+done
+[ "$i" -lt 30 ] || fail "$VERSION: fresh home draft classified empty"
+[ "$(fm_composer_extract_selected_content styled=1 "$SCREEN")" = DRAFT_PROOF ] \
+  || fail "$VERSION: fresh home draft extraction drift"
+tmux kill-window -t probe:home
+pass "$VERSION: fresh home version label, cursorless styled/plain readiness and draft refusal"
 bash "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB/project" --scout --harness opencode --model "$MODEL"
 wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
 wait_idle
