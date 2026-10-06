@@ -1987,6 +1987,32 @@ test_git_adapter_checks_rewritten_destination() {
   pass "named rewritten destinations are checked and explicit rewrite or legacy indirection fails closed"
 }
 
+test_git_adapter_checks_branch_objects() {
+  local repo out ref tag_sha real_git marker="$TMP_ROOT/object-receiver"
+  repo=$(fresh_repo branch-objects)
+  real_git=$(command -v git)
+  rm "$TMP_ROOT/branch-objects.hooks/pre-push"
+  pinned git -C "$repo" tag -a annotated -m "$PRIVATE_TERM" || fail "annotated tag fixture failed"
+  tag_sha=$(git -C "$repo" rev-parse annotated)
+  printf '#!/bin/sh\nprintf received >"%s"\n' "$marker" >"$TMP_ROOT/public.git/hooks/pre-receive"
+  chmod +x "$TMP_ROOT/public.git/hooks/pre-receive"
+  for ref in annotated:refs/notes/fixture annotated:refs/tags/fixture annotated:refs/heads/fixture annotated; do
+    out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin "$ref" 2>&1) && fail "unscanned tag object must refuse"
+    [ ! -e "$marker" ] || fail "refused tag reached receive hook"
+    git --git-dir="$TMP_ROOT/public.git" cat-file -e "$tag_sha" >/dev/null 2>&1 && fail "unchecked annotation reached remote"
+  done
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main:refs/notes/fixture 2>&1) && fail "non-branch commit target must refuse"
+  assert_contains "$out" 'branch destinations required' 'branch namespace refusal'
+  [ ! -e "$marker" ] || fail "non-branch target reached receive hook"
+  git -C "$repo" tag lightweight main
+  out=$(FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin lightweight 2>&1) || fail "commit source should publish the checked branch: $out"
+  assert_equals "$(git -C "$repo" rev-parse main)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse refs/heads/lightweight)" 'actual target matches checked branch'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/tags/lightweight >/dev/null 2>&1 && fail "implicit source tag namespace was published"
+  git --git-dir="$TMP_ROOT/public.git" cat-file -e "$tag_sha" >/dev/null 2>&1 && fail "unchecked annotation accompanied commit source"
+  rm "$TMP_ROOT/public.git/hooks/pre-receive"
+  pass "outgoing adapter refuses unscanned tag objects and non-branch refs, and forwards only checked commit objects to checked branches"
+}
+
 test_git_adapter_disables_recursive_publication() {
   local repo child="$TMP_ROOT/submodule-source" remote="$TMP_ROOT/submodule-remote.git" before after out real_git
   repo=$(fresh_repo recursive-publication)
@@ -2177,6 +2203,7 @@ test_contribution_poison_and_evidence_adapter
 test_local_gate_transport_preserves_hooks
 test_git_adapter_refuses_indirect_publication
 test_git_adapter_checks_rewritten_destination
+test_git_adapter_checks_branch_objects
 test_git_adapter_disables_recursive_publication
 test_upstream_issue_and_reply_limits
 test_issue_edit_gate_context

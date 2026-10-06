@@ -3,6 +3,7 @@
 // Usage: fm-git-publish-exec.mjs <absolute-real-git> <git-args>...
 // Known ordinary commands preserve argv; aliases and publishing plumbing
 // are refused. Pushes accept -C plus an explicit remote and branch refspecs.
+// Sources must be commit objects; pushes forward checked SHA:refs/heads refs.
 // Named remotes resolve URL rewrites through Git before destination checks.
 // Rewritten explicit URLs/legacy remotes refuse; use a configured remote.
 // Implicit mirror/tag/helper publication, receive-pack overrides and
@@ -57,6 +58,7 @@ try {
     if (r.status !== 0) throw new Error("cannot resolve outgoing push");
     return r.stdout.trim();
   };
+  let checkedRefs;
   if (argv[i] === "push") {
     const options = new Set(["-u", "--set-upstream", "--force-with-lease", "--force", "--porcelain", "--quiet", "-q"]);
     const args = argv.slice(i + 1);
@@ -122,15 +124,19 @@ try {
       if (!gateRoot || path.dirname(realpathSync(url)) !== realpathSync(gateRoot)) throw new Error("gate options require an isolated local gate");
     }
     const zero = "0".repeat(40), lines = [];
+    checkedRefs = [];
     for (const original of refs) {
       const ref = original.replace(/^\+/, "");
       const parts = ref.split(":");
       if (parts.length > 2 || !parts[0]) throw new Error("unsupported refspec");
-      const sha = run(["rev-parse", "--verify", `${parts[0]}^{commit}`]);
+      if (run(["cat-file", "-t", parts[0]]) !== "commit") throw new Error("commit source objects required");
+      const sha = run(["rev-parse", "--verify", parts[0]]);
       let target = parts[1] || parts[0];
       if (!target.startsWith("refs/")) target = `refs/heads/${target}`;
+      if (!target.startsWith("refs/heads/")) throw new Error("branch destinations required");
       run(["check-ref-format", target]);
       lines.push(`${parts[0]} ${sha} ${target} ${zero}`);
+      checkedRefs.push(`${original.startsWith("+") ? "+" : ""}${sha}:${target}`);
     }
     const gate = path.join(path.dirname(fileURLToPath(import.meta.url)), "fm-publish-gate.sh");
     const checked = spawnSync(gate, ["pre-push", remote, url], { argv0: "git", cwd, input: `${lines.join("\n")}\n`, stdio: ["pipe", "inherit", "inherit"] });
@@ -140,7 +146,8 @@ try {
   }
   const forwarded = argv[i] === "push" ? [
     ...argv.slice(0, i + 1), "--recurse-submodules=no",
-    ...argv.slice(i + 1).filter((arg) => arg !== "--no-verify"),
+    ...argv.slice(i + 1, argv.length - checkedRefs.length).filter((arg) => arg !== "--no-verify"),
+    ...checkedRefs,
   ] : argv;
   const result = spawnSync(real, forwarded, { argv0: "git", stdio: "inherit" });
   if (result.error) throw new Error("real git execution failed");
