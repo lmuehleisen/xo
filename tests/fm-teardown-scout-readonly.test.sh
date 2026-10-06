@@ -691,6 +691,41 @@ test_reported_mount_with_trailing_newline_is_not_made_writable() {
   pass "a reported mount whose path ends with a newline is not made writable"
 }
 
+# The recorded path is a symlink to a directory whose name ends with a newline.
+# The sibling without that newline must not be the tree that cleanup changes.
+test_newline_scratch_root_does_not_change_sibling() {
+  local case_dir id=scout-root-newline rc sibling_mode name
+  skip_if_directory_mode_is_bypassed "scout-root-newline" && return 0
+  case_dir=$(make_case scout-root-newline)
+  name=$'slot\n'
+  mv "$case_dir/wt" "$case_dir/$name"
+  mkdir -p "$case_dir/slot/copied-hooks/nested"
+  printf 'sibling\n' > "$case_dir/slot/copied-hooks/nested/commit-msg"
+  chmod a-w "$case_dir/slot" "$case_dir/slot/copied-hooks" \
+    "$case_dir/slot/copied-hooks/nested" "$case_dir/slot/copied-hooks/nested/commit-msg"
+  sibling_mode=$(mode_of "$case_dir/slot")
+  ln -s "$name" "$case_dir/alias"
+  mkdir -p "$case_dir/$name/copied-hooks/nested"
+  printf '#!/bin/sh\n' > "$case_dir/$name/copied-hooks/nested/commit-msg"
+  chmod a-w "$case_dir/$name/copied-hooks" "$case_dir/$name/copied-hooks/nested" \
+    "$case_dir/$name/copied-hooks/nested/commit-msg"
+  write_task "$case_dir" "$id" scout "$case_dir/alias"
+  write_scout_report "$case_dir" "$id"
+
+  rc=0
+  run_teardown "$case_dir" "$id" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scout-root-newline: teardown of the newline scratch root should succeed"$'\n'"$(cat "$case_dir/stderr")"
+  [ ! -e "$case_dir/$name/copied-hooks" ] \
+    || fail "scout-root-newline: the real scratch hooks tree is still present"
+  assert_equals "$sibling_mode" "$(mode_of "$case_dir/slot")" \
+    "scout-root-newline: sibling directory mode changed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_equals "sibling" "$(cat "$case_dir/slot/copied-hooks/nested/commit-msg")" \
+    "scout-root-newline: sibling file contents changed"
+  [ -d "$case_dir/slot/copied-hooks" ] \
+    || fail "scout-root-newline: sibling hooks tree was removed"
+  pass "a symlink to a scratch directory whose name ends with a newline does not change the sibling path"
+}
+
 test_separate_mount_inside_scratch_scout_is_not_made_writable() {
   local rc=0
   if [ "$(uname -s)" != Linux ]; then
@@ -724,4 +759,5 @@ test_unsearchable_directory_on_scratch_mount_aborts_before_return
 test_unsearchable_directory_inside_reported_mount_does_not_block_return
 test_reported_mount_with_backslash_is_not_made_writable
 test_reported_mount_with_trailing_newline_is_not_made_writable
+test_newline_scratch_root_does_not_change_sibling
 test_separate_mount_inside_scratch_scout_is_not_made_writable

@@ -94,11 +94,13 @@
 # its own mount; other systems use the mount point POSIX df reports for that
 # path. The path is compared as raw bytes, including a trailing newline that
 # command substitution would otherwise drop, so a backslash or newline in it
-# still selects that mount. A test run can supply that table only when
-# FM_TEST_SEAM is set; ordinary cleanup always reads the live table. A
-# different device or mount
-# is left unchanged and is not entered, including a same-filesystem bind
-# mount and every directory under it. A failure to list a directory on the
+# still selects that mount. The same byte is kept when the scratch root is
+# resolved, so a symlink to a directory whose name ends with a newline is not
+# replaced by the sibling path that lacks it. A test run can supply that
+# table only when FM_TEST_SEAM is set; ordinary cleanup always reads the live
+# table. A different device or mount is left unchanged and is not entered,
+# including a same-filesystem bind mount and every directory under it. A
+# failure to list a directory on the
 # scratch copy's own mount aborts the return. A directory the walk cannot descend,
 # a uchg flag, and a hard link to an outside inode also stay out of this
 # repair, and it does not change files or flags. The kernel walk inside
@@ -1753,10 +1755,14 @@ inspectable_git_worktree() {
 }
 
 canonical_existing_dir() {
-  local target=$1
+  local target=$1 marked
   [ -n "$target" ] || return 1
   [ -d "$target" ] || return 1
-  ( cd "$target" && pwd -P )
+  # Marker keeps a trailing newline that belongs to the directory name.
+  marked=$(cd "$target" && pwd -P && printf x) || return 1
+  marked=${marked%x}
+  marked=${marked%$'\n'}
+  printf '%s\n' "$marked"
 }
 
 retry_wait_secs_is_valid() {
@@ -2021,11 +2027,14 @@ prepare_scout_scratch_for_return() {
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
   # A pool slot recorded through a symlink is resolved once. The walk below
-  # does not follow any symlink inside that physical directory.
-  wt_phys=$(canonical_existing_dir "$wt") || {
+  # does not follow any symlink inside that physical directory. Keep a trailing
+  # newline in that root; bare command substitution would select the sibling.
+  wt_phys=$(canonical_existing_dir "$wt" && printf x) || {
     echo "teardown: cannot resolve scratch scout worktree $wt" >&2
     return 1
   }
+  wt_phys=${wt_phys%x}
+  wt_phys=${wt_phys%$'\n'}
   if [ -z "$wt_phys" ] || [ "$wt_phys" = / ]; then
     echo "teardown: refusing to change $wt; its scratch scout path is not a repairable directory" >&2
     return 1
