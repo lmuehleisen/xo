@@ -155,7 +155,8 @@ case "${1:-}" in
     fi
     [ -z "${FM_FAKE_COMPOSER_READ_FAIL:-}" ] || exit 1
     if [ "$(cat "$D/command")" = codex ]; then
-      printf '› %s\n' "$(cat "$D/composer" 2>/dev/null)"
+      # cursor_y above is zero-based row 1, so the composer is the second row.
+      printf 'Codex fixture\n› %s\n' "$(cat "$D/composer" 2>/dev/null)"
       exit 0
     fi
     if [ -s "$D/composer" ]; then
