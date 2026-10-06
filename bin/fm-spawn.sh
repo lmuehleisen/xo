@@ -6397,6 +6397,9 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     opencode_spawn_fail "OpenCode V2 brief encoding failed in window $T"
     exit 1
   }
+  # Submission may start work even when its verdict is lost or unconfirmed.
+  # Keep task ownership from this point, including if submission is interrupted.
+  SPAWN_FRESH_COMMIT_PENDING=0
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" != empty ]; then

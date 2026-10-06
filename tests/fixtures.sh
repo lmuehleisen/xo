@@ -175,6 +175,11 @@ case "${1:-}" in
         case "$arg" in *'Read the brief at'*) : > "$FM_FAKE_TMUX_BRIEF_STATE" ;; esac
       done
     fi
+    if [ -n "${FM_FAKE_TMUX_BRIEF_WORK_FILE:-}" ] && [ -f "${FM_FAKE_TMUX_BRIEF_STATE:-}" ]; then
+      for arg in "$@"; do
+        [ "$arg" != Enter ] || printf 'brief started\n' > "$FM_FAKE_TMUX_BRIEF_WORK_FILE"
+      done
+    fi
     if [ "${FM_FAKE_TMUX_BRIEF_SEND_FAIL:-0}" = 1 ]; then
       for arg in "$@"; do
         case "$arg" in *'Read the brief at'*) exit 1 ;; esac

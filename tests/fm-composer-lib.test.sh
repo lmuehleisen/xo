@@ -738,6 +738,13 @@ test_matrix_opencode_leftbar_signals() {
   sidebar=$'  ┃                                                                                                     Connect provider /connect\n  ┃\n  ┃\n  ┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n  ╹'"$floor"$'\n  /tmp/project                    9.7K (1%)  ctrl+p commands'
   assert_screen "V2 sidebar does not pollute composer" empty "$CAPS_TMUX" "$sidebar" 1
   assert_screen "V2 location strip is cursorless furniture" empty "$CAPS_STYLED_NOID" "$sidebar"
+  local custom_sidebar
+  custom_sidebar=${sidebar/Build auto/Review auto}
+  assert_screen "V2 unknown mode footer stays unknown by default" unknown "$CAPS_STYLED_NOID" "$custom_sidebar"
+  FM_COMPOSER_LEFTBAR_FOOTER_RE='^Review auto · .+$' assert_screen \
+    "V2 configured mode footer proves cursorless furniture" empty "$CAPS_STYLED_NOID" "$custom_sidebar"
+  FM_COMPOSER_LEFTBAR_FOOTER_RE='^Review auto · .+$' assert_screen \
+    "V2 configured footer with later output stays unknown" unknown "$CAPS_STYLED_NOID" "$custom_sidebar"$'\nnew output'
   local spaced_sidebar
   spaced_sidebar=${sidebar/\/tmp\/project/\/tmp\/my project}
   assert_screen "V2 whitespace path is cursorless furniture" empty "$CAPS_STYLED_NOID" "$spaced_sidebar"

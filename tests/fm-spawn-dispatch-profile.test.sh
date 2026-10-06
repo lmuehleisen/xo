@@ -990,14 +990,15 @@ test_opencode_refuses_pending_startup_composer() {
 }
 
 test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
-  local rec id out status mode failure endpoint
+  local rec id out status mode failure endpoint work_file
   for failure in readiness submission pending unknown; do
     for mode in closed survives unreadable; do
       id="profile-opencode-$failure-$mode"
       rec=$(make_spawn_case "$id" opencode "$id")
       read_case_record "$rec"
       endpoint="$CASE_DIR/endpoint"
-      out=$(FM_FAKE_TMUX_ENDPOINT_STATE="$endpoint" FM_FAKE_TMUX_CLOSE_MODE="$mode" \
+      work_file="$WT_DIR/brief-started.txt"
+      out=$(FM_FAKE_TMUX_BRIEF_WORK_FILE="$work_file" FM_FAKE_TMUX_ENDPOINT_STATE="$endpoint" FM_FAKE_TMUX_CLOSE_MODE="$mode" \
         FM_FAKE_TMUX_COMPOSER="$([ "$failure" != readiness ] || printf pending)" \
         FM_FAKE_TMUX_BRIEF_SEND_FAIL="$([ "$failure" != submission ] || printf 1)" \
         FM_FAKE_TMUX_BRIEF_STATE="$CASE_DIR/brief-typed" \
@@ -1008,15 +1009,24 @@ test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
       expect_code 1 "$status" "OpenCode $failure must fail with $mode endpoint cleanup"
       if [ "$mode" = closed ]; then
         [ ! -s "$endpoint" ] || fail "failed startup did not close its endpoint"
-        [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "confirmed closure must roll back provisional ownership"
+      fi
+      if [ "$mode" = closed ] && [ "$failure" = readiness ]; then
+        [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "pre-delivery closure must roll back provisional ownership"
       else
         assert_meta_profile "$HOME_DIR/state/$id.meta" opencode default default
-        [ -s "$HOME_DIR/state/$id.busy-gen" ] || fail "unconfirmed closure lost busy wiring"
+        [ -s "$HOME_DIR/state/$id.busy-gen" ] || fail "possible brief delivery lost busy wiring"
+      fi
+      if [ "$mode" != closed ]; then
         assert_contains "$out" 'preserved for recovery' "unconfirmed closure must report retained ownership"
+      fi
+      if [ "$failure" = unknown ]; then
+        [ -s "$work_file" ] || fail "unknown post-Enter verdict must exercise work already started"
+      elif [ "$failure" = readiness ]; then
+        [ ! -f "$work_file" ] || fail "readiness failure must not deliver the brief"
       fi
     done
   done
-  pass "OpenCode failed or unconfirmed brief delivery retires confirmed endpoints and preserves uncertain ownership"
+  pass "OpenCode startup retains task ownership after possible brief delivery, including closed endpoints"
 }
 
 test_opencode_threads_model_and_effort_variant() {

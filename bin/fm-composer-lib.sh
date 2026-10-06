@@ -1778,7 +1778,7 @@ _fm_composer_select_cursorless() {
         trimmed=$(_fm_composer_row_content "$raw" 0)
         trimmed=${trimmed#┃}
         fm_composer_normalize_trim_var trimmed
-        fm_composer_idle_matches "$trimmed" "$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT" sensitive || {
+        fm_composer_idle_matches "$trimmed" "${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}" sensitive || {
           FM_COMPOSER_SELECTED_KIND=; return 1;
         }
         raw=$(printf '%s\n' "$plain" | tail -n "+$((next + 2))")
