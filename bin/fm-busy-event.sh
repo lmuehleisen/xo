@@ -14,7 +14,7 @@
 #       the old gen are rejected as stale from then on.
 #
 #   apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen)
-#         --source S --event E
+#         --source S --event E [--if-seq N]
 #       Append one lifecycle event: validate the gen against the armed
 #       sidecar, advance seq under the lock, atomically replace the record.
 #       Adapter wiring passes the exact --gen embedded at arm time, so a
@@ -22,6 +22,8 @@
 #       Claude fm-send --key Escape path (fm-interrupt) and firstmate recovery
 #       paths (fm-recovery) may pass --current-gen to bind to the incarnation
 #       armed right now.
+#       --if-seq applies only when the current record still has that sequence;
+#       a mismatch is a successful no-op, checked under the same writer lock.
 #
 #   progress <state-dir> <id> --gen G
 #       Refresh state/<id>.progress for observed native-harness activity under
@@ -35,7 +37,7 @@
 #       an old task from retiring a newly armed incarnation. A missing sidecar
 #       is already retired, so any orphan record is removed idempotently.
 #
-# Exit codes: 0 applied; 1 refused (stale gen, unarmed task, lock timeout,
+# Exit codes: 0 applied or sequence-guard no-op; 1 refused (stale gen, unarmed task, lock timeout,
 # invalid input); 2 usage. Adapter hook command lines append `|| true` so a
 # refusal never breaks the harness's own lifecycle.
 set -u
@@ -44,7 +46,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   fm-busy-event.sh arm <state-dir> <id> [--state busy|idle|unknown] [--source S] [--event E]
-  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E
+  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E [--if-seq N]
   fm-busy-event.sh progress <state-dir> <id> --gen G
   fm-busy-event.sh retire <state-dir> <id> (--gen G | --current-gen)
 See the header comment for the full contract.
@@ -74,6 +76,7 @@ GEN=
 USE_CURRENT_GEN=0
 SOURCE=
 EVENT=
+EXPECTED_SEQ=
 if [ "$CMD" = apply ]; then
   NEW_STATE=${1:-}
   case "$NEW_STATE" in busy|idle|unknown) shift ;; *) usage ;; esac
@@ -89,6 +92,12 @@ while [ $# -gt 0 ]; do
     --current-gen) USE_CURRENT_GEN=1; shift ;;
     --source) SOURCE=${2:-}; shift 2 || usage ;;
     --event) EVENT=${2:-}; shift 2 || usage ;;
+    --if-seq)
+      [ "$CMD" = apply ] || usage
+      EXPECTED_SEQ=${2:-}
+      case "$EXPECTED_SEQ" in ''|*[!0-9]*) usage ;; esac
+      shift 2 || usage
+      ;;
     *) usage ;;
   esac
 done
@@ -237,6 +246,11 @@ if [ -f "$REC" ]; then
       esac
       ;;
   esac
+fi
+if [ -n "$EXPECTED_SEQ" ] && [ "$OLD_SEQ" != "$EXPECTED_SEQ" ]; then
+  lock_release
+  umask "$old_umask"
+  exit 0
 fi
 write_record "$GEN" $((OLD_SEQ + 1)) || {
   lock_release

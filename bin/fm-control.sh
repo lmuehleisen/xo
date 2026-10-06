@@ -976,7 +976,7 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line spawn_ok
+  local exit_result state note_line spawn_ok spawn_feedback
   local -a spawn_args
 
   require_state_verified_backend relaunch
@@ -1022,11 +1022,18 @@ do_relaunch() {
   RELAUNCH_TX="${BASHPID:-$$}.$(date -u +%Y%m%dT%H%M%SZ).$RANDOM"
   journal_write launching "${CHECKPOINT_LINES[@]}" "$note_line" "relaunch_tx=$RELAUNCH_TX"
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
-  [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
-  [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  if [ "$TARGET_HARNESS" = opencode ]; then
+    # Spawn inherits omitted axes; pass control's resolved defaults explicitly.
+    spawn_args+=(--model "$TARGET_MODEL" --effort "$TARGET_EFFORT")
+  else
+    [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
+    [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  fi
   spawn_ok=1
-  if ! FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
-      "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
+  if spawn_feedback=$(FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
+      "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}"); then
+    :
+  else
     spawn_ok=0
     [ "$(fm_meta_get "$META" control_relaunch_tx)" = "$RELAUNCH_TX" ] \
       || die "the replacement agent for $ID could not be launched on $TARGET_HARNESS"
@@ -1056,6 +1063,11 @@ do_relaunch() {
     die "the launch of $ID's replacement reported a failure after republishing task $ID's record, and that record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to check for the agent; reconcile $META before any further control action"
   fi
 
+  if [ "$TARGET_HARNESS" = opencode ] &&
+    { printf '%s\n' "$spawn_feedback" | grep -Fqx "opencode_delivery_failed=$RELAUNCH_TX" ||
+      [ -n "$(fm_meta_get "$META" opencode_launch_failure)" ]; }; then
+    die "OpenCode replacement readiness or brief delivery failed; endpoint $T is retained for inspection, not confirmed as relaunched"
+  fi
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {
     [ "$spawn_ok" = 1 ] \
       || die "the replacement agent for $ID could not be launched on $TARGET_HARNESS and did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"

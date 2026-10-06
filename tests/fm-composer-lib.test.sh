@@ -738,6 +738,17 @@ test_matrix_opencode_leftbar_signals() {
   sidebar=$'  ┃                                                                                                     Connect provider /connect\n  ┃\n  ┃\n  ┃  Build auto · Muse Spark 1.3 Free OpenCode Zen\n  ╹'"$floor"$'\n  /tmp/project                    9.7K (1%)  ctrl+p commands'
   assert_screen "V2 sidebar does not pollute composer" empty "$CAPS_TMUX" "$sidebar" 1
   assert_screen "V2 location strip is cursorless furniture" empty "$CAPS_STYLED_NOID" "$sidebar"
+  # V2 also right-aligns the path after the shortcut, including on restart.
+  # This footer order was captured from a real 2.0.18 worker; cursorless
+  # backends must prove the same empty input that tmux's cursor can prove.
+  local shortcut_first
+  shortcut_first=${sidebar/\/tmp\/project                    9.7K (1%)  ctrl+p commands/12.8K (1%)  ctrl+p commands    \/tmp\/project:main}
+  assert_screen "V2 restarted shortcut-first footer on plain capture" empty "$CAPS_PLAIN" "$shortcut_first"
+  assert_screen "V2 restarted shortcut-first footer on styled capture" empty "$CAPS_STYLED_NOID" "$shortcut_first"
+  assert_screen "V2 restarted footer with later output refuses" unknown "$CAPS_PLAIN" "$shortcut_first"$'\nnew output'
+  assert_screen "V2 shortcuts without a path refuse" unknown "$CAPS_PLAIN" "${shortcut_first/    \/tmp\/project:main/}"
+  assert_screen "V2 shortcut-first footer without floor refuses" unknown "$CAPS_PLAIN" "${shortcut_first/╹$floor/}"
+  assert_screen "V2 shortcut-first footer draft refuses" unknown "$CAPS_PLAIN" "${shortcut_first/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}"
   local custom_sidebar
   custom_sidebar=${sidebar/Build auto/Review auto}
   assert_screen "V2 unknown mode footer stays unknown by default" unknown "$CAPS_STYLED_NOID" "$custom_sidebar"

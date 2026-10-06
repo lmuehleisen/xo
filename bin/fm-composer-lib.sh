@@ -1770,10 +1770,11 @@ _fm_composer_select_cursorless() {
     fm_composer_normalize_trim_var trimmed
     if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed"; then
       # V2 draws its location/shortcut strip directly below the half-block
-      # floor. Require both the mode/model footer and the bounded floor before
+      # floor, with the path either before or after the command shortcut.
+      # Require both the mode/model footer and the bounded floor before
       # treating this exact strip as furniture; later text still invalidates it.
       if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] && [ "$boundary" -eq "$((FM_COMPOSER_SELECTED_LAST + 1))" ] &&
-        printf '%s\n' "$trimmed" | LC_ALL=C grep -qE '^/.+[[:space:]]{2,}.*ctrl\+p commands'; then
+        printf '%s\n' "$trimmed" | LC_ALL=C grep -qE '^(/.+[[:space:]]{2,}.*ctrl\+p commands|.*[[:space:]]{2,}ctrl\+p commands[[:space:]]{2,}/[^[:cntrl:]]+)$'; then
         raw=$(_fm_composer_screen_row "$FM_COMPOSER_SELECTED_LAST" "$plain")
         trimmed=$(_fm_composer_row_content "$raw" 0)
         trimmed=${trimmed#┃}

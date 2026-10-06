@@ -65,7 +65,16 @@
 #   validated state/<id>.meta, so --backend, --scout, --secondmate, a project
 #   positional, and batch pairs are all refused alongside it; only harness,
 #   model, and effort may change, which is what makes a harness switch one
-#   ordinary relaunch. It refuses unless the recorded endpoint is positively
+#   ordinary relaunch. Same-adapter OpenCode replacements inherit recorded
+#   model and effort unless explicitly supplied; --effort default resets an
+#   OpenCode replacement to its provider's default variant. OpenCode restart
+#   readiness or delivery failure retains the endpoint, wiring, and published task record,
+#   marking the replacement as failed for recovery,
+#   and captures diagnostics in tasktmp/opencode-startup-<spawn_gen>.log.
+#   With FM_CONTROL_RELAUNCH_TX set, OpenCode delivery failure emits
+#   opencode_delivery_failed=<transaction> on stdout for fm-control, independent
+#   of metadata writes and child exit codes.
+#   It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
 #   or herdr), and clears the previous harness's per-task wiring before arming
 #   the new incarnation. Two verdicts are agent-free: a `dead` endpoint is
@@ -953,6 +962,12 @@ if [ "$TRACEPARENT_SET" -eq 1 ]; then
   }
 fi
 case "$EFFORT" in
+default)
+  [ "$RELAUNCH" -eq 1 ] || {
+    echo "error: --effort default applies only to an OpenCode relaunch" >&2
+    exit 1
+  }
+  ;;
 '' | low | medium | high | xhigh | max | ultra) ;;
 *)
   echo "error: --effort must be one of low, medium, high, xhigh, max, ultra" >&2
@@ -2207,6 +2222,14 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: task $ID has no recorded harness; pass --harness to relaunch it" >&2
     exit 1
   }
+  # OpenCode's V2 config must retain the selected model on the direct
+  # --relaunch path too; fm-control is not the only allowed stopped-task caller.
+  # Keep this scoped to the same adapter: an explicit harness switch must not
+  # inherit a provider/model or variant selected for the previous harness.
+  if [ "$ARG3" = opencode ] && [ "$RELAUNCH_PRIOR_HARNESS" = opencode ]; then
+    [ "$MODEL_SET" -eq 1 ] || MODEL=$(fm_meta_get "$RELAUNCH_META" model)
+    [ "$EFFORT_SET" -eq 1 ] || EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
+  fi
   fm_agy_relaunch_inherit
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
@@ -2231,6 +2254,10 @@ else
   ARG3=${POS[2]:-}
 fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
+if [ "$EFFORT_SET" -eq 1 ] && [ "$EFFORT" = default ] && [ "$ARG3" != opencode ]; then
+  echo "error: --effort default applies only to an OpenCode relaunch" >&2
+  exit 1
+fi
 
 shell_quote() {
   printf "'"
@@ -4869,8 +4896,41 @@ spawn_delivery_endpoint_cleanup() {
 }
 
 opencode_spawn_fail() { # <detail>
+  local failure_state=${2:-idle}
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
+  if [ "$RELAUNCH" -eq 1 ]; then
+    # Readiness failure settles an unchanged launch seed; submission ambiguity
+    # makes it unknown. Never replace newer native activity with either verdict.
+    # Keep the generation armed for lifecycle events from the retained pane.
+    if ! "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE_REAL" "$ID" "$failure_state" \
+      --gen "$BUSY_GEN" --source fm-spawn --event launch-failed --if-seq 1; then
+      echo "error: could not settle OpenCode replacement busy state for $ID; reconcile endpoint $T before recovery" >&2
+    fi
+    local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
+    if ! {
+      printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
+        "$1" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
+      fm_backend_capture "$BACKEND" "$T" 100 "$W"
+    } >"$diagnostic"; then
+      echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
+    fi
+    # Publication already bound this replacement to the endpoint. Keep that
+    # record and plugin generation, including when the previous pane was gone.
+    # Mere agent liveness must not turn failed readiness into relaunch success.
+    SPAWN_META_TMP="$STATE/.$ID.meta.opencode-failed.${BASHPID:-$$}"
+    if awk -F= '$1 != "opencode_launch_failure"' "$STATE/$ID.meta" >"$SPAWN_META_TMP" &&
+      printf 'opencode_launch_failure=%s\n' "$SPAWN_GEN" >>"$SPAWN_META_TMP" &&
+      fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
+      SPAWN_META_TMP=
+    else
+      echo "error: could not mark OpenCode replacement failure in $STATE/$ID.meta; reconcile endpoint $T before recovery" >&2
+    fi
+    echo "warning: OpenCode endpoint and replacement wiring are preserved; task record retained; diagnostics=$diagnostic" >&2
+    [ -z "${FM_CONTROL_RELAUNCH_TX:-}" ] ||
+      printf 'opencode_delivery_failed=%s\n' "$FM_CONTROL_RELAUNCH_TX"
+    return 1
+  fi
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
     SPAWN_ENDPOINT_CLOSED=1
@@ -4882,6 +4942,7 @@ opencode_spawn_fail() { # <detail>
     RELAUNCH_REPLACEMENT_PENDING=0
     echo "warning: OpenCode endpoint closure is unconfirmed; task record $STATE/$ID.meta and wiring are preserved for recovery" >&2
   fi
+  return 1
 }
 
 # Only an additional matching line proves a new acknowledgement. Comparing
@@ -5761,7 +5822,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir opencode_launch_failure", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -6390,12 +6451,12 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   done
   if [ "$opencode_ready" -ne 1 ]; then
     opencode_spawn_fail "OpenCode V2 composer did not become ready in window $T"
-    exit 1
+    exit $?
   fi
   OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
     "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || {
     opencode_spawn_fail "OpenCode V2 brief encoding failed in window $T"
-    exit 1
+    exit $?
   }
   # Submission may start work even when its verdict is lost or unconfirmed.
   # Keep task ownership from this point, including if submission is interrupted.
@@ -6403,8 +6464,8 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" != empty ]; then
-    opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T"
-    exit 1
+    opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T" unknown
+    exit $?
   fi
 fi
 if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then

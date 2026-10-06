@@ -56,6 +56,32 @@ test_apply_advances_seq_and_source() {
   pass "apply advances seq under the armed gen and attributes the writing source"
 }
 
+test_guarded_apply_preserves_newer_activity() {
+  local state gen out before
+  state=$(new_state_dir guarded-apply)
+  gen=$("$EV" arm "$state" t1)
+  "$EV" apply "$state" t1 unknown --gen "$gen" --source fm-spawn --event launch-unconfirmed --if-seq 1 \
+    || fail "matching sequence guard refused"
+  out=$(fm_busy_classify tmux w1 opencode t1 "$state")
+  [ "$out" = 'unknown fm-spawn' ] || fail "unchanged launch seed was not made unknown: $out"
+  "$EV" apply "$state" t1 busy --gen "$gen" --source opencode-plugin --event execution-started \
+    || fail "native activity event failed"
+  before=$(cat "$state/t1.busy-state")
+  "$EV" apply "$state" t1 idle --gen "$gen" --source fm-spawn --event launch-failed --if-seq 1 \
+    || fail "advanced sequence guard should succeed without writing"
+  [ "$(cat "$state/t1.busy-state")" = "$before" ] || fail "guarded apply overwrote newer activity or advanced its sequence"
+  out=$(fm_busy_classify tmux w1 opencode t1 "$state")
+  [ "$out" = 'busy opencode-plugin' ] || fail "native activity was not preserved: $out"
+  if "$EV" apply "$state" t1 idle --gen g1.1.1 --source fm-spawn --event launch-failed --if-seq 1 2>/dev/null; then
+    fail "sequence guard bypassed stale generation refusal"
+  fi
+  if "$EV" apply "$state" t1 idle --gen "$gen" --source fm-spawn --event launch-failed --if-seq NaN 2>/dev/null; then
+    fail "invalid sequence guard was accepted"
+  fi
+  [ "$(cat "$state/t1.busy-state")" = "$before" ] || fail "refused guarded event changed native activity"
+  pass "guarded busy events update only the expected lifecycle sequence and preserve newer native activity"
+}
+
 test_apply_current_gen_reset() {
   local state out
   state=$(new_state_dir apply-current)
@@ -597,6 +623,7 @@ test_progress_is_generation_bound_and_not_semantic_state
 
 test_arm_seeds_busy_spawn
 test_apply_advances_seq_and_source
+test_guarded_apply_preserves_newer_activity
 test_apply_current_gen_reset
 test_apply_unarmed_refused
 test_retire_serializes_and_rejects_stale_gen

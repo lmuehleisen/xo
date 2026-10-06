@@ -2639,7 +2639,7 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 
 ## OpenCode V2
 
-Verified on 2026-10-05 with `opencode v2.0.18` on macOS and a private tmux server.
+Verified on 2026-10-06 with `opencode v2.0.18` on macOS and a private tmux server.
 The supported launch floor is V2 2.0.18; V1 launch is refused before worker allocation.
 Refresh the worker evidence with:
 
@@ -2652,14 +2652,17 @@ The displayed model was `Build auto · Muse Spark 1.3 Free OpenCode Zen`.
 The exact terminal result was:
 
 ```text
-ok - opencode v2.0.18: requested model, brief, busy/idle, turn-end, composer, durable steer, interrupt, exit and relaunch
+ok - opencode v2.0.18: fresh spawn, bare relaunch model, preserved work, brief/status, busy/idle, turn-end, cursorless composer, durable steer, interrupt, exit and failed-restart retention
 ```
 
-The guard proves the real spawn template and per-task plugin load, semantic busy/idle settlement, turn-end notification, ancestry detection, tmux liveness, cursor-aware and cursorless idle classification, draft classification, durable inbox acknowledgement, interruption of a running turn, stopped-agent verification, and deterministic relaunch in the same scratch copy.
+The guard proves the real spawn template and per-task plugin load, semantic busy/idle settlement, turn-end notification, ancestry detection, tmux liveness, cursor-aware and cursorless idle classification, draft classification, durable inbox acknowledgement, interruption of a running turn, stopped-agent verification, and bare `fm-spawn.sh --relaunch` in the same scratch copy.
+It also forces a restart readiness timeout and requires the real pane, uncommitted work, and diagnostic capture to survive before exiting through the control plane.
+Only scratch allocation is stubbed; fresh endpoint creation, launch, readiness, plugin events, and replacement submission use production code.
 The control command reports `cancel=unconfirmed`; the live guard separately requires the plugin's idle event before proceeding.
 [Supervision verification](supervision.md#opencode-v2-primary-boundary) owns the separate portable evidence that primary modules preserve their legacy V1 exports.
 The V2 composer includes `Build auto`, a location/shortcut strip below its half-block floor, and sidebar content alongside the input rows.
-Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-sessionstart-nudge.test.sh`.
+Its location strip can put the path before or after `ctrl+p commands`; cursorless classification requires the bounded floor and mode/model footer for either order.
+Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-control-relaunch.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-sessionstart-nudge.test.sh`.
 This run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.
 V2 primary operation is deferred as documented by the [harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration).
 
