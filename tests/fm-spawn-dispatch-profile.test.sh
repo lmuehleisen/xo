@@ -1161,10 +1161,11 @@ test_claude_ultracode_optin() {
       out=$(FM_FAKE_CLAUDE_ULTRACODE_RUNTIME='Ultracode unavailable' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model haiku)
     fi
     expect_code 1 "$?" "ultracode must refuse $probe: $out"
-    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unsupported ultracode published metadata"
     if [ "$probe" = old-version ]; then
+      assert_absent "$HOME_DIR/state/$id.meta" "preflight-refused ultracode published metadata"
       [ ! -s "$LAUNCH_LOG" ] || fail "unsupported ultracode launched"
     else
+      assert_present "$HOME_DIR/state/$id.meta" "post-launch ultracode refusal lost task ownership"
       assert_not_contains "$(cat "$LAUNCH_LOG")" 'FIRSTMATE_OP: v1 operational-input' "unsupported ultracode received its task brief"
     fi
   done
@@ -1255,6 +1256,9 @@ prior_ack() {
   fi
 }
 if [ "${1:-}" = capture-pane ]; then
+  if [ -f "$dir/goal-input" ] && [ -n "${FM_FAKE_GOAL_EDIT_PATH:-}" ]; then
+    printf 'native goal worker edit\n' > "$FM_FAKE_GOAL_EDIT_PATH"
+  fi
   phase=${FM_FAKE_GOAL_SIGNAL_PHASE:-}
   if [ -n "$phase" ] && [ -f "$dir/optin-launched" ] && [ ! -f "$dir/signal-sent" ] &&
     { { [ "$phase" = before ] && [ ! -f "$dir/goal-input" ]; } ||
@@ -1337,7 +1341,7 @@ SH
 }
 
 test_goal_first_native_input() {
-  local harness rec id out launch input envelope role
+  local harness rec id out launch input envelope role expected expected_role directive
   for harness in claude codex; do
     id="goal-$harness"
     rec=$(make_spawn_case "$id" "$harness" "$id")
@@ -1350,11 +1354,17 @@ test_goal_first_native_input() {
     assert_task_launch_uses_probed_executable "$harness" "$launch"
     assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
-    assert_grep '^/goal ' "$FAKEBIN_DIR/goal-input" "goal was not delivered as parser-native input"
-    assert_grep 'Reply with smoke\.' "$FAKEBIN_DIR/goal-input" "native goal input lost its completion condition"
-    assert_grep 'launch-brief.md exactly, including its authority and stop/wait gates' "$FAKEBIN_DIR/goal-input" "goal omitted worker contract"
+    input=$(cat "$FAKEBIN_DIR/goal-input")
+    directive="Reply with smoke. Read and follow the launch brief at $HOME_DIR/data/$id/launch-brief.md exactly, including its authority and stop/wait gates."
+    expected="/goal $directive"
     if [ "$harness" = codex ]; then
-      input=$(cat "$FAKEBIN_DIR/goal-input")
+      # The published brief is the worker contract oracle: its first section
+      # must reach the native goal verbatim, ahead of the completion condition.
+      expected_role=$(awk 'NF == 0 {exit} {if (NR > 1) printf " "; printf "%s", $0}' "$HOME_DIR/data/$id/launch-brief.md")
+      expected="/goal $(printf '%s' "$expected_role $directive" | "$ROOT/bin/fm-operational-input.sh" encode launch-brief)"
+    fi
+    assert_equals "$expected" "$input" "native $harness goal input differs from the exact launch contract"
+    if [ "$harness" = codex ]; then
       envelope=${input#'/goal '}
       [ "$(printf '%s' "$envelope" | "$ROOT/bin/fm-operational-input.sh" kind)" = launch-brief ] \
         || fail "Codex goal lost its authenticated launch-brief carrier"
@@ -1385,7 +1395,7 @@ test_goal_first_native_input() {
   out=$(FM_FAKE_GOAL_REJECT=1 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke)
   expect_code 1 "$?" "unacknowledged goal must not report a successful spawn: $out"
   assert_not_contains "$out" "spawned $id" "native goal rejection was silently omitted"
-  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a confirmed closed failed launch retained its provisional record"
+  assert_present "$HOME_DIR/state/$id.meta" "a post-launch goal refusal lost task ownership"
   pass "Claude and Codex goals are the first native input and preserve the brief contract"
 }
 
@@ -1450,6 +1460,34 @@ test_goal_prompt_echo_is_not_an_acknowledgement() {
   pass "echoed goal text cannot substitute for a native acknowledgement"
 }
 
+test_goal_failure_after_worker_edits_preserves_ownership() {
+  local harness rec id out edit meta
+  for harness in claude codex; do
+    id="goal-edit-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    goal_pane_fixture
+    printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
+    edit="$WT_DIR/native-goal-edit.txt"
+    out=$(FM_FAKE_GOAL_STALE_ONLY=1 FM_FAKE_GOAL_EDIT_PATH="$edit" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code 1 "$?" "unacknowledged $harness goal with worker edits must fail: $out"
+    assert_contains "$out" 'endpoint is closed; retaining task record' "confirmed shutdown discarded ownership of worker edits"
+    assert_present "$FAKEBIN_DIR/endpoint-kill-attempted" "failed goal did not close its endpoint"
+    assert_present "$HOME_DIR/state/$id.meta" "failed goal erased the worktree owner"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" "retained owner lost the edited worktree"
+    assert_equals 'native goal worker edit' "$(cat "$edit")" "failure cleanup changed the worker edit"
+    meta=$(cat "$HOME_DIR/state/$id.meta")
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal smoke 2>&1)
+    expect_code 1 "$?" "failed-goal ownership must prevent a fresh duplicate dispatch: $out"
+    assert_contains "$out" 'already has a record' "duplicate dispatch did not refuse on retained ownership"
+    assert_equals "$meta" "$(cat "$HOME_DIR/state/$id.meta")" "duplicate dispatch changed the failed task owner"
+    [ ! -s "$LAUNCH_LOG" ] || fail "duplicate dispatch launched over unaccounted worker edits"
+    assert_equals 'native goal worker edit' "$(cat "$edit")" "duplicate dispatch changed the retained work"
+  done
+  pass "post-launch goal failure retains edited worktrees and refuses duplicate dispatch after confirmed shutdown"
+}
+
 test_interrupted_launch_optins_preserve_endpoint_ownership() {
   local rec id out scenario harness phase signal unknown expected optin status status_fail
   for scenario in 'codex before TERM 1 0' 'codex after HUP 0 0' 'claude before HUP 0 0' 'claude after TERM 1 0' 'ultracode before TERM 1 0' 'claude before TERM 0 1' 'codex after HUP 1 1'; do
@@ -1479,17 +1517,12 @@ test_interrupted_launch_optins_preserve_endpoint_ownership() {
     if [ "$harness" = claude ]; then
       [ -f "$FAKEBIN_DIR/busy-generation-before" ] || fail "the Claude interruption case did not arm a busy generation"
     fi
-    if [ "$unknown" = 1 ]; then
-      [ -f "$HOME_DIR/state/$id.meta" ] || fail "an interrupted launch erased ownership of an unconfirmed endpoint: $scenario $out"
-      if [ -f "$FAKEBIN_DIR/busy-generation-before" ]; then
-        cmp -s "$FAKEBIN_DIR/busy-generation-before" "$HOME_DIR/state/$id.busy-gen" || fail "an interrupted launch changed or retired its armed busy generation"
-      fi
-    else
-      [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a positively absent interrupted endpoint kept its provisional record"
-      [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "a positively absent interrupted endpoint kept its busy generation"
+    assert_present "$HOME_DIR/state/$id.meta" "an interrupted launch erased task ownership: $scenario $out"
+    if [ -f "$FAKEBIN_DIR/busy-generation-before" ]; then
+      cmp -s "$FAKEBIN_DIR/busy-generation-before" "$HOME_DIR/state/$id.busy-gen" || fail "an interrupted launch changed or retired its armed busy generation"
     fi
   done
-  pass "interrupted mode and goal launches preserve ownership until endpoint absence is proven"
+  pass "interrupted mode and goal launches preserve ownership after both confirmed and unconfirmed shutdown"
 }
 
 test_task_optins_refuse_wrong_surfaces() {
@@ -2842,6 +2875,7 @@ test_claude_ultracode_optin
 test_goal_first_native_input
 test_goal_acknowledgement_is_fresh_and_failure_stays_owned
 test_goal_prompt_echo_is_not_an_acknowledgement
+test_goal_failure_after_worker_edits_preserves_ownership
 test_interrupted_launch_optins_preserve_endpoint_ownership
 test_task_optins_refuse_wrong_surfaces
 test_goal_directive_exact_boundary

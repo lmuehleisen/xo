@@ -113,11 +113,12 @@
 #   current worker role before that directive; the same length bound applies.
 #   The existing backend composer and submit path owns readiness and delivery;
 #   a new native goal acknowledgement after the pre-submit capture is required
-#   before spawn reports success. A failed goal launch retains its task record
-#   and busy generation unless endpoint absence is positively confirmed.
+#   before spawn reports success. A failed post-launch goal retains its task
+#   record, worktree, and busy generation for guarded cleanup even after the
+#   endpoint is positively confirmed absent: the worker may have made edits.
 #   The same ownership-preserving failure path covers ultracode activation.
 #   Interrupted activation also closes the exact endpoint and retains task
-#   ownership until endpoint absence is positively confirmed.
+#   ownership for guarded cleanup.
 #   These two flags refuse secondmates, relaunches, and raw commands.
 #   The shared control preflight also refuses relaunch of a task recorded with
 #   either opt-in before stopping its worker; recovery cannot reconstruct them.
@@ -4894,7 +4895,9 @@ task_ultracode_start() {
 
 task_launch_optin_cleanup() { # <detail>
   # Preserve ownership before any cleanup call can itself be interrupted.
-  # Only positive endpoint absence restores the provisional rollback path.
+  # Endpoint absence cannot prove the worktree has no worker edits. Every
+  # post-launch failure keeps the record/lease until guarded cleanup accounts
+  # for that work, including when activation was not acknowledged.
   SPAWN_FRESH_COMMIT_PENDING=0
   SPAWN_OPTIN_CLEANUP_DONE=1
   if ! printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"; then
@@ -4902,10 +4905,10 @@ task_launch_optin_cleanup() { # <detail>
   fi
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
-    SPAWN_FRESH_COMMIT_PENDING=1
+    echo "error: $1; endpoint is closed; retaining task record $STATE/$ID.meta and worktree for guarded cleanup" >&2
   else
     # An opt-in may have activated despite an unreadable acknowledgement.
-    # Keep ownership until guarded teardown proves the endpoint is gone.
+    # Keep ownership while guarded cleanup accounts for the endpoint and work.
     echo "error: $1 and endpoint shutdown is unconfirmed; retaining task record $STATE/$ID.meta and worktree for recovery" >&2
   fi
 }
