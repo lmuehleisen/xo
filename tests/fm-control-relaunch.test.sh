@@ -1246,6 +1246,41 @@ test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop() {
   pass "fm-control relaunch: an adapter unverified for this task kind refuses before the agent is stopped"
 }
 
+test_unsupported_opencode_version_refuses_before_stop() {
+  local dir out rc current failure
+  for current in claude opencode; do
+    for failure in v1 below-floor malformed unreadable; do
+      dir=$(new_case "opencode-version-$current-$failure" oc-version)
+      add_ship_task "$dir" oc-version "$current"
+      printf '%s' "$current" > "$dir/fake/command"
+      cp "$dir/home/state/oc-version.meta" "$dir/meta-prior"
+      cp "$dir/home/data/oc-version/brief.md" "$dir/brief-prior"
+      printf 'preserve edit\n' > "$dir/wt/edited.txt"
+      cat > "$dir/fakebin/opencode" <<'SH'
+#!/bin/sh
+[ ! -f "$FM_FAKE_DIR/opencode-unreadable" ] || exit 1
+cat "$FM_FAKE_DIR/opencode-version"
+SH
+      chmod +x "$dir/fakebin/opencode"
+      case "$failure" in
+        v1) printf 'opencode v1.18.33\n' > "$dir/fake/opencode-version" ;;
+        below-floor) printf 'opencode v2.0.17\n' > "$dir/fake/opencode-version" ;;
+        malformed) printf 'unknown version\n' > "$dir/fake/opencode-version" ;;
+        unreadable) : > "$dir/fake/opencode-unreadable" ;;
+      esac
+      out=$(run_control "$dir" oc-version relaunch --harness opencode --note 'retain worker'); rc=$?
+      expect_code 1 "$rc" "unsupported OpenCode $failure must refuse before stopping $current"
+      assert_contains "$out" OpenCode "version refusal must identify the adapter"
+      [ "$(cat "$dir/fake/command")" = "$current" ] || fail "version refusal stopped the old worker"
+      [ ! -s "$dir/fake/keys" ] && [ ! -s "$dir/fake/literal" ] || fail "version refusal touched the endpoint"
+      cmp -s "$dir/meta-prior" "$dir/home/state/oc-version.meta" || fail "version refusal changed task metadata"
+      cmp -s "$dir/brief-prior" "$dir/home/data/oc-version/brief.md" || fail "version refusal changed the brief"
+      [ -s "$dir/wt/edited.txt" ] || fail "version refusal lost edited work"
+    done
+  done
+  pass "fm-control relaunch: unsupported or unreadable OpenCode versions preserve the current worker before stop"
+}
+
 test_secondmate_codex_ultra_refuses_before_stop() {
   local dir home out rc source id=sm-ultra
   for source in explicit configured; do
@@ -2711,6 +2746,7 @@ test_turnend_auth_paths_are_owned_by_the_control_adapter
 test_secondmate_relaunch_picks_up_the_configured_harness_pin
 test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop
 test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop
+test_unsupported_opencode_version_refuses_before_stop
 test_secondmate_codex_ultra_refuses_before_stop
 test_explicit_secondmate_harness_ignores_configured_profile_axes
 test_ship_relaunch_ignores_the_crew_harness_config
