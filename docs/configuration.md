@@ -1213,6 +1213,7 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
   "classes": {
     "<class>": {
       "family": "<model family>",
+      "unmetered": true,
       "routes": [
         { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>", "provider": "<optional quota-axi provider>", "floor": { "scope": "<quota-axi scope>", "min_percent": 50 } }
       ],
@@ -1239,6 +1240,7 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
 | Field | Meaning |
 | --- | --- |
 | Class `family` | Required; the model family a second opinion excludes. A harness and model routed by more than one class must keep one family. |
+| Class `unmetered` | Optional boolean; `true` declares every route in the class free of quota consumption, and the class's routes must not declare quota floors. |
 | Class `routes` | Required non-empty array of profiles, each one way to reach the class's model, validated exactly like a `use` profile. |
 | Class `experiment` | Optional; marks a trial class sampled for `share` (above 0, at most 1) of the tasks its lanes resolve. |
 | Class `data_policy` | Optional; names the `data_policies` entry a task must satisfy before any route of the class is eligible. |
@@ -1253,7 +1255,12 @@ A lane rule's `when`, `approval`, `min_confidence`, and `floor` keep their meani
 
 **How a lane resolves**
 
-Every class route is evaluated like a profile: its provider, floor, quota row, runway, and `spendPriority`.
+Every class route is evaluated like a profile, with a class's `unmetered` flag replacing only provider quota evidence.
+
+- A class with `unmetered: true` replaces provider quota evidence with the explicit label `unmetered (declared)` and a synthetic `spendPriority` of `0`; it does not claim a measured remaining percentage or runway.
+- This fixed score is the pace-neutral boundary: positive measured scores rank ahead, negative scores rank behind, and a tie escalates under the normal tie rule.
+- The synthetic zero counts as not spending ahead of pace, so an unmetered route cannot open an `others-ahead-of-pace` gate.
+- Unmetered affects quota evidence only; class data policies, experiment sampling, approval, lane ordering, and other eligibility gates still apply.
 
 - An `ordered` lane takes the first class with any eligible route and ranks only inside that class; an eligible but unranked route keeps its class first rather than falling through to the next class.
 - A `pool` lane ranks every eligible route of every class together.

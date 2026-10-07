@@ -38,8 +38,10 @@
 #   "Typed dispatch resolution" owns this tool's operator contract.
 #
 # Lanes: a rule with `classes` is a lane (bin/fm-dispatch-lanes-lib.sh owns its
-#   structural checks). Each class route is evaluated exactly like a profile,
-#   then code picks: a sampled experiment class with a rankable route first; in
+#   structural checks). Each class route is evaluated like a profile, except a
+#   class declared unmetered receives a fixed neutral spendPriority of 0 and
+#   skips provider quota evidence; its other eligibility gates still apply.
+#   Code picks: a sampled experiment class with a rankable route first; in
 #   an `ordered` lane the first class with any eligible route, ranked inside
 #   that class; in a `pool` lane the spendPriority argmax over every class.
 #   A class gated `others-ahead-of-pace` stays eligible only while every
@@ -75,6 +77,7 @@
 #     lane: <name> order=<ordered|pool>   (lane rules; exclude_family and data_tags when given)
 #     experiment: <class> share=.. bucket=.. -> sampled | not sampled | excluded
 #     candidate: <harness>:<model> [class=.. family=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
+#     Unmetered class routes print quota=unmetered (declared), spendPriority=0, runway=unmetered; these are declared facts, not measured quota.
 #     class: <name> family=<family> [experiment]   (lane rules, status clear only)
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
@@ -245,6 +248,7 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson verified_harn
   elif any((.rules // [])[]; type != "object") then "each rule must be an object"
   elif any((.rules // [])[]; (.when | type) != "string" or (.when | length) == 0) then "each rule needs non-empty when"
   elif (dispatch_lanes_error // null) != null then dispatch_lanes_error
+  elif any(([(.rules // [])[] | profiles(.use)[]] + profiles(.default // null))[]; type == "object" and has("unmetered")) then "unmetered must be declared on a lane class, not a profile"
   elif any((.rules // [])[]; (has("classes") | not) and (profiles(.use) | length) == 0) then "each rule needs at least one use profile"
   elif any((.rules // [])[]; has("approval") and .approval != "captain") then "approval must be \"captain\" when present"
   elif any((.rules // [])[]; has("min_confidence") and ((.min_confidence | type) != "number" or .min_confidence < 0 or .min_confidence > 1)) then "min_confidence must be a number from 0 through 1 when present"
@@ -499,9 +503,11 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     end;
   def evidence($rows):
     $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), usableRunwaySeconds: (.runway.usableRunwaySeconds // null), spendPriority: (.selection.spendPriority // null)});
-  def evaluate($c):
+  def evaluate_route($c; $unmetered):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
+    elif $unmetered then
+      {profile: $c, provider: $p, unmetered: true, spendPriority: 0, eligible: true, reason: "unmetered (declared)"}
     elif prov($p; $lane) == null then
       {profile: $c, provider: $p, eligible: true, unranked: true,
        reason: (if any($q.providers[]; .provider == $p)
@@ -561,6 +567,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
     end;
+  def evaluate($c): evaluate_route($c; false);
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -589,11 +596,12 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def lane_eval($rule):
     [dispatch_lane_refs($rule)[] | . as $ref | ($cfg.classes[$ref.class]) as $def |
       {name: $ref.class, gate: ($ref.gate // null), family: $def.family,
-       experiment: ($def.experiment // null), data_policy: ($def.data_policy // null), routes: $def.routes}
+       experiment: ($def.experiment // null), data_policy: ($def.data_policy // null),
+       unmetered: ($def.unmetered // false), routes: $def.routes}
       | . + {excluded: class_exclusion(.)}
       | . as $k
       | . + {candidates: [.routes[] |
-          (if $k.excluded != null then {profile: ., eligible: false, reason: $k.excluded} else evaluate(.) end)
+          (if $k.excluded != null then {profile: ., eligible: false, reason: $k.excluded} else evaluate_route(.; $k.unmetered) end)
           + {class: $k.name, family: $k.family} + (if $k.experiment != null then {experiment: true} else {} end)]}
     ] as $classes0 |
     ([$classes0[] | select(.gate == null) | .candidates[] | select(rankable)]) as $others |
@@ -743,7 +751,8 @@ TEXT=$(jq -r '
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
       + (if .class then "  class=\(.class | flat) family=\(.family | flat)" + (if .experiment then " experiment" else "" end) else "" end)
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
-      + (if .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
+      + (if .unmetered then "  quota=unmetered (declared)  spendPriority=0  runway=unmetered"
+         elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
       + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)),

@@ -1219,12 +1219,26 @@ assert_contains "$out" 'lane: standard  order=pool' "--lane names the lane and i
 [ ! -e "$LOG/argv" ] || fail "--lane must not call the network"
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "pool argmax picks the highest spendPriority route"
 assert_contains "$out" 'class: sol-high  family=gpt' "the chosen class and family are printed"
-assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  -> eligible, unranked' "an unmeasured free route is disclosed, not blocked"
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "the declared unmetered route is rankable and clearly distinguished from measured quota"
 pass "a named lane resolves in code with no key, picking a route by spendPriority"
+
+lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6 opencode=exhausted
+run_lane code out err "$BRIEF" --lane standard --project xo
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "provider quota rows do not override a class's unmetered declaration"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "a positive measured route still outranks the unmetered neutral score"
+
+lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=-0.1 devin=-0.4 kiro=-0.6
+run_lane code out err "$BRIEF" --lane standard --project xo
+assert_contains "$out" "profile: --harness 'opencode' --model 'opencode/muse-spark-1.3-contributor-free'" "the neutral unmetered priority beats metered routes spending ahead of pace"
+lane_quota claude=-0.3 codex=0 grok=-0.5 agy=-0.1 devin=-0.4 kiro=-0.6
+run_lane code out err "$BRIEF" --lane standard --project xo
+assert_contains "$out" 'status: escalate' "a measured zero ties the unmetered neutral priority"
+assert_contains "$out" 'genuine spendPriority tie' "unmetered ties use the normal explicit tie escalation"
+pass "unmetered routes rank at the pace-neutral boundary without starving positive measured routes"
 
 # Gemini joins Standard only while every ungated route spends ahead of pace and it does not.
 assert_contains "$out" 'class=gemini-flash-high family=gemini  provider=agy' "the gated class is evaluated"
-assert_contains "$out" 'not eligible: pace gate closed: sol-high not spending ahead of pace' "a route on or under pace keeps the gate closed"
+assert_contains "$out" 'not eligible: pace gate closed: sol-high, muse-spark not spending ahead of pace' "a metered or unmetered route on pace keeps the gate closed"
 lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
 run_lane code out err "$BRIEF" --lane standard --project xo
 assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "the gate opens when every other route is ahead of pace"
@@ -1251,6 +1265,21 @@ lane_quota claude=exhausted codex=0.2 kiro=exhausted
 run_lane code out err "$BRIEF" --lane technical-deep
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'max'" "an exhausted first class falls to the next class in order"
 pass "ordered lanes take the first viable class and rank only inside it"
+
+cat > "$RULES" <<'JSON'
+{"classes":{
+  "free-first":{"family":"muse","unmetered":true,"routes":[{"harness":"opencode","model":"opencode/muse-spark-1.3-contributor-free","provider":"opencode"}]},
+  "metered-second":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-6.1-sol","effort":"high"}]}},
+ "rules":[{"lane":"ordered-unmetered","order":"ordered","when":"Ordered quota selection.","classes":["free-first","metered-second"]}]}
+JSON
+lane_quota codex=0.9
+run_lane code out err "$BRIEF" --lane ordered-unmetered
+assert_contains "$out" "profile: --harness 'opencode' --model 'opencode/muse-spark-1.3-contributor-free'" "ordered lanes keep the first unmetered class ahead of a higher measured score"
+jq '.rules[0].classes = ["metered-second", "free-first"]' "$RULES" > "$TMP_ROOT/reordered.json" && cp "$TMP_ROOT/reordered.json" "$RULES"
+run_lane code out err "$BRIEF" --lane ordered-unmetered
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "ordered lanes keep a higher measured class ahead when it is listed first"
+pass "unmetered ranking preserves ordered lane semantics"
+cp "$TEMPLATE" "$RULES"
 
 # Long-horizon needs the captain's per-task word; candidates are still shown.
 lane_quota claude=0.3 codex=0.2
@@ -1281,12 +1310,12 @@ lane_quota codex=-0.2 devin=-0.1 agy=0.3
 run_lane code out err "$BRIEF" --lane bulk --project acme
 assert_contains "$out" 'class=muse-spark family=muse  -> not eligible: data policy may-train does not admit project acme without an allowed data tag' "an unlisted project is refused"
 run_lane code out err "$BRIEF" --lane bulk --project acme --data-tag public-research
-assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  -> eligible, unranked' "an allowed data tag admits the route"
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "an allowed data tag admits the unmetered route"
 assert_contains "$out" 'data_tags: public-research' "the data tags are printed"
 run_lane code out err "$BRIEF" --lane bulk --project xo --data-tag person-data
 assert_contains "$out" 'not eligible: data policy may-train refuses data tag person-data' "a denied tag refuses even an allowed project"
 run_lane code out err "$BRIEF" --lane bulk --project xo
-assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  -> eligible, unranked' "an allowed project admits the route"
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "an allowed project admits the unmetered route"
 run_lane code out err "$BRIEF" --lane bulk --data-tag publc
 expect_code 2 "$code" "an undeclared data tag is a usage error"
 assert_contains "$err" 'undeclared data tag: publc' "the typo is named"
@@ -1324,6 +1353,29 @@ run_lane code out err "$EXP_BRIEF" --lane standard
 [ "$out" = "$first" ] || fail "the same brief must sample the same way on every run"
 pass "an experiment class is sampled per brief and marked when chosen"
 
+cat > "$RULES" <<'JSON'
+{"classes":{
+  "sol-high":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-6.1-sol","effort":"high"}]},
+  "muse-trial":{"family":"muse","unmetered":true,"experiment":{"share":1},"routes":[{"harness":"opencode","model":"opencode/muse-spark-1.3-contributor-free","provider":"opencode"}]}},
+ "rules":[{"lane":"unmetered-experiment","when":"Sampled free route.","classes":["sol-high","muse-trial"]}]}
+JSON
+lane_quota codex=0.5
+run_lane code out err "$BRIEF" --lane unmetered-experiment
+assert_contains "$out" 'experiment: muse-trial  share=1  ' "the unmetered experiment is sampled through the normal class gate"
+assert_contains "$out" "profile: --harness 'opencode' --model 'opencode/muse-spark-1.3-contributor-free'" "a sampled unmetered experiment takes the task through the normal experiment rule"
+jq '.classes["muse-trial"].experiment.share = 0.01' "$RULES" > "$TMP_ROOT/unmetered-rare.json" && cp "$TMP_ROOT/unmetered-rare.json" "$RULES"
+EXP_BRIEF="$TMP_ROOT/unmetered-exp-brief.md"
+found=''
+for variant in 1 2 3 4 5 6 7 8 9 10; do
+  printf '# Task\nRename the pager helper, unmetered variant %s.\n' "$variant" > "$EXP_BRIEF"
+  run_lane code out err "$EXP_BRIEF" --lane unmetered-experiment
+  case "$out" in *'-> not sampled'*) found=$variant; break ;; esac
+done
+[ -n "$found" ] || fail "no unmetered experiment brief variant was left unsampled at a 1% share"
+assert_contains "$out" 'class=muse-trial family=muse experiment  -> not eligible: experiment not sampled for this task' "an unmetered route does not bypass experiment sampling"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "an unsampled unmetered route yields to the eligible measured pool"
+pass "unmetered routes retain normal experiment sampling gates"
+
 # Jev may pick a lane rule: the lane resolves exactly as with --lane.
 cp "$TEMPLATE" "$RULES"
 lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
@@ -1352,6 +1404,22 @@ cp "$TEMPLATE" "$RULES"
 run_lane code out err "$BRIEF" --lane nope
 expect_code 2 "$code" "an unknown lane is a usage error"
 assert_contains "$err" 'unknown lane: nope' "the unknown lane is named"
+jq '.classes["muse-spark"].unmetered = "yes"' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane bulk
+expect_code 2 "$code" "an invalid unmetered class value is refused"
+assert_contains "$err" 'class unmetered must be a boolean' "the unmetered type error is explicit"
+jq '.classes["muse-spark"].routes[0].floor = {scope:"all_models", min_percent:50}' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane bulk
+expect_code 2 "$code" "an unmetered class cannot declare a quota floor"
+assert_contains "$err" 'an unmetered class route must not have a quota floor' "the incompatible floor is named"
+jq '.classes["muse-spark"].routes[0].unmetered = true' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane bulk
+expect_code 2 "$code" "unmetered must be declared on a class, not its route"
+assert_contains "$err" 'unmetered belongs on the class, not on a route' "the declaration location is explicit"
+printf '{"rules":[{"when":"Coding","use":{"harness":"opencode","unmetered":true}}]}\n' > "$RULES"
+run_lane code out err "$BRIEF"
+expect_code 2 "$code" "an ordinary use profile cannot opt into lane-only unmetered handling"
+assert_contains "$err" 'unmetered must be declared on a lane class, not a profile' "the lane-only declaration scope is explicit"
 jq '.classes["muse-spark"].routes[0] |= del(.provider)' "$TEMPLATE" > "$RULES"
 run_lane code out err "$BRIEF" --lane bulk
 expect_code 2 "$code" "a multi-provider class route without provider is refused"

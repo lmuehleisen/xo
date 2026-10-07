@@ -51,12 +51,17 @@ FM_DISPATCH_LANES_JQ='
     if has("classes") and (.classes | type) != "object" then "classes must be an object of named model classes"
     elif any($classes | keys[]; dl_name | not) then "class names must match ^[a-z0-9]+(-[a-z0-9]+)*$"
     elif any($classes[]; type != "object") then "each class must be an object"
-    elif any($classes[]; (keys - ["family", "routes", "experiment", "data_policy", "why"]) | length > 0) then
-      "unknown class field: " + ([$classes[] | keys - ["family", "routes", "experiment", "data_policy", "why"] | .[]] | unique | join(", "))
+    elif any($classes[]; (keys - ["family", "routes", "experiment", "data_policy", "unmetered", "why"]) | length > 0) then
+      "unknown class field: " + ([$classes[] | keys - ["family", "routes", "experiment", "data_policy", "unmetered", "why"] | .[]] | unique | join(", "))
+    elif any($classes[]; has("unmetered") and (.unmetered | type) != "boolean") then
+      "class unmetered must be a boolean"
     elif any($classes[]; .family | dl_name | not) then "each class needs family matching ^[a-z0-9]+(-[a-z0-9]+)*$"
     elif any($classes[]; (.routes | type) != "array" or (.routes | length) == 0) then "each class needs a non-empty routes array"
     elif any($classes[] | .routes[]; dl_route_bad) then
       "each class route needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*$ when present"
+    elif any($classes[] | .routes[]; has("unmetered")) then "unmetered belongs on the class, not on a route"
+    elif any($classes[]; .unmetered == true and any(.routes[]; has("floor"))) then
+      "an unmetered class route must not have a quota floor"
     elif any($classes[]; (.routes | map(dl_route_key)) as $k | ($k | length) != ($k | unique | length)) then
       "each class must not contain duplicate harness, model, and effort routes"
     elif any($classes[]; has("experiment") and (
