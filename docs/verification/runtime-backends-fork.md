@@ -403,8 +403,8 @@ The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the fi
 ### Bypass permission layer (opt-in)
 
 Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5, so the layer's live-verified set is `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11`.
-A version without that evidence, such as 1.2.8 through 1.2.10, stays outside the set.
+The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the same six checks then passed on 1.3.1 on 2026-10-07 (see the 1.3.1 refresh below), so the layer's live-verified set is `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1`.
+A version without that evidence, such as 1.2.8 through 1.2.10, 1.3.0, or any later release, stays outside the set.
 The set stays an explicit allowlist rather than a minimum version, because each entry is individually proven against the version-sensitive hook contract.
 
 ```sh
@@ -439,6 +439,39 @@ Admission checks beyond the guard, on agy 1.2.11 (2026-09-25) with the productio
 
 `--sandbox` composition probe, 2026-09-19, agy 1.2.7: the flag composes with the bypass launch in headless mode, but the probe found no containment the adapter could rely on in that mode, and its interactive-session behaviour under a spawned pane is unverified.
 The launch therefore stays on `--dangerously-skip-permissions` alone, with the policy layer's write guards as the write restriction.
+
+#### 1.3.1 refresh (2026-10-07)
+
+Refreshed on 2026-10-07 with agy 1.3.1 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
+`bin/fm-spawn.sh --agy-bypass` refuses any version outside the allowlist, so 1.3.1 required this refresh before it could launch.
+Nothing in the version-sensitive hook contract changed: the same six live checks and the observer live check passed unchanged, and the `agy models` catalog still lists `gemini-3.6-flash-low`, so no part of the layer needed adapting beyond adding 1.3.1 to the allowlist.
+1.3.0 has no live evidence and stays outside the set.
+
+```sh
+FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
+```
+
+```text
+ok - agy 1.3.1: a policy deny blocks a bypassed call and the reason reaches the model
+ok - agy 1.3.1: an abstained task-local file op runs unchanged and the armed heartbeat logged
+ok - agy 1.3.1: a timed-out judge denies, holds the call for firstmate, and never abstains
+ok - agy 1.3.1: install-worker refuses a malformed merged hooks.json before any launch
+ok - agy 1.3.1: a force_ask decision under bypass did not block the call - no prompt exists to force
+ok - agy 1.3.1: a bypass session whose hook never logs leaves no armed line for the canary to trust
+# agy bypass permission layer live checks passed (agy 1.3.1)
+```
+
+```sh
+FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
+```
+
+```text
+ok - agy 1.3.1: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
+# agy observer live checks passed (agy 1.3.1)
+```
+
+The portable `tests/fm-agy-harness.test.sh` passed, and `tests/fm-agy-permission-policy.test.sh` passed every case except `fm-agy-permission-policy: exact shell inbox acknowledgements pass; siblings, globs and symlinks refuse`, which fails on a sibling-inbox `mkdir -p` the shared command policy abstains rather than denies.
+That case fails independently of the agy bypass layer and this allowlist change: it exercises `bin/fm-command-policy-lib.sh`, which this change does not touch, and is tracked separately.
 
 Portable permission-policy checks, refreshed on 2026-10-02 with fixture judges and ShellCheck 0.11.0:
 
