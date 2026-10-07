@@ -86,9 +86,11 @@
 # cleanup before the destructive return, including when an ancestor had to be
 # made searchable before the mount could be seen. Mount boundaries come from
 # the kernel mount table, so a name that contains a control character still
-# matches. On Linux, an unreadable kernel table refuses cleanup before the
-# return, because the mount listing replaces those characters. Other systems
-# have no kernel table and use their mount listing.
+# matches. Linux reads that table from /proc/self/mountinfo and refuses
+# cleanup when the file is unreadable, because its mount listing replaces
+# those characters. macOS reads getmntinfo, which returns the mount-path
+# bytes directly, and refuses cleanup when that call fails. Neither platform
+# trusts the mount command listing.
 # Ship worktrees are not modified, including a refusal or a forced discard.
 # The scout has stopped and teardown has already reaped worktree processes, so
 # only a concurrent process of the same user could race a directory into or out
@@ -1836,27 +1838,64 @@ scout_decode_mountinfo_field() {
   printf '%b' "$1"
 }
 
-# macOS has no kernel mount table. Its mount listing is the fallback. Linux
-# must not use this: util-linux replaces control characters, so a miss can
-# chmod a nested mount and the return can delete through it.
-scout_fill_mount_points_from_mount() {
-  local dest=$1 line rest out
-  out=$(mount) || return 1
-  while IFS= read -r line; do
-    case $line in
-      *" on "*) ;;
-      *) continue ;;
-    esac
-    rest=${line#* on }
-    rest=${rest% \(*}
-    case $rest in
-      *" type "*) rest=${rest% type *} ;;
-    esac
-    rest=${rest%" "}
-    [ -n "$rest" ] || continue
-    scout_record_mount_point "$dest" "$rest"
-  done <<< "$out"
-  return 0
+# macOS getmntinfo returns each f_mntonname, so a newline or the text " type "
+# stays in the path. The mount command listing splits records on newlines and
+# is not a boundary. A result that does not include / is rejected: that means
+# the statfs layout did not match this system.
+scout_fill_mount_points_from_getmntinfo() {
+  local dest=$1 py
+  py=$(command -v python3) || return 1
+  "$py" - "$dest" <<'PY'
+import ctypes
+import sys
+
+dest = sys.argv[1]
+MAXPATHLEN = 1024
+MFSTYPENAMELEN = 16
+
+
+class StatFS(ctypes.Structure):
+    _fields_ = [
+        ("f_bsize", ctypes.c_uint32),
+        ("f_iosize", ctypes.c_int32),
+        ("f_blocks", ctypes.c_uint64),
+        ("f_bfree", ctypes.c_uint64),
+        ("f_bavail", ctypes.c_uint64),
+        ("f_files", ctypes.c_uint64),
+        ("f_ffree", ctypes.c_uint64),
+        ("f_fsid", ctypes.c_int32 * 2),
+        ("f_owner", ctypes.c_uint32),
+        ("f_type", ctypes.c_uint32),
+        ("f_flags", ctypes.c_uint32),
+        ("f_fssubtype", ctypes.c_uint32),
+        ("f_fstypename", ctypes.c_char * MFSTYPENAMELEN),
+        ("f_mntonname", ctypes.c_char * MAXPATHLEN),
+        ("f_mntfromname", ctypes.c_char * MAXPATHLEN),
+        ("f_flags_ext", ctypes.c_uint32),
+        ("f_reserved", ctypes.c_uint32 * 7),
+    ]
+
+
+libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+libc.getmntinfo.argtypes = [ctypes.POINTER(ctypes.POINTER(StatFS)), ctypes.c_int]
+libc.getmntinfo.restype = ctypes.c_int
+buf = ctypes.POINTER(StatFS)()
+# MNT_NOWAIT is 2. Do not block on an unresponsive filesystem.
+count = libc.getmntinfo(ctypes.byref(buf), 2)
+if count <= 0:
+    sys.exit(1)
+paths = []
+for index in range(count):
+    raw = bytes(buf[index].f_mntonname).split(b"\0", 1)[0]
+    if not raw.startswith(b"/"):
+        sys.exit(1)
+    paths.append(raw)
+if b"/" not in paths:
+    sys.exit(1)
+with open(dest, "ab") as handle:
+    for raw in paths:
+        handle.write(raw + b"\0")
+PY
 }
 
 scout_fill_mount_points() {
@@ -1870,16 +1909,19 @@ scout_fill_mount_points() {
     src=/proc/self/mountinfo
   fi
   if [ -z "$src" ]; then
-    # No lossless table. Linux mount(8) replaces control characters with ?,
-    # so that listing cannot prove a nested mount is absent. A test that
-    # names a table and then withholds it asserts the same refusal where
-    # the listing is otherwise the fallback.
-    if [ "$(uname -s)" = Linux ] || { [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ]; }; then
+    # A test that names a table and then withholds it must refuse on every
+    # platform, including macOS where getmntinfo would otherwise succeed.
+    if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ]; then
       echo "error: scratch scout cleanup has no lossless mount table; refusing cleanup before return" >&2
       return 1
     fi
-    scout_fill_mount_points_from_mount "$dest"
-    return
+    # Linux mount(8) and the macOS mount command both split or replace
+    # control characters. getmntinfo is the lossless macOS source.
+    if [ "$(uname -s)" = Darwin ] && scout_fill_mount_points_from_getmntinfo "$dest"; then
+      return 0
+    fi
+    echo "error: scratch scout cleanup has no lossless mount table; refusing cleanup before return" >&2
+    return 1
   fi
   while IFS= read -r line || [ -n "$line" ]; do
     field=$(printf '%s\n' "$line" | awk '{print $5}')

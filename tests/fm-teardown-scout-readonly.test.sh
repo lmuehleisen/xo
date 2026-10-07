@@ -371,6 +371,39 @@ test_missing_kernel_mount_table_refuses_cleanup() {
   pass "a missing kernel mount table stops cleanup before return"
 }
 
+# The mount command splits a newline and the text " type ". Cleanup must
+# ignore that listing even when it names a directory inside the copy.
+test_mount_command_listing_is_not_a_boundary() {
+  local case_dir id=scout-mount-cmd rc walk bind
+  skip_if_directory_mode_is_bypassed "scout-mount-cmd" && return 0
+  case_dir=$(make_case scout-mount-cmd)
+  write_task "$case_dir" "$id" scout
+  mkdir -p "$case_dir/data/$id"
+  printf 'findings\n' > "$case_dir/data/$id/report.md"
+  plant_readonly_tree "$case_dir"
+  walk=$(cd "$case_dir/wt" && pwd -P)
+  bind="$walk/not-a-mount"
+  mkdir -p "$bind"
+  printf 'mounted\n' > "$bind/secret"
+  cat > "$case_dir/fakebin/mount" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "/dev/disk0 on $bind (apfs, local)"
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/mount"
+
+  rc=0
+  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scout-mount-cmd: teardown should ignore the mount command"$'\n'"$(cat "$case_dir/stderr")"
+  [ ! -e "$bind" ] \
+    || fail "scout-mount-cmd: a directory named by the mount command was kept"$'\n'"$(cat "$case_dir/stderr")"
+  [ ! -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-mount-cmd: the non-writable hooks tree is still in the scratch copy"
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-mount-cmd: teardown did not return the worktree"
+  pass "the mount command listing is not a cleanup boundary"
+}
+
 # Mode 0444 has no owner search bit. chmod u+w leaves it unsearchable, so the
 # walk must restore read and search too or the nested tree stays behind.
 test_mode_0444_directory_is_deleted() {
@@ -401,4 +434,5 @@ test_same_filesystem_mount_is_not_made_writable
 test_writable_mount_under_unsearchable_ancestor_refuses_return
 test_newline_mount_point_is_refused
 test_missing_kernel_mount_table_refuses_cleanup
+test_mount_command_listing_is_not_a_boundary
 test_mode_0444_directory_is_deleted
