@@ -73,6 +73,23 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# A finished scout can leave a nested directory without owner write permission,
+# for example a copied Git hooks tree. treehouse return then cleans with
+# `git clean -fd`, which unlinks a child only when that child's parent directory
+# is writable and does not repair the mode, so the return fails and the scratch
+# copy stays checked out. After those report and completion-gate checks and the
+# landed-work check, and after teardown has reaped processes in that copy,
+# scratch scout cleanup restores owner read, write, and search on real
+# directories owned by this user and on the same device as the scratch copy.
+# The walk does not follow symlinks and does not descend into another device.
+# A directory on another device is left unchanged, and finding one aborts
+# cleanup before the destructive return.
+# A same-device bind mount shares the scratch copy's device id, so this walk
+# cannot tell it from an ordinary directory. Bind mounts are out of scope.
+# Ship worktrees are not modified, including a refusal or a forced discard.
+# The scout has stopped and teardown has already reaped worktree processes, so
+# only a concurrent process of the same user could race a directory into or out
+# of the copy during that walk. That race is outside this cleanup trust model.
 # Before destructive cleanup, teardown validates task check artifacts as
 # ordinary single-link files on the state device. It refuses and preserves
 # task state when that proof fails; otherwise it removes the task's check,
@@ -1803,6 +1820,75 @@ cleanup_stale_lock_for_safety_check() {
 
   echo "teardown: worktree safety check blocked by git lock $lock that is not provably stale (may belong to a live process); leaving it in place" >&2
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
+}
+
+# Restore owner read, write, and search on real directories in a scratch scout
+# copy so the following treehouse return can unlink a tree the scout left
+# non-writable. See the script header. Ships are unchanged. Same-device bind
+# mounts are out of scope: they share this device id.
+prepare_scout_scratch_for_return() {
+  local wt=$1 walk root_dev owner err mounts find_rc=0
+  [ "$KIND" = scout ] || return 0
+  [ -n "$wt" ] || return 0
+  [ -d "$wt" ] || return 0
+  walk=$(cd -- "$wt" && pwd -P) || return 1
+  root_dev=$(stat -c %d -- "$walk" 2>/dev/null) || root_dev=$(stat -f '%d' "$walk") || return 1
+  [ -n "$root_dev" ] || return 1
+  owner=$(id -u) || return 1
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mount.XXXXXX") || return 1
+  mounts=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mounts.XXXXXX") || {
+    rm -f "$err"
+    return 1
+  }
+  # -P does not follow symlinks. -xdev does not descend into another
+  # filesystem, but the other device's root is still visited, so the device
+  # id is compared before any mode change. A directory this user does not own
+  # is left unchanged. Exit 0 prunes; exit 1 falls through to chmod.
+  find -P "$walk" -xdev \
+    \( -type d -exec sh -c '
+      root_dev=$1
+      owner=$2
+      err=$3
+      mounts=$4
+      dir=$5
+      if dev=$(stat -c %d -- "$dir" 2>/dev/null); then
+        :
+      else
+        dev=$(stat -f "%d" "$dir") || { printf x > "$err"; exit 0; }
+      fi
+      [ -n "$dev" ] || { printf x > "$err"; exit 0; }
+      if [ "$dev" != "$root_dev" ]; then
+        printf "%s\n" "$dir" >> "$mounts"
+        exit 0
+      fi
+      if uid=$(stat -c %u -- "$dir" 2>/dev/null); then
+        :
+      else
+        uid=$(stat -f "%u" "$dir") || { printf x > "$err"; exit 0; }
+      fi
+      [ -n "$uid" ] || { printf x > "$err"; exit 0; }
+      [ "$uid" = "$owner" ] || exit 0
+      exit 1
+    ' sh "$root_dev" "$owner" "$err" "$mounts" {} \; -prune \) \
+    -o \
+    \( -type d ! -perm -u+rwx -exec sh -c '
+      err=$1
+      dir=$2
+      # One directory at a time, so search permission is back before descent.
+      # A batched chmod would leave a mode 0444 child unvisited.
+      chmod u+rwx "$dir" || { printf x > "$err"; exit 1; }
+    ' sh "$err" {} \; \) \
+    || find_rc=$?
+  if [ -s "$err" ] || [ "$find_rc" -ne 0 ]; then
+    rm -f "$err" "$mounts"
+    return 1
+  fi
+  if [ -s "$mounts" ]; then
+    echo "error: scratch scout worktree $walk contains a directory on another device; refusing cleanup before return" >&2
+    rm -f "$err" "$mounts"
+    return 1
+  fi
+  rm -f "$err" "$mounts"
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
@@ -3711,6 +3797,12 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   post_lock_cleanup_check=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
+  fi
+  if [ "$KIND" = scout ]; then
+    prepare_scout_scratch_for_return "$WT" || {
+      echo "error: scratch scout cleanup cannot proceed for $WT; teardown aborted" >&2
+      exit 1
+    }
   fi
   teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
