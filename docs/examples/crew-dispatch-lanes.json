@@ -91,9 +91,11 @@
     },
     "swe-2": {
       "family": "swe",
+      "unmetered": true,
       "routes": [
         { "harness": "devin", "model": "swe-2-max", "provider": "devin" }
-      ]
+      ],
+      "why": "Devin lists SWE-2 as free, with no quota to conserve."
     },
     "kiro-auto": {
       "family": "kiro-auto",

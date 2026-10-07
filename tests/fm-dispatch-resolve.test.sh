@@ -1220,33 +1220,41 @@ assert_contains "$out" 'lane: standard  order=pool' "--lane names the lane and i
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "pool argmax picks the highest spendPriority route"
 assert_contains "$out" 'class: sol-high  family=gpt' "the chosen class and family are printed"
 assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "the declared unmetered route is rankable and clearly distinguished from measured quota"
+assert_contains "$out" 'class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "the Devin SWE-2 class in the example is declared unmetered"
 pass "a named lane resolves in code with no key, picking a route by spendPriority"
 
-lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6 opencode=exhausted
+lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=exhausted kiro=-0.6 opencode=exhausted
 run_lane code out err "$BRIEF" --lane standard --project xo
 assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "provider quota rows do not override a class's unmetered declaration"
+assert_contains "$out" 'class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "an exhausted Devin row does not override the SWE-2 unmetered declaration"
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "a positive measured route still outranks the unmetered neutral score"
 
 lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=-0.1 devin=-0.4 kiro=-0.6
 run_lane code out err "$BRIEF" --lane standard --project xo
-assert_contains "$out" "profile: --harness 'opencode' --model 'opencode/muse-spark-1.3-contributor-free'" "the neutral unmetered priority beats metered routes spending ahead of pace"
+assert_contains "$out" 'status: escalate' "multiple unmetered routes tie when every measured route is spending ahead of pace"
+assert_contains "$out" 'genuine spendPriority tie' "unmetered ties do not break by class order"
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "Muse remains rankable at neutral priority"
+assert_contains "$out" 'class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible' "SWE-2 remains rankable at the same neutral priority"
 lane_quota claude=-0.3 codex=0 grok=-0.5 agy=-0.1 devin=-0.4 kiro=-0.6
 run_lane code out err "$BRIEF" --lane standard --project xo
 assert_contains "$out" 'status: escalate' "a measured zero ties the unmetered neutral priority"
 assert_contains "$out" 'genuine spendPriority tie' "unmetered ties use the normal explicit tie escalation"
-pass "unmetered routes rank at the pace-neutral boundary without starving positive measured routes"
+pass "unmetered routes use the pace-neutral boundary without starving positive measured routes or breaking ties by class order"
 
-# An unmetered route stays neutral for pace; excluding Muse lets the measured routes
-# open the gate when they are all ahead of pace and Gemini itself is not.
+# Unmetered routes stay neutral for pace; they keep the shipped lane's gate closed.
+# Removing both from this test fixture shows the gate can open when all remaining
+# metered routes are ahead of pace and Gemini itself is not.
 assert_contains "$out" 'class=gemini-flash-high family=gemini  provider=agy' "the gated class is evaluated"
-assert_contains "$out" 'not eligible: pace gate closed: muse-spark, sol-high not spending ahead of pace' "a metered or unmetered route on pace keeps the gate closed"
+assert_contains "$out" 'not eligible: pace gate closed: muse-spark, sol-high, swe-2 not spending ahead of pace' "unmetered routes remain part of the pace gate"
+jq '.rules |= map(if .lane == "standard" then .classes |= map(select(. != "muse-spark" and . != "swe-2")) else . end)' "$TEMPLATE" > "$RULES"
 lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
-run_lane code out err "$BRIEF" --lane standard --project xo --exclude-family muse
+run_lane code out err "$BRIEF" --lane standard --project xo
 assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "the gate opens when every remaining route is ahead of pace"
 lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=-0.05 devin=-0.25 kiro=-0.6
-run_lane code out err "$BRIEF" --lane standard --project xo --exclude-family muse
+run_lane code out err "$BRIEF" --lane standard --project xo
 assert_contains "$out" 'pace gate closed: this class is itself spending ahead of pace' "the gate stays closed when the gated class is ahead of pace too"
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "the pool falls back to the best ungated route"
+cp "$TEMPLATE" "$RULES"
 lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
 run_lane code out err "$BRIEF" --lane scoped --project xo
 assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "an ungated lane ranks the same class without the pace condition"
