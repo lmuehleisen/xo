@@ -347,6 +347,30 @@ test_newline_mount_point_is_refused() {
   pass "a mount point whose name contains a newline stops cleanup before return"
 }
 
+# Linux mount(8) replaces control characters when the kernel table is missing.
+# Cleanup must refuse instead of trusting that listing.
+test_missing_kernel_mount_table_refuses_cleanup() {
+  local case_dir id=scout-no-mountinfo rc
+  skip_if_directory_mode_is_bypassed "scout-no-mountinfo" && return 0
+  case_dir=$(make_case scout-no-mountinfo)
+  write_task "$case_dir" "$id" scout
+  mkdir -p "$case_dir/data/$id"
+  printf 'findings\n' > "$case_dir/data/$id/report.md"
+  plant_readonly_tree "$case_dir"
+
+  rc=0
+  FM_TEST_MOUNTINFO="$case_dir/missing-mountinfo" \
+    run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-no-mountinfo: teardown returned without a mount table"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "no lossless mount table" "$case_dir/stderr" \
+    "scout-no-mountinfo: teardown did not report the missing mount table"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-no-mountinfo: teardown returned the worktree"
+  [ -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-no-mountinfo: cleanup deleted the scratch copy"
+  pass "a missing kernel mount table stops cleanup before return"
+}
+
 # Mode 0444 has no owner search bit. chmod u+w leaves it unsearchable, so the
 # walk must restore read and search too or the nested tree stays behind.
 test_mode_0444_directory_is_deleted() {
@@ -376,4 +400,5 @@ test_other_device_directory_is_not_made_writable
 test_same_filesystem_mount_is_not_made_writable
 test_writable_mount_under_unsearchable_ancestor_refuses_return
 test_newline_mount_point_is_refused
+test_missing_kernel_mount_table_refuses_cleanup
 test_mode_0444_directory_is_deleted

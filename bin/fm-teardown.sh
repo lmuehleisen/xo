@@ -86,7 +86,9 @@
 # cleanup before the destructive return, including when an ancestor had to be
 # made searchable before the mount could be seen. Mount boundaries come from
 # the kernel mount table, so a name that contains a control character still
-# matches.
+# matches. On Linux, an unreadable kernel table refuses cleanup before the
+# return, because the mount listing replaces those characters. Other systems
+# have no kernel table and use their mount listing.
 # Ship worktrees are not modified, including a refusal or a forced discard.
 # The scout has stopped and teardown has already reaped worktree processes, so
 # only a concurrent process of the same user could race a directory into or out
@@ -1834,9 +1836,9 @@ scout_decode_mountinfo_field() {
   printf '%b' "$1"
 }
 
-# Linux mount(8) listing replaces control characters, so it is not a mount
-# boundary. /proc/self/mountinfo keeps the escaped name. macOS has no
-# mountinfo and its mount(8) output is the fallback.
+# macOS has no kernel mount table. Its mount listing is the fallback. Linux
+# must not use this: util-linux replaces control characters, so a miss can
+# chmod a nested mount and the return can delete through it.
 scout_fill_mount_points_from_mount() {
   local dest=$1 line rest out
   out=$(mount) || return 1
@@ -1858,13 +1860,24 @@ scout_fill_mount_points_from_mount() {
 }
 
 scout_fill_mount_points() {
-  local dest=$1 line field point src
+  local dest=$1 line field point src=
   : > "$dest"
-  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ] && [ -r "$FM_TEST_MOUNTINFO" ]; then
-    src=$FM_TEST_MOUNTINFO
+  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ]; then
+    if [ -r "$FM_TEST_MOUNTINFO" ]; then
+      src=$FM_TEST_MOUNTINFO
+    fi
   elif [ -r /proc/self/mountinfo ]; then
     src=/proc/self/mountinfo
-  else
+  fi
+  if [ -z "$src" ]; then
+    # No lossless table. Linux mount(8) replaces control characters with ?,
+    # so that listing cannot prove a nested mount is absent. A test that
+    # names a table and then withholds it asserts the same refusal where
+    # the listing is otherwise the fallback.
+    if [ "$(uname -s)" = Linux ] || { [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ]; }; then
+      echo "error: scratch scout cleanup has no lossless mount table; refusing cleanup before return" >&2
+      return 1
+    fi
     scout_fill_mount_points_from_mount "$dest"
     return
   fi
