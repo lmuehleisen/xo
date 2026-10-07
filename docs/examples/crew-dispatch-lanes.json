@@ -82,17 +82,20 @@
     },
     "muse-spark": {
       "family": "muse",
+      "unmetered": true,
       "data_policy": "may-train",
       "routes": [
         { "harness": "opencode", "model": "opencode/muse-spark-1.3-contributor-free", "provider": "opencode" }
       ],
-      "why": "Free contributor tier that may retain data for training; quota-axi measures no pool for it, so it stays eligible but unranked."
+      "why": "Free contributor tier with no quota to conserve; it may retain prompts for training, so the data policy still applies."
     },
     "swe-2": {
       "family": "swe",
+      "unmetered": true,
       "routes": [
         { "harness": "devin", "model": "swe-2-max", "provider": "devin" }
-      ]
+      ],
+      "why": "Devin lists SWE-2 as free, with no quota to conserve."
     },
     "kiro-auto": {
       "family": "kiro-auto",

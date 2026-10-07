@@ -1120,6 +1120,9 @@ crew_dispatch_validate() {
       ([(.rules // [])[]? | profiles(.use?)[]?]
         + (if has("default") then [profiles(.default)[]?] else [] end)
         + dispatch_class_routes);
+    def non_lane_profiles:
+      [(.rules // [])[]? | profiles(.use?)[]?]
+        + (if has("default") then [profiles(.default)[]?] else [] end);
     def malformed_optional_fields($items):
       ($items | any(has("model") and (((.model | type) != "string") or (.model | length) == 0)))
       or ($items | any(has("effort") and (((.effort | type) != "string") or (.effort | length) == 0)))
@@ -1150,6 +1153,7 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"
     elif (dispatch_lanes_error // null) != null then dispatch_lanes_error
+    elif any(non_lane_profiles[]; type == "object" and has("unmetered")) then "unmetered must be declared on a lane class, not a profile"
     elif [(.rules // [])[]? | select(has("classes") | not) | select((.use? | type) != "object" and (.use? | type) != "array")] | length > 0 then "each rule needs use"
     elif [(.rules // [])[]? | select((.use? | type) == "array" and (.use | length) == 0)] | length > 0 then "each rule needs at least one use profile"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select(type != "object")] | length > 0 then "each use profile must be an object"
@@ -1210,6 +1214,7 @@ crew_dispatch_validate() {
       + [(.rules // [])[]? | "BOOTSTRAP_INFO: crew dispatch rule: " + (.when | tostring) + " -> "
           + (if has("classes") then lane_set(.) else profile_set(.use; .select?) end)]
       + [(.classes // {}) | to_entries[] | "BOOTSTRAP_INFO: crew dispatch class: " + .key + " family=" + .value.family
+          + (if .value.unmetered then " unmetered" else "" end)
           + (if .value.experiment then " experiment share=" + (.value.experiment.share | tostring) else "" end)
           + (if .value.data_policy then " data_policy=" + .value.data_policy else "" end)
           + " -> [" + ([.value.routes[] | profile(.)] | join(", ")) + "]"]
