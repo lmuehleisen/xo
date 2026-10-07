@@ -1840,8 +1840,10 @@ scout_decode_mountinfo_field() {
 
 # macOS getmntinfo returns each f_mntonname, so a newline or the text " type "
 # stays in the path. The mount command listing splits records on newlines and
-# is not a boundary. A result that does not include / is rejected: that means
-# the statfs layout did not match this system.
+# is not a boundary. StatFS below is the 64-bit inode layout. On Intel macOS
+# the unsuffixed getmntinfo symbol is the legacy ABI, so the lookup prefers
+# getmntinfo$INODE64. arm64 exports only the unsuffixed 64-bit symbol. A
+# result that does not include / is rejected: the layout did not match.
 scout_fill_mount_points_from_getmntinfo() {
   local dest=$1 py
   py=$(command -v python3) || return 1
@@ -1877,11 +1879,20 @@ class StatFS(ctypes.Structure):
 
 
 libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
-libc.getmntinfo.argtypes = [ctypes.POINTER(ctypes.POINTER(StatFS)), ctypes.c_int]
-libc.getmntinfo.restype = ctypes.c_int
+getmntinfo = None
+for symbol in ("getmntinfo$INODE64", "getmntinfo"):
+    try:
+        getmntinfo = getattr(libc, symbol)
+    except AttributeError:
+        continue
+    break
+if getmntinfo is None:
+    sys.exit(1)
+getmntinfo.argtypes = [ctypes.POINTER(ctypes.POINTER(StatFS)), ctypes.c_int]
+getmntinfo.restype = ctypes.c_int
 buf = ctypes.POINTER(StatFS)()
 # MNT_NOWAIT is 2. Do not block on an unresponsive filesystem.
-count = libc.getmntinfo(ctypes.byref(buf), 2)
+count = getmntinfo(ctypes.byref(buf), 2)
 if count <= 0:
     sys.exit(1)
 paths = []
