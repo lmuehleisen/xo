@@ -4,6 +4,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/pi-package.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pi-package.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-calm-pi-extension)
 EXT="$ROOT/.pi/extensions/fm-calm.ts"
@@ -17,7 +19,10 @@ WORKING_SHIP_SPRITE="$ROOT/.pi/extensions/lib/fm-calm-working-ship-sprite.ts"
 WATCH_EXT="$ROOT/.pi/extensions/fm-primary-pi-watch.ts"
 OPERATIONAL_INPUT="$ROOT/bin/fm-operational-input.sh"
 PI_OPERATIONAL_INPUT="$ROOT/.pi/extensions/lib/fm-operational-input.ts"
-PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+PI_PACKAGE_DIR=
+if fm_test_pi_package_dir; then
+  PI_PACKAGE_DIR=$FM_TEST_PI_PACKAGE_DIR
+fi
 TMUX_SOCKET="fm-calm-$$"
 TMUX_SESSION="fm-calm-e2e"
 # Verified against Pi 0.81.1 and 0.82.0 (docs/calm-mode-feasibility.md). This is
@@ -185,8 +190,8 @@ test_home_resolution() {
     echo "skip: node or npm not found for Pi calm home-resolution test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
   version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
@@ -314,8 +319,8 @@ test_pi_compat_degraded_adapter() {
     echo "skip: node or npm not found for Pi calm degraded-adapter test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
 
@@ -483,8 +488,8 @@ test_queued_operational_rows() {
     echo "skip: node or npm not found for Pi Calm queued-row test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
 
@@ -795,8 +800,8 @@ test_builtin_gate_load_time() {
     echo "skip: node or npm not found for Pi calm gate test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
 
@@ -885,8 +890,8 @@ test_calm_activation_collision_and_regression_bound() {
     echo "skip: node or npm not found for Pi calm activation test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
 
@@ -1103,8 +1108,8 @@ test_rendering_and_session_lifecycle() {
     echo "skip: node or npm not found for Pi calm renderer test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
   version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
@@ -1841,8 +1846,8 @@ test_calm_mid_turn_working_notes() {
     echo "skip: node or npm not found for Pi calm mid-turn renderer test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
   version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
@@ -2971,8 +2976,8 @@ test_working_ship_geometry_and_lifecycle() {
     echo "skip: node or npm not found for Pi Calm working-ship test"
     return 0
   fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return 0
   fi
   version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
