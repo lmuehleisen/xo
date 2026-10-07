@@ -1906,13 +1906,9 @@ prepare_scout_scratch_for_return() {
         exit 0
       fi
       [ "$dir" = "$walk" ] && exit 1
-      if mp=$(stat -c %m -- "$dir" 2>/dev/null); then
-        if [ "$mp" = "$root_mp" ]; then
-          exit 1
-        fi
-        printf "%s\n" "$dir" >> "$mounts"
-        exit 0
-      fi
+      # The mount table is authoritative. GNU stat %m can report the backing
+      # mount for a same-filesystem bind, which matches the copy and would
+      # hide the mount if it were trusted first.
       set -f
       IFS="
 "
@@ -1922,6 +1918,12 @@ prepare_scout_scratch_for_return() {
           exit 0
         fi
       done
+      if mp=$(stat -c %m -- "$dir" 2>/dev/null); then
+        if [ "$mp" != "$root_mp" ]; then
+          printf "%s\n" "$dir" >> "$mounts"
+          exit 0
+        fi
+      fi
       exit 1
     ' sh "$root_dev" "$root_mp" "$walk" "$points" "$err" "$mounts" {} \; -prune \) \
     -o \

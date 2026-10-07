@@ -76,6 +76,41 @@ write_task() {  # <case_dir> <id> <kind>
     "decision_keys="
 }
 
+# stat %m reports the same mount for the copy and the bind. The mount table
+# names the bind, which is the signal a same-filesystem bind can hide from stat.
+plant_bind_report() {  # <case_dir> <walk> <bind>
+  local case_dir=$1 walk=$2 bind=$3 real_stat real_mount
+  real_stat=$(command -v stat)
+  real_mount=$(command -v mount)
+  cat > "$case_dir/fakebin/stat" <<SH
+#!/usr/bin/env bash
+set -u
+path=
+wants_mount=0
+for arg in "\$@"; do
+  case "\$arg" in
+    *%m*) wants_mount=1 ;;
+  esac
+  case "\$arg" in
+    -*) ;;
+    *) path=\$arg ;;
+  esac
+done
+if [ "\$wants_mount" -eq 1 ] && { [ "\$path" = "$walk" ] || [ "\$path" = "$bind" ]; }; then
+  printf '%s\n' same-mount
+  exit 0
+fi
+exec "$real_stat" "\$@"
+SH
+  cat > "$case_dir/fakebin/mount" <<SH
+#!/usr/bin/env bash
+set -u
+"$real_mount" "\$@"
+printf '%s\n' "/dev/disk0 on $bind (apfs, local)"
+SH
+  chmod +x "$case_dir/fakebin/stat" "$case_dir/fakebin/mount"
+}
+
 plant_readonly_tree() {  # <case_dir>
   local wt="$1/wt" outside="$1/outside"
   mkdir -p "$wt/copied-hooks/nested" "$outside"
@@ -202,7 +237,7 @@ SH
 # A same-filesystem bind mount has the copy device id. stat %m is the mount
 # boundary find -xdev does not prune. Cleanup must stop before return.
 test_same_filesystem_mount_is_not_made_writable() {
-  local case_dir id=scout-bind rc dir_mode real_stat walk bind
+  local case_dir id=scout-bind rc dir_mode walk bind
   skip_if_directory_mode_is_bypassed "scout-bind" && return 0
   case_dir=$(make_case scout-bind)
   write_task "$case_dir" "$id" scout
@@ -215,28 +250,7 @@ test_same_filesystem_mount_is_not_made_writable() {
   printf 'mounted\n' > "$bind/secret"
   chmod a-w "$bind" "$bind/secret"
   dir_mode=$(mode_of "$bind")
-  real_stat=$(command -v stat)
-  cat > "$case_dir/fakebin/stat" <<SH
-#!/usr/bin/env bash
-set -u
-path=
-wants_mount=0
-for arg in "\$@"; do
-  case "\$arg" in
-    *%m*) wants_mount=1 ;;
-  esac
-  case "\$arg" in
-    -*) ;;
-    *) path=\$arg ;;
-  esac
-done
-if [ "\$wants_mount" -eq 1 ] && [ "\$path" = "$bind" ]; then
-  printf '%s\n' "\$path"
-  exit 0
-fi
-exec "$real_stat" "\$@"
-SH
-  chmod +x "$case_dir/fakebin/stat"
+  plant_bind_report "$case_dir" "$walk" "$bind"
 
   rc=0
   run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
@@ -257,7 +271,7 @@ SH
 # An already-writable mount under a mode 0444 ancestor becomes reachable once
 # that ancestor is made searchable. The return must still not run.
 test_writable_mount_under_unsearchable_ancestor_refuses_return() {
-  local case_dir id=scout-hidden-mount rc dir_mode real_stat walk bind
+  local case_dir id=scout-hidden-mount rc dir_mode walk bind
   skip_if_directory_mode_is_bypassed "scout-hidden-mount" && return 0
   case_dir=$(make_case scout-hidden-mount)
   write_task "$case_dir" "$id" scout
@@ -269,28 +283,7 @@ test_writable_mount_under_unsearchable_ancestor_refuses_return() {
   printf 'mounted\n' > "$bind/secret"
   dir_mode=$(mode_of "$bind")
   chmod 0444 "$walk/locked"
-  real_stat=$(command -v stat)
-  cat > "$case_dir/fakebin/stat" <<SH
-#!/usr/bin/env bash
-set -u
-path=
-wants_mount=0
-for arg in "\$@"; do
-  case "\$arg" in
-    *%m*) wants_mount=1 ;;
-  esac
-  case "\$arg" in
-    -*) ;;
-    *) path=\$arg ;;
-  esac
-done
-if [ "\$wants_mount" -eq 1 ] && [ "\$path" = "$bind" ]; then
-  printf '%s\n' "\$path"
-  exit 0
-fi
-exec "$real_stat" "\$@"
-SH
-  chmod +x "$case_dir/fakebin/stat"
+  plant_bind_report "$case_dir" "$walk" "$bind"
 
   rc=0
   run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
