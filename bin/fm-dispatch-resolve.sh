@@ -471,12 +471,23 @@ if jq -e "$FM_DISPATCH_LANES_JQ"'
   ' "$RULES")
 fi
 
+# Devin's included_quota binds only to its own catalog's paid per-token models,
+# which draw on the plan allowance; its free SWE-2 family draws on nothing and
+# stays unmetered, never binding another harness, like the Agy buckets.
+DEVIN_IDS='[]'
+if jq -e "$FM_DISPATCH_LANES_JQ"'
+  def profiles: if type == "array" then . elif type == "object" then [.] else [] end;
+  any(([(.rules // [])[] | .use | profiles[]] + ((.default // []) | profiles) + dispatch_class_routes)[]; .harness == "devin")
+' "$RULES" >/dev/null; then
+  DEVIN_IDS=$(fm_quota_devin_catalog)
+fi
+
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 DIRECT=false
 [ -z "$LANE" ] || DIRECT=true
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson horizon "$COMPLETION_HORIZON" \
+RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" \
-  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_AGY_JQ$FM_DISPATCH_LANES_JQ"'
+  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
   ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def prov($p; $lane): quota_row($q; $p; $lane);
@@ -487,7 +498,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     (prov($p; $lane) != null and (["known", "partial"] | index(prov($p; $lane).quotaSemantics.status)) != null);
   def applicable($p; $lane; $c):
     (if $c.harness == "agy" then quota_agy_scope($agy_ids; ($c.model // ""); ($agy_levels[([$c.model // "", $c.effort // ""] | @json)] // "")) else "" end) as $agy_scope |
-    [rows($p; $lane)[] | select(quota_applicable($p; ($c.model // ""); $agy_scope))];
+    (if $c.harness == "devin" then quota_devin_scope($devin_ids; ($c.model // "")) else "" end) as $devin_scope |
+    [rows($p; $lane)[] | select(quota_applicable($p; ($c.model // ""); $agy_scope; $devin_scope))];
   def floor_state($f; $p; $lane):
     if $f == null then "none"
     elif prov($p; $lane) == null or (measured($p; $lane) | not) then "unknown"
@@ -536,7 +548,9 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       elif ($rows | length) == 0 then
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true, unknown: true,
          reason: ("no applicable quota row for provider \($p)" +
-           if $p == "agy" then "; catalog-backed family quota is unmeasured" else "" end)}
+           if $p == "agy" then "; catalog-backed family quota is unmeasured"
+           elif $p == "devin" then "; free SWE-2 usage draws on no plan quota, so the route is unmetered"
+           else "" end)}
       elif $profile_floor_state == "unknown" then
         ([rows($p; $lane)[] | select(.scope == $c.floor.scope)] | first) as $floor_row |
         {profile: $c, provider: $p, bounds: $bounds, scope: $c.floor.scope, pct: ($floor_row.effectivePercentRemaining // null), runway: ($floor_row.runway.status // null), eligible: true, unranked: true, unknown: true, reason: "profile floor \($c.floor.scope) is unverifiable: not rankable"}

@@ -53,7 +53,13 @@ FM_QUOTA_ROW_JQ='
     end;
   # Reviewed quota scopes: Agy buckets require a catalog-backed model family.
   # Kiro included credits are one pool, never a whole-provider hard bound.
-  def quota_applicable($provider; $model; $agy_scope):
+  # The Devin included_quota window meters the plan-included allowance that its
+  # paid per-token models draw on first (billed by token cost of the selected
+  # model); its free SWE-2 family consumes none of it, so devin_scope is
+  # included_quota only for a catalog-confirmed paid model and empty for a free
+  # one, keeping a free route eligible but unmetered rather than binding it to
+  # the paid pool.
+  def quota_applicable($provider; $model; $agy_scope; $devin_scope):
     ($model | split("/") | last // "" | sub("^model:"; "")) as $bare |
     # Unknown Agy family bounds cannot be replaced by generic/exact evidence.
     ($provider != "agy" or $agy_scope != "") and (
@@ -61,9 +67,11 @@ FM_QUOTA_ROW_JQ='
     ($bare != "" and $bare != "default" and
       (.scope == ("model:" + $bare) or .scope == ("product:" + $bare))) or
     ($provider == "agy" and $agy_scope != "" and .scope == $agy_scope) or
-    ($provider == "kiro" and .scope == "included:credit_monthly"));
+    ($provider == "kiro" and .scope == "included:credit_monthly") or
+    ($provider == "devin" and $devin_scope != "" and .scope == $devin_scope));
   def quota_hard_bound($provider):
-    ($provider == "kiro" and .scope == "included:credit_monthly") | not;
+    ((($provider == "kiro" and .scope == "included:credit_monthly") or
+      ($provider == "devin" and .scope == "included_quota"))) | not;
   def quota_selection_known:
     .selection.status == "known" and
     (.selection.spendPriority | type) == "number" and
@@ -222,6 +230,7 @@ fm_quota_provider_for_harness() {
     cursor)       printf 'cursor\n' ;;
     muse)         printf 'meta\n' ;;
     agy)          printf 'agy\n' ;;
+    devin)        printf 'devin\n' ;;
     *)            return 1 ;;
   esac
 }
@@ -246,4 +255,36 @@ FM_QUOTA_AGY_JQ='
     if $listed | test("^gemini-[a-zA-Z0-9.-]+$") then "gemini"
     elif $listed | test("^(claude|gpt)-[a-zA-Z0-9.-]+$") then "claude_gpt"
     else "" end;
+'
+
+# Capture the Devin models that draw on the plan-included quota window once,
+# with no quota/credential read. Devin's own docs
+# (https://docs.devin.ai/desktop/models) state "Your quota and extra usage is
+# billed based on the token cost of the model you select", so every paid
+# per-token model draws on the included daily/weekly quota first and bills
+# extra usage past it; quota-axi's devin provider agrees that free models do
+# not draw on these windows. `devin models list` prints one model per line as
+# two leading spaces, the model id, column padding, a label, and a bracketed
+# "[<context>, <pricing>]" field. A paid model carries a per-token "$" price in
+# that bracket (including Fusion rows, which bill the lead model's "$" cost
+# beside a "Sidekick: Free" note); the free SWE-2 family carries "Free" with no
+# "$" and so is excluded, because free usage consumes none of the window.
+# Unknown lines, absent models and a failed catalog stay out of the set.
+# Requires fm_run_timed from fm-timeout-lib.sh in the calling executable.
+fm_quota_devin_catalog() {
+  local listing
+  listing=$(fm_run_timed 5 devin models list </dev/null 2>/dev/null) || listing=''
+  printf '%s\n' "$listing" | jq -Rsc '
+    split("\n")
+    | map(capture("^  (?<id>[a-zA-Z0-9][a-zA-Z0-9._-]*)[ \t].*(?<bracket>\\[[^]]*\\])\\s*$") // empty
+          | select(.bracket | test("\\$"))
+          | .id)
+    | unique'
+}
+
+# shellcheck disable=SC2016,SC2034 # jq program used by consumers
+FM_QUOTA_DEVIN_JQ='
+  def quota_devin_scope($ids; $model):
+    ($model | split("/") | last // "" | sub("^model:"; "")) as $bare |
+    if $bare != "" and ($ids | index($bare)) != null then "included_quota" else "" end;
 '

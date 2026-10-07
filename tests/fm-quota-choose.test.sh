@@ -69,6 +69,29 @@ printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaud
 SH
 chmod +x "$FAKEBIN/agy"
 
+# Fake devin: `devin models list` prints the real space-padded column shape,
+# with Free SWE-2 rows and paid per-token GPT rows, so the catalog parser is
+# exercised exactly as against the real CLI.
+cat > "$FAKEBIN/devin" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = models ] && [ "${2:-}" = list ] || exit 2
+[ "${FAKE_DEVIN_FAIL:-0}" = 1 ] && exit 1
+cat <<'LIST'
+Available models (3 families)
+
+SWE-2 (swe-2)
+  swe-2-high                     SWE-2 High  [262K context, Free]
+  swe-2-max                      SWE-2 Max  [262K context, Free]
+
+GPT-6.1 Sol (gpt-6.1-sol)
+  gpt-6-1-sol-max                GPT-6.1 Sol Max Thinking  [1M context, $2 / 1M Input · $0.1 / 1M Cached input · $10 / 1M Output]
+
+Fusion (fusion)
+  fusion-gpt-6-1-sol-max-sidekick-swe-2-medium   Fusion  [1M context, $2 / 1M Input · $0.1 / 1M Cached input · $10 / 1M Output · Sidekick: Free]
+LIST
+SH
+chmod +x "$FAKEBIN/devin"
+
 
 cat > "$FIXTURE" <<'JSON'
 {
@@ -830,6 +853,37 @@ fi
 out=$(call_choose --snapshot "$LAB/unknown-agy.json" --candidate agy:gemini-3.8-flash-high --candidate agy:claude-sonnet-4-6)
 [ "$out" = "agy claude-sonnet-4-6" ] || fail "mapped family lost its bounding bucket: $out"
 ok "Agy bucket mapping uses its own catalog and fails safely on unknown families"
+
+# Devin included_quota is the plan allowance its paid per-token models draw on,
+# so the GPT and Fusion routes bind and select; the free SWE-2 models draw on
+# nothing and stay unselected.
+DEVIN_POSITIVE="$LAB/devin-positive.json"
+jq '.providers = [{provider:"devin",quotaSemantics:{status:"known",effectiveAvailability:[
+  {scope:"included_quota",status:"known",effectivePercentRemaining:96,runway:{status:"through_reset"}}
+]}}]' "$FIXTURE" > "$DEVIN_POSITIVE"
+out=$(call_choose --snapshot "$DEVIN_POSITIVE" --candidate devin:gpt-6-1-sol-max)
+[ "$out" = "devin gpt-6-1-sol-max" ] || fail "Devin paid GPT did not bind included_quota: $out"
+if out=$(call_choose --snapshot "$DEVIN_POSITIVE" --candidate devin:swe-2-max 2>/dev/null); then
+  fail "Devin free SWE-2 route bound the paid included pool: $out"
+fi
+[ "$out" = "none" ] || fail "Devin free SWE-2 route returned: $out"
+out=$(call_choose --snapshot "$DEVIN_POSITIVE" --candidate devin:swe-2-max --candidate devin:gpt-6-1-sol-max)
+[ "$out" = "devin gpt-6-1-sol-max" ] || fail "Devin selection skipped the paid route for the free one: $out"
+# A Fusion row whose bracket carries a paid price plus "Sidekick: Free" is paid.
+out=$(call_choose --snapshot "$DEVIN_POSITIVE" --candidate devin:fusion-gpt-6-1-sol-max-sidekick-swe-2-medium)
+[ "$out" = "devin fusion-gpt-6-1-sol-max-sidekick-swe-2-medium" ] || fail "Devin paid Fusion route did not bind the included pool: $out"
+# An exhausted included_quota is not whole-provider exhaustion, but the paid
+# model still has no positive headroom to select.
+jq '.providers[0].quotaSemantics.effectiveAvailability[0] |= (.effectivePercentRemaining = 0 | .runway.status = "exhausted_now")' "$DEVIN_POSITIVE" > "$MALFORMED"
+if out=$(call_choose --snapshot "$MALFORMED" --candidate devin:gpt-6-1-sol-max 2>/dev/null); then
+  fail "exhausted included_quota selected the paid route: $out"
+fi
+[ "$out" = "none" ] || fail "exhausted included_quota returned: $out"
+# A failed catalog cannot fabricate a binding for any Devin model.
+if FAKE_DEVIN_FAIL=1 call_choose --snapshot "$DEVIN_POSITIVE" --candidate devin:gpt-6-1-sol-max >/dev/null 2>&1; then
+  fail "failed Devin catalog fabricated a binding"
+fi
+ok "Devin included_quota binds only catalog-confirmed paid models"
 
 for state in stale auth_required; do
   jq --arg state "$state" '(.providers[] | select(.provider == "claude")) |= (.state = {status:$state,stale:($state == "stale")})' "$FIXTURE" > "$MALFORMED"
