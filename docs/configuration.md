@@ -1215,7 +1215,7 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
       "family": "<model family>",
       "unmetered": true,
       "routes": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>", "provider": "<optional quota-axi provider>", "floor": { "scope": "<quota-axi scope>", "min_percent": 50 } }
+        { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>", "provider": "<optional quota-axi provider>" }
       ],
       "experiment": { "share": 0.25, "why": "<optional>" },
       "data_policy": "<optional policy name>",
