@@ -1236,14 +1236,15 @@ assert_contains "$out" 'status: escalate' "a measured zero ties the unmetered ne
 assert_contains "$out" 'genuine spendPriority tie' "unmetered ties use the normal explicit tie escalation"
 pass "unmetered routes rank at the pace-neutral boundary without starving positive measured routes"
 
-# Gemini joins Standard only while every ungated route spends ahead of pace and it does not.
+# An unmetered route stays neutral for pace; excluding Muse lets the measured routes
+# open the gate when they are all ahead of pace and Gemini itself is not.
 assert_contains "$out" 'class=gemini-flash-high family=gemini  provider=agy' "the gated class is evaluated"
-assert_contains "$out" 'not eligible: pace gate closed: sol-high, muse-spark not spending ahead of pace' "a metered or unmetered route on pace keeps the gate closed"
+assert_contains "$out" 'not eligible: pace gate closed: muse-spark, sol-high not spending ahead of pace' "a metered or unmetered route on pace keeps the gate closed"
 lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
-run_lane code out err "$BRIEF" --lane standard --project xo
-assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "the gate opens when every other route is ahead of pace"
+run_lane code out err "$BRIEF" --lane standard --project xo --exclude-family muse
+assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "the gate opens when every remaining route is ahead of pace"
 lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=-0.05 devin=-0.25 kiro=-0.6
-run_lane code out err "$BRIEF" --lane standard --project xo
+run_lane code out err "$BRIEF" --lane standard --project xo --exclude-family muse
 assert_contains "$out" 'pace gate closed: this class is itself spending ahead of pace' "the gate stays closed when the gated class is ahead of pace too"
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "the pool falls back to the best ungated route"
 lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
@@ -1417,7 +1418,7 @@ run_lane code out err "$BRIEF" --lane bulk
 expect_code 2 "$code" "unmetered must be declared on a class, not its route"
 assert_contains "$err" 'unmetered belongs on the class, not on a route' "the declaration location is explicit"
 printf '{"rules":[{"when":"Coding","use":{"harness":"opencode","unmetered":true}}]}\n' > "$RULES"
-run_lane code out err "$BRIEF"
+TYPESAFE_API_KEY=$KEY run_lane code out err "$BRIEF"
 expect_code 2 "$code" "an ordinary use profile cannot opt into lane-only unmetered handling"
 assert_contains "$err" 'unmetered must be declared on a lane class, not a profile' "the lane-only declaration scope is explicit"
 jq '.classes["muse-spark"].routes[0] |= del(.provider)' "$TEMPLATE" > "$RULES"
