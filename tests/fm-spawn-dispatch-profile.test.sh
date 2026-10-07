@@ -2530,7 +2530,7 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 }
 
 test_worker_permission_modes() {
-  local harness mode rec id out status launch state_real data_real task_brief
+  local harness mode rec id out status launch state_real data_real task_brief raw_command
   for harness in claude codex; do
     for mode in auto manual; do
       id="perm-$harness-$mode-z1"
@@ -2569,7 +2569,24 @@ test_worker_permission_modes() {
       assert_meta_profile "$HOME_DIR/state/$id.meta" "$harness" default default
     done
   done
-  pass 'Claude and Codex auto/manual modes preserve narrow reporting access and explicit harness overrides'
+
+  id=perm-codex-raw-z1
+  rec=$(make_spawn_case "$id" codex "$id")
+  read_case_record "$rec"
+  raw_command='codex --sandbox workspace-write --ask-for-approval on-request "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "$raw_command" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "raw Codex launch with its own manual flags should succeed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" 'codex --sandbox workspace-write --ask-for-approval on-request' \
+    'raw Codex launch did not preserve its own manual permission flags'
+  assert_not_contains "$launch" '--approve-for-me' 'raw Codex launch must not receive canonical auto-review flags'
+  task_brief="$HOME_DIR/data/$id/launch-brief.md"
+  assert_no_grep 'When a needed command fails with a Codex sandbox permission error' "$task_brief" \
+    'raw Codex brief must not carry reviewed-auto retry guidance'
+  assert_contains "$launch" "encode launch-brief < '$task_brief'" \
+    'raw Codex fixture did not carry the generated brief to its worker'
+  pass 'Claude and Codex auto/manual modes preserve narrow reporting access; raw Codex keeps its own permission posture'
 }
 
 test_codex_secondmate_permission_modes() {

@@ -3732,7 +3732,9 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     fm_brief_worker_role "$STATE" "$ID" &&
       printf '\n' &&
       cat "$SOURCE_BRIEF" &&
-      if [ "$HARNESS" = codex ] && [ "$CREW_PERMISSION_MODE" = auto ]; then
+      # Raw commands only record their leading executable as the harness; this
+      # permission mode does not control their approval or sandbox flags.
+      if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = codex ] && [ "$CREW_PERMISSION_MODE" = auto ]; then
         printf '\n' && fm_brief_codex_reviewed_sandbox
       fi &&
       if [ "$NO_MISTAKES_PIPELINE" -eq 1 ]; then
