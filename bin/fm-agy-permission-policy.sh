@@ -171,7 +171,7 @@ if [ "$EVENT" = verified-versions ]; then
   # armed line; a version without that evidence stays out. Keep this an
   # explicit list, never a minimum or a range: a range would admit the next
   # release unproven, which is the failure this gate exists to prevent.
-  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11\n'
+  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1\n'
   exit 0
 fi
 if [ "$EVENT" = grants-digest ]; then
