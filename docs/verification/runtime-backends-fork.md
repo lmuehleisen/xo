@@ -758,7 +758,7 @@ The same runs showed that a GET-shaped lookup must print to stdout for the polic
 
 Verified 2026-10-06 with devin 3000.11.3.
 quota-axi reports Devin under scope `included_quota` (weekly and daily windows), the plan-included allowance the vendor bills by the selected model's token cost; its free SWE-2 family consumes none of it.
-The token-free live guard confirms the Devin catalog still marks a paid GPT model with a per-token price and binds it to `included_quota` through the public quota chooser, while a free SWE-2 model stays unselected (unmetered).
+The token-free live guard confirms the Devin catalog still marks a paid GPT model with a per-token price and binds it to `included_quota` through the public quota chooser, while a free SWE-2 model stays unselected (free, draws on no plan quota).
 No model prompt or provider quota read is performed, and other harnesses do not participate in this catalog boundary.
 The synthetic routing matrix is covered by `tests/fm-dispatch-resolve.test.sh` and `tests/fm-quota-choose.test.sh`.
 

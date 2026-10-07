@@ -86,7 +86,7 @@ JSON
 if [ -n "$FREE" ]; then
   OUT=$("$ROOT/bin/fm-quota-choose.sh" --snapshot "$LAB/quota.json" --candidate "devin:$PAID" --candidate "devin:$FREE") \
     || fail "devin $VERSION paid model failed to bind the included pool"
-  assert_equals "devin $PAID" "$OUT" "devin $VERSION paid model selected over the unmetered free route"
+  assert_equals "devin $PAID" "$OUT" "devin $VERSION paid model selected over the free route"
 else
   OUT=$("$ROOT/bin/fm-quota-choose.sh" --snapshot "$LAB/quota.json" --candidate "devin:$PAID") \
     || fail "devin $VERSION paid model failed to bind the included pool"

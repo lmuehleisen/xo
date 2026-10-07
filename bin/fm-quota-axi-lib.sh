@@ -57,8 +57,8 @@ FM_QUOTA_ROW_JQ='
   # paid per-token models draw on first (billed by token cost of the selected
   # model); its free SWE-2 family consumes none of it, so devin_scope is
   # included_quota only for a catalog-confirmed paid model and empty for a free
-  # one, keeping a free route eligible but unmetered rather than binding it to
-  # the paid pool.
+  # one, keeping a free route eligible but unranked (it draws on no plan quota)
+  # rather than binding it to the paid pool.
   def quota_applicable($provider; $model; $agy_scope; $devin_scope):
     ($model | split("/") | last // "" | sub("^model:"; "")) as $bare |
     # Unknown Agy family bounds cannot be replaced by generic/exact evidence.

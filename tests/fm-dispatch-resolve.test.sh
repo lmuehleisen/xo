@@ -1191,7 +1191,7 @@ pass "Kiro included pool is bound without summing pools or declaring whole-provi
 
 # Devin's included_quota is the plan allowance its paid per-token models draw
 # on, so the GPT routes bind and rank; its free SWE-2 model draws on nothing
-# and stays disclosed uncertainty (unmetered).
+# and stays disclosed uncertainty (free, draws on no plan quota).
 cat > "$RULES" <<'JSON'
 {"rules":[{"when":"Coding","use":[
   {"harness":"devin","model":"swe-2-max","provider":"devin"},
@@ -1207,7 +1207,7 @@ reset_log
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
 assert_contains "$out" 'candidate: devin:gpt-6-1-sol-max  provider=devin  scope=included_quota  remaining=96%  spendPriority=1.92  runway=through_reset  -> eligible' "a paid Sol route binds the included_quota row"
 assert_contains "$out" 'candidate: devin:gpt-6-luna-max  provider=devin  scope=included_quota  remaining=96%  spendPriority=1.92  runway=through_reset  -> eligible' "a paid Luna route binds the included_quota row"
-assert_contains "$out" 'candidate: devin:swe-2-max  provider=devin  -> eligible, unranked: no applicable quota row for provider devin; no catalog-confirmed quota binding (a free model draws on none, and a paid model binds only when the catalog is read): disclosed uncertainty' "the free SWE-2 route stays disclosed uncertainty"
+assert_contains "$out" 'candidate: devin:swe-2-max  provider=devin  -> eligible, unranked: no applicable quota row for provider devin; no catalog-confirmed quota binding (a free route draws on no plan quota, and a paid route binds only when the catalog is read): disclosed uncertainty' "the free SWE-2 route stays disclosed uncertainty"
 # Both paid routes draw on the one included_quota pool, so they share its
 # spendPriority and genuinely tie; the resolver escalates rather than guessing.
 assert_contains "$out" 'status: escalate' "two paid routes sharing one included pool tie and escalate"
@@ -1219,7 +1219,7 @@ cat > "$RULES" <<'JSON'
   {"harness":"devin","model":"gpt-6-1-sol-max","provider":"devin"}]}]}
 JSON
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
-assert_contains "$out" "  profile: --harness 'devin' --model 'gpt-6-1-sol-max'" "a paid route is ranked and chosen over the unmetered free route"
+assert_contains "$out" "  profile: --harness 'devin' --model 'gpt-6-1-sol-max'" "a paid route is ranked and chosen over the free route"
 # An exhausted included_quota is not whole-provider exhaustion: the paid routes
 # are unranked rather than blocked, and the free route keeps its own uncertainty.
 jq '.providers[0].quotaSemantics.effectiveAvailability[0] |= (.effectivePercentRemaining = 0 | .runway.status = "exhausted_now")' "$HARDENED_MUTATION" > "$TMP_ROOT/devin-empty.json"

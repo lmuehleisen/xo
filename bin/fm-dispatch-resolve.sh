@@ -472,8 +472,8 @@ if jq -e "$FM_DISPATCH_LANES_JQ"'
 fi
 
 # Devin's included_quota binds only to its own catalog's paid per-token models,
-# which draw on the plan allowance; its free SWE-2 family draws on nothing and
-# stays unmetered, never binding another harness, like the Agy buckets.
+# which draw on the plan allowance; its free SWE-2 family draws on no plan quota
+# and stays unranked, never binding another harness, like the Agy buckets.
 DEVIN_IDS='[]'
 if jq -e "$FM_DISPATCH_LANES_JQ"'
   def profiles: if type == "array" then . elif type == "object" then [.] else [] end;
@@ -549,7 +549,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true, unknown: true,
          reason: ("no applicable quota row for provider \($p)" +
            if $p == "agy" then "; catalog-backed family quota is unmeasured"
-           elif $p == "devin" then "; no catalog-confirmed quota binding (a free model draws on none, and a paid model binds only when the catalog is read)"
+           elif $p == "devin" then "; no catalog-confirmed quota binding (a free route draws on no plan quota, and a paid route binds only when the catalog is read)"
            else "" end)}
       elif $profile_floor_state == "unknown" then
         ([rows($p; $lane)[] | select(.scope == $c.floor.scope)] | first) as $floor_row |

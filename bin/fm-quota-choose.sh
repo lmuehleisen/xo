@@ -35,7 +35,8 @@
 # family only. Agy additionally uses its own bounded catalog to bind the
 # reviewed Gemini and Claude/GPT buckets; Devin likewise uses its own catalog
 # to bind the included_quota plan allowance to its paid per-token models only,
-# leaving its free SWE-2 models unmetered; unsupported model families stay
+# leaving its free SWE-2 models unranked (they draw on no plan quota);
+# unsupported model families stay
 # unknown even beside known generic or exact-model quota. Included Kiro pools
 # are handled only by the typed resolver.
 # Some harnesses can run models from several providers - for
