@@ -2530,7 +2530,7 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 }
 
 test_worker_permission_modes() {
-  local harness mode rec id out status launch state_real data_real
+  local harness mode rec id out status launch state_real data_real task_brief
   for harness in claude codex; do
     for mode in auto manual; do
       id="perm-$harness-$mode-z1"
@@ -2548,15 +2548,24 @@ test_worker_permission_modes() {
       assert_contains "$launch" "--add-dir '$state_real'" 'status/inbox access missing'
       assert_contains "$launch" "--add-dir '$data_real'" 'brief/report access missing'
       assert_not_contains "$launch" "--add-dir '$HOME_DIR' " 'whole home must not be granted'
+      task_brief="$HOME_DIR/data/$id/launch-brief.md"
       case "$harness:$mode" in
         claude:auto) assert_contains "$launch" '--permission-mode auto' 'Claude Auto missing' ;;
         claude:manual) assert_contains "$launch" '--permission-mode manual' 'Claude manual missing' ;;
-        codex:auto) assert_contains "$launch" '--approve-for-me' 'Codex review missing' ;;
+        codex:auto)
+          assert_contains "$launch" '--approve-for-me' 'Codex review missing'
+          assert_grep 'When a needed command fails with a Codex sandbox permission error' "$task_brief" \
+            'Codex auto brief omitted reviewed-sandbox retry guidance'
+          ;;
         codex:manual)
           assert_contains "$launch" '--sandbox workspace-write --ask-for-approval on-request -c approvals_reviewer=user' 'Codex manual must override global automatic review'
           assert_not_contains "$launch" '--approve-for-me' 'manual must not enable auto review'
           ;;
       esac
+      if [ "$harness:$mode" != codex:auto ]; then
+        assert_no_grep 'When a needed command fails with a Codex sandbox permission error' "$task_brief" \
+          "$harness $mode brief must not carry Codex reviewed-sandbox guidance"
+      fi
       assert_meta_profile "$HOME_DIR/state/$id.meta" "$harness" default default
     done
   done
@@ -2978,6 +2987,9 @@ SH
       out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode "$kind" --yolo off)
     fi
     expect_code 0 "$?" "$kind worker spawn failed: $out"
+    assert_grep 'When a needed command fails with a Codex sandbox permission error' \
+      "$HOME_DIR/data/$id/launch-brief.md" \
+      "$kind Codex auto brief did not carry reviewed-sandbox retry guidance"
     launch=$(cat "$LAUNCH_LOG")
     envelope="$CASE_DIR/prompt-envelope"
     encoded="$CASE_DIR/encoded-prompt"

@@ -131,6 +131,18 @@ Project instructions still govern the work wherever they do not conflict with th
 EOF
 }
 
+# Worker-facing retry guidance for Codex's reviewed auto permission mode.
+# fm-spawn.sh appends it only to Codex ship/scout launch briefs in that mode;
+# the harness adapter reference points here instead of duplicating the wording.
+fm_brief_codex_reviewed_sandbox() {
+  cat <<'EOF'
+# Codex reviewed-sandbox command errors
+When a needed command fails with a Codex sandbox permission error (for example, "Operation not permitted", a denied write outside the worktree, or blocked network), request an escalated retry with a one-line justification and let the reviewer decide.
+Escalate only commands authorized by this brief.
+If the reviewer denies the request, stop and report `blocked:`; report `blocked:` without escalation when the command is outside this task's scope.
+EOF
+}
+
 # Closed-set gate shared by every forge-aware renderer and bin/fm-brief.sh, so a
 # caller cannot reach a half-rendered contract. local-only is refused rather than
 # rendered with an inert annotation: it publishes nothing, and its landing

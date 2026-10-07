@@ -20,6 +20,10 @@ A directory trust dialog appears on the first run for a repository root: "Do you
 Accept it with Enter and verify the instructions begin processing.
 The decision persists for the repository, so later worktrees of the same project skip it.
 
+## Reviewed worker sandbox errors
+
+`fm-spawn.sh` adds the worker-facing retry guidance from [`fm_brief_codex_reviewed_sandbox`](../../../../../bin/fm-dod-lib.sh) to Codex ship/scout briefs only when the effective permission mode is auto.
+
 ## Task launch opt-ins
 
 Verified on 2026-10-05 with codex-cli 0.160.0.
