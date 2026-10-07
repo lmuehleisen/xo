@@ -79,8 +79,9 @@
 # is writable and does not repair the mode, so the return fails and the scratch
 # copy stays checked out. After those report and completion-gate checks and the
 # landed-work check, and after teardown has reaped processes in that copy,
-# scratch scout cleanup restores owner write on real directories there. The
-# walk does not follow symlinks. A directory on another filesystem or mount,
+# scratch scout cleanup restores owner read, write, and search on real
+# directories there. The walk does not follow symlinks. A directory on another
+# filesystem or mount,
 # including a same-filesystem bind mount and a nested mount root, is left
 # unchanged and is not descended into.
 # Ship worktrees are not modified, including a refusal or a forced discard.
@@ -1860,9 +1861,9 @@ scout_mount_point_of() {
   printf '%s\n' "$best"
 }
 
-# Restore owner write on real directories in a scratch scout copy so the
-# following treehouse return can unlink a tree the scout left non-writable.
-# See the script header. Ships are unchanged.
+# Restore owner read, write, and search on real directories in a scratch scout
+# copy so the following treehouse return can unlink a tree the scout left
+# non-writable. See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
   local wt=$1 walk root_dev root_mp points err find_rc=0
   [ "$KIND" = scout ] || return 0
@@ -1907,13 +1908,13 @@ prepare_scout_scratch_for_return() {
       exit 1
     ' sh "$root_dev" "$root_mp" "$walk" "$points" "$err" {} \; -prune \) \
     -o \
-    \( -type d ! -perm -u+w -exec sh -c '
+    \( -type d ! -perm -u+rwx -exec sh -c '
       err=$1
-      shift
-      for dir do
-        chmod u+w "$dir" || { printf x > "$err"; exit 1; }
-      done
-    ' sh "$err" {} + \) \
+      dir=$2
+      # One directory at a time, so search permission is back before descent.
+      # A batched chmod would leave a mode 0444 child unvisited.
+      chmod u+rwx "$dir" || { printf x > "$err"; exit 1; }
+    ' sh "$err" {} \; \) \
     || find_rc=$?
   if [ -s "$err" ] || [ "$find_rc" -ne 0 ]; then
     rm -f "$err"

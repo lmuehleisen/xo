@@ -248,7 +248,31 @@ SH
   pass "a same-filesystem mount keeps its mode while the scratch copy is still cleaned up"
 }
 
+# Mode 0444 has no owner search bit. chmod u+w leaves it unsearchable, so the
+# walk must restore read and search too or the nested tree stays behind.
+test_mode_0444_directory_is_deleted() {
+  local case_dir id=scout-0444 rc
+  skip_if_directory_mode_is_bypassed "scout-0444" && return 0
+  case_dir=$(make_case scout-0444)
+  write_task "$case_dir" "$id" scout
+  mkdir -p "$case_dir/data/$id" "$case_dir/wt/locked/nested"
+  printf 'findings\n' > "$case_dir/data/$id/report.md"
+  printf 'hidden\n' > "$case_dir/wt/locked/nested/file"
+  chmod 0444 "$case_dir/wt/locked/nested/file" \
+    "$case_dir/wt/locked/nested" "$case_dir/wt/locked"
+
+  rc=0
+  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scout-0444: teardown should succeed"$'\n'"$(cat "$case_dir/stderr")"
+  [ ! -e "$case_dir/wt/locked" ] \
+    || fail "scout-0444: the mode 0444 tree is still in the scratch copy"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    "scout-0444: teardown did not return the worktree"
+  pass "a scratch scout directory left at mode 0444 is cleaned up"
+}
+
 test_scout_readonly_tree_is_deleted_and_outside_directory_stays
 test_ship_with_unlanded_readonly_tree_is_refused_unchanged
 test_other_device_directory_is_not_made_writable
 test_same_filesystem_mount_is_not_made_writable
+test_mode_0444_directory_is_deleted
