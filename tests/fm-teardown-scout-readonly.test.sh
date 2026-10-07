@@ -35,7 +35,13 @@ make_case() {  # <name>
 set -u
 printf '%s\n' "$*" >> "${FM_TREEHOUSE_LOG:?}"
 if [ "${1:-}" = return ]; then
-  git -C "${3:?}" clean -fd
+  # FM_TEST_CLEAN_EXCLUDE is a git pathspec for a simulated mount that must
+  # stay. An ordinary clean would fail on that non-writable directory.
+  if [ -n "${FM_TEST_CLEAN_EXCLUDE:-}" ]; then
+    git -C "${3:?}" clean -fd -e "${FM_TEST_CLEAN_EXCLUDE}"
+  else
+    git -C "${3:?}" clean -fd
+  fi
   exit $?
 fi
 exit 0
@@ -94,6 +100,7 @@ run_teardown() {  # <case_dir> <id>
     FM_DATA_OVERRIDE="$1/data" \
     FM_CONFIG_OVERRIDE="$1/config" \
     FM_TREEHOUSE_LOG="$1/treehouse.log" \
+    FM_TEST_CLEAN_EXCLUDE="${FM_TEST_CLEAN_EXCLUDE:-}" \
     PATH="$1/fakebin:$PATH" \
     "$TEARDOWN" "$2"
 }
@@ -236,9 +243,11 @@ SH
   chmod +x "$case_dir/fakebin/stat"
 
   rc=0
-  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  FM_TEST_CLEAN_EXCLUDE=/bind \
+    run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scout-bind: teardown should succeed"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
-    "scout-bind: teardown did not reach the worktree return (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+    "scout-bind: teardown did not reach the worktree return"
   assert_equals "$dir_mode" "$(mode_of "$bind")" \
     "scout-bind: bind mount was made writable"
   assert_equals "mounted" "$(cat "$bind/secret")" \
