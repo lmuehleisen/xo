@@ -2573,6 +2573,7 @@ test_worker_permission_modes() {
   id=perm-codex-raw-z1
   rec=$(make_spawn_case "$id" codex "$id")
   read_case_record "$rec"
+  # shellcheck disable=SC2016 # This command remains a literal fixture passed through fm-spawn.
   raw_command='codex --sandbox workspace-write --ask-for-approval on-request "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "$raw_command" --mode no-mistakes --yolo off)
   status=$?
