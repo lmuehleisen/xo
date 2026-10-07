@@ -231,6 +231,9 @@
 #   the slot (including a wiring path already present when it was leased), an
 #   unavailable lock, or a failed return retains the lease and receipt for
 #   inspection. This script never edits Treehouse's own state directly.
+#   OpenCode readiness failure before brief submission uses those same guarded
+#   abort checks after closing its endpoint, and captures the screen first.
+#   Once brief submission is attempted, ownership remains for guarded recovery.
 #   The exact returned path is checked for isolation and competing local-home
 #   claims before a child shell enters it with its own TREEHOUSE_DIR, replacing
 #   any inherited parent-slot value. The pane's outer shell stays in the project,
@@ -1390,6 +1393,7 @@ SPAWN_META_LOCK=
 SPAWN_META_LOCK_HELD=0
 SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
+SPAWN_FRESH_FAILURE_EVENT=
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_TREEHOUSE_PROJECT_LOCK=
@@ -1422,6 +1426,7 @@ spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
     "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
+    SPAWN_FRESH_FAILURE_EVENT=
     # With the record gone, the worker's private tmux servers and directory go
     # too, unless a launched worker's endpoint is not proven gone: removing the
     # directory under it would send its bare tmux back to the default server.
@@ -1434,6 +1439,9 @@ spawn_fresh_commit_rollback() {
     return 0
   fi
   echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
+  [ -z "$SPAWN_FRESH_FAILURE_EVENT" ] ||
+    printf '%s\n' "$SPAWN_FRESH_FAILURE_EVENT" >>"$STATE/$ID.status"
+  SPAWN_FRESH_FAILURE_EVENT=
   return 1
 }
 
@@ -4870,24 +4878,26 @@ spawn_delivery_endpoint_cleanup() {
 }
 
 opencode_spawn_fail() { # <detail>
-  local failure_state=${2:-idle}
-  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
+  local failure_state=${2:-idle} failure_event
+  failure_event=$(status_stamp_line "failed: $1")
   echo "error: $1; inspect window $T" >&2
+  local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
+  if ! {
+    printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
+      "$1" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
+    fm_backend_capture "$BACKEND" "$T" 100 "$W"
+  } >"$diagnostic"; then
+    echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
+  fi
+  echo "spawn: OpenCode startup diagnostics=$diagnostic" >&2
   if [ "$RELAUNCH" -eq 1 ]; then
+    printf '%s\n' "$failure_event" >>"$STATE/$ID.status"
     # Readiness failure settles an unchanged launch seed; submission ambiguity
     # makes it unknown. Never replace newer native activity with either verdict.
     # Keep the generation armed for lifecycle events from the retained pane.
     if ! "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE_REAL" "$ID" "$failure_state" \
       --gen "$BUSY_GEN" --source fm-spawn --event launch-failed --if-seq 1; then
       echo "error: could not settle OpenCode replacement busy state for $ID; reconcile endpoint $T before recovery" >&2
-    fi
-    local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
-    if ! {
-      printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
-        "$1" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
-      fm_backend_capture "$BACKEND" "$T" 100 "$W"
-    } >"$diagnostic"; then
-      echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
     fi
     # Publication already bound this replacement to the endpoint. Keep that
     # record and plugin generation, including when the previous pane was gone.
@@ -4908,6 +4918,13 @@ opencode_spawn_fail() { # <detail>
   spawn_delivery_endpoint_cleanup
   if spawn_endpoint_proven_absent; then
     SPAWN_ENDPOINT_CLOSED=1
+    if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+      # No brief was attempted. Reuse the abort guards, which still refuse a
+      # return when startup plugins wrote content or record rollback fails.
+      SPAWN_PRELAUNCH_WIRING=1
+      SPAWN_PRELAUNCH_LEASE=1
+      SPAWN_PRELAUNCH_ENDPOINT_GONE=1
+    fi
   else
     # Preserve the endpoint's owner and wiring when closure is uncertain.
     # A successful kill call alone is not proof that the worker is gone.
@@ -4915,6 +4932,13 @@ opencode_spawn_fail() { # <detail>
     SPAWN_FRESH_COMMIT_PENDING=0
     RELAUNCH_REPLACEMENT_PENDING=0
     echo "warning: OpenCode endpoint closure is unconfirmed; task record $STATE/$ID.meta and wiring are preserved for recovery" >&2
+  fi
+  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+    # A completed pre-brief rollback has no task to own a status wake. Publish
+    # only if record rollback fails, without removing any earlier history.
+    SPAWN_FRESH_FAILURE_EVENT=$failure_event
+  else
+    printf '%s\n' "$failure_event" >>"$STATE/$ID.status"
   fi
   return 1
 }

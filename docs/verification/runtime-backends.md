@@ -2665,10 +2665,39 @@ The V2 composer includes `Build auto`, a location/status strip below its half-bl
 The guard exercises the fresh home screen before submitting a prompt, requiring both styled and plain cursorless readiness and preserving a typed draft as pending.
 Its separated, indented version label is furniture only behind the proven composer and shortcut strip; extra output still refuses.
 The running-turn strip can pair `esc interrupt` with `ctrl+p commands` without a path, and the guard verifies cursorless readiness during a real running turn.
-Its location strip can put the path before or after `ctrl+p commands`; cursorless classification requires the bounded floor and mode/model footer for either order.
+Its location strip can put the path before or after `ctrl+p commands`, including paths shortened with `…/` or rendered relative to home with `~/`; cursorless classification requires the bounded floor and mode/model footer for either order.
+The separated version row can also contain the exact plugin-load notification; a permission dialog, notification popup, additional output, or real draft still refuses typed delivery.
 Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-control-relaunch.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-sessionstart-nudge.test.sh`.
-This run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.
+This tmux run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.
 V2 primary operation is deferred as documented by the [harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration).
+
+### Herdr worker lifecycle
+
+Verified on 2026-10-06 with `opencode v2.0.18`, Herdr 0.9.3, and the free contributor model above.
+Refresh with:
+
+```sh
+FM_OPENCODE_LIVE_BACKEND=herdr FM_OPENCODE_LIVE_E2E=1 bash tests/opencode-v2-live.sh
+```
+
+The Herdr branch, `tests/opencode-v2-herdr-live.sh`, uses the guarded named-session lab and independent fixture allocations containing the repository's legacy project plugins.
+It verifies shortened paths and the plugin notification on cursorless startup, a long multi-line brief, native busy/idle and turn-end events, rejection of stale generations, durable steering acknowledgement, interrupt, exit, and control relaunch preserving work and the selected model.
+Fresh readiness failure before brief submission captures the screen and uses the existing guarded abort path to return only a clean slot; startup content, unknown endpoint closure, or failed record rollback retains the lease.
+`tests/fm-spawn-prelaunch-rollback.test.sh` covers clean timeout retry and startup-content retention, while `tests/fm-spawn-prelaunch-lease-return.test.sh` covers ambiguous endpoint and rollback retention.
+Concurrent intake can refuse the home or project lock before allocation; the guard proves that an ordinary sequential retry then processes both briefs.
+Separate surface probes verify an empty composer in a new window and a true split, plus refusal of typed delivery at a real manual permission prompt without accepting the permission.
+The legacy primary modules remain V1-only and can display plugin-load notifications when V2 discovers them; worker lifecycle events come from the independent per-task V2 plugin.
+This guard does not verify native resume or rate-limit recovery.
+The exact successful result lines were:
+
+```text
+ok - opencode v2.0.18: fresh shared-workspace spawn, long brief, native busy/idle and turn-end
+ok - opencode v2.0.18: durable steer acknowledgement, interrupt, exit and control relaunch preserve work/model
+ok - opencode v2.0.18: real fresh readiness rollback removes its lease receipt
+ok - opencode v2.0.18: concurrent intake refuses lock contention before allocation; sequential retry processes both briefs
+ok - opencode v2.0.18: fresh new-window and true split-pane composers are readable
+ok - opencode v2.0.18: manual permission prompt refuses typed delivery; no permission accepted
+```
 
 The authoritative migration references are [V2 migration](https://opencode.ai/v2/docs/migrate-v1), [plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1), and the [tagged 2.0.18 source](https://github.com/anomalyco/opencode/tree/v2.0.18).
 Model config content and private-server environment inheritance are established by `packages/core/src/config.ts`, `packages/cli/src/server-process.ts`, and `packages/cli/src/services/standalone.ts` at that tag.

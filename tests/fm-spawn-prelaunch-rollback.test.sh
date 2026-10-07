@@ -95,7 +95,7 @@ assert_rolled_back() {  # <label> <home> <wt> <fakebin> <id> <spawn-output>
   ! window_present "fm-$id" || fail "$label: the refused spawn left its window fm-$id open"
   grep -qxF -- "return --force $wt" "$fakebin/treehouse-calls" 2>/dev/null ||
     fail "$label: the leased slot was not returned; treehouse calls: $(cat "$fakebin/treehouse-calls" 2>/dev/null); slot status: $(git -C "$wt" status --porcelain --ignored=matching --untracked-files=all 2>&1); spawn output: $out"
-  for leftover in treehouse-lease busy-state busy-gen meta agy-hooks agy-permission.json agy-permission-cache; do
+  for leftover in treehouse-lease busy-state busy-gen meta status agy-hooks agy-permission.json agy-permission-cache; do
     [ ! -e "$home/state/$id.$leftover" ] && [ ! -L "$home/state/$id.$leftover" ] ||
       fail "$label: the refused spawn left state/$id.$leftover behind"
   done
@@ -231,6 +231,108 @@ EOF
   pass "fm-spawn.sh: every agy launch checks its audit dependency before acquiring an endpoint"
 }
 
+test_opencode_readiness_failure_returns_clean_slot() {
+  local id="rb-opencode-$$" fields case_dir home proj wt fakebin out status
+  fields=$(make_case opencode "$id")
+  IFS='|' read -r case_dir home proj wt fakebin <<EOF
+$fields
+EOF
+  cat > "$fakebin/opencode" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'opencode v2.0.18\n'; exit 0; fi
+printf 'READINESS_CAPTURE_PROOF\n'
+while :; do sleep 1; done
+SH
+  chmod +x "$fakebin/opencode"
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode \
+    --model opencode/muse-spark-1.3-contributor-free); status=$?
+  [ "$status" -ne 0 ] || fail "OpenCode readiness failure must refuse: $out"
+  case "$out" in *'composer did not become ready'*) ;; *) fail "wrong failure: $out" ;; esac
+  assert_rolled_back opencode "$home" "$wt" "$fakebin" "$id" "$out"
+  grep -q 'READINESS_CAPTURE_PROOF' /tmp/fm-"$id"/opencode-startup-*.log ||
+    fail "fresh OpenCode failure lost its pre-close screen"
+  # The exact same ID must reach acquisition again, rather than a stale receipt
+  # refusing the retry before it can launch.
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode); status=$?
+  [ "$status" -ne 0 ] || fail "second readiness failure must refuse"
+  [ "$(grep -c '^get --lease ' "$fakebin/treehouse-calls")" -eq 2 ] || fail "stale receipt blocked retry: $out"
+  assert_rolled_back opencode-retry "$home" "$wt" "$fakebin" "$id" "$out"
+  # Existing history belongs to the home; suppress the new rollback event
+  # rather than deleting the entire log to hide the orphan wake.
+  printf 'working: earlier history\n' > "$home/state/$id.status"
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode); status=$?
+  [ "$status" -ne 0 ] || fail "historical retry must refuse"
+  [ "$(cat "$home/state/$id.status")" = 'working: earlier history' ] || fail "rollback changed earlier status history"
+  [ ! -e "$home/state/$id.meta" ] && [ ! -e "$home/state/$id.treehouse-lease" ] || fail "historical retry did not roll back"
+  rm -rf "/tmp/fm-$id"
+  pass "fm-spawn.sh: OpenCode readiness failure captures its screen, clears status, returns its clean slot and permits retry"
+}
+
+test_opencode_failed_record_rollback_keeps_failure_status() {
+  local id="rb-opencode-record-$$" fields case_dir home proj wt fakebin out status
+  fields=$(make_case opencode-record "$id")
+  IFS='|' read -r case_dir home proj wt fakebin <<EOF
+$fields
+EOF
+  cat > "$fakebin/opencode" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'opencode v2.0.18\n'; exit 0; fi
+while :; do sleep 1; done
+SH
+  cat > "$fakebin/rm" <<'SH'
+#!/usr/bin/env bash
+for path in "$@"; do
+  [ "$path" != "$FM_TEST_ROLLBACK_META" ] || exit 1
+done
+exec /bin/rm "$@"
+SH
+  chmod +x "$fakebin/opencode" "$fakebin/rm"
+  out=$(FM_TEST_ROLLBACK_META="$home/state/$id.meta" \
+    FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode); status=$?
+  [ "$status" -ne 0 ] || fail "record rollback failure must refuse"
+  ! window_present "fm-$id" || fail "record rollback failure left an endpoint"
+  [ -f "$home/state/$id.meta" ] || fail "fixture did not retain the task record"
+  [ -f "$home/state/$id.treehouse-lease" ] || fail "record rollback failure lost its lease receipt"
+  ! grep -q '^return ' "$fakebin/treehouse-calls" || fail "retained task record's slot was returned"
+  [ "$(grep -c '^failed \[at=' "$home/state/$id.status")" -eq 1 ] || fail "retained failure must notify once"
+  grep -q 'composer did not become ready' "$home/state/$id.status" || fail "failure event lost readiness detail"
+  rm -rf "/tmp/fm-$id"
+  pass "fm-spawn.sh: OpenCode record rollback failure retains its lease and publishes the failure"
+}
+
+test_opencode_readiness_failure_keeps_startup_content() {
+  local id="rb-opencode-dirty-$$" fields case_dir home proj wt fakebin out status
+  fields=$(make_case opencode-dirty "$id")
+  IFS='|' read -r case_dir home proj wt fakebin <<EOF
+$fields
+EOF
+  cat > "$fakebin/opencode" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'opencode v2.0.18\n'; exit 0; fi
+printf 'startup content\n' > startup.txt
+while :; do sleep 1; done
+SH
+  chmod +x "$fakebin/opencode"
+  out=$(FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.1 \
+    run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --harness opencode); status=$?
+  [ "$status" -ne 0 ] || fail "dirty readiness failure must refuse"
+  ! window_present "fm-$id" || fail "dirty readiness failure left an endpoint"
+  [ -f "$wt/startup.txt" ] || fail "startup content was discarded"
+  [ -f "$home/state/$id.treehouse-lease" ] || fail "dirty slot lost receipt"
+  [ ! -e "$home/state/$id.status" ] || fail "rolled-back task left an orphan failure status"
+  ! grep -q '^return ' "$fakebin/treehouse-calls" || fail "dirty slot was returned"
+  case "$out" in *'holds content this spawn did not write'*) ;; *) fail "no retention diagnostic: $out" ;; esac
+  rm -rf "/tmp/fm-$id"
+  pass "fm-spawn.sh: OpenCode startup content prevents automatic lease return"
+}
+
+test_opencode_readiness_failure_returns_clean_slot
+test_opencode_readiness_failure_keeps_startup_content
+test_opencode_failed_record_rollback_keeps_failure_status
 test_agy_audit_dependency_refuses_before_launch
 test_bypass_hooks_refusal_rolls_back
 test_post_publication_prelaunch_refusal_rolls_back

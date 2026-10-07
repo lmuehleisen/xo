@@ -2,6 +2,9 @@
 # V2 branch of fm-opencode-primary-live-e2e.test.sh. Uses only a private tmux
 # socket, disposable profile, and independently initialized scratch repositories.
 set -eu
+if [ "${FM_OPENCODE_LIVE_BACKEND:-tmux}" = herdr ]; then
+  exec bash "$(dirname "${BASH_SOURCE[0]}")/opencode-v2-herdr-live.sh"
+fi
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fm_live_gate opt-in FM_OPENCODE_LIVE_E2E opencode tmux git jq node
