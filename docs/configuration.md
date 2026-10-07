@@ -1083,7 +1083,8 @@ Per-machine Cursor `cli-config.json` attribution-off is not this contract: it do
 The optional local, gitignored `config/quota-providers` limits every quota and auth read to one nonempty comma-separated line of quota-axi provider ids.
 An absent file preserves quota-axi's default discovery.
 Use lowercase ids without whitespace, empty entries, or duplicates; a trailing newline is allowed.
-Supported ids are `claude`, `codex`, `cursor`, `copilot`, `grok`, `kimi`, `zai`, `agy`, `alibaba`, `opencode-go`, `commandcode`, `minimax`, `mimo`, `deepseek`, `openrouter`, `elevenlabs`, `devin`, and `muse` (quota-axi 0.1.55).
+Supported ids are `claude`, `codex`, `cursor`, `copilot`, `grok`, `kimi`, `zai`, `agy`, `alibaba`, `opencode-go`, `commandcode`, `minimax`, `mimo`, `deepseek`, `openrouter`, `elevenlabs`, `devin`, `muse`, and `kiro` (quota-axi 0.1.58).
+Configured Kiro reads require the feature compatibility floor owned by [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh); older or unparseable versions refuse before any quota or auth read.
 For example, `claude,codex` restricts reads to those two providers.
 [`bin/fm-quota-read.sh`](../bin/fm-quota-read.sh) validates the file and passes its value as `--provider`; an unreadable or malformed file refuses the read with a diagnostic instead of widening discovery.
 Caller-supplied `--provider` options are refused when a scope file exists, preventing quota-axi from unioning extra providers into the configured selection.
@@ -1168,7 +1169,7 @@ Typed resolution additively recognizes `gemini` because AGENTS.md section 4 veri
 | `claude`, `codex`, `grok`, `kimi`, `cursor`, `agy`, `muse` | The resolver has an authoritative single-provider mapping. |
 | Every other verified harness | Must declare `provider` explicitly; this includes multi-provider `pi`, `pi-signed`, `omp`, and `opencode`, and unmapped `gemini`, `rovo`, and `devin`; omission is an actionable configuration error before any request. |
 
-This single-provider table is separate from the frozen legacy mapping used by `fm-quota-choose.sh`, so additions cannot alter no-key routing.
+This single-provider table is separate from the worker helper's narrower mapping in [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh).
 
 **Profile quota floors**
 
@@ -1258,7 +1259,8 @@ After the answer, code applies all remaining checks and ranking:
 
 - The confidence floor and the matched rule's `approval` and `floor`.
 - Each candidate's `provider` and `floor`.
-- Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
+- Every applicable account-wide, model/product, or explicitly mapped provider bucket from one `quota-axi --json` snapshot.
+- The inspectable completion horizon and runway feasibility floor before ranking; the script header owns the input and conservative default.
 - The numeric `spendPriority` argmax over candidates, using each candidate's limiting row.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
@@ -1280,9 +1282,17 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 
 **Candidate eligibility and evidence**
 
-- Any applicable `exhausted_now` row or known zero bound makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
-- Missing or nonnumeric `spendPriority` evidence is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
+- Any applicable hard-bound `exhausted_now` row, known zero bound, or finite projected runway below the completion horizon makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
+- Unknown runway, missing or nonnumeric `spendPriority`, or selection status other than known is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
+
 - On the opted-in path, duplicate concrete profiles with the same harness, model, and effort inside one rule or the default array are configuration errors rather than ties.
+
+The shared quota library owns the reviewed scope mapping used by the resolver and worker helper.
+Agy's own bounded `agy models` catalog must list the model (or its selected effort alias) before its Gemini or Claude/GPT family binds the `gemini` or `claude_gpt` bucket.
+An unknown model family or unavailable catalog leaves that candidate eligible but unranked, even beside known generic or exact-model quota.
+An explicit Pi `provider: kiro` binds `included:credit_monthly` as one included pool; insufficient included capacity stays eligible but unranked because other pools or overage remain unmeasured.
+Pools are never summed, and Devin's included allowance has no implicit whole-provider binding.
+
 
 **Outcomes and exit status**
 
@@ -1302,7 +1312,7 @@ Every result above exits 0.
 **Firstmate retains the dispatch decision**
 
 The tool never replaces firstmate's judgment, `quota-array-dispatch`, the captain-approval gate, or `fm-spawn.sh` validation; `AGENTS.md` section 4 owns what firstmate does with each outcome.
-By accepted design, a `clear` result does not enforce catalog/authentication, reasoning-class, or completion-runway gates.
+A `clear` result applies the quota and completion-runway checks above; firstmate still owns the full catalog/authentication and reasoning-class gates.
 
 Firstmate passes its profile line unless it states a reason to override, such as the brief's reasoning class or an eligible-unranked-candidate note; every non-clear result returns to the full existing intake.
 

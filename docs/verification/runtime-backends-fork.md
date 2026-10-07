@@ -584,6 +584,22 @@ ok - agy 1.2.0: explicit and harness-less delivery matchers read busy
 
 `tests/fm-tmux-submit-busy.test.sh` covers harness isolation and the idle-to-busy submit path with an unreadable composer, including already-busy and failed-capture baselines that must remain unconfirmed.
 
+### Catalog-backed quota buckets
+
+Verified 2026-10-06 with agy 1.3.0.
+The token-free live guard feeds synthetic independent bucket capacity to the public quota chooser and binds models from the installed `agy models` catalog.
+No model prompt or provider quota read is performed.
+Other harnesses and runtime backends do not participate in this catalog boundary.
+The synthetic routing and observer matrices are covered by `tests/fm-dispatch-resolve.test.sh`, `tests/fm-quota-choose.test.sh`, and `tests/fm-procevent-quota.test.sh`.
+
+```sh
+bash bin/fm-test-run.sh tests/fm-quota-agy-catalog-live-e2e.test.sh
+```
+
+```text
+ok - agy 1.3.0: catalog-backed quota buckets verified without model tokens
+```
+
 ## Devin CLI (devin)
 
 The Devin CLI crewmate and scout adapter was verified on 2026-09-14 with devin-cli 3000.10.21 (`devin 3000.10.21 (611c1cba)`) on macOS arm64, tmux 3.7c.

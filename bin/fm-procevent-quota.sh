@@ -18,6 +18,7 @@
 # poll       The blocking child the generic runner executes; never run this
 #            directly in a conversational turn. It polls `quota-axi --json`
 #            until quota drops below the threshold or an error stops the watch.
+#            Unknown/unmeasured capacity stops through the error path.
 # classify   Print the captured outcome class: low, exhausted, error, or unknown.
 # terminal   Every quota poll is terminal because the source fires at most once.
 # source-id  Print the canonical source id.
@@ -123,13 +124,15 @@ condition_status() {
       ($availability | map(select(.status == "known"))) as $known |
       if ($availability | length) == 0 then "error"
       elif any($availability[]; (.runway.status // "") == "exhausted_now") then "exhausted"
-      elif ($known | length) == 0 then "healthy"
+      elif ($known | length) == 0 then "error"
       elif any($known[]; .effectivePercentRemaining < ($threshold | tonumber)) then "low"
+      elif any($availability[]; .status != "known") then "error"
       else "healthy"
       end;
     .providers |= map(select($provider == "" or .provider == $provider)) |
     if (.providers | length) == 0 and $provider != "" then "error"
-    elif ([.providers[]?.quotaSemantics.effectiveAvailability[]?] | length) == 0 then "healthy"
+    elif ([.providers[]?.quotaSemantics.effectiveAvailability[]?] | length) == 0 then "error"
+    elif any(.providers[]; (.quotaSemantics.effectiveAvailability | length) == 0) then "error"
     else classify([.providers[]?.quotaSemantics.effectiveAvailability[]?])
     end
   ' 2>/dev/null || printf 'error\n'

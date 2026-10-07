@@ -7,6 +7,10 @@
 # Reads one already-captured quota-axi default TOON or JSON snapshot from the
 # provided file, or from stdin when --snapshot is omitted.
 # bin/fm-quota-axi-lib.sh owns schema compatibility and the shared row join.
+# Schema 6 TOON omits accountKeys: a missing explicit lane stays unknown instead
+# of taking default-account evidence that a JSON membership read could replace.
+# The agent-side quota skill owns that permitted fallback; this helper never
+# takes a second snapshot.
 # For each --candidate in order, it maps <harness> to its primary provider
 # family, then applies the matched row's provider-wide scopes and exact model
 # or product scopes for <model>. A candidate is eligible only when no
@@ -28,7 +32,11 @@
 # Multi-provider limitation: this helper maps each harness to ONE primary
 # provider family (fm_quota_provider_for_harness in bin/fm-quota-axi-lib.sh)
 # and checks quota for that
-# family only. Some harnesses can run models from several providers - for
+# family only. Agy additionally uses its own bounded catalog to bind the
+# reviewed Gemini and Claude/GPT buckets; unsupported model families stay
+# unknown even beside known generic or exact-model quota. Included Kiro pools
+# are handled only by the typed resolver.
+# Some harnesses can run models from several providers - for
 # example, Pi and OpenCode may dispatch xAI, Anthropic, or other models - so a
 # candidate whose established provider differs from the harness's primary family
 # is checked against the wrong quota row. This is an accepted limitation of the
@@ -53,6 +61,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 
@@ -313,7 +323,7 @@ else
           end
         end
       end
-    end
+    end | . + {accountMembershipUnavailable: true}
   ' 2>/dev/null) || die "invalid quota-axi snapshot"
 fi
 
@@ -333,23 +343,18 @@ provider_for_harness() {
 # bound through quota_row from bin/fm-quota-axi-lib.sh, so <lane> matters only
 # on a schema 6 snapshot.
 effective_for_provider_model() {
-  local provider=$1 model=${2:-default} lane=${3:-}
-  printf '%s\n' "$QUOTA_JSON" | jq -c --arg provider "$provider" --arg model "$model" --arg lane "$lane" "$FM_QUOTA_ROW_JQ"'
+  local provider=$1 model=${2:-default} lane=${3:-} agy_scope=${4:-}
+  printf '%s\n' "$QUOTA_JSON" | jq -c --arg provider "$provider" --arg model "$model" --arg lane "$lane" --arg agy_scope "$agy_scope" "$FM_QUOTA_ROW_JQ"'
     ($model | sub("^model:"; "")) as $model_token |
     quota_row(.; $provider; $lane) as $p |
     if ($p // null) == null then {status: "unknown"}
     else ($p.quotaSemantics.effectiveAvailability // []) |
-    map(select(.scope as $scope |
-      $scope == "all_models" or $scope == "all_products" or
-      ($model_token != "" and $model_token != "default" and
-       (($scope | startswith("model:")) or ($scope | startswith("product:"))) and
-       ($model_token == ($scope | sub("^(model|product):"; ""))))
-    )) as $applicable |
+    map(select(quota_applicable($provider; $model_token; $agy_scope))) as $applicable |
     ($applicable | map(select(.status == "known"))) as $known |
     if ($applicable | length) == 0 then {status: "unknown"}
     elif any($applicable[]; (.runway.status // "") == "exhausted_now") then
       ($applicable | map(select((.runway.status // "") == "exhausted_now")) | first)
-    elif ($known | length) == 0 then {status: "unknown"}
+    elif any($applicable[]; .status != "known") then {status: "unknown"}
     elif any($known[]; .effectivePercentRemaining == 0) then
       ($known | map(select(.effectivePercentRemaining == 0)) | first)
     else ($known | min_by(.effectivePercentRemaining))
@@ -370,6 +375,10 @@ for c in "${CANDIDATES[@]}"; do
   esac
 done
 
+AGY_IDS='[]'
+for c in "${CANDIDATES[@]}"; do
+  if [ "${c%%:*}" = agy ]; then AGY_IDS=$(fm_quota_agy_catalog); break; fi
+done
 chosen="none"
 for c in "${CANDIDATES[@]}"; do
   harness=${c%%:*}
@@ -379,7 +388,11 @@ for c in "${CANDIDATES[@]}"; do
   scope_model=$model
   [ "$harness" != omp ] || scope_model=${model#*/}
   lane=$(jq -rn --arg h "$harness" --arg m "$model" "$FM_QUOTA_ROW_JQ"'quota_lane($h; $m)')
-  effective=$(effective_for_provider_model "$provider" "$scope_model" "$lane")
+  agy_scope=''
+  if [ "$harness" = agy ]; then
+    agy_scope=$(jq -rn --argjson ids "$AGY_IDS" --arg model "$model" "$FM_QUOTA_AGY_JQ"'quota_agy_scope($ids; $model; "")')
+  fi
+  effective=$(effective_for_provider_model "$provider" "$scope_model" "$lane" "$agy_scope")
   if [ -z "$effective" ] || [ "$effective" = "null" ]; then
     continue
   fi

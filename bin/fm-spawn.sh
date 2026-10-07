@@ -2359,19 +2359,6 @@ omp_model_validate() { # <omp-bin> <model>
   return 1
 }
 
-# The level agy receives as --effort for <effort> and <model>, or nothing. A
-# model id already carrying a level wins, and xhigh and max cap at high;
-# effort_flag_for_harness's agy arm records why.
-agy_effort_level() {  # <effort> <model>
-  case "$2" in
-  *-low | *-medium | *-high) return 0 ;;
-  esac
-  case "$1" in
-  low | medium) printf '%s\n' "$1" ;;
-  high | xhigh | max) printf '%s\n' high ;;
-  esac
-}
-
 # agy pre-launch model validation. `agy models` prints one model per line as
 # "<id>\t<label>" for the account's catalog only; ids are bare, never
 # provider-prefixed, and most carry an effort suffix (gemini-3.8-flash-high).

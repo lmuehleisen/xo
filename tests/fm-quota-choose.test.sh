@@ -61,6 +61,15 @@ trap cleanup EXIT
 
 mkdir -p "$FAKEBIN"
 
+cat > "$FAKEBIN/agy" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = models ] || exit 2
+[ "${FAKE_AGY_FAIL:-0}" = 1 ] && exit 1
+printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet\ngpt-5-high\tGPT 5\nfuture-family\tFuture\n'
+SH
+chmod +x "$FAKEBIN/agy"
+
+
 cat > "$FIXTURE" <<'JSON'
 {
   "generatedAt": "2030-01-01T00:00:00Z",
@@ -561,11 +570,11 @@ ok "Muse uses Meta quota"
 
 jq '.providers += [{"provider":"agy","windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":25,"runway":{"status":"through_reset"}}]}}]' \
   "$LAB/captured.json" > "$AGY_POSITIVE"
-if err=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:default 2>&1); then
-  fail "legacy quota chooser unexpectedly accepted Agy"
+if out=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:default); then
+  fail "implicit Agy model ranked without a catalog-backed family relation"
 fi
-printf '%s\n' "$err" | grep -F 'unknown harness: agy' >/dev/null || fail "legacy Agy rejection changed: $err"
-ok "Agy remains resolver-only"
+[ "$out" = "none" ] || fail "unmapped Agy default returned: $out"
+ok "implicit Agy model stays unranked even with provider-wide quota"
 
 jq '.providers += [.providers[] | select(.provider == "claude")]' "$LAB/captured.json" > "$DUPLICATE"
 if err=$(call_choose --snapshot "$DUPLICATE" --candidate claude:default 2>&1); then
@@ -767,5 +776,80 @@ out=$(bash -c 'set -e; . "$1/fm-quota-axi-lib.sh"; fm_quota_single_provider_for_
   || fail "provider-table lookup exited nonzero under set -e"
 [ "$out" = claude ] || fail "provider-table lookup under set -e printed: $out"
 ok "provider-table lookup prints the provider when called directly under set -e"
+
+# Published membership binds the alias, without mixing independent accounts.
+ALIAS="$LAB/alias.json"
+jq '(.providers[] | select(.accountKey == "openai-codex-work")) |=
+  (.accountKeys = [.accountKey, "work-alias"] | .accountKey = "work-alias")' "$SCHEMA6" > "$ALIAS"
+out=$(call_choose --snapshot "$ALIAS" --candidate pi:default --candidate cursor:default)
+[ "$out" = "cursor default" ] || fail "unrelated lane changed selection: $out"
+# Pi primary provider is intentionally outside this helper; exercise native
+# Codex membership in its own provider through the same public helper.
+jq '(.providers[] | select(.accountKey == "work-alias")) |=
+  (.accountKeys += ["codex-home"] | .quotaSemantics.effectiveAvailability |= map(.effectivePercentRemaining = 50))' "$ALIAS" > "$MALFORMED"
+out=$(call_choose --snapshot "$MALFORMED" --candidate codex:default)
+[ "$out" = "codex default" ] || fail "native alias did not bind: $out"
+for mutation in '.providers[0].accountKeys = []' '.providers[0].accountKeys = ["elsewhere"]' '.providers[0].accountKeys = ["default", "default"]' '.providers[1].accountKeys = [.providers[1].accountKey, "work-alias"]' '.providers[0].accountKeys = ["default", "bad key"]'; do
+  jq "$mutation" "$ALIAS" > "$MALFORMED"
+  if call_choose --snapshot "$MALFORMED" --candidate cursor:default >/dev/null 2>&1; then
+    fail "invalid or ambiguous membership dispatched: $mutation"
+  fi
+done
+ok "membership joins and ambiguous membership rejection are shared by the chooser"
+
+# Independent Agy buckets apply only to catalog-supported model families.
+jq '.providers = [{provider:"agy",quotaSemantics:{status:"known",effectiveAvailability:[
+  {scope:"gemini",status:"known",effectivePercentRemaining:0,runway:{status:"exhausted_now"}},
+  {scope:"claude_gpt",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}
+]}}]' "$FIXTURE" > "$AGY_POSITIVE"
+out=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:gemini-3.8-flash-high --candidate agy:claude-sonnet-4-6)
+[ "$out" = "agy claude-sonnet-4-6" ] || fail "Agy independent buckets failed: $out"
+for model in future-family unlisted-claude agy-claude gpt-5-high; do
+  if [ "$model" = gpt-5-high ]; then
+    out=$(call_choose --snapshot "$AGY_POSITIVE" --candidate "agy:$model")
+    [ "$out" = "agy $model" ] || fail "catalog GPT family did not bind"
+  elif call_choose --snapshot "$AGY_POSITIVE" --candidate "agy:$model" >/dev/null 2>&1; then
+    fail "unknown Agy bucket relation dispatched: $model"
+  fi
+done
+if FAKE_AGY_FAIL=1 call_choose --snapshot "$AGY_POSITIVE" --candidate agy:claude-sonnet-4-6 >/dev/null 2>&1; then
+  fail "failed Agy catalog fabricated a bucket"
+fi
+# A healthy generic/exact scope cannot stand in for an unknown family bound.
+jq '.providers[0].quotaSemantics.effectiveAvailability += [
+  {scope:"all_models",status:"known",effectivePercentRemaining:90,runway:{status:"through_reset"}},
+  {scope:"model:gemini-3.8-flash-high",status:"known",effectivePercentRemaining:90,runway:{status:"through_reset"}},
+  {scope:"product:gemini-3.8-flash-high",status:"known",effectivePercentRemaining:90,runway:{status:"through_reset"}}
+]' "$AGY_POSITIVE" > "$LAB/unknown-agy.json"
+if FAKE_AGY_FAIL=1 call_choose --snapshot "$LAB/unknown-agy.json" --candidate agy:gemini-3.8-flash-high >/dev/null 2>&1; then
+  fail "failed catalog selected generic or exact evidence around an unknown family bound"
+fi
+if call_choose --snapshot "$LAB/unknown-agy.json" --candidate agy:future-family >/dev/null 2>&1; then
+  fail "unmapped catalog family selected generic evidence"
+fi
+out=$(call_choose --snapshot "$LAB/unknown-agy.json" --candidate agy:gemini-3.8-flash-high --candidate agy:claude-sonnet-4-6)
+[ "$out" = "agy claude-sonnet-4-6" ] || fail "mapped family lost its bounding bucket: $out"
+ok "Agy bucket mapping uses its own catalog and fails safely on unknown families"
+
+for state in stale auth_required; do
+  jq --arg state "$state" '(.providers[] | select(.provider == "claude")) |= (.state = {status:$state,stale:($state == "stale")})' "$FIXTURE" > "$MALFORMED"
+  if call_choose --snapshot "$MALFORMED" --candidate claude:default >/dev/null 2>&1; then
+    fail "contradictory provider state dispatched: $state"
+  fi
+done
+ok "chooser refuses stale/auth-required snapshots that claim known headroom"
+
+# TOON cannot prove absence from folded membership before default fallback.
+cat > "$LAB/alias.toon" <<'TOON'
+quota[2]{provider,accountKey,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  codex,default,all_models,80,1,through_reset,established,weekly,"2030-01-03T00:00:00Z"
+  codex,folded,all_models,0,-1,exhausted_now,established,weekly,"2030-01-03T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+if call_choose --snapshot "$LAB/alias.toon" --candidate codex:default >/dev/null 2>&1; then
+  fail "TOON missing membership chose default evidence without proving lane absence"
+fi
+ok "schema-six TOON lane uncertainty requires the agent-owned JSON fallback"
 
 printf '# all fm-quota-choose tests passed\n'
