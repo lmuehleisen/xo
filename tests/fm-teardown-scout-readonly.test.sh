@@ -35,13 +35,7 @@ make_case() {  # <name>
 set -u
 printf '%s\n' "$*" >> "${FM_TREEHOUSE_LOG:?}"
 if [ "${1:-}" = return ]; then
-  # FM_TEST_CLEAN_EXCLUDE is a git pathspec for a simulated mount that must
-  # stay. An ordinary clean would fail on that non-writable directory.
-  if [ -n "${FM_TEST_CLEAN_EXCLUDE:-}" ]; then
-    git -C "${3:?}" clean -fd -e "${FM_TEST_CLEAN_EXCLUDE}"
-  else
-    git -C "${3:?}" clean -fd
-  fi
+  git -C "${3:?}" clean -fd
   exit $?
 fi
 exit 0
@@ -100,7 +94,6 @@ run_teardown() {  # <case_dir> <id>
     FM_DATA_OVERRIDE="$1/data" \
     FM_CONFIG_OVERRIDE="$1/config" \
     FM_TREEHOUSE_LOG="$1/treehouse.log" \
-    FM_TEST_CLEAN_EXCLUDE="${FM_TEST_CLEAN_EXCLUDE:-}" \
     PATH="$1/fakebin:$PATH" \
     "$TEARDOWN" "$2"
 }
@@ -157,8 +150,8 @@ test_ship_with_unlanded_readonly_tree_is_refused_unchanged() {
   pass "a ship with an uncommitted non-writable tree is refused and left unchanged"
 }
 
-# A directory whose device is not the scratch copy must keep its mode.
-# find -xdev still matches that directory; the device check is what skips it.
+# A directory whose device is not the scratch copy must keep its mode, and
+# cleanup must stop before the destructive return.
 test_other_device_directory_is_not_made_writable() {
   local case_dir id=scout-dev rc dir_mode real_stat
   skip_if_directory_mode_is_bypassed "scout-other-device" && return 0
@@ -192,19 +185,22 @@ SH
 
   rc=0
   run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
-  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
-    "scout-other-device: teardown did not reach the worktree return (rc=$rc)"$'\n'"$(cat "$case_dir/stderr")"
+  [ "$rc" -ne 0 ] || fail "scout-other-device: teardown returned a nested mount"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "nested mount" "$case_dir/stderr" \
+    "scout-other-device: teardown did not report the nested mount"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-other-device: teardown returned the worktree"
   assert_equals "$dir_mode" "$(mode_of "$case_dir/wt/mnt")" \
     "scout-other-device: directory on another device was made writable"
   assert_equals "mounted" "$(cat "$case_dir/wt/mnt/secret")" \
     "scout-other-device: file on another device was removed"
-  [ ! -e "$case_dir/wt/copied-hooks" ] \
-    || fail "scout-other-device: the same-device hooks tree was not cleaned up"$'\n'"$(cat "$case_dir/stderr")"
-  pass "a directory on another device keeps its mode while the scratch copy is still cleaned up"
+  [ -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-other-device: cleanup deleted the scratch copy despite the mount"
+  pass "a directory on another device keeps its mode and stops cleanup before return"
 }
 
-# A same-filesystem bind mount has the copy's device id. stat %m is the mount
-# boundary find -xdev does not prune. The reported mount must keep its mode.
+# A same-filesystem bind mount has the copy device id. stat %m is the mount
+# boundary find -xdev does not prune. Cleanup must stop before return.
 test_same_filesystem_mount_is_not_made_writable() {
   local case_dir id=scout-bind rc dir_mode real_stat walk bind
   skip_if_directory_mode_is_bypassed "scout-bind" && return 0
@@ -243,18 +239,71 @@ SH
   chmod +x "$case_dir/fakebin/stat"
 
   rc=0
-  FM_TEST_CLEAN_EXCLUDE=/bind \
-    run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
-  expect_code 0 "$rc" "scout-bind: teardown should succeed"$'\n'"$(cat "$case_dir/stderr")"
-  assert_grep "return --force $case_dir/wt" "$case_dir/treehouse.log" \
-    "scout-bind: teardown did not reach the worktree return"
+  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-bind: teardown returned a nested mount"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "nested mount" "$case_dir/stderr" \
+    "scout-bind: teardown did not report the nested mount"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-bind: teardown returned the worktree"
   assert_equals "$dir_mode" "$(mode_of "$bind")" \
     "scout-bind: bind mount was made writable"
   assert_equals "mounted" "$(cat "$bind/secret")" \
     "scout-bind: file on the bind mount was removed"
-  [ ! -e "$case_dir/wt/copied-hooks" ] \
-    || fail "scout-bind: the same-device hooks tree was not cleaned up"$'\n'"$(cat "$case_dir/stderr")"
-  pass "a same-filesystem mount keeps its mode while the scratch copy is still cleaned up"
+  [ -e "$case_dir/wt/copied-hooks" ] \
+    || fail "scout-bind: cleanup deleted the scratch copy despite the mount"
+  pass "a same-filesystem mount keeps its mode and stops cleanup before return"
+}
+
+# An already-writable mount under a mode 0444 ancestor becomes reachable once
+# that ancestor is made searchable. The return must still not run.
+test_writable_mount_under_unsearchable_ancestor_refuses_return() {
+  local case_dir id=scout-hidden-mount rc dir_mode real_stat walk bind
+  skip_if_directory_mode_is_bypassed "scout-hidden-mount" && return 0
+  case_dir=$(make_case scout-hidden-mount)
+  write_task "$case_dir" "$id" scout
+  mkdir -p "$case_dir/data/$id"
+  printf 'findings\n' > "$case_dir/data/$id/report.md"
+  walk=$(cd "$case_dir/wt" && pwd -P)
+  bind="$walk/locked/bind"
+  mkdir -p "$bind"
+  printf 'mounted\n' > "$bind/secret"
+  dir_mode=$(mode_of "$bind")
+  chmod 0444 "$walk/locked"
+  real_stat=$(command -v stat)
+  cat > "$case_dir/fakebin/stat" <<SH
+#!/usr/bin/env bash
+set -u
+path=
+wants_mount=0
+for arg in "\$@"; do
+  case "\$arg" in
+    *%m*) wants_mount=1 ;;
+  esac
+  case "\$arg" in
+    -*) ;;
+    *) path=\$arg ;;
+  esac
+done
+if [ "\$wants_mount" -eq 1 ] && [ "\$path" = "$bind" ]; then
+  printf '%s\n' "\$path"
+  exit 0
+fi
+exec "$real_stat" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/stat"
+
+  rc=0
+  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-hidden-mount: teardown returned a nested mount"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "nested mount" "$case_dir/stderr" \
+    "scout-hidden-mount: teardown did not report the nested mount"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-hidden-mount: teardown returned the worktree"
+  assert_equals "$dir_mode" "$(mode_of "$bind")" \
+    "scout-hidden-mount: bind mount mode changed"
+  assert_equals "mounted" "$(cat "$bind/secret")" \
+    "scout-hidden-mount: file on the bind mount was removed"
+  pass "a writable mount under an unsearchable directory stops cleanup before return"
 }
 
 # Mode 0444 has no owner search bit. chmod u+w leaves it unsearchable, so the
@@ -284,4 +333,5 @@ test_scout_readonly_tree_is_deleted_and_outside_directory_stays
 test_ship_with_unlanded_readonly_tree_is_refused_unchanged
 test_other_device_directory_is_not_made_writable
 test_same_filesystem_mount_is_not_made_writable
+test_writable_mount_under_unsearchable_ancestor_refuses_return
 test_mode_0444_directory_is_deleted

@@ -81,9 +81,10 @@
 # landed-work check, and after teardown has reaped processes in that copy,
 # scratch scout cleanup restores owner read, write, and search on real
 # directories there. The walk does not follow symlinks. A directory on another
-# filesystem or mount,
-# including a same-filesystem bind mount and a nested mount root, is left
-# unchanged and is not descended into.
+# filesystem or mount, including a same-filesystem bind mount and a nested
+# mount root, is left unchanged and is not descended into. Finding one aborts
+# cleanup before the destructive return, including when an ancestor had to be
+# made searchable before the mount could be seen.
 # Ship worktrees are not modified, including a refusal or a forced discard.
 # The scout has stopped and teardown has already reaped worktree processes, so
 # only a concurrent process of the same user could race a directory into or out
@@ -1865,7 +1866,7 @@ scout_mount_point_of() {
 # copy so the following treehouse return can unlink a tree the scout left
 # non-writable. See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 walk root_dev root_mp points err find_rc=0
+  local wt=$1 walk root_dev root_mp points err mounts find_rc=0
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
@@ -1876,9 +1877,15 @@ prepare_scout_scratch_for_return() {
   root_mp=$(scout_mount_point_of "$walk" "$points") || return 1
   [ -n "$root_mp" ] || return 1
   err=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mount.XXXXXX") || return 1
+  mounts=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mounts.XXXXXX") || {
+    rm -f "$err"
+    return 1
+  }
   # -P does not follow symlinks. -xdev does not descend into another
   # filesystem. A same-filesystem bind mount shares the device, so any mount
-  # point other than this copy is pruned before the mode change.
+  # point other than this copy is recorded and pruned before the mode change.
+  # The destructive return is refused when that record is non-empty: repairing
+  # an ancestor can make an already-writable mount reachable to git clean.
   find -P "$walk" -xdev \
     \( -type d -exec sh -c '
       root_dev=$1
@@ -1886,27 +1893,37 @@ prepare_scout_scratch_for_return() {
       walk=$3
       points=$4
       err=$5
-      dir=$6
+      mounts=$6
+      dir=$7
       if dev=$(stat -c %d -- "$dir" 2>/dev/null); then
         :
       else
         dev=$(stat -f "%d" "$dir") || { printf x > "$err"; exit 0; }
       fi
       [ -n "$dev" ] || { printf x > "$err"; exit 0; }
-      [ "$dev" = "$root_dev" ] || exit 0
+      if [ "$dev" != "$root_dev" ]; then
+        printf "%s\n" "$dir" >> "$mounts"
+        exit 0
+      fi
       [ "$dir" = "$walk" ] && exit 1
       if mp=$(stat -c %m -- "$dir" 2>/dev/null); then
-        [ "$mp" = "$root_mp" ] && exit 1
+        if [ "$mp" = "$root_mp" ]; then
+          exit 1
+        fi
+        printf "%s\n" "$dir" >> "$mounts"
         exit 0
       fi
       set -f
       IFS="
 "
       for mp in $points; do
-        [ "$mp" = "$dir" ] && exit 0
+        if [ "$mp" = "$dir" ]; then
+          printf "%s\n" "$dir" >> "$mounts"
+          exit 0
+        fi
       done
       exit 1
-    ' sh "$root_dev" "$root_mp" "$walk" "$points" "$err" {} \; -prune \) \
+    ' sh "$root_dev" "$root_mp" "$walk" "$points" "$err" "$mounts" {} \; -prune \) \
     -o \
     \( -type d ! -perm -u+rwx -exec sh -c '
       err=$1
@@ -1917,10 +1934,15 @@ prepare_scout_scratch_for_return() {
     ' sh "$err" {} \; \) \
     || find_rc=$?
   if [ -s "$err" ] || [ "$find_rc" -ne 0 ]; then
-    rm -f "$err"
+    rm -f "$err" "$mounts"
     return 1
   fi
-  rm -f "$err"
+  if [ -s "$mounts" ]; then
+    echo "error: scratch scout worktree $walk contains a nested mount; refusing cleanup before return" >&2
+    rm -f "$err" "$mounts"
+    return 1
+  fi
+  rm -f "$err" "$mounts"
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
@@ -3832,7 +3854,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   fi
   if [ "$KIND" = scout ]; then
     prepare_scout_scratch_for_return "$WT" || {
-      echo "error: cannot restore write permission in scratch scout worktree $WT; teardown aborted" >&2
+      echo "error: scratch scout cleanup cannot proceed for $WT; teardown aborted" >&2
       exit 1
     }
   fi
