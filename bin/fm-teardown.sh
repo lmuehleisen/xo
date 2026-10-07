@@ -80,17 +80,12 @@
 # copy stays checked out. After those report and completion-gate checks and the
 # landed-work check, and after teardown has reaped processes in that copy,
 # scratch scout cleanup restores owner read, write, and search on real
-# directories there. The walk does not follow symlinks. A directory on another
-# filesystem or mount, including a same-filesystem bind mount and a nested
-# mount root, is left unchanged and is not descended into. Finding one aborts
-# cleanup before the destructive return, including when an ancestor had to be
-# made searchable before the mount could be seen. Mount boundaries come from
-# the kernel mount table, so a name that contains a control character still
-# matches. Linux reads that table from /proc/self/mountinfo and refuses
-# cleanup when the file is unreadable, because its mount listing replaces
-# those characters. macOS reads getmntinfo, which returns the mount-path
-# bytes directly, and refuses cleanup when that call fails. Neither platform
-# trusts the mount command listing.
+# directories owned by this user and on the same device as the scratch copy.
+# The walk does not follow symlinks and does not descend into another device.
+# A directory on another device is left unchanged, and finding one aborts
+# cleanup before the destructive return.
+# A same-device bind mount shares the scratch copy's device id, so this walk
+# cannot tell it from an ordinary directory. Bind mounts are out of scope.
 # Ship worktrees are not modified, including a refusal or a forced discard.
 # The scout has stopped and teardown has already reaped worktree processes, so
 # only a concurrent process of the same user could race a directory into or out
@@ -1827,191 +1822,35 @@ cleanup_stale_lock_for_safety_check() {
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
 }
 
-# Append one mount point. NUL separates records so a newline in the name survives.
-scout_record_mount_point() {
-  printf '%s\0' "$2" >> "$1"
-}
-
-# Decode one mountinfo field. The kernel encodes space, tab, newline, and
-# backslash as octal escapes, which mount(8) listing mode would replace with ?.
-scout_decode_mountinfo_field() {
-  printf '%b' "$1"
-}
-
-# macOS getmntinfo returns each f_mntonname, so a newline or the text " type "
-# stays in the path. The mount command listing splits records on newlines and
-# is not a boundary. StatFS below is the 64-bit inode layout. On Intel macOS
-# the unsuffixed getmntinfo symbol is the legacy ABI, so the lookup prefers
-# getmntinfo$INODE64. arm64 exports only the unsuffixed 64-bit symbol. A
-# result that does not include / is rejected: the layout did not match.
-scout_fill_mount_points_from_getmntinfo() {
-  local dest=$1 py
-  py=$(command -v python3) || return 1
-  "$py" - "$dest" <<'PY'
-import ctypes
-import sys
-
-dest = sys.argv[1]
-MAXPATHLEN = 1024
-MFSTYPENAMELEN = 16
-
-
-class StatFS(ctypes.Structure):
-    _fields_ = [
-        ("f_bsize", ctypes.c_uint32),
-        ("f_iosize", ctypes.c_int32),
-        ("f_blocks", ctypes.c_uint64),
-        ("f_bfree", ctypes.c_uint64),
-        ("f_bavail", ctypes.c_uint64),
-        ("f_files", ctypes.c_uint64),
-        ("f_ffree", ctypes.c_uint64),
-        ("f_fsid", ctypes.c_int32 * 2),
-        ("f_owner", ctypes.c_uint32),
-        ("f_type", ctypes.c_uint32),
-        ("f_flags", ctypes.c_uint32),
-        ("f_fssubtype", ctypes.c_uint32),
-        ("f_fstypename", ctypes.c_char * MFSTYPENAMELEN),
-        ("f_mntonname", ctypes.c_char * MAXPATHLEN),
-        ("f_mntfromname", ctypes.c_char * MAXPATHLEN),
-        ("f_flags_ext", ctypes.c_uint32),
-        ("f_reserved", ctypes.c_uint32 * 7),
-    ]
-
-
-libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
-getmntinfo = None
-for symbol in ("getmntinfo$INODE64", "getmntinfo"):
-    try:
-        getmntinfo = getattr(libc, symbol)
-    except AttributeError:
-        continue
-    break
-if getmntinfo is None:
-    sys.exit(1)
-getmntinfo.argtypes = [ctypes.POINTER(ctypes.POINTER(StatFS)), ctypes.c_int]
-getmntinfo.restype = ctypes.c_int
-buf = ctypes.POINTER(StatFS)()
-# MNT_NOWAIT is 2. Do not block on an unresponsive filesystem.
-count = getmntinfo(ctypes.byref(buf), 2)
-if count <= 0:
-    sys.exit(1)
-paths = []
-for index in range(count):
-    raw = bytes(buf[index].f_mntonname).split(b"\0", 1)[0]
-    if not raw.startswith(b"/"):
-        sys.exit(1)
-    paths.append(raw)
-if b"/" not in paths:
-    sys.exit(1)
-with open(dest, "ab") as handle:
-    for raw in paths:
-        handle.write(raw + b"\0")
-PY
-}
-
-scout_fill_mount_points() {
-  local dest=$1 line field point src=
-  : > "$dest"
-  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ]; then
-    if [ -r "$FM_TEST_MOUNTINFO" ]; then
-      src=$FM_TEST_MOUNTINFO
-    fi
-  elif [ -r /proc/self/mountinfo ]; then
-    src=/proc/self/mountinfo
-  fi
-  if [ -z "$src" ]; then
-    # A test that names a table and then withholds it must refuse on every
-    # platform, including macOS where getmntinfo would otherwise succeed.
-    if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ]; then
-      echo "error: scratch scout cleanup has no lossless mount table; refusing cleanup before return" >&2
-      return 1
-    fi
-    # Linux mount(8) and the macOS mount command both split or replace
-    # control characters. getmntinfo is the lossless macOS source.
-    if [ "$(uname -s)" = Darwin ] && scout_fill_mount_points_from_getmntinfo "$dest"; then
-      return 0
-    fi
-    echo "error: scratch scout cleanup has no lossless mount table; refusing cleanup before return" >&2
-    return 1
-  fi
-  while IFS= read -r line || [ -n "$line" ]; do
-    field=$(printf '%s\n' "$line" | awk '{print $5}')
-    [ -n "$field" ] || continue
-    # Command substitution drops trailing newlines. A mount point may end
-    # with one, so keep a sentinel until the record is stored.
-    point=$(scout_decode_mountinfo_field "$field"; printf x)
-    point=${point%x}
-    scout_record_mount_point "$dest" "$point"
-  done < "$src"
-  return 0
-}
-
-# Mount point of one directory. GNU stat %m can hide a same-filesystem bind.
-# Otherwise the longest listed mount point that contains the directory is used.
-scout_mount_point_of() {
-  local path=$1 mountfile=$2 mp best=
-  if mp=$(stat -c %m -- "$path" 2>/dev/null); then
-    printf '%s\n' "$mp"
-    return 0
-  fi
-  while IFS= read -r -d '' mp || [ -n "$mp" ]; do
-    [ -n "$mp" ] || continue
-    if [ "$path" = "$mp" ] || [ "$mp" = / ] || [ "${path#"$mp"/}" != "$path" ]; then
-      if [ ${#mp} -ge ${#best} ]; then
-        best=$mp
-      fi
-    fi
-  done < "$mountfile"
-  [ -n "$best" ] || return 1
-  printf '%s\n' "$best"
-}
-
 # Restore owner read, write, and search on real directories in a scratch scout
 # copy so the following treehouse return can unlink a tree the scout left
-# non-writable. See the script header. Ships are unchanged.
+# non-writable. See the script header. Ships are unchanged. Same-device bind
+# mounts are out of scope: they share this device id.
 prepare_scout_scratch_for_return() {
-  local wt=$1 walk root_dev root_mp mountfile err mounts find_rc=0
+  local wt=$1 walk root_dev owner err mounts find_rc=0
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
   walk=$(cd -- "$wt" && pwd -P) || return 1
   root_dev=$(stat -c %d -- "$walk" 2>/dev/null) || root_dev=$(stat -f '%d' "$walk") || return 1
   [ -n "$root_dev" ] || return 1
-  mountfile=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mountfile.XXXXXX") || return 1
-  if ! scout_fill_mount_points "$mountfile"; then
-    rm -f "$mountfile"
-    return 1
-  fi
-  if ! root_mp=$(scout_mount_point_of "$walk" "$mountfile"); then
-    rm -f "$mountfile"
-    return 1
-  fi
-  [ -n "$root_mp" ] || {
-    rm -f "$mountfile"
-    return 1
-  }
-  err=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mount.XXXXXX") || {
-    rm -f "$mountfile"
-    return 1
-  }
+  owner=$(id -u) || return 1
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mount.XXXXXX") || return 1
   mounts=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mounts.XXXXXX") || {
-    rm -f "$err" "$mountfile"
+    rm -f "$err"
     return 1
   }
   # -P does not follow symlinks. -xdev does not descend into another
-  # filesystem. A same-filesystem bind mount shares the device, so any mount
-  # point other than this copy is recorded and pruned before the mode change.
-  # The destructive return is refused when that record is non-empty: repairing
-  # an ancestor can make an already-writable mount reachable to git clean.
+  # filesystem, but the other device's root is still visited, so the device
+  # id is compared before any mode change. A directory this user does not own
+  # is left unchanged. Exit 0 prunes; exit 1 falls through to chmod.
   find -P "$walk" -xdev \
-    \( -type d -exec bash -c '
+    \( -type d -exec sh -c '
       root_dev=$1
-      root_mp=$2
-      walk=$3
-      mountfile=$4
-      err=$5
-      mounts=$6
-      dir=$7
+      owner=$2
+      err=$3
+      mounts=$4
+      dir=$5
       if dev=$(stat -c %d -- "$dir" 2>/dev/null); then
         :
       else
@@ -2022,25 +1861,15 @@ prepare_scout_scratch_for_return() {
         printf "%s\n" "$dir" >> "$mounts"
         exit 0
       fi
-      [ "$dir" = "$walk" ] && exit 1
-      # The mount table is authoritative. GNU stat %m can report the backing
-      # mount for a same-filesystem bind, which matches the copy and would
-      # hide the mount if it were trusted first. Records are NUL-separated
-      # so a newline in the mount-point name still compares equal.
-      while IFS= read -r -d "" mp || [ -n "$mp" ]; do
-        if [ "$mp" = "$dir" ]; then
-          printf "%s\n" "$dir" >> "$mounts"
-          exit 0
-        fi
-      done < "$mountfile"
-      if mp=$(stat -c %m -- "$dir" 2>/dev/null); then
-        if [ "$mp" != "$root_mp" ]; then
-          printf "%s\n" "$dir" >> "$mounts"
-          exit 0
-        fi
+      if uid=$(stat -c %u -- "$dir" 2>/dev/null); then
+        :
+      else
+        uid=$(stat -f "%u" "$dir") || { printf x > "$err"; exit 0; }
       fi
+      [ -n "$uid" ] || { printf x > "$err"; exit 0; }
+      [ "$uid" = "$owner" ] || exit 0
       exit 1
-    ' bash "$root_dev" "$root_mp" "$walk" "$mountfile" "$err" "$mounts" {} \; -prune \) \
+    ' sh "$root_dev" "$owner" "$err" "$mounts" {} \; -prune \) \
     -o \
     \( -type d ! -perm -u+rwx -exec sh -c '
       err=$1
@@ -2051,15 +1880,15 @@ prepare_scout_scratch_for_return() {
     ' sh "$err" {} \; \) \
     || find_rc=$?
   if [ -s "$err" ] || [ "$find_rc" -ne 0 ]; then
-    rm -f "$err" "$mounts" "$mountfile"
+    rm -f "$err" "$mounts"
     return 1
   fi
   if [ -s "$mounts" ]; then
-    echo "error: scratch scout worktree $walk contains a nested mount; refusing cleanup before return" >&2
-    rm -f "$err" "$mounts" "$mountfile"
+    echo "error: scratch scout worktree $walk contains a directory on another device; refusing cleanup before return" >&2
+    rm -f "$err" "$mounts"
     return 1
   fi
-  rm -f "$err" "$mounts" "$mountfile"
+  rm -f "$err" "$mounts"
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
