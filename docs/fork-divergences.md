@@ -190,6 +190,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-brief.test.sh` local-skill listing case.
 - Upstream: no local-skill brief inventory.
 
+### dispatch-lanes
+
+- Intent: crew dispatch configuration chooses each lane's model classes while code chooses the provider route by quota; `docs/configuration.md` "Lanes and model classes".
+- Class: intended.
+- Seam: fork-only `bin/fm-dispatch-lanes-lib.sh` and `docs/examples/crew-dispatch-lanes.json`, plus the lane hunks in `bin/fm-dispatch-resolve.sh` (`--lane`, `--exclude-family`, `--data-tag`, and lane evaluation), `bin/fm-bootstrap.sh` (lane validation and verbose facts), and `bin/fm-spawn.sh` (`model_family=` meta), the lane prose in `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`, the lane procedure and trigger in `.agents/skills/quota-array-dispatch/SKILL.md` and `.agents/skills/agent-skill-trigger-index/SKILL.md`, the template row in `docs/documentation-audiences.json`, and the library's guard selection in `bin/fm-test-run.sh` (shared).
+- Guard: `tests/fm-dispatch-resolve.test.sh` lane cases; `tests/fm-bootstrap.test.sh` lane validation rows, lane verbose facts, and `test_crew_dispatch_lanes_template_is_valid`; `tests/fm-spawn-dispatch-profile.test.sh` `test_lane_route_records_model_family`.
+- Upstream: rules name concrete profiles or profile arrays only, with no model classes, lanes, experiments, data policies, or second-opinion family exclusion.
+
 ## Carried
 
 ### devin-adapter-mechanics

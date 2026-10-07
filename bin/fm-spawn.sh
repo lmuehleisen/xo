@@ -103,6 +103,10 @@
 #   from that harness's launch rather than guessed. Ultra is the explicit
 #   exception: bin/fm-harness.sh validate-native-effort owns its model scope;
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
+#   A task worker whose harness and model match a route of a model class in
+#   config/crew-dispatch.json records that class's family as model_family= in
+#   its meta, so a later second opinion can exclude it; an unlisted route
+#   records none and is never refused for being outside a lane.
 #   Direct Codex receives -c model_reasoning_effort="ultra" only when the
 #   installed config bootstrap and bundled model catalog prove support from the
 #   finalized task worktree before harness start. Its native goal feature
@@ -604,6 +608,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-codex-catalog-lib.sh
 . "$SCRIPT_DIR/fm-codex-catalog-lib.sh"
+# shellcheck source=bin/fm-dispatch-lanes-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-lanes-lib.sh"
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved raw_bytes
@@ -5820,12 +5826,20 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir opencode_launch_failure", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp model effort model_family ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir opencode_launch_failure", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
   ' "$RELAUNCH_META"
 }
+# The dispatched route's model family, from the config's model classes, so a
+# later second opinion can exclude it; a route no class lists records none.
+MODEL_FAMILY=
+if [ "$KIND" != secondmate ]; then
+  family_model=${MODEL:-}
+  [ "$family_model" != default ] || family_model=
+  MODEL_FAMILY=$(fm_dispatch_model_family "$CONFIG/crew-dispatch.json" "$HARNESS" "$family_model")
+fi
 {
   echo "window=$META_WINDOW"
   # window_id pins the tmux window OBJECT itself (fm_backend_tmux_create_task
@@ -5849,6 +5863,7 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ -z "$MODEL_FAMILY" ] || echo "model_family=$MODEL_FAMILY"
   [ "$ULTRACODE" = 0 ] || echo "ultracode=on"
   [ "$GOAL_SET" = 0 ] || echo "goal=$GOAL"
   # The worker account pin, only when this home declares one, so an unpinned
