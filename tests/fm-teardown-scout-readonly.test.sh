@@ -79,9 +79,28 @@ write_task() {  # <case_dir> <id> <kind>
 # stat %m reports the same mount for the copy and the bind. The mount table
 # names the bind, which is the signal a same-filesystem bind can hide from stat.
 plant_bind_report() {  # <case_dir> <walk> <bind>
-  local case_dir=$1 walk=$2 bind=$3 real_stat real_mount
+  local case_dir=$1 walk=$2 bind=$3 real_stat point
   real_stat=$(command -v stat)
-  real_mount=$(command -v mount)
+  point=$(python3 -c '
+import sys
+out = []
+for ch in sys.argv[1]:
+    if ch == "\\":
+        out.append("\\134")
+    elif ch == " ":
+        out.append("\\040")
+    elif ch == "\t":
+        out.append("\\011")
+    elif ch == "\n":
+        out.append("\\012")
+    else:
+        out.append(ch)
+sys.stdout.write("".join(out))
+' "$bind")
+  # The copy itself sits on the root mount. A table that names only the bind
+  # leaves the fallback resolver with no mount that contains the copy.
+  printf '1 1 0:1 / / rw - ext4 /dev/disk1 rw\n' > "$case_dir/mountinfo"
+  printf '2 1 0:1 / %s rw - ext4 /dev/disk0 rw\n' "$point" >> "$case_dir/mountinfo"
   cat > "$case_dir/fakebin/stat" <<SH
 #!/usr/bin/env bash
 set -u
@@ -102,13 +121,7 @@ if [ "\$wants_mount" -eq 1 ] && { [ "\$path" = "$walk" ] || [ "\$path" = "$bind"
 fi
 exec "$real_stat" "\$@"
 SH
-  cat > "$case_dir/fakebin/mount" <<SH
-#!/usr/bin/env bash
-set -u
-"$real_mount" "\$@"
-printf '%s\n' "/dev/disk0 on $bind (apfs, local)"
-SH
-  chmod +x "$case_dir/fakebin/stat" "$case_dir/fakebin/mount"
+  chmod +x "$case_dir/fakebin/stat"
 }
 
 plant_readonly_tree() {  # <case_dir>
@@ -129,6 +142,8 @@ run_teardown() {  # <case_dir> <id>
     FM_DATA_OVERRIDE="$1/data" \
     FM_CONFIG_OVERRIDE="$1/config" \
     FM_TREEHOUSE_LOG="$1/treehouse.log" \
+    FM_TEST_SEAM="${FM_TEST_SEAM:-}" \
+    FM_TEST_MOUNTINFO="${FM_TEST_MOUNTINFO:-}" \
     PATH="$1/fakebin:$PATH" \
     "$TEARDOWN" "$2"
 }
@@ -253,7 +268,8 @@ test_same_filesystem_mount_is_not_made_writable() {
   plant_bind_report "$case_dir" "$walk" "$bind"
 
   rc=0
-  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  FM_TEST_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
   [ "$rc" -ne 0 ] || fail "scout-bind: teardown returned a nested mount"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep "nested mount" "$case_dir/stderr" \
     "scout-bind: teardown did not report the nested mount"
@@ -286,7 +302,8 @@ test_writable_mount_under_unsearchable_ancestor_refuses_return() {
   plant_bind_report "$case_dir" "$walk" "$bind"
 
   rc=0
-  run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  FM_TEST_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
   [ "$rc" -ne 0 ] || fail "scout-hidden-mount: teardown returned a nested mount"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep "nested mount" "$case_dir/stderr" \
     "scout-hidden-mount: teardown did not report the nested mount"
@@ -297,6 +314,37 @@ test_writable_mount_under_unsearchable_ancestor_refuses_return() {
   assert_equals "mounted" "$(cat "$bind/secret")" \
     "scout-hidden-mount: file on the bind mount was removed"
   pass "a writable mount under an unsearchable directory stops cleanup before return"
+}
+
+# mount(8) listing replaces a newline in the name with ?. The kernel table
+# keeps the escaped newline, and that name must still stop cleanup.
+test_newline_mount_point_is_refused() {
+  local case_dir id=scout-newline rc dir_mode walk bind
+  skip_if_directory_mode_is_bypassed "scout-newline" && return 0
+  case_dir=$(make_case scout-newline)
+  write_task "$case_dir" "$id" scout
+  mkdir -p "$case_dir/data/$id"
+  printf 'findings\n' > "$case_dir/data/$id/report.md"
+  walk=$(cd "$case_dir/wt" && pwd -P)
+  bind="$walk/bind"$'\n'"more"
+  mkdir -p -- "$bind"
+  printf 'mounted\n' > "$bind/secret"
+  dir_mode=$(mode_of "$bind")
+  plant_bind_report "$case_dir" "$walk" "$bind"
+
+  rc=0
+  FM_TEST_MOUNTINFO="$case_dir/mountinfo" \
+    run_teardown "$case_dir" "$id" >"$case_dir/stdout" 2>"$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "scout-newline: teardown returned a nested mount"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "nested mount" "$case_dir/stderr" \
+    "scout-newline: teardown did not report the nested mount"
+  assert_no_grep "return --force" "$case_dir/treehouse.log" \
+    "scout-newline: teardown returned the worktree"
+  assert_equals "$dir_mode" "$(mode_of "$bind")" \
+    "scout-newline: mount mode changed"
+  assert_equals "mounted" "$(cat "$bind/secret")" \
+    "scout-newline: file on the mount was removed"
+  pass "a mount point whose name contains a newline stops cleanup before return"
 }
 
 # Mode 0444 has no owner search bit. chmod u+w leaves it unsearchable, so the
@@ -327,4 +375,5 @@ test_ship_with_unlanded_readonly_tree_is_refused_unchanged
 test_other_device_directory_is_not_made_writable
 test_same_filesystem_mount_is_not_made_writable
 test_writable_mount_under_unsearchable_ancestor_refuses_return
+test_newline_mount_point_is_refused
 test_mode_0444_directory_is_deleted

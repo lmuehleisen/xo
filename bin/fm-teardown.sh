@@ -84,7 +84,9 @@
 # filesystem or mount, including a same-filesystem bind mount and a nested
 # mount root, is left unchanged and is not descended into. Finding one aborts
 # cleanup before the destructive return, including when an ancestor had to be
-# made searchable before the mount could be seen.
+# made searchable before the mount could be seen. Mount boundaries come from
+# the kernel mount table, so a name that contains a control character still
+# matches.
 # Ship worktrees are not modified, including a refusal or a forced discard.
 # The scout has stopped and teardown has already reaped worktree processes, so
 # only a concurrent process of the same user could race a directory into or out
@@ -1821,10 +1823,22 @@ cleanup_stale_lock_for_safety_check() {
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
 }
 
-# Print one mount point per line. Linux mount(8) puts " type <fstype>" before
-# the parenthetical options. macOS puts the options immediately after the path.
-scout_mount_points() {
-  local line rest out
+# Append one mount point. NUL separates records so a newline in the name survives.
+scout_record_mount_point() {
+  printf '%s\0' "$2" >> "$1"
+}
+
+# Decode one mountinfo field. The kernel encodes space, tab, newline, and
+# backslash as octal escapes, which mount(8) listing mode would replace with ?.
+scout_decode_mountinfo_field() {
+  printf '%b' "$1"
+}
+
+# Linux mount(8) listing replaces control characters, so it is not a mount
+# boundary. /proc/self/mountinfo keeps the escaped name. macOS has no
+# mountinfo and its mount(8) output is the fallback.
+scout_fill_mount_points_from_mount() {
+  local dest=$1 line rest out
   out=$(mount) || return 1
   while IFS= read -r line; do
     case $line in
@@ -1838,26 +1852,50 @@ scout_mount_points() {
     esac
     rest=${rest%" "}
     [ -n "$rest" ] || continue
-    printf '%s\n' "$rest"
+    scout_record_mount_point "$dest" "$rest"
   done <<< "$out"
+  return 0
 }
 
-# Mount point of one directory. GNU stat %m sees a same-filesystem bind mount.
+scout_fill_mount_points() {
+  local dest=$1 line field point src
+  : > "$dest"
+  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_MOUNTINFO:-}" ] && [ -r "$FM_TEST_MOUNTINFO" ]; then
+    src=$FM_TEST_MOUNTINFO
+  elif [ -r /proc/self/mountinfo ]; then
+    src=/proc/self/mountinfo
+  else
+    scout_fill_mount_points_from_mount "$dest"
+    return
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    field=$(printf '%s\n' "$line" | awk '{print $5}')
+    [ -n "$field" ] || continue
+    # Command substitution drops trailing newlines. A mount point may end
+    # with one, so keep a sentinel until the record is stored.
+    point=$(scout_decode_mountinfo_field "$field"; printf x)
+    point=${point%x}
+    scout_record_mount_point "$dest" "$point"
+  done < "$src"
+  return 0
+}
+
+# Mount point of one directory. GNU stat %m can hide a same-filesystem bind.
 # Otherwise the longest listed mount point that contains the directory is used.
 scout_mount_point_of() {
-  local path=$1 points=$2 mp best=
+  local path=$1 mountfile=$2 mp best=
   if mp=$(stat -c %m -- "$path" 2>/dev/null); then
     printf '%s\n' "$mp"
     return 0
   fi
-  while IFS= read -r mp; do
+  while IFS= read -r -d '' mp || [ -n "$mp" ]; do
     [ -n "$mp" ] || continue
     if [ "$path" = "$mp" ] || [ "$mp" = / ] || [ "${path#"$mp"/}" != "$path" ]; then
       if [ ${#mp} -ge ${#best} ]; then
         best=$mp
       fi
     fi
-  done <<< "$points"
+  done < "$mountfile"
   [ -n "$best" ] || return 1
   printf '%s\n' "$best"
 }
@@ -1866,19 +1904,32 @@ scout_mount_point_of() {
 # copy so the following treehouse return can unlink a tree the scout left
 # non-writable. See the script header. Ships are unchanged.
 prepare_scout_scratch_for_return() {
-  local wt=$1 walk root_dev root_mp points err mounts find_rc=0
+  local wt=$1 walk root_dev root_mp mountfile err mounts find_rc=0
   [ "$KIND" = scout ] || return 0
   [ -n "$wt" ] || return 0
   [ -d "$wt" ] || return 0
   walk=$(cd -- "$wt" && pwd -P) || return 1
   root_dev=$(stat -c %d -- "$walk" 2>/dev/null) || root_dev=$(stat -f '%d' "$walk") || return 1
   [ -n "$root_dev" ] || return 1
-  points=$(scout_mount_points) || return 1
-  root_mp=$(scout_mount_point_of "$walk" "$points") || return 1
-  [ -n "$root_mp" ] || return 1
-  err=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mount.XXXXXX") || return 1
+  mountfile=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mountfile.XXXXXX") || return 1
+  if ! scout_fill_mount_points "$mountfile"; then
+    rm -f "$mountfile"
+    return 1
+  fi
+  if ! root_mp=$(scout_mount_point_of "$walk" "$mountfile"); then
+    rm -f "$mountfile"
+    return 1
+  fi
+  [ -n "$root_mp" ] || {
+    rm -f "$mountfile"
+    return 1
+  }
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mount.XXXXXX") || {
+    rm -f "$mountfile"
+    return 1
+  }
   mounts=$(mktemp "${TMPDIR:-/tmp}/fm-scout-mounts.XXXXXX") || {
-    rm -f "$err"
+    rm -f "$err" "$mountfile"
     return 1
   }
   # -P does not follow symlinks. -xdev does not descend into another
@@ -1887,11 +1938,11 @@ prepare_scout_scratch_for_return() {
   # The destructive return is refused when that record is non-empty: repairing
   # an ancestor can make an already-writable mount reachable to git clean.
   find -P "$walk" -xdev \
-    \( -type d -exec sh -c '
+    \( -type d -exec bash -c '
       root_dev=$1
       root_mp=$2
       walk=$3
-      points=$4
+      mountfile=$4
       err=$5
       mounts=$6
       dir=$7
@@ -1908,16 +1959,14 @@ prepare_scout_scratch_for_return() {
       [ "$dir" = "$walk" ] && exit 1
       # The mount table is authoritative. GNU stat %m can report the backing
       # mount for a same-filesystem bind, which matches the copy and would
-      # hide the mount if it were trusted first.
-      set -f
-      IFS="
-"
-      for mp in $points; do
+      # hide the mount if it were trusted first. Records are NUL-separated
+      # so a newline in the mount-point name still compares equal.
+      while IFS= read -r -d "" mp || [ -n "$mp" ]; do
         if [ "$mp" = "$dir" ]; then
           printf "%s\n" "$dir" >> "$mounts"
           exit 0
         fi
-      done
+      done < "$mountfile"
       if mp=$(stat -c %m -- "$dir" 2>/dev/null); then
         if [ "$mp" != "$root_mp" ]; then
           printf "%s\n" "$dir" >> "$mounts"
@@ -1925,7 +1974,7 @@ prepare_scout_scratch_for_return() {
         fi
       fi
       exit 1
-    ' sh "$root_dev" "$root_mp" "$walk" "$points" "$err" "$mounts" {} \; -prune \) \
+    ' bash "$root_dev" "$root_mp" "$walk" "$mountfile" "$err" "$mounts" {} \; -prune \) \
     -o \
     \( -type d ! -perm -u+rwx -exec sh -c '
       err=$1
@@ -1936,15 +1985,15 @@ prepare_scout_scratch_for_return() {
     ' sh "$err" {} \; \) \
     || find_rc=$?
   if [ -s "$err" ] || [ "$find_rc" -ne 0 ]; then
-    rm -f "$err" "$mounts"
+    rm -f "$err" "$mounts" "$mountfile"
     return 1
   fi
   if [ -s "$mounts" ]; then
     echo "error: scratch scout worktree $walk contains a nested mount; refusing cleanup before return" >&2
-    rm -f "$err" "$mounts"
+    rm -f "$err" "$mounts" "$mountfile"
     return 1
   fi
-  rm -f "$err" "$mounts"
+  rm -f "$err" "$mounts" "$mountfile"
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
