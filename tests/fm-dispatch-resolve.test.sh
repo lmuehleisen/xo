@@ -1021,6 +1021,22 @@ for effort in xhigh max; do
   TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
   assert_not_contains "$err" 'malformed rules file' "agy effort $effort is well formed"
 done
+# Codex max follows the installed catalog, exactly as bootstrap's schema check does.
+mkdir -p "$TMP_ROOT/codex-catalog"
+printf '%s\n' '{"models":[{"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-5","supported_reasoning_levels":[{"effort":"high"}]}]}' > "$TMP_ROOT/codex-catalog/models_cache.json"
+for case in advertised:gpt-6-luna:ok not-advertised:gpt-5:bad missing-catalog:gpt-6-luna:bad missing-catalog-luna:gpt-5.6-luna:ok; do
+  IFS=: read -r label model verdict <<< "$case"
+  codex_home=$TMP_ROOT/codex-catalog
+  case "$label" in missing-catalog*) codex_home=$TMP_ROOT/codex-catalog-absent ;; esac
+  printf '{"rules":[{"when":"x","use":{"harness":"codex","model":"%s","effort":"max"}}]}\n' "$model" > "$RULES"
+  CODEX_HOME=$codex_home TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+  if [ "$verdict" = ok ]; then
+    expect_code 0 "$code" "codex max $label resolves without a configuration error"
+    assert_not_contains "$err" 'malformed rules file' "codex max $label is well formed"
+  else
+    assert_contains "$err" 'each use profile effort must be supported by its harness and model' "codex max $label is refused"
+  fi
+done
 cp "$BASE_RULES" "$RULES"
 for removed in --json --rules --quota; do
   TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" "$removed"

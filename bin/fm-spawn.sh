@@ -599,6 +599,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-codex-catalog-lib.sh
+. "$SCRIPT_DIR/fm-codex-catalog-lib.sh"
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved raw_bytes
@@ -3149,7 +3151,7 @@ model_flag_for_harness() {
 }
 
 effort_flag_for_harness() {
-  local harness=$1 effort=$2 model=${3:-} catalog max_supported
+  local harness=$1 effort=$2 model=${3:-}
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
   claude)
@@ -3158,33 +3160,18 @@ effort_flag_for_harness() {
     esac
     ;;
   codex)
-    # The installed Codex catalog owns max support. An unavailable or invalid
-    # catalog preserves the historical Luna-only fallback.
+    # The installed Codex catalog owns max support (bin/fm-codex-catalog-lib.sh).
     case "$effort" in
     low | medium | high | xhigh | ultra) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
     max)
-      catalog="${CODEX_HOME:-$HOME/.codex}/models_cache.json"
-      max_supported=
-      if [ -r "$catalog" ]; then
-        max_supported=$(jq -r --arg model "$model" '
-          if (.models | type) != "array" then error("invalid model catalog")
-          else [.models[] | select(.slug == $model)] |
-            if any(.[]; (.supported_reasoning_levels | type) != "array")
-            then error("invalid model reasoning levels")
-            else any(.[]; any(.supported_reasoning_levels[]; .effort == "max")) end
-          end
-        ' "$catalog" 2>/dev/null) || max_supported=
+      if ! fm_codex_max_allowed "$model"; then
+        if [ "$(fm_codex_max_support "$model")" = false ]; then
+          printf 'fm-spawn.sh: warning: Codex model %s requested effort %s; catalog does not advertise max, omitting effort flag\n' "$model" "$effort" >&2
+        else
+          printf 'fm-spawn.sh: warning: Codex model %s requested effort %s; catalog unavailable or invalid, omitting effort flag\n' "$model" "$effort" >&2
+        fi
+        return 0
       fi
-      case "$max_supported" in
-        true) ;;
-        false) printf 'fm-spawn.sh: warning: Codex model %s requested effort %s; catalog does not advertise max, omitting effort flag\n' "$model" "$effort" >&2; return 0 ;;
-        *)
-          if [ "$model" != gpt-5.6-luna ]; then
-            printf 'fm-spawn.sh: warning: Codex model %s requested effort %s; catalog unavailable or invalid, omitting effort flag\n' "$model" "$effort" >&2
-            return 0
-          fi
-          ;;
-      esac
       printf -- '-c %s ' "$(shell_quote 'model_reasoning_effort="max"')"
       ;;
     esac

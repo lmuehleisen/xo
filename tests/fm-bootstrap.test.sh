@@ -1124,7 +1124,7 @@ test_crew_dispatch_validation() {
     fakebin=$(make_fake_toolchain "$case_dir")
     add_real_jq "$fakebin"
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      TYPESAFE_API_KEY=test-key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+      CODEX_HOME="$case_dir/codex-home" TYPESAFE_API_KEY=test-key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
       empty)
         [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
@@ -1246,6 +1246,44 @@ ROWS
   pass "bootstrap gates resolver fields and additive harnesses on the typed key"
 }
 
+# Codex max follows the installed model catalog the launch reads; a missing or
+# invalid catalog keeps only the historical gpt-5.6-luna fallback.
+test_crew_dispatch_codex_max_follows_catalog() {
+  local case_dir fakebin catalog label model expect out
+  case_dir="$TMP_ROOT/dispatch-codex-catalog"
+  mkdir -p "$case_dir/home/config" "$case_dir/codex-home"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  catalog='{"models":[{"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"high"},{"effort":"max"}]},{"slug":"gpt-5.6-luna","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-5","supported_reasoning_levels":[{"effort":"high"}]}]}'
+  while IFS='^' read -r label model expect; do
+    [ -n "$label" ] || continue
+    case "$label" in
+      advertised* | not-advertised*) printf '%s\n' "$catalog" > "$case_dir/codex-home/models_cache.json" ;;
+      missing*) rm -f "$case_dir/codex-home/models_cache.json" ;;
+      invalid*) printf '%s\n' '{"models":{}}' > "$case_dir/codex-home/models_cache.json" ;;
+    esac
+    printf '{"rules":[{"when":"big feature","use":{"harness":"codex","model":"%s","effort":"max"}}]}\n' "$model" > "$case_dir/home/config/crew-dispatch.json"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      CODEX_HOME="$case_dir/codex-home" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    [ "$out" = "$expect" ] || fail "codex max $label: expected '$expect', got: $out"
+  done <<'ROWS'
+advertised new model^gpt-6-luna^
+advertised Luna^gpt-5.6-luna^
+not-advertised model^gpt-5^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
+missing catalog new model^gpt-6-luna^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
+missing catalog Luna^gpt-5.6-luna^
+invalid catalog new model^gpt-6-luna^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
+invalid catalog Luna^gpt-5.6-luna^
+ROWS
+  printf '%s\n' '{"rules":[{"when":"a","use":{"harness":"codex","model":"gpt-5.6-luna","effort":"max"}},{"when":"b","use":{"harness":"codex","model":"gpt-6-luna","effort":"max"}}]}' > "$case_dir/home/config/crew-dispatch.json"
+  out=$(env -u HOME -u CODEX_HOME PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>&1 | grep 'crew-dispatch\|unbound')
+  [ "$out" = "CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max" ] \
+    || fail "codex max without HOME or CODEX_HOME must use the Luna-only fallback, got: $out"
+  pass "bootstrap accepts Codex max exactly where the installed catalog advertises it"
+}
+
 test_bootstrap_reporting
 test_dropped_tools_are_not_required
 test_no_mistakes_opt_in_reports_unavailable_cli
@@ -1275,3 +1313,4 @@ test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_crew_dispatch_codex_max_follows_catalog

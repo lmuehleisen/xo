@@ -1178,7 +1178,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 **Model, effort, and fallback behavior**
 
 - Profile `ultra` remains scoped to native Pi; direct Codex's per-spawn extension is described under [Per-task high-quota launch modes](#per-task-high-quota-launch-modes), with validation owned by `bin/fm-harness.sh validate-native-effort`.
-- Codex `max` is valid when the profile selects `gpt-5.6-luna`, whose installed catalog entry supports that reasoning level.
+- Codex `max` is valid when the installed Codex model catalog advertises `max` for the profile's model; when that catalog is missing or invalid, only `gpt-5.6-luna` keeps `max` ([`bin/fm-codex-catalog-lib.sh`](../bin/fm-codex-catalog-lib.sh) owns the lookup).
 - An omitted model or effort means the selected harness uses its own default for that axis.
 - OpenCode V2 receives effort through the build agent's model reference in its per-spawn config; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns the variant mapping and unsupported-value behavior.
 - Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
