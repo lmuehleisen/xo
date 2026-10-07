@@ -549,7 +549,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true, unknown: true,
          reason: ("no applicable quota row for provider \($p)" +
            if $p == "agy" then "; catalog-backed family quota is unmeasured"
-           elif $p == "devin" then "; free SWE-2 usage draws on no plan quota, so the route is unmetered"
+           elif $p == "devin" then "; no catalog-confirmed quota binding (a free model draws on none, and a paid model binds only when the catalog is read)"
            else "" end)}
       elif $profile_floor_state == "unknown" then
         ([rows($p; $lane)[] | select(.scope == $c.floor.scope)] | first) as $floor_row |

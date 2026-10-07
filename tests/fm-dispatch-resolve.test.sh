@@ -1207,7 +1207,7 @@ reset_log
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
 assert_contains "$out" 'candidate: devin:gpt-6-1-sol-max  provider=devin  scope=included_quota  remaining=96%  spendPriority=1.92  runway=through_reset  -> eligible' "a paid Sol route binds the included_quota row"
 assert_contains "$out" 'candidate: devin:gpt-6-luna-max  provider=devin  scope=included_quota  remaining=96%  spendPriority=1.92  runway=through_reset  -> eligible' "a paid Luna route binds the included_quota row"
-assert_contains "$out" 'candidate: devin:swe-2-max  provider=devin  -> eligible, unranked: no applicable quota row for provider devin; free SWE-2 usage draws on no plan quota, so the route is unmetered: disclosed uncertainty' "the free SWE-2 route stays disclosed uncertainty"
+assert_contains "$out" 'candidate: devin:swe-2-max  provider=devin  -> eligible, unranked: no applicable quota row for provider devin; no catalog-confirmed quota binding (a free model draws on none, and a paid model binds only when the catalog is read): disclosed uncertainty' "the free SWE-2 route stays disclosed uncertainty"
 # Both paid routes draw on the one included_quota pool, so they share its
 # spendPriority and genuinely tie; the resolver escalates rather than guessing.
 assert_contains "$out" 'status: escalate' "two paid routes sharing one included pool tie and escalate"
