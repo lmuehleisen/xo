@@ -1362,7 +1362,8 @@ The shared quota library owns the reviewed scope mapping used by the resolver an
 Agy's own bounded `agy models` catalog must list the model (or its selected effort alias) before its Gemini or Claude/GPT family binds the `gemini` or `claude_gpt` bucket.
 An unknown model family or unavailable catalog leaves that candidate eligible but unranked, even beside known generic or exact-model quota.
 An explicit Pi `provider: kiro` binds `included:credit_monthly` as one included pool; insufficient included capacity stays eligible but unranked because other pools or overage remain unmeasured.
-Pools are never summed, and Devin's included allowance has no implicit whole-provider binding.
+A `provider: devin` route binds the `included_quota` window only when Devin's own `devin models list` catalog shows the model is paid per-token (every family except free SWE-2), because the vendor bills quota and extra usage by the selected model's token cost; its free SWE-2 models draw on no plan quota, so they stay eligible but unranked, and an exhausted `included_quota` is not whole-provider exhaustion because paid usage continues past it.
+Pools are never summed, so Devin's free SWE-2 routes never bind the paid plan allowance.
 
 
 **Lane resolution**

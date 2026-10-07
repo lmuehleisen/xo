@@ -33,7 +33,10 @@
 # provider family (fm_quota_provider_for_harness in bin/fm-quota-axi-lib.sh)
 # and checks quota for that
 # family only. Agy additionally uses its own bounded catalog to bind the
-# reviewed Gemini and Claude/GPT buckets; unsupported model families stay
+# reviewed Gemini and Claude/GPT buckets; Devin likewise uses its own catalog
+# to bind the included_quota plan allowance to its paid per-token models only,
+# leaving its free SWE-2 models unranked (they draw on no plan quota);
+# unsupported model families stay
 # unknown even beside known generic or exact-model quota. Included Kiro pools
 # are handled only by the typed resolver.
 # Some harnesses can run models from several providers - for
@@ -343,13 +346,13 @@ provider_for_harness() {
 # bound through quota_row from bin/fm-quota-axi-lib.sh, so <lane> matters only
 # on a schema 6 snapshot.
 effective_for_provider_model() {
-  local provider=$1 model=${2:-default} lane=${3:-} agy_scope=${4:-}
-  printf '%s\n' "$QUOTA_JSON" | jq -c --arg provider "$provider" --arg model "$model" --arg lane "$lane" --arg agy_scope "$agy_scope" "$FM_QUOTA_ROW_JQ"'
+  local provider=$1 model=${2:-default} lane=${3:-} agy_scope=${4:-} devin_scope=${5:-}
+  printf '%s\n' "$QUOTA_JSON" | jq -c --arg provider "$provider" --arg model "$model" --arg lane "$lane" --arg agy_scope "$agy_scope" --arg devin_scope "$devin_scope" "$FM_QUOTA_ROW_JQ"'
     ($model | sub("^model:"; "")) as $model_token |
     quota_row(.; $provider; $lane) as $p |
     if ($p // null) == null then {status: "unknown"}
     else ($p.quotaSemantics.effectiveAvailability // []) |
-    map(select(quota_applicable($provider; $model_token; $agy_scope))) as $applicable |
+    map(select(quota_applicable($provider; $model_token; $agy_scope; $devin_scope))) as $applicable |
     ($applicable | map(select(.status == "known"))) as $known |
     if ($applicable | length) == 0 then {status: "unknown"}
     elif any($applicable[]; (.runway.status // "") == "exhausted_now") then
@@ -379,6 +382,10 @@ AGY_IDS='[]'
 for c in "${CANDIDATES[@]}"; do
   if [ "${c%%:*}" = agy ]; then AGY_IDS=$(fm_quota_agy_catalog); break; fi
 done
+DEVIN_IDS='[]'
+for c in "${CANDIDATES[@]}"; do
+  if [ "${c%%:*}" = devin ]; then DEVIN_IDS=$(fm_quota_devin_catalog); break; fi
+done
 chosen="none"
 for c in "${CANDIDATES[@]}"; do
   harness=${c%%:*}
@@ -392,7 +399,11 @@ for c in "${CANDIDATES[@]}"; do
   if [ "$harness" = agy ]; then
     agy_scope=$(jq -rn --argjson ids "$AGY_IDS" --arg model "$model" "$FM_QUOTA_AGY_JQ"'quota_agy_scope($ids; $model; "")')
   fi
-  effective=$(effective_for_provider_model "$provider" "$scope_model" "$lane" "$agy_scope")
+  devin_scope=''
+  if [ "$harness" = devin ]; then
+    devin_scope=$(jq -rn --argjson ids "$DEVIN_IDS" --arg model "$model" "$FM_QUOTA_DEVIN_JQ"'quota_devin_scope($ids; $model)')
+  fi
+  effective=$(effective_for_provider_model "$provider" "$scope_model" "$lane" "$agy_scope" "$devin_scope")
   if [ -z "$effective" ] || [ "$effective" = "null" ]; then
     continue
   fi
