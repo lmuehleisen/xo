@@ -4,7 +4,8 @@ description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
   array from quota-axi's default TOON, ranking by spendPriority after three
   orthogonal gates.
-  Load when a dispatch rule or default resolves to more than one profile candidate.
+  Load when a dispatch rule or default resolves to more than one profile candidate,
+  or when the dispatch configuration declares lanes of model classes.
 user-invocable: false
 metadata:
   internal: true
@@ -142,3 +143,16 @@ Report duplicate concrete profiles as a configuration error.
 Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, `spendPriority`, and runway-versus-horizon result.
 A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
 Never conclude with an unexplained "best quota" label.
+
+## Lane configurations
+
+When `config/crew-dispatch.json` declares lane rules, the configuration chooses the model class and code chooses the provider route; [Lanes and model classes](../../../docs/configuration.md#lanes-and-model-classes) owns the schema and semantics.
+
+- Choose the lane, never a route: take the lane the resolver's Choice answer matched, or, when the key is off or the lane is already clear, pick the lane by judgment and run `bin/fm-dispatch-resolve.sh <brief> --project <name> --lane <lane>`, which needs no key and sends nothing.
+- Pass one `--data-tag` for each data tag the task carries, so a class's data policy admits or refuses it in code; when the task's data is unclear, pass no allow tag and let the policy refuse.
+- An allow tag reserved for one-off exceptions is passed only on the captain's word for that task.
+- A `clear` lane result has applied eligibility, floors, and runway to every route, but the reasoning-class gate above remains yours.
+- A lane gated by `approval` escalates with its candidates; launch it only on the captain's word for that task.
+- For a second opinion, read `model_family=` from the originating task's `state/<id>.meta` and resolve the same lane with `--exclude-family <family>`; when the origin recorded no family, ask rather than guess one.
+- A chosen class marked `experiment` is a trial route: note it in the backlog item, and flag the trial when relaying its result so the comparison stays visible.
+- Experiments such as evaluation runs or calibration arms are exempt from lanes: launch each arm with its explicit `--harness`, `--model`, and `--effort` flags instead of resolving a lane.

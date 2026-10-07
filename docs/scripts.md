@@ -119,6 +119,7 @@ The retained compatibility gate lifecycle boundary for fleet lifecycle entrypoin
 | `fm-backlog-transition-lib.sh` | Pair task-record changes with their backlog transitions and replay interrupted closes |
 | `fm-quota-axi-lib.sh`    | Shared `quota-axi` compatibility floor and quota snapshot schema validation           |
 | `fm-codex-catalog-lib.sh` | Shared installed Codex model-catalog lookup for `max` reasoning-effort support |
+| `fm-dispatch-lanes-lib.sh` | Single owner of crew-dispatch lane, model-class, and data-policy structure checks, plus the model-family lookup `fm-spawn.sh` records |
 | `fm-quota-choose.sh`     | Choose the first candidate with known positive quota from an ordered harness:model list |
 | `fm-vendor-auth-probe.sh`| Run one hard-bounded, non-destructive authentication probe of a named vendor CLI and report the fact |
 | `fm-wake-drain.sh`       | Present and acknowledge the current actor's claimed wake rows alongside status, outcome-backstop, decision, divergence, supervision-host outcome, recovery, and supervision checks |

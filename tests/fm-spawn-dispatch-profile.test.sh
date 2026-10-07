@@ -504,6 +504,34 @@ test_active_dispatch_profile_allows_explicit_harness() {
   pass "active crew-dispatch profile allows an explicit resolved harness"
 }
 
+# A lane route records its class family for a later second opinion, while a
+# route no class lists (an experiment arm, say) still spawns and records none.
+test_lane_route_records_model_family() {
+  local rec id out status lanes
+  lanes='{"classes":{"sol-high":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol-high"]}]}'
+  id=lane-family-z15
+  rec=$(make_spawn_case lane-family claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
+  status=$?
+  expect_code 0 "$status" "a lane route spawn should succeed"$'\n'"$out"
+  assert_grep 'model_family=gpt' "$HOME_DIR/state/$id.meta" "a lane route did not record its class family"
+
+  id=lane-unlisted-z16
+  rec=$(make_spawn_case lane-unlisted claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5.5 --effort high)
+  status=$?
+  expect_code 0 "$status" "a route outside every lane should still spawn"$'\n'"$out"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.5 high
+  assert_no_grep 'model_family=' "$HOME_DIR/state/$id.meta" "a route no class lists recorded a model family"
+  pass "a lane route records its model family and an unlisted route spawns without one"
+}
+
 test_active_dispatch_profile_allows_positional_harness() {
   local rec id out status
   id=profile-positional-z14
@@ -3114,6 +3142,7 @@ test_unresolvable_relative_overrides_fail_loudly
 test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
+test_lane_route_records_model_family
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_chained_raw_launch_strips_ai_trailer_in_every_step

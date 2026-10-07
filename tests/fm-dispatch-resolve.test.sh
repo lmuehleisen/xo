@@ -1168,4 +1168,206 @@ assert_contains "$out" 'not whole-provider exhaustion' "included zero does not f
 assert_contains "$out" 'eligible, unranked:' "candidate with other unmeasured pools remains eligible"
 pass "Kiro included pool is bound without summing pools or declaring whole-provider exhaustion"
 
+# --- lanes: model classes with provider routes ----------------------------------
+LANE_CODEX_HOME="$TMP_ROOT/lane-codex-home"
+mkdir -p "$LANE_CODEX_HOME"
+cat > "$LANE_CODEX_HOME/models_cache.json" <<'JSON'
+{"models":[
+  {"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"high"},{"effort":"xhigh"},{"effort":"max"}]},
+  {"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"max"}]},
+  {"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"xhigh"},{"effort":"max"}]}]}
+JSON
+LANE_QUOTA="$TMP_ROOT/lane-quota.json"
+# lane_quota <provider>=<spendPriority|exhausted>...: one all_models row each.
+lane_quota() {
+  local rows='' entry provider value row
+  for entry in "$@"; do
+    provider=${entry%%=*}
+    value=${entry#*=}
+    if [ "$value" = exhausted ]; then
+      row='{"scope":"all_models","status":"known","effectivePercentRemaining":0,"runway":{"status":"exhausted_now"},"selection":{"status":"known","spendPriority":-1}}'
+    else
+      row="{\"scope\":\"all_models\",\"status\":\"known\",\"effectivePercentRemaining\":60,\"runway\":{\"status\":\"through_reset\"},\"selection\":{\"status\":\"known\",\"spendPriority\":$value}}"
+    fi
+    rows="$rows${rows:+,}{\"provider\":\"$provider\",\"state\":{\"status\":\"fresh\"},\"quotaSemantics\":{\"status\":\"known\",\"effectiveAvailability\":[$row]}}"
+  done
+  printf '{"generatedAt":"2030-01-01T00:00:00Z","schemaVersion":5,"providers":[%s]}\n' "$rows" > "$LANE_QUOTA"
+}
+# run_lane <exit-var> <out-var> <err-var> [args...]: no key, the lane quota fixture.
+run_lane() {
+  local __exit=$1 __out=$2 __err=$3 _out _code
+  shift 3
+  _out=$(PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" CODEX_HOME="$LANE_CODEX_HOME" QUOTA_AXI_FIXTURE="$LANE_QUOTA" \
+    "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  _code=$?
+  printf -v "$__exit" '%s' "$_code"
+  printf -v "$__out" '%s' "$_out"
+  printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
+}
+TEMPLATE="$ROOT/docs/examples/crew-dispatch-lanes.json"
+cp "$TEMPLATE" "$RULES"
+
+# A named lane needs no key and sends nothing; code picks the route.
+reset_log
+lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
+run_lane code out err "$BRIEF" --lane standard --project xo
+expect_code 0 "$code" "--lane exits 0 without a key"
+assert_contains "$out" 'status: clear' "--lane resolves the template's standard lane"
+assert_contains "$out" 'selected: by --lane' "--lane names how the rule was chosen"
+assert_not_contains "$out" 'probabilities:' "--lane prints no Choice probabilities"
+assert_contains "$out" 'lane: standard  order=pool' "--lane names the lane and its order"
+[ ! -e "$LOG/argv" ] || fail "--lane must not call the network"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "pool argmax picks the highest spendPriority route"
+assert_contains "$out" 'class: sol-high  family=gpt' "the chosen class and family are printed"
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  -> eligible, unranked' "an unmeasured free route is disclosed, not blocked"
+pass "a named lane resolves in code with no key, picking a route by spendPriority"
+
+# Gemini joins Standard only while every ungated route spends ahead of pace and it does not.
+assert_contains "$out" 'class=gemini-flash-high family=gemini  provider=agy' "the gated class is evaluated"
+assert_contains "$out" 'not eligible: pace gate closed: sol-high not spending ahead of pace' "a route on or under pace keeps the gate closed"
+lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
+run_lane code out err "$BRIEF" --lane standard --project xo
+assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "the gate opens when every other route is ahead of pace"
+lane_quota claude=-0.3 codex=-0.2 grok=-0.5 agy=-0.05 devin=-0.25 kiro=-0.6
+run_lane code out err "$BRIEF" --lane standard --project xo
+assert_contains "$out" 'pace gate closed: this class is itself spending ahead of pace' "the gate stays closed when the gated class is ahead of pace too"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "the pool falls back to the best ungated route"
+lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
+run_lane code out err "$BRIEF" --lane scoped --project xo
+assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "an ungated lane ranks the same class without the pace condition"
+pass "the Gemini pace gate applies only where the lane declares it"
+
+# Ordered lanes stop at the first class with any eligible route.
+run_lane code out err "$BRIEF" --lane judgment
+assert_contains "$out" "profile: --harness 'claude' --model 'claude-opus-5-5' --effort 'xhigh'" "the first viable class wins over a higher-priority later class"
+lane_quota claude=exhausted codex=0.2 kiro=-0.6
+run_lane code out err "$BRIEF" --lane judgment
+assert_contains "$out" "profile: --harness 'pi' --model 'kiro/claude-opus-5.5' --effort 'xhigh'" "another route of the first class serves before the fallback class"
+lane_quota claude=exhausted codex=0.2
+run_lane code out err "$BRIEF" --lane judgment
+assert_contains "$out" 'status: escalate' "an unmeasured route keeps the first class viable instead of skipping to the fallback"
+assert_contains "$out" 'no rankable eligible candidate in first viable class opus-xhigh' "the escalation names the first viable class"
+lane_quota claude=exhausted codex=0.2 kiro=exhausted
+run_lane code out err "$BRIEF" --lane technical-deep
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'max'" "an exhausted first class falls to the next class in order"
+pass "ordered lanes take the first viable class and rank only inside it"
+
+# Long-horizon needs the captain's per-task word; candidates are still shown.
+lane_quota claude=0.3 codex=0.2
+run_lane code out err "$BRIEF" --lane long-horizon
+assert_contains "$out" 'status: escalate' "an approval-gated lane never auto-dispatches"
+assert_contains "$out" "rule requires the captain's explicit approval before dispatch" "the escalation names the approval gate"
+assert_contains "$out" 'class=sol-ultra family=gpt' "the approval-gated lane still evaluates its classes"
+assert_not_contains "$out" 'profile:' "an approval-gated lane prints no profile"
+pass "Long-horizon resolves to the captain's per-task word"
+
+# A second opinion excludes the originating family and every experiment.
+lane_quota claude=0.5 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=0.9
+run_lane code out err "$BRIEF" --lane standard --project xo --exclude-family claude
+assert_contains "$out" 'exclude_family: claude' "the excluded family is printed"
+assert_contains "$out" 'class=opus-medium family=claude  -> not eligible: second opinion excludes family claude' "the originating family is excluded"
+assert_contains "$out" 'experiment: kiro-auto  share=0.25' "the experiment is reported"
+assert_contains "$out" 'not eligible: an experiment class never serves a second opinion' "an experiment never serves a second opinion"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "the best other-family route serves the second opinion"
+run_lane code out err "$BRIEF" --lane judgment --exclude-family claude
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra' --effort 'xhigh'" "an ordered lane moves to its first other-family class"
+run_lane code out err "$BRIEF" --lane standard --exclude-family cluade
+expect_code 2 "$code" "an undeclared family is a usage error"
+assert_contains "$err" 'undeclared family: cluade' "the typo is named"
+pass "a second opinion keeps the lane and excludes the originating family"
+
+# The data policy refuses a training-retaining route for disallowed data.
+lane_quota codex=-0.2 devin=-0.1 agy=0.3
+run_lane code out err "$BRIEF" --lane bulk --project acme
+assert_contains "$out" 'class=muse-spark family=muse  -> not eligible: data policy may-train does not admit project acme without an allowed data tag' "an unlisted project is refused"
+run_lane code out err "$BRIEF" --lane bulk --project acme --data-tag public-research
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  -> eligible, unranked' "an allowed data tag admits the route"
+assert_contains "$out" 'data_tags: public-research' "the data tags are printed"
+run_lane code out err "$BRIEF" --lane bulk --project xo --data-tag person-data
+assert_contains "$out" 'not eligible: data policy may-train refuses data tag person-data' "a denied tag refuses even an allowed project"
+run_lane code out err "$BRIEF" --lane bulk --project xo
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  -> eligible, unranked' "an allowed project admits the route"
+run_lane code out err "$BRIEF" --lane bulk --data-tag publc
+expect_code 2 "$code" "an undeclared data tag is a usage error"
+assert_contains "$err" 'undeclared data tag: publc' "the typo is named"
+pass "a data policy admits its class only for allowed projects or tags and never with a denied tag"
+
+# Experiments: a sampled arm takes the task, the same brief always samples the same way.
+cat > "$RULES" <<'JSON'
+{"classes":{
+  "sol-high":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-6.1-sol","effort":"high"}]},
+  "kiro-auto":{"family":"kiro-auto","experiment":{"share":1},"routes":[{"harness":"pi","model":"kiro/auto","provider":"kiro"}]}},
+ "rules":[{"lane":"standard","when":"Ordinary work.","classes":["sol-high","kiro-auto"]}]}
+JSON
+lane_quota codex=0.5 kiro=-0.6
+run_lane code out err "$BRIEF" --lane standard
+assert_contains "$out" '-> sampled' "a share of 1 samples every task"
+assert_contains "$out" "profile: --harness 'pi' --model 'kiro/auto'" "a sampled experiment takes the task over a higher-priority route"
+assert_contains "$out" 'class: kiro-auto  family=kiro-auto  experiment' "the chosen experiment is marked"
+lane_quota codex=0.5
+run_lane code out err "$BRIEF" --lane standard
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "an unranked sampled experiment yields to the ranked pool"
+jq '.classes["kiro-auto"].experiment.share = 0.01' "$RULES" > "$TMP_ROOT/rare.json" && cp "$TMP_ROOT/rare.json" "$RULES"
+lane_quota codex=0.5 kiro=0.9
+EXP_BRIEF="$TMP_ROOT/exp-brief.md"
+found=''
+for variant in 1 2 3 4 5 6 7 8 9 10; do
+  printf '# Task\nRename the pager helper, variant %s.\n' "$variant" > "$EXP_BRIEF"
+  run_lane code out err "$EXP_BRIEF" --lane standard
+  case "$out" in *'-> not sampled'*) found=$variant; break ;; esac
+done
+[ -n "$found" ] || fail "no brief variant was left unsampled at a 1% share"
+assert_contains "$out" 'class=kiro-auto family=kiro-auto experiment  -> not eligible: experiment not sampled for this task' "an unsampled experiment is excluded"
+assert_contains "$out" "profile: --harness 'codex'" "an unsampled experiment never takes the task"
+first=$out
+run_lane code out err "$EXP_BRIEF" --lane standard
+[ "$out" = "$first" ] || fail "the same brief must sample the same way on every run"
+pass "an experiment class is sampled per brief and marked when chosen"
+
+# Jev may pick a lane rule: the lane resolves exactly as with --lane.
+cp "$TEMPLATE" "$RULES"
+lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
+jq -n '{model: "jev-1.13.0", usage: {input_tokens: 9, output_tokens: 3},
+  answers: {rule: {type: "choice", choice: "rule_6", confidence: 0.92,
+    probabilities: ({default: 0.01, rule_1: 0.01, rule_2: 0.01, rule_3: 0.01, rule_4: 0.01, rule_5: 0.01, rule_6: 0.93, rule_7: 0.01, rule_8: 0})}}}' > "$RESPONSE"
+reset_log
+TYPESAFE_API_KEY=$KEY run_lane code out err "$BRIEF" --project xo
+assert_contains "$out" 'confidence: 0.92' "the Choice answer is still reported"
+assert_contains "$out" 'lane: scoped  order=pool' "a picked lane rule resolves its classes"
+assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "the picked lane chooses its route in code"
+jq '.body = 1' "$LOG/body" >/dev/null 2>&1 || fail "the lane path still sent one Choice request"
+pass "a lane rule chosen by the Choice answer resolves like a named lane"
+
+# A second opinion on a profile rule escalates: it has no families to exclude.
+printf '{"classes":{"x":{"family":"gpt","routes":[{"harness":"codex"}]}},"rules":[{"when":"Coding","use":{"harness":"claude"}}]}\n' > "$RULES"
+jq -n '{model: "jev-1.13.0", answers: {rule: {type: "choice", choice: "rule_1", confidence: 0.9, probabilities: {rule_1: 0.9, default: 0.1}}}}' > "$RESPONSE"
+lane_quota claude=0.3
+TYPESAFE_API_KEY=$KEY run_lane code out err "$BRIEF" --exclude-family gpt
+assert_contains "$out" 'status: escalate' "a second opinion on a profile rule escalates"
+assert_contains "$out" 'a second opinion needs a lane whose classes declare model families' "the escalation explains why"
+pass "a second opinion needs a lane"
+
+# Usage and configuration errors stay actionable.
+cp "$TEMPLATE" "$RULES"
+run_lane code out err "$BRIEF" --lane nope
+expect_code 2 "$code" "an unknown lane is a usage error"
+assert_contains "$err" 'unknown lane: nope' "the unknown lane is named"
+jq '.classes["muse-spark"].routes[0] |= del(.provider)' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane bulk
+expect_code 2 "$code" "a multi-provider class route without provider is refused"
+assert_contains "$err" 'class muse-spark profiles whose harness lacks one authoritative provider family require provider: opencode' "the class is named"
+jq '.rules[0].classes += ["missing-class"]' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane judgment
+expect_code 2 "$code" "an undeclared class is a configuration error"
+assert_contains "$err" 'lane names an undeclared class: missing-class' "the undeclared class is named"
+jq '.classes["grok-high"].routes[0].effort = "xhigh"' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane standard
+expect_code 2 "$code" "an unsupported class route effort is refused"
+assert_contains "$err" 'each class route effort must be supported by its harness and model' "the route effort error is explicit"
+rm -f "$RULES"
+run_lane code out err "$BRIEF" --lane standard
+expect_code 2 "$code" "--lane without a rules file is a usage error"
+pass "lane usage and configuration errors exit 2 with an actionable reason"
+cp "$BASE_RULES" "$RULES"
+
 printf '# all fm-dispatch-resolve tests passed\n'

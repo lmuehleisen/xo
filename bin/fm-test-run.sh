@@ -1586,7 +1586,7 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-quota-choose.test.sh"
       printf '%s\n' "__script__:fm-dispatch-resolve.test.sh"
       ;;
-    bin/fm-codex-catalog-lib.sh)
+    bin/fm-codex-catalog-lib.sh|bin/fm-dispatch-lanes-lib.sh)
       printf '%s\n' session-bootstrap
       printf '%s\n' "__script__:fm-dispatch-resolve.test.sh"
       printf '%s\n' "__script__:fm-spawn-dispatch-profile.test.sh"

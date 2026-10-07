@@ -189,6 +189,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-quota-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+# shellcheck source=bin/fm-dispatch-lanes-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-dispatch-lanes-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-codex-catalog-lib.sh disable=SC1091
@@ -1092,7 +1094,7 @@ crew_dispatch_validate() {
   fi
   # Codex max follows the installed catalog (bin/fm-codex-catalog-lib.sh).
   codex_max_ok=$({ jq -r '.. | objects | select(.harness == "codex" and .effort == "max") | .model | strings' "$file" 2>/dev/null || true; } | fm_codex_max_allowed_json)
-  err=$(jq -r --argjson typed "$typed_active" --argjson codex_max_ok "$codex_max_ok" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" '
+  err=$(jq -r --argjson typed "$typed_active" --argjson codex_max_ok "$codex_max_ok" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_DISPATCH_LANES_JQ"'
     def verified($h): $verified_harnesses | index($h);
     def provider_id($p): ($p | type) == "string" and ($p | test($provider_re));
     def effort_ok($h; $m; $e):
@@ -1116,7 +1118,8 @@ crew_dispatch_validate() {
       end;
     def configured_profiles:
       ([(.rules // [])[]? | profiles(.use?)[]?]
-        + (if has("default") then [profiles(.default)[]?] else [] end));
+        + (if has("default") then [profiles(.default)[]?] else [] end)
+        + dispatch_class_routes);
     def malformed_optional_fields($items):
       ($items | any(has("model") and (((.model | type) != "string") or (.model | length) == 0)))
       or ($items | any(has("effort") and (((.effort | type) != "string") or (.effort | length) == 0)))
@@ -1146,7 +1149,8 @@ crew_dispatch_validate() {
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"
-    elif [(.rules // [])[]? | select((.use? | type) != "object" and (.use? | type) != "array")] | length > 0 then "each rule needs use"
+    elif (dispatch_lanes_error // null) != null then dispatch_lanes_error
+    elif [(.rules // [])[]? | select(has("classes") | not) | select((.use? | type) != "object" and (.use? | type) != "array")] | length > 0 then "each rule needs use"
     elif [(.rules // [])[]? | select((.use? | type) == "array" and (.use | length) == 0)] | length > 0 then "each rule needs at least one use profile"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select(type != "object")] | length > 0 then "each use profile must be an object"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length > 0 then "each use profile needs harness"
@@ -1187,7 +1191,7 @@ crew_dispatch_validate() {
     return 0
   fi
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
-    jq -r '
+    jq -r "$FM_DISPATCH_LANES_JQ"'
     def profile($p):
       ($p.harness | tostring)
       + (if ($p.model? != null) then "/" + ($p.model | tostring)
@@ -1199,8 +1203,16 @@ crew_dispatch_validate() {
         (($selector // "quota-balanced") + "[" + ([$value[] | profile(.)] | join(", ")) + "]")
       else profile($value)
       end;
+    def lane_set($rule):
+      "lane " + $rule.lane + " " + ($rule.order // "pool") + "["
+      + ([dispatch_lane_refs($rule)[] | .class + (if .gate then " (" + .gate + ")" else "" end)] | join(", ")) + "]";
     (["BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json"]
-      + [(.rules // [])[]? | "BOOTSTRAP_INFO: crew dispatch rule: " + (.when | tostring) + " -> " + profile_set(.use; .select?)]
+      + [(.rules // [])[]? | "BOOTSTRAP_INFO: crew dispatch rule: " + (.when | tostring) + " -> "
+          + (if has("classes") then lane_set(.) else profile_set(.use; .select?) end)]
+      + [(.classes // {}) | to_entries[] | "BOOTSTRAP_INFO: crew dispatch class: " + .key + " family=" + .value.family
+          + (if .value.experiment then " experiment share=" + (.value.experiment.share | tostring) else "" end)
+          + (if .value.data_policy then " data_policy=" + .value.data_policy else "" end)
+          + " -> [" + ([.value.routes[] | profile(.)] | join(", ")) + "]"]
       + (if has("default") then ["BOOTSTRAP_INFO: crew dispatch default: " + profile_set(.default; null)] else [] end))
     | .[]
   ' "$file"

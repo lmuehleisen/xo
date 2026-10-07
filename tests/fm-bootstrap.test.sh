@@ -1109,6 +1109,28 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   expect=$'BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json\nBOOTSTRAP_INFO: crew dispatch rule: fresh news -> grok\nBOOTSTRAP_INFO: crew dispatch rule: big feature -> quota-balanced[claude/claude-sonnet-5/high, codex/gpt-5.5/high]\nBOOTSTRAP_INFO: crew dispatch rule: legacy feature -> quota-balanced[claude, codex]\nBOOTSTRAP_INFO: crew dispatch default: quota-balanced[pi/anthropic/claude-sonnet-5/high, grok/grok-4.5/high]'
   [ "$out" = "$expect" ] || fail "active dispatch verbose info block mismatch"$'\n'"expected: $expect"$'\n'"actual:   $out"
   pass "bootstrap surfaces active crew-dispatch rules only as verbose BOOTSTRAP_INFO"
+
+  printf '%s\n' '{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"},{"harness":"pi","model":"openai-codex/gpt-5","effort":"high","provider":"codex"}]},"auto":{"family":"auto","experiment":{"share":0.25},"routes":[{"harness":"pi","model":"kiro/auto","provider":"kiro"}]},"free":{"family":"free","data_policy":"public","routes":[{"harness":"opencode","model":"opencode/free","provider":"opencode"}]}},"data_policies":{"public":{"allow_tags":["public-research"]}},"rules":[{"lane":"judgment","order":"ordered","when":"design calls","classes":["sol"]},{"lane":"standard","when":"ordinary work","classes":["sol",{"class":"auto","gate":"others-ahead-of-pace"},"free"]}]}' > "$case_dir/home/config/crew-dispatch.json"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_BOOTSTRAP_VERBOSE_FACTS=1 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  expect=$'BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json\nBOOTSTRAP_INFO: crew dispatch rule: design calls -> lane judgment ordered[sol]\nBOOTSTRAP_INFO: crew dispatch rule: ordinary work -> lane standard pool[sol, auto (others-ahead-of-pace), free]\nBOOTSTRAP_INFO: crew dispatch class: sol family=gpt -> [codex/gpt-5/high, pi/openai-codex/gpt-5/high]\nBOOTSTRAP_INFO: crew dispatch class: auto family=auto experiment share=0.25 -> [pi/kiro/auto]\nBOOTSTRAP_INFO: crew dispatch class: free family=free data_policy=public -> [opencode/opencode/free]'
+  [ "$out" = "$expect" ] || fail "lane verbose info block mismatch"$'\n'"expected: $expect"$'\n'"actual:   $out"
+  pass "bootstrap surfaces lane rules and model classes as verbose BOOTSTRAP_INFO"
+}
+
+test_crew_dispatch_lanes_template_is_valid() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/dispatch-lanes-template"
+  mkdir -p "$case_dir/home/config" "$case_dir/codex-home"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  cp "$ROOT/docs/examples/crew-dispatch-lanes.json" "$case_dir/home/config/crew-dispatch.json"
+  printf '%s\n' '{"models":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"max"}]}]}' > "$case_dir/codex-home/models_cache.json"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    CODEX_HOME="$case_dir/codex-home" TYPESAFE_API_KEY=test-key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "the shipped lanes template must validate cleanly, got: $out"
+  pass "bootstrap accepts the shipped crew dispatch lanes template"
 }
 
 test_crew_dispatch_validation() {
@@ -1189,6 +1211,23 @@ default array profile without harness is flagged^{"default":[{"model":"gpt-5.5"}
 default array malformed effort is flagged^{"default":[{"harness":"codex","effort":3}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
 default profile floor without min_percent is flagged^{"default":[{"harness":"codex","floor":{"scope":"all_models"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile floor needs scope and min_percent 0..100
 default profile floor provider override is flagged^{"default":{"harness":"codex","floor":{"scope":"all_models","min_percent":50,"provider":"claude"}}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile floor needs scope and min_percent 0..100
+lane rule with classes is accepted^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol"]}]}^empty^
+gated pool lane is accepted^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex"}]},"flash":{"family":"gemini","routes":[{"harness":"agy","model":"gemini-3.8-flash-high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol",{"class":"flash","gate":"others-ahead-of-pace"}]}]}^empty^
+lane undeclared class is flagged^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol","nope"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - lane names an undeclared class: nope
+rule with use and classes is flagged^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol"],"use":{"harness":"codex"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - a rule takes either use or classes, not both
+lane on a use rule is flagged^{"rules":[{"lane":"standard","when":"ordinary work","use":{"harness":"codex"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - lane and order apply only to a rule with classes
+duplicate lane names are flagged^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol"]},{"lane":"standard","when":"other work","classes":["sol"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - lane names must be unique
+unknown lane gate is flagged^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":[{"class":"sol","gate":"sometimes"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unknown gate: sometimes
+gate in an ordered lane is flagged^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"judgment","order":"ordered","when":"design","classes":[{"class":"sol","gate":"others-ahead-of-pace"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - a gate applies only in a pool lane
+unknown lane order is flagged^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"judgment","order":"random","when":"design","classes":["sol"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - lane order must be ordered or pool
+class without family is flagged^{"classes":{"sol":{"routes":[{"harness":"codex"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each class needs family matching ^[a-z0-9]+(-[a-z0-9]+)*$
+class route unverified harness is flagged^{"classes":{"sol":{"family":"gpt","routes":[{"harness":"spaceship"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unverified harness: spaceship
+class route unsupported effort is flagged^{"classes":{"grok":{"family":"grok","routes":[{"harness":"grok","model":"grok-4","effort":"xhigh"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["grok"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: grok:xhigh
+class experiment share out of range is flagged^{"classes":{"auto":{"family":"auto","experiment":{"share":0},"routes":[{"harness":"pi","model":"kiro/auto","provider":"kiro"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["auto"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - class experiment needs share greater than 0 and at most 1
+class undeclared data policy is flagged^{"classes":{"sol":{"family":"gpt","data_policy":"may-train","routes":[{"harness":"codex"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - class data_policy must name a declared data policy
+data policy tag both allowed and denied is flagged^{"classes":{"sol":{"family":"gpt","data_policy":"open","routes":[{"harness":"codex"}]}},"data_policies":{"open":{"allow_tags":["public"],"deny_tags":["public"]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - a data policy tag must appear only once across allow_tags and deny_tags
+one route through two lane classes is flagged^{"classes":{"a":{"family":"gpt","routes":[{"harness":"codex"}]},"b":{"family":"gpt","routes":[{"harness":"codex"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["a","b"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - a lane must not reach the same harness, model, and effort through two classes
+one model under two families is flagged^{"classes":{"a":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]},"b":{"family":"other","routes":[{"harness":"codex","model":"gpt-5","effort":"low"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["a"]},{"lane":"scoped","when":"small work","classes":["b"]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - a harness and model routed by more than one class must keep one family
 ROWS
 
   case_dir="$TMP_ROOT/dispatch-opt-in-gate"
@@ -1313,4 +1352,5 @@ test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_crew_dispatch_lanes_template_is_valid
 test_crew_dispatch_codex_max_follows_catalog

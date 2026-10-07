@@ -1096,7 +1096,7 @@ The inheritance allowlist remains owned by [`bin/fm-config-inherit-lib.sh`](../b
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
 Firstmate chooses the best matching rule with judgment; shell scripts do not match the natural-language rules.
-Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
+Firstmate resolves the rule's profile object or array, or a lane rule's model classes, under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
 
 **Spawn requirements**
 
@@ -1134,7 +1134,7 @@ This section is the single owner of the canonical schema and its per-field seman
 | Field | Requirement |
 | --- | --- |
 | `rules` | May be absent or empty for a default-only configuration. |
-| Rule `when` and `use` | Required for each rule. |
+| Rule `when` and `use` | Required for each rule, except that a [lane rule](#lanes-and-model-classes) takes `classes` instead of `use`. |
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
@@ -1192,8 +1192,8 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 **Validation and diagnostics**
 
 - When the file exists, bootstrap validates it with `jq`.
-- Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-- Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
+- Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule and per model class, and one fact for the optional default profile set.
+- Malformed JSON, malformed rules, an empty or malformed profile array, a malformed lane, class, or data policy, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; [`bin/fm-dispatch-lanes-lib.sh`](../bin/fm-dispatch-lanes-lib.sh) owns the lane structure checks that bootstrap and the resolver share.
 - While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those inert declarations preserve the pre-existing bootstrap behavior.
 - Missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 - While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
@@ -1202,12 +1202,76 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
+### Lanes and model classes
+
+A lane rule lets the configuration choose the model and leaves the provider to code: the rule lists model classes, and code picks among each class's provider routes by quota.
+Lane rules and profile rules can share one file, and a file with no `classes` keeps the schema above unchanged.
+[`docs/examples/crew-dispatch-lanes.json`](examples/crew-dispatch-lanes.json) is a complete lane configuration; copy it into local `config/crew-dispatch.json` and add the home's own projects to its data policy's `allow_projects` where that policy fits them.
+
+```json
+{
+  "classes": {
+    "<class>": {
+      "family": "<model family>",
+      "routes": [
+        { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>", "provider": "<optional quota-axi provider>", "floor": { "scope": "<quota-axi scope>", "min_percent": 50 } }
+      ],
+      "experiment": { "share": 0.25, "why": "<optional>" },
+      "data_policy": "<optional policy name>",
+      "why": "<optional rationale>"
+    }
+  },
+  "data_policies": {
+    "<policy>": { "allow_projects": ["<project>"], "allow_tags": ["<tag>"], "deny_tags": ["<tag>"], "why": "<optional>" }
+  },
+  "rules": [
+    {
+      "lane": "<lane name>",
+      "when": "<natural-language condition describing a kind of task>",
+      "order": "ordered",
+      "approval": "captain",
+      "classes": ["<class>", { "class": "<class>", "gate": "others-ahead-of-pace" }]
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| Class `family` | Required; the model family a second opinion excludes. A harness and model routed by more than one class must keep one family. |
+| Class `routes` | Required non-empty array of profiles, each one way to reach the class's model, validated exactly like a `use` profile. |
+| Class `experiment` | Optional; marks a trial class sampled for `share` (above 0, at most 1) of the tasks its lanes resolve. |
+| Class `data_policy` | Optional; names the `data_policies` entry a task must satisfy before any route of the class is eligible. |
+| Policy `allow_projects`, `allow_tags`, `deny_tags` | Projects and data tags the policy admits, and data tags it always refuses; a tag appears in at most one list. |
+| Rule `lane` | Required on a rule with `classes`; a unique name that addresses the lane directly. |
+| Rule `classes` | Replaces `use`; a non-empty list of class names or `{ "class", "gate" }` objects. A rule takes `use` or `classes`, never both, and a lane reaches each harness, model, and effort through at most one class. |
+| Rule `order` | `pool` (the default) or `ordered`. |
+| Class reference `gate` | Only `others-ahead-of-pace`, and only in a pool lane. |
+
+Class, family, lane, policy, and tag names match `^[a-z0-9]+(-[a-z0-9]+)*$`.
+A lane rule's `when`, `approval`, `min_confidence`, and `floor` keep their meanings from the rule schema above.
+
+**How a lane resolves**
+
+Every class route is evaluated like a profile: its provider, floor, quota row, runway, and `spendPriority`.
+
+- An `ordered` lane takes the first class with any eligible route and ranks only inside that class; an eligible but unranked route keeps its class first rather than falling through to the next class.
+- A `pool` lane ranks every eligible route of every class together.
+- A class gated `others-ahead-of-pace` stays eligible only while every rankable route of the lane's ungated classes has a negative `spendPriority` (spending ahead of pace) and the gated class's own best route does not; with no rankable ungated route the gate stays closed.
+- An experiment class is sampled from the task text's checksum, so the same brief always samples the same way; a sampled experiment with a rankable route takes the task, and an unsampled one is not eligible.
+- A class with a `data_policy` is eligible only when the task's project is in `allow_projects` or one of its data tags is in `allow_tags`, and never when one of its data tags is in `deny_tags`.
+- A second opinion resolves the originating task's lane again with that task's model family excluded; every experiment class is excluded from a second opinion too.
+
+`fm-spawn.sh` records `model_family=` in task meta when the launched harness and model match a class route, which is the family a later second opinion excludes; a launch outside every class records none and is never refused for it.
+Experiments such as evaluation runs or calibration arms are exempt from lanes and launch with explicit `--harness`, `--model`, and `--effort` flags.
+
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 
 `bin/fm-dispatch-resolve.sh` resolves one concrete crewmate or scout profile from a written brief with typesafe.ai's System One model (Jev), so the rule match that firstmate otherwise reasons out in its own context becomes one short tool turn.
 It is off unless `TYPESAFE_API_KEY` is non-empty in the calling environment or the home's gitignored `.env` holds a `TYPESAFE_API_KEY=` line; the environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
+A named `--lane` is the one exception: it sends nothing, so it runs without the key, as described under Lane resolution below.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
 
 Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFIG_OVERRIDE` selects the config directory for tests and specialized setup like the other scripts.
@@ -1222,7 +1286,7 @@ Firstmate invokes the resolve path directly after writing the brief, without a p
 
 **What the model receives**
 
-When on and at least one rule exists, the tool sends the project name and the brief's task-specific text as state and asks one Choice question whose options are every rule's `when` plus the fixed neutral option for no matching rule; the model never sees quota, catalogs, `why`, `use`, approvals, or confidence floors.
+When on and at least one rule exists, the tool sends the project name and the brief's task-specific text as state and asks one Choice question whose options are every rule's `when` plus the fixed neutral option for no matching rule; the model never sees quota, catalogs, `why`, `use`, classes, data policies, approvals, or confidence floors.
 The task-specific text is the brief's `## Captain's intent` and `## Firstmate spec` sections under `# Task` that `bin/fm-brief.sh` scaffolds, read by the same parser that feeds `fm-spawn.sh` validation and the no-mistakes `--intent` contract; a brief with neither section is sent whole.
 
 When the sections are sent from a scout brief, the line `Brief kind: scout (report only)` comes first, taken from the scaffold's scout contract line; ship briefs and briefs sent whole get no kind line.
@@ -1294,19 +1358,34 @@ An explicit Pi `provider: kiro` binds `included:credit_monthly` as one included 
 Pools are never summed, and Devin's included allowance has no implicit whole-provider binding.
 
 
+**Lane resolution**
+
+When the picked rule is a lane, code resolves its classes as [Lanes and model classes](#lanes-and-model-classes) describes, from the same quota snapshot and completion horizon.
+
+```sh
+bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name> --lane <lane> [--data-tag <tag>]... [--exclude-family <family>]
+```
+
+- `--lane <name>` resolves that lane rule directly, with no Choice request, so it needs no `TYPESAFE_API_KEY`, sends nothing, and makes no call besides the one quota read.
+- `--data-tag <tag>` names a data tag the task carries, repeatable; a class's data policy admits or refuses the task from the project and these tags.
+- `--exclude-family <family>` asks for a second opinion: it drops every class of that family and every experiment class, and escalates when the resolved rule is not a lane.
+
+Lane output adds a `lane:` line, one `experiment:` line per experiment class with its sampling result, each candidate's class and family, and a `class:` line naming the chosen class, its family, and whether it is an experiment.
+A lane's `approval` gate escalates with every candidate printed, so the captain sees the routes before giving the per-task word.
+
 **Outcomes and exit status**
 
 | Result | Meaning |
 | --- | --- |
 | `clear` | A `profile:` line ready for `fm-spawn.sh`. |
 | `ambiguous` | Confidence below the floor with no runner-up taken. |
-| `escalate` | An approval-gated rule, unverifiable rule floor, nothing rankable, or a genuine tie. |
+| `escalate` | An approval-gated rule, unverifiable rule floor, nothing rankable, a genuine tie, or a second opinion on a rule that is not a lane. |
 | `error` | API, network, malformed response metadata, rendering, or quota-axi failure. |
 
 Every result above exits 0.
 
 - Response probabilities must contain exactly every offered choice, use numeric values from 0 through 1, and sum to approximately 1 within 0.01.
-- Only a usage or configuration error exits 2: an unreadable brief, an existing but unreadable or malformed canonical rules file, or missing `jq`, each reported and never selected around.
+- Only a usage or configuration error exits 2: an unreadable brief, an existing but unreadable or malformed canonical rules file, missing `jq`, an unknown `--lane`, or an `--exclude-family` or `--data-tag` no class or policy declares, each reported and never selected around.
 - Missing `curl` is a normal structured `error` outcome with exit 0 so firstmate uses today's routing.
 
 **Firstmate retains the dispatch decision**

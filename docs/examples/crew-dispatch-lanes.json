@@ -1,0 +1,166 @@
+{
+  "classes": {
+    "opus-xhigh": {
+      "family": "claude",
+      "routes": [
+        { "harness": "claude", "model": "claude-opus-5-5", "effort": "xhigh" },
+        { "harness": "pi", "model": "kiro/claude-opus-5.5", "effort": "xhigh", "provider": "kiro" }
+      ]
+    },
+    "opus-high": {
+      "family": "claude",
+      "routes": [
+        { "harness": "claude", "model": "claude-opus-5-5", "effort": "high" },
+        { "harness": "pi", "model": "kiro/claude-opus-5.5", "effort": "high", "provider": "kiro" }
+      ]
+    },
+    "opus-medium": {
+      "family": "claude",
+      "routes": [
+        { "harness": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+        { "harness": "pi", "model": "kiro/claude-opus-5.5", "effort": "medium", "provider": "kiro" }
+      ]
+    },
+    "opus-ultracode": {
+      "family": "claude",
+      "routes": [
+        { "harness": "claude", "model": "claude-opus-5-5", "effort": "xhigh" }
+      ],
+      "why": "Launch with fm-spawn.sh --ultracode once approved; ultracode is a Claude Code feature, so this class has no Kiro route."
+    },
+    "astra-xhigh": {
+      "family": "gpt",
+      "routes": [
+        { "harness": "codex", "model": "gpt-6-astra", "effort": "xhigh" }
+      ]
+    },
+    "sol-max": {
+      "family": "gpt",
+      "routes": [
+        { "harness": "codex", "model": "gpt-6.1-sol", "effort": "max" },
+        { "harness": "devin", "model": "gpt-6-1-sol-max", "provider": "devin" }
+      ]
+    },
+    "sol-xhigh": {
+      "family": "gpt",
+      "routes": [
+        { "harness": "codex", "model": "gpt-6.1-sol", "effort": "xhigh" },
+        { "harness": "devin", "model": "gpt-6-1-sol-xhigh", "provider": "devin" }
+      ]
+    },
+    "sol-high": {
+      "family": "gpt",
+      "routes": [
+        { "harness": "codex", "model": "gpt-6.1-sol", "effort": "high" },
+        { "harness": "devin", "model": "gpt-6-1-sol-high", "provider": "devin" }
+      ]
+    },
+    "sol-ultra": {
+      "family": "gpt",
+      "routes": [
+        { "harness": "pi", "model": "codex-native/gpt-6.1-sol", "effort": "ultra", "provider": "codex" }
+      ]
+    },
+    "luna-max": {
+      "family": "gpt",
+      "routes": [
+        { "harness": "codex", "model": "gpt-6-luna", "effort": "max" },
+        { "harness": "devin", "model": "gpt-6-luna-max", "provider": "devin" }
+      ]
+    },
+    "grok-high": {
+      "family": "grok",
+      "routes": [
+        { "harness": "grok", "model": "grok-4.7", "effort": "high" }
+      ]
+    },
+    "gemini-flash-high": {
+      "family": "gemini",
+      "routes": [
+        { "harness": "agy", "model": "gemini-3.8-flash-high" }
+      ]
+    },
+    "muse-spark": {
+      "family": "muse",
+      "data_policy": "may-train",
+      "routes": [
+        { "harness": "opencode", "model": "opencode/muse-spark-1.3-contributor-free", "provider": "opencode" }
+      ],
+      "why": "Free contributor tier that may retain data for training; quota-axi measures no pool for it, so it stays eligible but unranked."
+    },
+    "swe-2": {
+      "family": "swe",
+      "routes": [
+        { "harness": "devin", "model": "swe-2-max", "provider": "devin" }
+      ]
+    },
+    "kiro-auto": {
+      "family": "kiro-auto",
+      "experiment": { "share": 0.25, "why": "Compare its results against the other Standard routes before widening it." },
+      "routes": [
+        { "harness": "pi", "model": "kiro/auto", "provider": "kiro" }
+      ]
+    }
+  },
+  "data_policies": {
+    "may-train": {
+      "allow_projects": ["xo", "quota-axi"],
+      "allow_tags": ["public-research", "synthetic-eval", "side-project", "public-web-enrichment", "captain-approved"],
+      "deny_tags": ["person-data", "credentials", "private-notes", "client-confidential"],
+      "why": "The route may retain prompts for training: public or synthetic material only, never personal, credential, private, or client data."
+    }
+  },
+  "rules": [
+    {
+      "lane": "judgment",
+      "when": "Design or architecture decisions, product and taste calls such as creative or marketing work, ambiguous investigations, or an important final review of a risky, cross-cutting, security-sensitive, or money-touching change.",
+      "order": "ordered",
+      "classes": ["opus-xhigh", "astra-xhigh"]
+    },
+    {
+      "lane": "technical-deep",
+      "when": "Difficult debugging whose cause is still unknown after a first look, or work crossing concurrency, security, or process-state boundaries that needs intricate systems or code reasoning.",
+      "order": "ordered",
+      "classes": ["opus-xhigh", "sol-max", "astra-xhigh"]
+    },
+    {
+      "lane": "high-quality-standard",
+      "when": "Ordinary substantive implementation whose output quality materially matters because customers or the public see it, or it is judged by taste rather than tests.",
+      "classes": ["opus-high", "sol-xhigh"]
+    },
+    {
+      "lane": "high-quality-scoped",
+      "when": "A narrow, clearly bounded task whose polish, taste, or customer-facing quality materially matters, such as a well-specified user interface component.",
+      "classes": ["sol-high", "opus-medium", "muse-spark"]
+    },
+    {
+      "lane": "standard",
+      "when": "Ordinary substantive features or fixes that need meaningful implementation judgment.",
+      "classes": [
+        "sol-high",
+        "opus-medium",
+        "muse-spark",
+        "grok-high",
+        { "class": "gemini-flash-high", "gate": "others-ahead-of-pace" },
+        "swe-2",
+        "kiro-auto"
+      ]
+    },
+    {
+      "lane": "scoped",
+      "when": "A narrow, clearly bounded implementation or one specific review question whose outcome is easy to verify and that the model should complete without struggling.",
+      "classes": ["luna-max", "gemini-flash-high", "muse-spark", "swe-2"]
+    },
+    {
+      "lane": "bulk",
+      "when": "Repetitive cheap units of work such as reruns, bulk edits, or mechanical migrations.",
+      "classes": ["luna-max", "swe-2", "gemini-flash-high", "muse-spark"]
+    },
+    {
+      "lane": "long-horizon",
+      "when": "Prolonged independent execution over hours that needs its own decomposition, recovery, or subagents.",
+      "approval": "captain",
+      "classes": ["opus-ultracode", "sol-ultra"]
+    }
+  ]
+}
