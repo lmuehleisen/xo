@@ -1824,6 +1824,9 @@ _fm_composer_select_agy() {  # <plain-screen>
   first=$((FM_COMPOSER_SCAN_PI_OPEN + 1))
   last=$((FM_COMPOSER_SCAN_PI_CLOSE - 1))
   text=$(_fm_composer_screen_row "$first" "$plain")
+  # Herdr's styled visible read ends every row with CRLF; the terminator is
+  # not part of the prompt row.
+  text=${text%$'\r'}
   case "$text" in '>'|'>'\ *) ;; *) return 1 ;; esac
   footer=$(_fm_composer_screen_row "$((last + 2))" "$plain")
   # Typing hides the shortcut hint; accept-edits keeps its right-aligned mode

