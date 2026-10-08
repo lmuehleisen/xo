@@ -1635,18 +1635,21 @@ never_approve() {  # <reason>
 # A form a native pre-allow rule could run unreviewed (FM_POLICY_PREALLOW_GUARD
 # in the header): refused, since no prompt would follow.
 # 0 when the current segment (E/EV) is `python|python3 -c <literal code>`
-# whose code names no construct that could run, load, or hand off the bytes
-# it reads: exec, eval, compile, __import__, importlib, runpy, subprocess,
-# os.system, os.exec*, os.spawn*, popen, pickle, marshal, shelve, ctypes, or
-# code.interact. A screen, not a boundary - the judge still reads the code.
+# whose code names, as a whole word, no construct that could run, load, store,
+# or hand off the bytes it reads: dynamic execution (exec, eval, compile,
+# __import__, importlib, runpy, builtins, any dunder), processes (subprocess,
+# os, spawn*, popen), file or stream output (open, write, writelines, Path,
+# pathlib, shutil, io, tempfile, codecs), deserialization (pickle, marshal,
+# shelve), introspection (getattr, setattr, delattr, globals, locals, vars,
+# sys.modules), native or interactive escapes (ctypes, interact, breakpoint),
+# or network clients (socket, http, urllib.request, requests). A parse
+# program reads stdin and prints; its printed output stays fetched bytes for
+# the next pipe stage. A screen, not a boundary - the judge still reads the
+# code.
 fetch_parse_only_python() {
   [ "${E[1]-}" = -c ] && [ "${#E[@]}" -ge 3 ] && [ "${EV[1]-1}" = 0 ] && [ "${EV[2]-1}" = 0 ] || return 1
-  case "${E[2]}" in
-    *exec*|*eval*|*compile*|*__import__*|*importlib*|*runpy*|*subprocess*|\
-    *os.system*|*spawn*|*popen*|*pickle*|*marshal*|*shelve*|*ctypes*|*interact*)
-      return 1 ;;
-  esac
-  return 0
+  case "${E[2]}" in *__*) return 1 ;; esac
+  ! printf '%s\n' "${E[2]}" | LC_ALL=C grep -Eq '(^|[^[:alnum:]_])(exec|eval|compile|importlib|runpy|builtins|subprocess|os|spawn[[:alnum:]_]*|popen|open|write|writelines|Path|pathlib|shutil|io|tempfile|codecs|pickle|marshal|shelve|getattr|setattr|delattr|globals|locals|vars|sys[[:space:]]*\.[[:space:]]*modules|ctypes|interact|breakpoint|socket|http|urllib[[:space:]]*\.[[:space:]]*request|requests)([^[:alnum:]_]|$)'
 }
 
 preallow_refuse() {  # <what> <fix>
@@ -3033,19 +3036,25 @@ brief_intent() { brief_section '^## Captain.s intent' 4000; }
 brief_spec() { brief_section '^## Firstmate spec' 4000; }
 
 # The files the generated brief directs its worker to read, one physical path
-# per line: every backticked absolute path on a brief line saying "read and
-# follow" (the scaffold's Definition of done names captain-hold-lifecycle that
-# way), kept only when it resolves to a regular file inside firstmate's own
-# .agents/skills tree beside this library. The worker can write its data
-# directory, so the skills-tree bound - not the brief text - is what keeps a
-# rewritten brief from directing reads anywhere else.
+# per line: the backticked absolute path that directly follows "read and
+# follow" on a brief line (the scaffold's Definition of done names
+# captain-hold-lifecycle that way), skipping a line that negates the
+# direction and any path the brief's read constraints mention, and kept only
+# when it resolves to a regular file inside firstmate's own .agents/skills
+# tree beside this library. The worker can write its data directory, so the
+# skills-tree bound - not the brief text - is what keeps a rewritten brief
+# from directing reads anywhere else.
 brief_directed_reads() {
   [ -n "$BRIEF" ] && [ -r "$BRIEF" ] || return 0
-  local skills p abs
+  local skills p abs constraints
   skills=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.agents/skills" 2>/dev/null && pwd -P) || return 0
+  constraints=$(brief_read_constraints)
   # shellcheck disable=SC2016 # the backticks are literal brief markup
-  LC_ALL=C grep -i 'read and follow' "$BRIEF" 2>/dev/null | head -n 20 \
-    | LC_ALL=C grep -o '`/[^`]*`' | tr -d '`' | while IFS= read -r p; do
+  LC_ALL=C grep -i 'read and follow `/' "$BRIEF" 2>/dev/null | head -n 20 \
+    | LC_ALL=C grep -i -v -E '(^|[^[:alnum:]_])(not|never|don.?t|cannot|without|avoid)([^[:alnum:]_].*)?read and follow' \
+    | LC_ALL=C sed -n 's/.*[Rr][Ee][Aa][Dd] [Aa][Nn][Dd] [Ff][Oo][Ll][Ll][Oo][Ww] `\(\/[^`]*\)`.*/\1/p' \
+    | while IFS= read -r p; do
+      case "$constraints" in *"$p"*) continue ;; esac
       abs=$(physical_target "$p" '' 0) || continue
       abs=$(resolve_symlink_chain "$abs") || continue
       [ -f "$abs" ] && strictly_inside "$abs" "$skills" && printf '%s\n' "$abs"
