@@ -1849,7 +1849,7 @@ fi')
 }
 
 test_task_script_interpreter_options() {
-  local policy dir wt script saved attempts cmd
+  local policy dir wt script saved attempts cmd n
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
   policy=$(new_case script-options '
 prompt=
@@ -1904,6 +1904,23 @@ fi')
     hook "$policy" permission-request exec "$cmd"
     if grep -qF 'Script this call runs:' "$saved"; then fail "unknown interpreter option forms must not select a guessed script: $cmd"; fi
   done
+  # An executable named like an interpreter can be a mutable task script.
+  # shellcheck disable=SC2016 # literal task launcher source
+  printf '#!/bin/sh\n# REVIEW_SCRIPT_MARKER TASK_INTERPRETER_MARKER\nexec /bin/bash "$@"\n' > "$wt/bash"
+  chmod +x "$wt/bash"
+  n=$(cat "$attempts")
+  hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/one'
+  grep -qF TASK_INTERPRETER_MARKER "$saved" || fail "a task-owned interpreter launcher must show its own body"
+  hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/one'
+  hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/two'
+  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "task-owned launchers must retain exact input"
+  printf '# launcher edit\n' >> "$wt/bash"
+  hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/two'
+  [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "a launcher edit must invalidate its exact approval"
+  PATH="$wt:$PATH" hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/one'
+  grep -qF TASK_INTERPRETER_MARKER "$saved" || fail "PATH-resolved task launchers must show their own body"
+  PATH="$wt:$PATH" hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/two'
+  [ "$(cat "$attempts")" = "$((n + 5))" ] || fail "PATH-resolved task launchers must also retain exact input"
   pass "fm-devin-permission-policy: option operands identify the actual script; snapshots/cache need no file utility"
 }
 
@@ -2063,6 +2080,11 @@ echo "DECLINE: inspect scope"' "$grants")
   if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "inline code arguments must not be mistaken for a script"; fi
   hook "$policy" permission-request exec "bash .scratch/tf.sh < /dev/null"
   if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "stdin interpreter forms must keep today's behavior"; fi
+  printf "# Task\n## Captain's intent\nDo not read .scratch/tf.sh.\n## Firstmate spec\nKeep the change narrow.\n" > "$dir/data/t1/brief.md"
+  hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/one'
+  if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "read-restricted scripts must not be disclosed before judgment"; fi
+  hook "$policy" judge-probe exec 'bash .scratch/tf.sh fetch https://lookup.example/probe'
+  if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "the probe must also omit read-restricted script bodies"; fi
   pass "fm-devin-permission-policy: outside, escaping, oversized, binary and credential scripts are never shown"
 }
 

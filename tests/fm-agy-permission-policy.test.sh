@@ -1244,7 +1244,7 @@ exit 0')
 }
 
 test_task_script_contents_and_cache() {
-  local policy dir wt root saved attempts before
+  local policy dir wt root saved attempts before n
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
   policy=$(new_case script-context '
 prompt=
@@ -1303,16 +1303,6 @@ fi')
   [ "$(cat "$attempts")" = 11 ] || fail "cwd must remain part of the script cache key"
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 21 '{"WaitMsBeforeAsync":1000}'
   [ "$(cat "$attempts")" = 12 ] || fail "other tool fields must remain part of the script cache key"
-  cat > "$dir/data/t1/brief.md" <<'EOF'
-# Task
-## Captain's intent
-Fix the flaky test.
-## Firstmate spec
-Keep the change narrow.
-DO NOT READ sibling research directories.
-EOF
-  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 22
-  [ "$(cat "$attempts")" = 13 ] || fail "changed read exclusions must still invalidate cached approval"
 
   before=$(wc -l < "$dir/state/agy-permission-log.jsonl")
   hook "$policy" judge-probe run_command "'$wt/tf.sh' fetch https://lookup.example/probe" 23
@@ -1320,9 +1310,36 @@ EOF
   grep -qF https://lookup.example/probe "$saved" || fail "probe must still show the full input"
   [ "$(wc -l < "$dir/state/agy-permission-log.jsonl")" = "$before" ] || fail "script probe must not write the observer log"
 
+  cat > "$dir/data/t1/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Fix the flaky test.
+## Firstmate spec
+Keep the change narrow.
+DO NOT READ tf.sh.
+EOF
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 22
+  [ "$(cat "$attempts")" = 14 ] || fail "changed read exclusions must still invalidate cached approval"
+  denied "$OUT" || fail "the judge must hold this excluded script"
+  if grep -qF AGY_SCRIPT_CONTEXT_MARKER "$saved"; then fail "read-restricted script bodies must not be disclosed before judgment"; fi
+
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one && git merge origin/main" 24
   denied "$OUT" || fail "always-decline actions must still hold beside a script invocation"
   [ "$(cat "$attempts")" = 14 ] || fail "always-decline must skip judge and cache"
+
+  printf "# Task\n## Captain's intent\nFix the flaky test.\n## Firstmate spec\nKeep the change narrow.\n" > "$dir/data/t1/brief.md"
+  # shellcheck disable=SC2016 # literal task launcher source
+  printf '#!/bin/sh\n# AGY_SCRIPT_CONTEXT_MARKER AGY_TASK_INTERPRETER_MARKER\nexec /bin/bash "$@"\n' > "$wt/bash"
+  chmod +x "$wt/bash"
+  n=$(cat "$attempts")
+  hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/one' 31
+  grep -qF AGY_TASK_INTERPRETER_MARKER "$saved" || fail "agy must inspect a task-owned launcher's own body"
+  hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/one' 32
+  hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/two' 33
+  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "agy task-owned launchers must retain exact input"
+  printf '# launcher edit\n' >> "$wt/bash"
+  hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/two' 34
+  [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "an agy launcher edit must invalidate its exact approval"
   pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
 }
 

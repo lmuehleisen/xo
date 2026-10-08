@@ -40,7 +40,11 @@
 #   unknown options), is shown as data when it physically resolves inside WORKTREE,
 #   DATA_DIR, or TASKTMP and is a readable regular text file of at most 16384
 #   bytes. Credential paths, including granted env files and symlink targets,
-#   are never read. This is input for the judge, not a static approval or a
+#   are never read. Explicit brief read constraints omit automatic script
+#   context entirely; prose restrictions cannot prove disclosure is allowed.
+#   A task-owned interpreter executable is inspected as the launcher itself
+#   and keeps an exact invocation key, even when found through PATH.
+#   This is input for the judge, not a static approval or a
 #   grant: the same always-decline and credential rules govern script effects.
 #   The snapshot shown to the judge also supplies the cache's content hash.
 #   Each path/hash snapshot is shown once, with at most 65536 bytes of script
@@ -671,10 +675,34 @@ judge_script_path() {  # <word> <cwd>
 }
 
 judge_script_input() {
-  local k=0 i abs logical word root phys bytes content hash base snapshot prior context
+  local k=0 i abs logical word root phys bytes content hash base snapshot prior context launcher='' interpreter=0
   [ "${#E[@]}" -gt 0 ] || return 0
   base=${E[0]##*/}
   if plain_interpreter "$base"; then
+    [ "${EV[0]}" = 0 ] && [ "${EG[0]}" = 0 ] || return 0
+    word=${E[0]}
+    case "$word" in
+      */*) ;;
+      *) word=$(CDPATH='' cd -- "$CWD" 2>/dev/null && command -v -- "$word") || return 0 ;;
+    esac
+    logical=$(resolve_maybe_tilde "$word" 0 "$CWD" 2>/dev/null) || return 0
+    sensitive_text "$logical" && return 0
+    granted_env_file "$logical" && return 0
+    phys=$(judge_script_path "$word" "$CWD") || return 0
+    for root in "$WORKTREE" "$DATA_DIR" "$TASKTMP"; do
+      [ -n "$root" ] || continue
+      root=$(physical_target "$root" '' 1 2>/dev/null) || continue
+      if strictly_inside "$phys" "$root"; then launcher=$phys; break; fi
+    done
+    if [ -n "$launcher" ]; then
+      # A task can change this executable; its name proves no interpreter
+      # semantics. Inspect its own body and retain every invocation argument.
+      JUDGE_SCRIPT_SIMPLE=0
+    else
+      interpreter=1
+    fi
+  fi
+  if [ "$interpreter" = 1 ]; then
     for ((i = 0; i < ${#SRO[@]}; i++)); do
       case "${SRO[i]}" in '<'|'<<'|'<<<') return 0 ;; esac
     done
@@ -717,18 +745,24 @@ judge_script_input() {
         *) break ;;
       esac
     done
-  else
+  elif [ -z "$launcher" ]; then
     # A bare program name is resolved through PATH, not against the cwd.
     case "${E[0]}" in */*) ;; *) return 0 ;; esac
   fi
   [ "$k" -lt "${#E[@]}" ] && [ "${EG[k]-0}" = 0 ] || return 0
-  logical=$(resolve_maybe_tilde "${E[k]}" "${EV[k]}" "$CWD" 2>/dev/null) || return 0
+  [ -z "$(brief_read_constraints)" ] || return 0
+  if [ -n "$launcher" ]; then
+    logical=$launcher
+    word=$launcher
+  else
+    logical=$(resolve_maybe_tilde "${E[k]}" "${EV[k]}" "$CWD" 2>/dev/null) || return 0
+    word=${E[k]}
+    if [ "${EV[k]}" = 1 ]; then word="$HOME/${word#"$TILDE"/}"; fi
+  fi
   sensitive_text "$logical" && return 0
   granted_env_file "$logical" && return 0
   # Keep .. until directory symlinks are followed; lexical normalization
   # first could identify a different file from the one the command runs.
-  word=${E[k]}
-  if [ "${EV[k]}" = 1 ]; then word="$HOME/${word#"$TILDE"/}"; fi
   abs=$(judge_script_path "$word" "$CWD") || return 0
   sensitive_text "$abs" && return 0
   granted_env_file "$abs" && return 0
