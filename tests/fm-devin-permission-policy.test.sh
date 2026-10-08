@@ -1937,6 +1937,46 @@ echo "APPROVE: rule 3, operands remain lookup data"')
   pass "fm-devin-permission-policy: nested scripts supply context while preserving their outer exact-input key"
 }
 
+test_task_script_context_budget() {
+  local policy dir wt saved attempts cmd i bytes
+  # shellcheck disable=SC2016 # the body is the fake judge script's own source
+  policy=$(new_case script-budget '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
+cp "$prompt" ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+echo "APPROVE: rule 3, operands remain lookup data"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  for ((i = 1; i <= 6; i++)); do
+    { printf '# AGGREGATE_SCRIPT_%s\n# ' "$i"; awk 'BEGIN {for (i=0; i<16000; i++) printf "x"}'; printf '\n'; } > "$wt/tf$i.sh"
+  done
+  cmd='./tf1.sh fetch one'
+  for ((i = 1; i < 8; i++)); do cmd="$cmd && ./tf1.sh fetch one"; done
+  hook "$policy" permission-request exec "$cmd"
+  [ "$(grep -c '^Script this call runs:' "$saved")" = 1 ] || fail "repeated snapshots must be shown only once"
+  hook "$policy" permission-request exec "$cmd"
+  [ "$(cat "$attempts")" = 1 ] || fail "deduplicated context must preserve exact-input cache hits"
+
+  cmd='./tf1.sh fetch one'
+  for ((i = 2; i <= 6; i++)); do cmd="$cmd && ./tf$i.sh fetch one"; done
+  hook "$policy" permission-request exec "$cmd"
+  grep -qF AGGREGATE_SCRIPT_1 "$saved" || fail "script context within the budget must still be shown"
+  if grep -qF AGGREGATE_SCRIPT_6 "$saved"; then fail "context beyond the aggregate limit must be omitted"; fi
+  grep -qF 'Additional script contents were omitted' "$saved" || fail "the judge must know when script context is incomplete"
+  bytes=$(awk '/^Script this call runs: / {on=1} on {print}' "$saved" | wc -c)
+  [ "$bytes" -le 65792 ] || fail "script context plus its fixed omission notice must remain bounded: $bytes bytes"
+  hook "$policy" permission-request exec "$cmd"
+  [ "$(cat "$attempts")" = 2 ] || fail "bounded context must preserve exact-input cache hits"
+  printf '\n' >> "$wt/tf6.sh"
+  hook "$policy" permission-request exec "$cmd"
+  [ "$(cat "$attempts")" = 3 ] || fail "even an omitted script edit must invalidate the verdict"
+  pass "fm-devin-permission-policy: script context is deduplicated/bounded while all eligible scripts invalidate the cache"
+}
+
 test_task_script_context_exclusions() {
   local policy dir wt script saved target grants
   dir="$TMP_ROOT/script-exclusions"
@@ -2181,6 +2221,7 @@ test_judge_prompt_carries_the_task_contract
 test_task_script_contents_and_cache
 test_task_script_interpreter_options
 test_task_script_nested_cache
+test_task_script_context_budget
 test_task_script_context_exclusions
 test_missing_policy_file_still_refuses
 
