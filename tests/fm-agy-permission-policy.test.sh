@@ -1262,10 +1262,12 @@ fi')
   saved="$dir/tmp/script-prompt.txt"
   attempts="$dir/tmp/agy-permission-judge/attempts"
   for root in "$wt" "$dir/data/t1" "$dir/tmp"; do
+    # shellcheck disable=SC2016 # literal source for the script under review
     printf '#!/usr/bin/env bash\n# AGY_SCRIPT_CONTEXT_MARKER\nprintf "lookup: %%s\\n" "$2"\n' > "$root/tf.sh"
     hook "$policy" pre-tool-use run_command "'$root/tf.sh' fetch https://lookup.example/one"
     abstained "$OUT" || fail "task-owned script contents must reach the agy judge: $OUT"
     grep -qF "Script this call runs:" "$saved" || fail "prompt must identify the script run"
+    # shellcheck disable=SC2016 # match the script's literal source in the prompt
     grep -qF 'printf "lookup: %s\n" "$2"' "$saved" || fail "agy prompt must contain the script body"
     hook "$policy" pre-tool-use run_command "'$root/tf.sh' fetch https://lookup.example/two"
     [ "$(tail -1 "$dir/state/agy-permission-log.jsonl" | jq -r .decider)" = cache ] \
