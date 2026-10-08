@@ -95,6 +95,7 @@ fm_test_pi_package_dir() {
   while [ -n "$pi_path" ] && [ "$hops" -lt 16 ]; do
     resolved=$(fm_test_resolve_path "$pi_path") || break
     if package_dir=$(fm_test_nearest_pi_package "$resolved"); then
+      # shellcheck disable=SC2034 # consumed by test files that source this helper
       FM_TEST_PI_PACKAGE_DIR=$package_dir
       return 0
     fi
@@ -108,6 +109,7 @@ fm_test_pi_package_dir() {
     hops=$((hops + 1))
   done
 
+  # shellcheck disable=SC2034 # consumed by test files that source this helper
   FM_TEST_PI_PACKAGE_REASON="installed @earendil-works/pi-coding-agent package not found at npm root or through pi on PATH"
   return 1
 }
