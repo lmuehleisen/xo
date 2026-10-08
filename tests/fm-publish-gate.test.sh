@@ -1836,8 +1836,9 @@ SH
   assert_contains "$(cat "$prompts")" 'The retry condition now preserves the expected exit code.' 'judge sees retained change'
   if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript' "$prompts"; then fail "judge received the unsanitized body"; fi
   rm -f "$received"
-  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated" 2>&1) && fail "unapproved generated body must not normalize"
-  [ ! -e "$received" ] || fail "unapproved body reached gh"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated" 2>&1) || fail "ordinary body should retain its normal policy checks: $out"
+  cmp -s "$generated" "$received" || fail "unapproved body was normalized"
+  rm -f "$received"
   out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr edit 3 --repo acme/upstream --body-file=- <"$generated" 2>&1) && fail "normalized edit must honor write block"
   assert_contains "$out" 'GitHub writes blocked' 'normalized write block'
   [ ! -e "$received" ] || fail "blocked normalized body reached gh"
