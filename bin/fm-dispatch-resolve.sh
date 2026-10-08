@@ -48,6 +48,15 @@
 #   Code picks: a sampled experiment class with a rankable route first; in
 #   an `ordered` lane the first class with any eligible route, ranked inside
 #   that class; in a `pool` lane the spendPriority argmax over every class.
+#   A class at its optional max_live cap is not eligible. Live counts read
+#   ordinary task records (kind not secondmate) from $FM_HOME/state/*.meta
+#   (FM_STATE_OVERRIDE replaces state), matching harness and model to any
+#   class route, regardless of effort or model_family; model=default matches
+#   a route with no model. Unreadable records
+#   count as nothing; a finished task not yet cleaned up still counts.
+#   This check is advisory; fm-spawn.sh does not enforce class caps.
+#   Exact spendPriority ties across classes prefer fewer live workers;
+#   ties that remain escalate, including ties between routes of one class.
 #   A class gated `others-ahead-of-pace` stays eligible only while every
 #   rankable route of the lane's ungated classes has spendPriority below 0 and
 #   its own best route has spendPriority of 0 or more. An experiment class is
@@ -83,6 +92,8 @@
 #     candidate: <harness>:<model> [class=.. family=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     Unmetered class routes print quota=unmetered (declared), spendPriority=0, runway=unmetered; these are declared facts, not measured quota.
 #     class: <name> family=<family> [experiment]   (lane rules, status clear only)
+#     Lane candidate lines end with live=<count> [max_live=<cap>].
+#     tie_break: <class> has fewest live workers (<count>) among spendPriority ties
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
@@ -115,6 +126,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
@@ -496,11 +508,26 @@ if jq -e "$FM_DISPATCH_LANES_JQ"'
   DEVIN_IDS=$(fm_quota_devin_catalog)
 fi
 
+# Snapshot readable ordinary task records without executing their contents.
+# Last field wins, as in fm-spawn.sh's away spend cap; one record counts once
+# per matching class even when multiple effort routes share harness and model.
+LIVE_TASKS=$(
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] && [ -r "$meta" ] || continue
+    meta_text=$(cat "$meta" 2>/dev/null) || continue
+    jq -Rsc '
+      [split("\n")[] | capture("^(?<key>kind|harness|model)=(?<value>.*)$")]
+      | from_entries | select(.kind != "secondmate")
+      | {harness, model: (if .model == "default" then "" else (.model // "") end)}
+    ' <<<"$meta_text"
+  done | jq -sc '.'
+) || emit_error "live task snapshot failed"
+
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 DIRECT=false
 [ -z "$LANE" ] || DIRECT=true
 RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
-  --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" \
+  --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
   ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
@@ -612,7 +639,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     else "data policy \($name) does not admit project \(if $project == "" then "(none given)" else $project end) without an allowed data tag (\(($p.allow_tags // []) | join(", ")))"
     end;
   def class_exclusion($k):
-    if $exclude != "" and $k.family == $exclude then "second opinion excludes family \($k.family)"
+    if $k.max_live != null and $k.live >= $k.max_live then "at live cap \($k.live)/\($k.max_live)"
+    elif $exclude != "" and $k.family == $exclude then "second opinion excludes family \($k.family)"
     elif $exclude != "" and $k.experiment != null then "an experiment class never serves a second opinion"
     elif $k.experiment != null and $sample >= ($k.experiment.share * 100) then "experiment not sampled for this task"
     elif $k.data_policy != null then policy_block($k.data_policy)
@@ -621,12 +649,16 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     [dispatch_lane_refs($rule)[] | . as $ref | ($cfg.classes[$ref.class]) as $def |
       {name: $ref.class, gate: ($ref.gate // null), family: $def.family,
        experiment: ($def.experiment // null), data_policy: ($def.data_policy // null),
-       unmetered: ($def.unmetered // false), routes: $def.routes}
+       unmetered: ($def.unmetered // false), routes: $def.routes,
+       max_live: ($def.max_live // null),
+       live: ([$live_tasks[] | . as $task |
+         select(any($def.routes[]; .harness == $task.harness and (.model // "") == $task.model))] | length)}
       | . + {excluded: class_exclusion(.)}
       | . as $k
       | . + {candidates: [.routes[] |
           (if $k.excluded != null then {profile: ., eligible: false, reason: $k.excluded} else evaluate_route(.; $k.unmetered) end)
-          + {class: $k.name, family: $k.family} + (if $k.experiment != null then {experiment: true} else {} end)]}
+          + {class: $k.name, family: $k.family, live: $k.live, max_live: $k.max_live}
+          + (if $k.experiment != null then {experiment: true} else {} end)]}
     ] as $classes0 |
     ([$classes0[] | select(.gate == null) | .candidates[] | select(rankable)]) as $others |
     [$classes0[] |
@@ -650,9 +682,17 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ([$cands[] | select(rankable)]) as $ranked |
     if ($ranked | length) == 0 then {status: "escalate", reason: "no rankable eligible candidate\($where)"}
     else ($ranked | max_by(.spendPriority)) as $best |
-      if ([$ranked[] | select(.spendPriority == $best.spendPriority)] | length) > 1
+      ([$ranked[] | select(.spendPriority == $best.spendPriority)]) as $ties |
+      (if ([$ties[].class] | unique | length) > 1 then
+         ($ties | map(.live) | min) as $fewest | [$ties[] | select(.live == $fewest)]
+       else $ties end) as $final |
+      if ($final | length) > 1
       then {status: "escalate", reason: "genuine spendPriority tie\($where)"}
-      else {status: "clear", chosen: $best} end
+      else {status: "clear", chosen: $final[0]}
+        + (if ($ties | length) > 1 then
+             {tie_break: "\($final[0].class) has fewest live workers (\($final[0].live)) among spendPriority ties"}
+           else {} end)
+      end
     end;
   # A sampled experiment with a rankable route takes the task; an ordered lane
   # stops at its first class with any eligible route, ranked or not, so unknown
@@ -726,7 +766,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ($sel.lane) as $le | (lane_pick($le)) as $pick |
     ([$le.candidates[] | select(.unranked)]) as $unranked |
     $ev + {status: $pick.status, note: $sel.note, candidates: $le.candidates}
-    + (if $pick.status == "clear" then {chosen: $pick.chosen} else {reason: $pick.reason} end)
+    + (if $pick.status == "clear" then {chosen: $pick.chosen, tie_break: $pick.tie_break} else {reason: $pick.reason} end)
     + (if $pick.status == "clear" and ($unranked | length) > 0 then
          {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
        else {} end)
@@ -772,6 +812,7 @@ TEXT=$(jq -r '
   (if .reason then "  reason: \(.reason | flat)" else empty end),
   (if .note then "  note: \(.note | flat)" else empty end),
   (if .unranked_note then "  note: \(.unranked_note | flat)" else empty end),
+  (if .tie_break then "  tie_break: \(.tie_break | flat)" else empty end),
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
       + (if .class then "  class=\(.class | flat) family=\(.family | flat)" + (if .experiment then " experiment" else "" end) else "" end)
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
@@ -779,7 +820,8 @@ TEXT=$(jq -r '
          elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
-      + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)),
+      + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)
+      + (if .class then "  live=\(.live)" + (if .max_live then " max_live=\(.max_live)" else "" end) else "" end)),
   (if .chosen.class then "  class: \(.chosen.class | flat)  family=\(.chosen.family | flat)" + (if .chosen.experiment then "  experiment" else "" end) else empty end),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)

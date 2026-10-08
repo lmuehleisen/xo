@@ -51,8 +51,12 @@ FM_DISPATCH_LANES_JQ='
     if has("classes") and (.classes | type) != "object" then "classes must be an object of named model classes"
     elif any($classes | keys[]; dl_name | not) then "class names must match ^[a-z0-9]+(-[a-z0-9]+)*$"
     elif any($classes[]; type != "object") then "each class must be an object"
-    elif any($classes[]; (keys - ["family", "routes", "experiment", "data_policy", "unmetered", "why"]) | length > 0) then
-      "unknown class field: " + ([$classes[] | keys - ["family", "routes", "experiment", "data_policy", "unmetered", "why"] | .[]] | unique | join(", "))
+    elif any($classes[]; (keys - ["family", "routes", "experiment", "data_policy", "unmetered", "max_live", "why"]) | length > 0) then
+      "unknown class field: " + ([$classes[] | keys - ["family", "routes", "experiment", "data_policy", "unmetered", "max_live", "why"] | .[]] | unique | join(", "))
+    elif any($classes[]; has("max_live") and (
+        (.max_live | type) != "number" or .max_live <= 0
+        or (.max_live | isinfinite) or .max_live != (.max_live | floor))) then
+      "class max_live must be a positive integer"
     elif any($classes[]; has("unmetered") and (.unmetered | type) != "boolean") then
       "class unmetered must be a boolean"
     elif any($classes[]; .family | dl_name | not) then "each class needs family matching ^[a-z0-9]+(-[a-z0-9]+)*$"

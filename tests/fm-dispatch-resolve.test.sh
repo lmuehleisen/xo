@@ -1347,6 +1347,110 @@ assert_contains "$out" 'status: escalate' "a measured zero ties the unmetered ne
 assert_contains "$out" 'genuine spendPriority tie' "unmetered ties use the normal explicit tie escalation"
 pass "unmetered routes use the pace-neutral boundary without starving positive measured routes or breaking ties by class order"
 
+# Live counts are home-local, count ordinary records regardless of status,
+# and match harness/model rather than effort or a stale model_family.
+LIVE_RULES="$TMP_ROOT/live-rules.json"
+LIVE_STATE="$HOME_DIR/state"
+mkdir -p "$LIVE_STATE"
+jq '.rules = [{lane:"live", when:"ordinary work", classes:["muse-spark", "swe-2", "sol-high"]}]' "$TEMPLATE" > "$LIVE_RULES"
+cp "$LIVE_RULES" "$RULES"
+cat > "$LIVE_STATE/worker.meta" <<'META'
+kind=scout
+harness=opencode
+model=opencode/muse-spark-1.3-contributor-free
+model_family=wrong
+effort=high
+META
+printf 'done: finished but not cleaned up\n' > "$LIVE_STATE/worker.status"
+cat > "$LIVE_STATE/secondmate.meta" <<'META'
+kind=secondmate
+harness=devin
+model=swe-2-max
+META
+printf 'kind=ship\nharness=opencode\nmodel=unrelated\n' > "$LIVE_STATE/unrelated.meta"
+ln -s "$LIVE_STATE/absent" "$LIVE_STATE/unreadable.meta"
+lane_quota codex=-0.2 devin=-0.4
+run_lane code out err "$BRIEF" --lane live --project xo
+expect_code 0 "$code" "live counting exits successfully"
+assert_contains "$out" "profile: --harness 'devin' --model 'swe-2-max'" "an exact unmetered tie prefers the less busy class"
+assert_contains "$out" 'tie_break: swe-2 has fewest live workers (0) among spendPriority ties' "the live-count tie-break is disclosed"
+assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible  live=1' "without a cap a matching finished ordinary task leaves the class eligible"
+assert_contains "$out" 'class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible  live=0' "secondmates and unreadable records do not count"
+
+jq '.classes["muse-spark"].max_live = 1' "$LIVE_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'class=muse-spark family=muse  -> not eligible: at live cap 1/1  live=1 max_live=1' "an at-cap class is excluded"
+assert_contains "$out" "profile: --harness 'devin' --model 'swe-2-max'" "the pool picks the next eligible route"
+assert_not_contains "$out" 'tie_break:' "excluding a capped class is not a tie-break"
+
+jq '.classes["muse-spark"].max_live = 2' "$LIVE_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'runway=unmetered  -> eligible  live=1 max_live=2' "an under-cap class remains eligible"
+pass "class caps exclude only at-cap classes and uncapped exact ties prefer fewer live workers"
+
+# Relaunch replaces this task record: its new route alone gets the count.
+printf 'harness=devin\nmodel=swe-2-max\nmodel_family=muse\n' > "$LIVE_STATE/worker.meta"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'runway=unmetered  -> eligible  live=0 max_live=2' "the relaunched task no longer counts for its old class"
+assert_contains "$out" 'class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible  live=1' "a record without kind counts for its new harness/model class"
+assert_contains "$out" 'tie_break: muse-spark has fewest live workers (0) among spendPriority ties' "relaunch moves the exact-tie preference to the other class"
+assert_contains "$out" "profile: --harness 'opencode' --model 'opencode/muse-spark-1.3-contributor-free'" "the preference is independent of class order"
+printf 'kind=ship\nharness=opencode\nmodel=opencode/muse-spark-1.3-contributor-free\n' > "$LIVE_STATE/other.meta"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'status: escalate' "equal nonzero live counts still escalate"
+assert_contains "$out" 'genuine spendPriority tie' "the surviving tie is named"
+assert_not_contains "$out" 'tie_break:' "no deciding tie-break is claimed for an equal-count tie"
+
+jq '.classes["muse-spark"].max_live = 1 | .classes["swe-2"].max_live = 1' "$LIVE_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "when both neutral classes are capped the best metered route wins"
+jq '.rules[0].order = "ordered" | .classes["muse-spark"].max_live = 1' "$LIVE_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" "profile: --harness 'devin' --model 'swe-2-max'" "an ordered lane falls through an at-cap first class"
+pass "relaunch updates live-class membership and surviving equal-count ties still escalate"
+
+# Match every route of a class, counting one record only once even when effort
+# routes overlap. Counts from a state override replace the effective home state.
+jq '.rules[0].classes = ["opus-high", "sol-high"] | .classes["opus-high"].max_live = 2 |
+  .classes["opus-high"].routes += [{harness:"claude", model:"claude-opus-5-5", effort:"medium"}]' "$LIVE_RULES" > "$RULES"
+printf 'harness=claude\nmodel=claude-opus-5-5\neffort=xhigh\n' > "$LIVE_STATE/route-one.meta"
+printf 'harness=pi\nmodel=kiro/claude-opus-5.5\n' > "$LIVE_STATE/route-two.meta"
+lane_quota claude=0.4 kiro=0.3 codex=0.2 devin=-0.4
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'class=opus-high family=claude  -> not eligible: at live cap 2/2  live=2 max_live=2' "both provider routes count and duplicate effort routes do not double-count"
+assert_contains "$out" "profile: --harness 'codex'" "all routes of the capped class are excluded"
+jq '.classes["opus-high"].routes |= .[:2]' "$RULES" > "$TMP_ROOT/no-duplicate-effort.json"
+mv "$TMP_ROOT/no-duplicate-effort.json" "$RULES"
+OVERRIDE_STATE="$TMP_ROOT/override-state"
+mkdir -p "$OVERRIDE_STATE"
+FM_STATE_OVERRIDE="$OVERRIDE_STATE" run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" "profile: --harness 'claude' --model 'claude-opus-5-5' --effort 'high'" "an empty state override ignores the home's records"
+assert_contains "$out" 'live=0 max_live=2' "the override provides the live count"
+lane_quota claude=0.4 kiro=0.4 codex=0.2 devin=-0.4
+FM_STATE_OVERRIDE="$OVERRIDE_STATE" run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'genuine spendPriority tie' "tied routes within one class still escalate"
+pass "class counts include all provider routes once and respect the effective state directory"
+
+# Spawn writes model=default when a route omits the model.
+jq '.classes["muse-spark"].routes[0] |= del(.model) |
+  .classes["muse-spark"].max_live = 1' "$LIVE_RULES" > "$RULES"
+printf 'kind=ship\nharness=opencode\nmodel=default\n' > "$LIVE_STATE/default-model.meta"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'candidate: opencode:-  class=muse-spark family=muse  -> not eligible: at live cap 1/1  live=1 max_live=1' "default-model metadata matches a route with no model"
+pass "class caps count routes that use the harness default model"
+
+for bad_cap in 0 -1 1.5 '"1"' null true '{}' '[]'; do
+  jq --argjson cap "$bad_cap" '.classes["muse-spark"].max_live = $cap' "$LIVE_RULES" > "$RULES"
+  run_lane code out err "$BRIEF" --lane live --project xo
+  expect_code 2 "$code" "malformed max_live $bad_cap is a configuration error"
+  assert_contains "$err" 'class max_live must be a positive integer' "the max_live schema error is explicit"
+done
+pass "max_live accepts only positive integers"
+rm -rf "$LIVE_STATE"
+cp "$TEMPLATE" "$RULES"
+lane_quota claude=-0.3 codex=0 grok=-0.5 agy=-0.1 devin=-0.4 kiro=-0.6
+run_lane code out err "$BRIEF" --lane standard --project xo
+
 # Unmetered routes stay neutral for pace; they keep the shipped lane's gate closed.
 # Removing both from this test fixture shows the gate can open when all remaining
 # metered routes are ahead of pace and Gemini itself is not.
