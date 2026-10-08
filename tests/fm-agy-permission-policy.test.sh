@@ -1369,6 +1369,95 @@ EOF
   pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
 }
 
+test_task_script_mutable_scratch_launchers() {
+  local policy dir wt saved attempts launcher cmd n system grants
+  # shellcheck disable=SC2016 # the body is the fake judge script's own source
+  policy=$(new_case script-scratch-launcher '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = -p ] && prompt=$2; shift; done
+printf "%s\n" "$prompt" > ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+echo "APPROVE: literal operands stay data"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  launcher="$dir/scratch/bash"
+  mkdir -p "$dir/scratch" "$wt/alias"
+  printf '# SCRIPT_CONTEXT_MARKER\n' > "$wt/tf.sh"
+  # shellcheck disable=SC2016 # literal mutable launcher source
+  printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$launcher"
+  chmod +x "$launcher"
+  ln -s "$launcher" "$wt/alias/bash"
+  printf '#!%s\n# SCRIPT_CONTEXT_MARKER\n' "$launcher" > "$wt/shebanged.sh"
+  n=0
+  for cmd in "'$launcher' tf.sh" 'alias/bash tf.sh' './shebanged.sh'; do
+    hook "$policy" pre-tool-use run_command "$cmd fetch one"
+    printf '# launcher edit\n' >> "$launcher"
+    hook "$policy" pre-tool-use run_command "$cmd fetch one"
+    hook "$policy" pre-tool-use run_command "$cmd fetch two"
+    n=$((n + 3))
+    [ "$(cat "$attempts")" = "$n" ] || fail "agy must re-judge mutable scratch launchers even on exact retries"
+    if grep -qF 'Script this call runs:' "$saved"; then fail "a launcher outside the context roots must keep its script opaque for agy"; fi
+  done
+  system=$(command -v bash)
+  TMPDIR="${system%/*}" hook "$policy" pre-tool-use run_command "'$system' tf.sh fetch one"
+  TMPDIR="${system%/*}" hook "$policy" pre-tool-use run_command "'$system' tf.sh fetch one"
+  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "agy must also guard launchers in the declared TMPDIR root"
+
+  # Exercise the granted root independently of /tmp without changing the
+  # existing system interpreter or any other file in its directory.
+  grants=$(jq -nc --arg root "${system%/*}" '{write_dirs:[$root]}')
+  # shellcheck disable=SC2016 # literal fake judge source
+  policy=$(new_case script-granted-launcher 'n=$(cat attempts 2>/dev/null || echo 0); echo "$((n + 1))" > attempts; echo "APPROVE: literal operands stay data"' "$grants")
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  printf '# SCRIPT_CONTEXT_MARKER\n' > "$wt/tf.sh"
+  for cmd in one one two; do hook "$policy" pre-tool-use run_command "'$system' tf.sh fetch $cmd"; done
+  [ "$(cat "$attempts")" = 3 ] || fail "a granted write root must make agy's interpreter verdict uncacheable"
+  pass "fm-agy-permission-policy: scratch, TMPDIR and granted launchers cannot reuse automatic script approvals"
+}
+
+test_task_script_cache_authority() {
+  local policy dir wt attempts judge grants
+  # shellcheck disable=SC2016 # literal fake judge source
+  judge='
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = -p ] && prompt=$2; shift; done
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+if printf "%s" "$prompt" | grep -qE "NO_SCRIPT_AUTHORITY|none in force:"; then
+  echo "DECLINE: authority was withdrawn"
+else
+  echo "APPROVE: operands stay data within current authority"
+fi'
+  policy=$(new_case script-authority "$judge")
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  printf '# script under review\n' > "$wt/tf.sh"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch one' 1
+  hook "$policy" pre-tool-use run_command './tf.sh fetch two' 2
+  [ "$(cat "$attempts")" = 1 ] || fail "unchanged authority must still permit agy operand reuse"
+  printf "# Task\n## Captain's intent\nNO_SCRIPT_AUTHORITY\n## Firstmate spec\nKeep the change narrow.\n" > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch two' 3
+  denied "$OUT" && [ "$(cat "$attempts")" = 2 ] || fail "changed task instructions must invalidate agy script approval"
+
+  grants=$(jq -nc --arg root "$dir/extra" '{write_dirs:[$root]}')
+  policy=$(new_case script-authority-grants "$judge" "$grants")
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  printf '# script under review\n' > "$wt/tf.sh"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch one' 1
+  jq '.grants_sha = ""' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch two' 2
+  denied "$OUT" && [ "$(cat "$attempts")" = 2 ] || fail "withdrawing the grants pin must invalidate agy script approval"
+  pass "fm-agy-permission-policy: script approvals bind current instructions and verified grants"
+}
+
 test_task_script_firstmate_approval_scope() {
   local policy dir wt attempts
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
@@ -1953,6 +2042,8 @@ test_judge_keeps_a_verdict_a_killed_attempt_already_gave
 test_judge_retry_is_not_weaker_than_the_first_attempt
 test_judge_probe_measures_without_touching_the_task
 test_task_script_contents_and_cache
+test_task_script_mutable_scratch_launchers
+test_task_script_cache_authority
 test_task_script_firstmate_approval_scope
 test_git_state_changes_are_not_read_and_build
 test_retire_closes_open_escalations

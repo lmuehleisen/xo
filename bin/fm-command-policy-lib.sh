@@ -44,6 +44,8 @@
 #   context entirely; prose restrictions cannot prove disclosure is allowed.
 #   A task-owned interpreter executable is inspected as the launcher itself
 #   and keeps an exact invocation key, even when found through PATH.
+#   Launchers in other scratch (/tmp or $TMPDIR) or granted write roots are
+#   mutable too: omit their script context and automatic verdict caching.
 #   Stripped wrappers/assignments and direct scripts with a task-owned or
 #   unresolvable shebang launcher omit this context and retain the original
 #   exact-input behavior; the hook does not reconstruct environments or launch
@@ -72,6 +74,8 @@
 #   mode is used by cache_store for judge verdicts and checked by cache_lookup
 #   alongside exact approvals, with separate script-key scopes. Compound calls
 #   keep exact-input keys augmented with script hashes; other calls are unchanged.
+#   Script cache keys also bind the full brief contents and recorded grants
+#   digest, so changes to task authority require fresh judgment.
 #
 #   Task grants: load_grants/grants_block/grants_digest/
 #   fm_grants_digest_of_file/granted_env_file*/granted_task_script/
@@ -693,6 +697,18 @@ judge_script_in_roots() {  # <physical-path>
   return 1
 }
 
+judge_script_mutable_launcher() {  # <physical-path>
+  judge_script_in_roots "$1" && return 0
+  local root
+  load_grants
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    root=$(physical_target "$root" '' 1 2>/dev/null) || continue
+    strictly_inside "$1" "$root" && return 0
+  done <<<"$(printf '%s\n' /tmp "${TMPDIR:-}" "$GRANT_WRITE_DIRS")"
+  return 1
+}
+
 judge_script_input() {
   local k=0 i abs logical word root phys bytes content hash base snapshot prior context launcher='' interpreter=0 first arg rest
   [ "${#E[@]}" -gt 0 ] || return 0
@@ -714,7 +730,12 @@ judge_script_input() {
     sensitive_text "$logical" && return 0
     granted_env_file "$logical" && return 0
     phys=$(judge_script_path "$word" "$CWD") || return 0
-    judge_script_in_roots "$phys" && launcher=$phys
+    if judge_script_in_roots "$phys"; then
+      launcher=$phys
+    elif judge_script_mutable_launcher "$phys"; then
+      JUDGE_SCRIPT_UNCACHEABLE=1
+      return 0
+    fi
     if [ -n "$launcher" ]; then
       # A task can change this executable; its name proves no interpreter
       # semantics. Inspect its own body and retain every invocation argument.
@@ -814,7 +835,7 @@ judge_script_input() {
         IFS=$' \t' read -r word arg rest <<<"${first#\#!}"
         [ -n "$word" ] || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
         phys=$(judge_script_path "$word" "$CWD") || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
-        judge_script_in_roots "$phys" && { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+        judge_script_mutable_launcher "$phys" && { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
         if [ "${word##*/}" = env ]; then
           # The kernel passes an optional shebang argument as one word.
           # Do not guess at env -S, assignments, or other option forms.
@@ -822,7 +843,7 @@ judge_script_input() {
           [ -z "$rest" ] || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
           word=$(CDPATH='' cd -- "$CWD" 2>/dev/null && command -v -- "$arg") || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
           phys=$(judge_script_path "$word" "$CWD") || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
-          judge_script_in_roots "$phys" && { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+          judge_script_mutable_launcher "$phys" && { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
         fi
         ;;
     esac
@@ -3558,10 +3579,14 @@ judge_probe() {  # <static-class>
 # The script-context/key contract is in the header. Only approvals are stored;
 # adapters check refusals and never-approve before a reusable cache hit.
 cache_key() {  # [shape] - exact by default, including pending escalation keys
-  local h='' input=$CACHE_INPUT scope=exact
+  local h='' input=$CACHE_INPUT scope=exact authority=''
   [ -n "$CACHE_DIR" ] && [ -n "$HASH_CMD" ] && [ -n "$TOOL" ] || return 1
   [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] || input="$input"$'\n'"script-opaque-launch"
   if [ -n "$JUDGE_SCRIPT_HASHES" ]; then
+    [ -n "$BRIEF" ] && [ -f "$BRIEF" ] && [ -r "$BRIEF" ] || return 1
+    authority=$($HASH_CMD "$BRIEF" 2>/dev/null) || return 1
+    authority=${authority%% *}
+    case "$authority" in ''|*[!0-9a-f]*) return 1 ;; esac
     if [ "${1:-}" = shape ] && [ "$JUDGE_SCRIPT_SIMPLE" = 1 ] && [ "$JUDGE_SCRIPT_COUNT" = 1 ] \
       && [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] \
       && [ -z "$NEVER_APPROVE" ] && [ -z "$SENSITIVE_HIT" ] \
@@ -3577,6 +3602,7 @@ cache_key() {  # [shape] - exact by default, including pending escalation keys
       fi
     fi
     input="$input"$'\n'"script-$scope:$JUDGE_SCRIPT_HASHES"
+    input="$input"$'\n'"script-authority:$authority:$GRANTS_SHA"
   fi
   h=$(printf '%s\n%s' "$TOOL" "$input" | $HASH_CMD 2>/dev/null) || return 1
   h=${h%% *}

@@ -1947,6 +1947,95 @@ fi')
   pass "fm-devin-permission-policy: option operands identify the actual script; snapshots/cache need no file utility"
 }
 
+test_task_script_mutable_scratch_launchers() {
+  local policy dir wt saved attempts launcher cmd n system grants
+  # shellcheck disable=SC2016 # the body is the fake judge script's own source
+  policy=$(new_case script-scratch-launcher '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
+cp "$prompt" ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+echo "APPROVE: literal operands stay data"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  launcher="$dir/scratch/bash"
+  mkdir -p "$dir/scratch" "$wt/alias"
+  printf '# SCRIPT_CONTEXT_MARKER\n' > "$wt/tf.sh"
+  # shellcheck disable=SC2016 # literal mutable launcher source
+  printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$launcher"
+  chmod +x "$launcher"
+  ln -s "$launcher" "$wt/alias/bash"
+  printf '#!%s\n# SCRIPT_CONTEXT_MARKER\n' "$launcher" > "$wt/shebanged.sh"
+  n=0
+  for cmd in "'$launcher' tf.sh" 'alias/bash tf.sh' './shebanged.sh'; do
+    hook "$policy" permission-request exec "$cmd fetch one"
+    printf '# launcher edit\n' >> "$launcher"
+    hook "$policy" permission-request exec "$cmd fetch one"
+    hook "$policy" permission-request exec "$cmd fetch two"
+    n=$((n + 3))
+    [ "$(cat "$attempts")" = "$n" ] || fail "mutable scratch launchers must be re-judged even on exact retries"
+    if grep -qF 'Script this call runs:' "$saved"; then fail "a launcher outside the context roots must keep its script opaque"; fi
+  done
+  system=$(command -v bash)
+  TMPDIR="${system%/*}" hook "$policy" permission-request exec "'$system' tf.sh fetch one"
+  TMPDIR="${system%/*}" hook "$policy" permission-request exec "'$system' tf.sh fetch one"
+  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "the declared TMPDIR root must also disable launcher caching"
+
+  # Declaring the existing interpreter directory writable exercises the grant
+  # rule without writing to that directory or relying on /tmp containment.
+  grants=$(jq -nc --arg root "${system%/*}" '{write_dirs:[$root]}')
+  # shellcheck disable=SC2016 # literal fake judge source
+  policy=$(new_case script-granted-launcher 'n=$(cat attempts 2>/dev/null || echo 0); echo "$((n + 1))" > attempts; echo "APPROVE: literal operands stay data"' "$grants")
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  printf '# SCRIPT_CONTEXT_MARKER\n' > "$wt/tf.sh"
+  for cmd in one one two; do hook "$policy" permission-request exec "'$system' tf.sh fetch $cmd"; done
+  [ "$(cat "$attempts")" = 3 ] || fail "a granted write root must make the interpreter uncacheable"
+  pass "fm-devin-permission-policy: scratch, TMPDIR and granted launchers cannot reuse automatic script approvals"
+}
+
+test_task_script_cache_authority() {
+  local policy dir wt attempts judge grants
+  # shellcheck disable=SC2016 # literal fake judge source
+  judge='
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+if grep -qE "NO_SCRIPT_AUTHORITY|none in force:" "$prompt"; then
+  echo "DECLINE: authority was withdrawn"
+else
+  echo "APPROVE: operands stay data within current authority"
+fi'
+  policy=$(new_case script-authority "$judge")
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  printf '# script under review\n' > "$wt/tf.sh"
+  hook "$policy" permission-request exec './tf.sh fetch one'
+  hook "$policy" permission-request exec './tf.sh fetch two'
+  [ "$(cat "$attempts")" = 1 ] || fail "unchanged authority must still permit operand reuse"
+  printf "# Task\n## Captain's intent\nNO_SCRIPT_AUTHORITY\n## Firstmate spec\nKeep the change narrow.\n" > "$dir/data/t1/brief.md"
+  hook "$policy" permission-request exec './tf.sh fetch two'
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 2 ] || fail "changed task instructions must invalidate script approval"
+
+  grants=$(jq -nc --arg root "$dir/extra" '{write_dirs:[$root]}')
+  policy=$(new_case script-authority-grants "$judge" "$grants")
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  printf '# script under review\n' > "$wt/tf.sh"
+  hook "$policy" permission-request exec './tf.sh fetch one'
+  jq '.grants_sha = ""' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+  hook "$policy" permission-request exec './tf.sh fetch two'
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 2 ] || fail "withdrawing the grants pin must invalidate script approval"
+  pass "fm-devin-permission-policy: script approvals bind current instructions and verified grants"
+}
+
 test_task_script_nested_cache() {
   local policy dir wt script saved attempts
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
@@ -2328,6 +2417,8 @@ test_every_fetch_positional_is_classified
 test_judge_prompt_carries_the_task_contract
 test_task_script_contents_and_cache
 test_task_script_interpreter_options
+test_task_script_mutable_scratch_launchers
+test_task_script_cache_authority
 test_task_script_nested_cache
 test_task_script_prompt_approval_scope
 test_task_script_context_budget
