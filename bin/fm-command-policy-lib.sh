@@ -52,8 +52,8 @@
 #   For one unwrapped invocation without redirections, shell operators,
 #   expansions, or globs, the cache retains the interpreter/options, script
 #   path, first script argument (subcommand), cwd, and other tool fields, but
-#   omits later literal non-option operands. An option among those operands
-#   keeps exact-input caching. All arguments still reach the judge on a miss;
+#   omits later literal non-option operands. Any option among the script's
+#   arguments keeps exact-input caching. All arguments reach the judge on a miss;
 #   it may approve the reusable shape only when those operands remain data and
 #   cannot change the authorized effects. Only judge approvals use this scope;
 #   escalation approvals remain exact. cache_key defaults to exact; its shape
@@ -765,7 +765,7 @@ judge_script_input() {
   [ "${#SW[@]}" = "${#E[@]}" ] || JUDGE_SCRIPT_SIMPLE=0
   for ((i = 0; i < ${#E[@]}; i++)); do
     [ "${EV[i]}" = 0 ] && [ "${EG[i]}" = 0 ] || JUDGE_SCRIPT_SIMPLE=0
-    if [ "$i" -gt "$((k + 1))" ]; then
+    if [ "$i" -gt "$k" ]; then
       case "${E[i]}" in -*) JUDGE_SCRIPT_SIMPLE=0 ;; esac
     fi
   done

@@ -1290,13 +1290,19 @@ fi')
   hook "$policy" pre-tool-use run_command "bash -c '\"$wt/tf.sh\" fetch https://lookup.example/two'" 19
   [ "$(cat "$attempts")" = 8 ] || fail "nested agy calls must preserve their full input and reuse only an exact match"
 
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' --profile default fetch https://lookup.example/one" 28
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' --profile default fetch https://lookup.example/one" 29
+  [ "$(cat "$attempts")" = 9 ] || fail "option-first agy calls must still reuse an exact retry"
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' --profile prod delete item" 30
+  [ "$(cat "$attempts")" = 10 ] || fail "agy must retain the option value and later subcommand in the key"
+
   # The same absolute script from another cwd or with other tool fields must
   # not inherit a verdict whose scope was judged with different metadata.
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 20 \
     "$(jq -nc --arg cwd "$dir/data/t1" '{Cwd:$cwd}')"
-  [ "$(cat "$attempts")" = 9 ] || fail "cwd must remain part of the script cache key"
+  [ "$(cat "$attempts")" = 11 ] || fail "cwd must remain part of the script cache key"
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 21 '{"WaitMsBeforeAsync":1000}'
-  [ "$(cat "$attempts")" = 10 ] || fail "other tool fields must remain part of the script cache key"
+  [ "$(cat "$attempts")" = 12 ] || fail "other tool fields must remain part of the script cache key"
   cat > "$dir/data/t1/brief.md" <<'EOF'
 # Task
 ## Captain's intent
@@ -1306,7 +1312,7 @@ Keep the change narrow.
 DO NOT READ sibling research directories.
 EOF
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 22
-  [ "$(cat "$attempts")" = 11 ] || fail "changed read exclusions must still invalidate cached approval"
+  [ "$(cat "$attempts")" = 13 ] || fail "changed read exclusions must still invalidate cached approval"
 
   before=$(wc -l < "$dir/state/agy-permission-log.jsonl")
   hook "$policy" judge-probe run_command "'$wt/tf.sh' fetch https://lookup.example/probe" 23
@@ -1316,7 +1322,7 @@ EOF
 
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one && git merge origin/main" 24
   denied "$OUT" || fail "always-decline actions must still hold beside a script invocation"
-  [ "$(cat "$attempts")" = 12 ] || fail "always-decline must skip judge and cache"
+  [ "$(cat "$attempts")" = 14 ] || fail "always-decline must skip judge and cache"
   pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
 }
 

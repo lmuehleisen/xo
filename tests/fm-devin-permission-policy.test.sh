@@ -1838,6 +1838,13 @@ fi')
   printf '\ngh pr merge 41 --repo owner/name\n' >> "$script"
   hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/two" script_13
   [ -z "$OUT" ] && [ "$(cat "$attempts")" = 11 ] || fail "changed script effects must be judged under the always-decline rules"
+
+  printf '# SCRIPT_CONTEXT_MARKER\n' > "$script"
+  hook "$policy" permission-request exec '.scratch/tf.sh --profile default fetch https://lookup.example/one' profile_one
+  hook "$policy" permission-request exec '.scratch/tf.sh --profile default fetch https://lookup.example/one' profile_retry
+  [ "$(cat "$attempts")" = 12 ] || fail "option-first calls must still reuse an exact retry"
+  hook "$policy" permission-request exec '.scratch/tf.sh --profile prod delete item' profile_other
+  [ "$(cat "$attempts")" = 13 ] || fail "an option value and later subcommand must not be omitted from the key"
   pass "fm-devin-permission-policy: script snapshots reach judge/probe; content, subcommand and invocation shape govern reuse"
 }
 
