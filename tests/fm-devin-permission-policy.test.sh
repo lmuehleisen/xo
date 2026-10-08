@@ -1948,6 +1948,38 @@ fi')
   pass "fm-devin-permission-policy: option operands identify the actual script; snapshots/cache need no file utility"
 }
 
+test_task_script_environment_mutations() {
+  local policy dir wt saved attempts prefix cmd n=0
+  # shellcheck disable=SC2016 # literal fake judge source
+  policy=$(new_case script-environment '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
+cp "$prompt" ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+echo "APPROVE: literal operands stay data"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  printf '# SCRIPT_ENVIRONMENT_MARKER\n' > "$wt/tf.sh"
+  # shellcheck disable=SC2016 # literal mutable launcher source
+  printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$wt/bash"
+  chmod +x "$wt/bash"
+  printf 'export PATH=.\n' > "$wt/launch-config.sh"
+  for prefix in "export PATH=$wt:/usr/bin:/bin;" "PATH=$wt:/usr/bin:/bin;" \
+    "hash -p $wt/bash bash;" '. ./launch-config.sh;' "eval 'export PATH=.';"; do
+    for cmd in one one two; do
+      printf '# launcher edit\n' >> "$wt/bash"
+      hook "$policy" permission-request exec "$prefix bash tf.sh fetch $cmd"
+      if grep -qF 'Script this call runs:' "$saved"; then fail "prior shell mutations must keep later script context opaque: $prefix"; fi
+    done
+    n=$((n + 3))
+    [ "$(cat "$attempts")" = "$n" ] || fail "prior shell mutations must not cache judge approvals: $prefix"
+  done
+  pass "fm-devin-permission-policy: prior shell mutations keep script context opaque and judge approvals uncached"
+}
+
 test_task_script_mutable_scratch_launchers() {
   local policy dir wt saved attempts launcher cmd n system grants
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
@@ -2445,6 +2477,7 @@ test_every_fetch_positional_is_classified
 test_judge_prompt_carries_the_task_contract
 test_task_script_contents_and_cache
 test_task_script_interpreter_options
+test_task_script_environment_mutations
 test_task_script_mutable_scratch_launchers
 test_task_script_cache_authority
 test_task_script_nested_cache

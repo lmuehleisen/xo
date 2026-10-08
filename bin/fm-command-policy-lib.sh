@@ -53,6 +53,9 @@
 #   chains. A plain /usr/bin/env <program> shebang uses the hook's PATH only
 #   for an unwrapped invocation; more complex env shebangs are omitted too.
 #   Wrapped calls and unsupported shebang launchers do not cache judge verdicts.
+#   Prior shell state mutations (including standalone assignments and compound
+#   eval) also omit later script context and automatic verdict caching; the
+#   hook does not simulate the resulting environment or command definitions.
 #   Escalation approvals still use exact input, in a distinct
 #   opaque-launch scope so older automatic approvals cannot be inherited.
 #   This is input for the judge, not a static approval or a
@@ -676,6 +679,7 @@ JUDGE_SCRIPT_INPUT='' JUDGE_SCRIPT_HASHES='' JUDGE_SCRIPT_SHAPE=''
 JUDGE_SCRIPT_COUNT=0 JUDGE_SCRIPT_SIMPLE=0
 JUDGE_SCRIPT_SEEN=() JUDGE_SCRIPT_OMITTED=0
 JUDGE_SCRIPT_UNCACHEABLE=0
+JUDGE_SCRIPT_ENV_OPAQUE=0
 JUDGE_CACHE_KEY=''
 # Follow a file's symlinks without normalizing .. ahead of physical traversal.
 judge_script_path() {  # <word> <cwd>
@@ -715,6 +719,10 @@ judge_script_mutable_launcher() {  # <physical-path>
 judge_script_input() {
   local k=0 i abs logical word root phys bytes content hash base snapshot prior context launcher='' interpreter=0 first arg rest
   [ "${#E[@]}" -gt 0 ] || return 0
+  if [ "$JUDGE_SCRIPT_ENV_OPAQUE" = 1 ]; then
+    JUDGE_SCRIPT_UNCACHEABLE=1
+    return 0
+  fi
   base=${E[0]##*/}
   # Prefixes can change PATH, cwd, or launch semantics. The ambient hook
   # environment cannot prove which executable such a wrapped call runs.
@@ -2025,6 +2033,16 @@ analyze_segment() {
   [ "$count" -gt 0 ] && base=${E[0]##*/}
   SEG_BASE=$base
   [ "${EV[0]-0}" = 1 ] && no_approve "command name is an expansion"
+  # Shell state can affect later segments without appearing in their words.
+  # Keep ordinary literal eval bodies inspectable through the nested walk.
+  if [ "$count" = 0 ] && [[ ${SW[0]-} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+    JUDGE_SCRIPT_ENV_OPAQUE=1
+  fi
+  case "${E[0]-}" in
+    export|unset|declare|typeset|local|read|source|.|set|shopt|alias|unalias|hash|enable|function|*'()')
+      JUDGE_SCRIPT_ENV_OPAQUE=1 ;;
+    eval) [ "$JUDGE_SCRIPT_SIMPLE" = 1 ] || JUDGE_SCRIPT_ENV_OPAQUE=1 ;;
+  esac
   judge_script_input
 
   # A fetch's output piped into a shell or interpreter is code, not data. The
@@ -3258,6 +3276,7 @@ evaluate_exec() {
   JUDGE_SCRIPT_COUNT=0 JUDGE_SCRIPT_SIMPLE=1
   JUDGE_SCRIPT_SEEN=() JUDGE_SCRIPT_OMITTED=0
   JUDGE_SCRIPT_UNCACHEABLE=0
+  JUDGE_SCRIPT_ENV_OPAQUE=0
   JUDGE_CACHE_KEY=''
   # shellcheck disable=SC2034 # output global; the agy adapter reads it after evaluate_exec.
   SENSITIVE_HIT=''

@@ -1370,6 +1370,38 @@ EOF
   pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
 }
 
+test_task_script_environment_mutations() {
+  local policy dir wt saved attempts prefix cmd n=0
+  # shellcheck disable=SC2016 # literal fake judge source
+  policy=$(new_case script-environment '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = -p ] && prompt=$2; shift; done
+printf "%s\n" "$prompt" > ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+echo "APPROVE: literal operands stay data"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  printf '# SCRIPT_ENVIRONMENT_MARKER\n' > "$wt/tf.sh"
+  # shellcheck disable=SC2016 # literal mutable launcher source
+  printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$wt/bash"
+  chmod +x "$wt/bash"
+  printf 'export PATH=.\n' > "$wt/launch-config.sh"
+  for prefix in "export PATH=$wt:/usr/bin:/bin;" "PATH=$wt:/usr/bin:/bin;" \
+    "hash -p $wt/bash bash;" '. ./launch-config.sh;' "eval 'export PATH=.';"; do
+    for cmd in one one two; do
+      printf '# launcher edit\n' >> "$wt/bash"
+      hook "$policy" pre-tool-use run_command "$prefix bash tf.sh fetch $cmd"
+      if grep -qF 'Script this call runs:' "$saved"; then fail "prior shell mutations must keep later script context opaque: $prefix"; fi
+    done
+    n=$((n + 3))
+    [ "$(cat "$attempts")" = "$n" ] || fail "prior shell mutations must not cache judge approvals: $prefix"
+  done
+  pass "fm-agy-permission-policy: prior shell mutations keep script context opaque and judge approvals uncached"
+}
+
 test_task_script_mutable_scratch_launchers() {
   local policy dir wt saved attempts launcher cmd n system grants
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
@@ -2070,6 +2102,7 @@ test_judge_keeps_a_verdict_a_killed_attempt_already_gave
 test_judge_retry_is_not_weaker_than_the_first_attempt
 test_judge_probe_measures_without_touching_the_task
 test_task_script_contents_and_cache
+test_task_script_environment_mutations
 test_task_script_mutable_scratch_launchers
 test_task_script_cache_authority
 test_task_script_firstmate_approval_scope
