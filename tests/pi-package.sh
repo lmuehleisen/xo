@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared discovery for tests that exercise the installed Pi SDK.
 # Source this file, then call fm_test_pi_package_dir before using the SDK.
 
@@ -66,12 +67,15 @@ fm_test_pi_wrapper_target() {
 
 fm_test_pi_package_dir() {
   local candidate npm_root pi_path resolved next package_dir hops=0
+  # shellcheck disable=SC2034 # consumed by test files that source this helper
   FM_TEST_PI_PACKAGE_DIR=
+  # shellcheck disable=SC2034 # consumed by test files that source this helper
   FM_TEST_PI_PACKAGE_REASON=
 
   if [ -n "${FM_PI_PACKAGE_DIR:-}" ]; then
-    if fm_test_is_pi_package "$FM_PI_PACKAGE_DIR"; then
-      FM_TEST_PI_PACKAGE_DIR=$(cd -P "$FM_PI_PACKAGE_DIR" 2>/dev/null && pwd) || return 1
+    candidate=$(cd -P "$FM_PI_PACKAGE_DIR" 2>/dev/null && pwd) || candidate=
+    if [ -n "$candidate" ] && fm_test_is_pi_package "$candidate"; then
+      FM_TEST_PI_PACKAGE_DIR=$candidate
       return 0
     fi
     FM_TEST_PI_PACKAGE_REASON="FM_PI_PACKAGE_DIR does not name an @earendil-works/pi-coding-agent package"

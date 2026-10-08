@@ -39,8 +39,7 @@ fm_live_gate opt-in FM_PI_BRANCH_LIVE_E2E npm jq node
 export NODE_NO_WARNINGS=1
 
 if ! fm_test_pi_package_dir; then
-  echo "skip: $FM_TEST_PI_PACKAGE_REASON"
-  exit 0
+  fail "requested live Pi suite: $FM_TEST_PI_PACKAGE_REASON"
 fi
 PI_PACKAGE_DIR=$FM_TEST_PI_PACKAGE_DIR
 PI_VERSION=$(jq -r '.version' "$PI_PACKAGE_DIR/package.json" 2>/dev/null || printf 'unknown')
