@@ -1253,7 +1253,9 @@ printf "%s\n" "$prompt" > ../script-prompt.txt
 n=$(cat attempts 2>/dev/null || echo 0)
 echo "$((n + 1))" > attempts
 if printf "%s" "$prompt" | grep -qF AGY_SCRIPT_CONTEXT_MARKER \
-  || printf "%s" "$prompt" | grep -qF "lookup.example/opaque-"; then
+  || printf "%s" "$prompt" | grep -qF "lookup.example/opaque-" \
+  || printf "%s" "$prompt" | grep -qF "bash -c" \
+  || printf "%s" "$prompt" | grep -qF "./bash"; then
   echo "APPROVE: rule 3, operands remain lookup data"
 else
   echo "DECLINE: script contents unavailable"
@@ -1286,24 +1288,24 @@ fi')
 
   hook "$policy" pre-tool-use run_command "bash -c '\"$wt/tf.sh\" fetch https://lookup.example/one'" 17
   [ "$(cat "$attempts")" = 7 ] || fail "a nested agy invocation must not reuse a direct script approval"
-  grep -qF AGY_SCRIPT_CONTEXT_MARKER "$saved" || fail "nested agy scripts must still reach the judge"
+  if grep -qF AGY_SCRIPT_CONTEXT_MARKER "$saved"; then fail "nested agy calls must omit script context"; fi
   hook "$policy" pre-tool-use run_command "bash -c '\"$wt/tf.sh\" fetch https://lookup.example/two'" 18
   hook "$policy" pre-tool-use run_command "bash -c '\"$wt/tf.sh\" fetch https://lookup.example/two'" 19
-  [ "$(cat "$attempts")" = 8 ] || fail "nested agy calls must preserve their full input and reuse only an exact match"
+  [ "$(cat "$attempts")" = 9 ] || fail "nested agy calls must re-judge exact retries"
 
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' --profile default fetch https://lookup.example/one" 28
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' --profile default fetch https://lookup.example/one" 29
-  [ "$(cat "$attempts")" = 9 ] || fail "option-first agy calls must still reuse an exact retry"
+  [ "$(cat "$attempts")" = 10 ] || fail "option-first agy calls must still reuse an exact retry"
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' --profile prod delete item" 30
-  [ "$(cat "$attempts")" = 10 ] || fail "agy must retain the option value and later subcommand in the key"
+  [ "$(cat "$attempts")" = 11 ] || fail "agy must retain the option value and later subcommand in the key"
 
   # The same absolute script from another cwd or with other tool fields must
   # not inherit a verdict whose scope was judged with different metadata.
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 20 \
     "$(jq -nc --arg cwd "$dir/data/t1" '{Cwd:$cwd}')"
-  [ "$(cat "$attempts")" = 11 ] || fail "cwd must remain part of the script cache key"
+  [ "$(cat "$attempts")" = 12 ] || fail "cwd must remain part of the script cache key"
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 21 '{"WaitMsBeforeAsync":1000}'
-  [ "$(cat "$attempts")" = 12 ] || fail "other tool fields must remain part of the script cache key"
+  [ "$(cat "$attempts")" = 13 ] || fail "other tool fields must remain part of the script cache key"
 
   before=$(wc -l < "$dir/state/agy-permission-log.jsonl")
   hook "$policy" judge-probe run_command "'$wt/tf.sh' fetch https://lookup.example/probe" 23
@@ -1320,13 +1322,13 @@ Keep the change narrow.
 DO NOT READ tf.sh.
 EOF
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 22
-  [ "$(cat "$attempts")" = 14 ] || fail "changed read exclusions must still invalidate cached approval"
+  [ "$(cat "$attempts")" = 15 ] || fail "changed read exclusions must still invalidate cached approval"
   denied "$OUT" || fail "the judge must hold this excluded script"
   if grep -qF AGY_SCRIPT_CONTEXT_MARKER "$saved"; then fail "read-restricted script bodies must not be disclosed before judgment"; fi
 
   hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one && git merge origin/main" 24
   denied "$OUT" || fail "always-decline actions must still hold beside a script invocation"
-  [ "$(cat "$attempts")" = 14 ] || fail "always-decline must skip judge and cache"
+  [ "$(cat "$attempts")" = 15 ] || fail "always-decline must skip judge and cache"
 
   printf "# Task\n## Captain's intent\nFix the flaky test.\n## Firstmate spec\nKeep the change narrow.\n" > "$dir/data/t1/brief.md"
   # shellcheck disable=SC2016 # literal task launcher source
@@ -1334,7 +1336,7 @@ EOF
   chmod +x "$wt/bash"
   n=$(cat "$attempts")
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/one' 31
-  grep -qF AGY_TASK_INTERPRETER_MARKER "$saved" || fail "agy must inspect a task-owned launcher's own body"
+  if grep -qF 'Script this call runs:' "$saved"; then fail "agy task-owned launchers must remain opaque"; fi
   printf '# delegated script edit\n' >> "$wt/tf.sh"
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/one' 32
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/two' 33
@@ -1370,7 +1372,7 @@ EOF
   pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
 }
 
-test_task_script_environment_mutations() {
+test_task_script_simple_boundary() {
   local policy dir wt saved attempts prefix cmd n=0
   # shellcheck disable=SC2016 # literal fake judge source
   policy=$(new_case script-environment '
@@ -1391,20 +1393,33 @@ echo "APPROVE: literal operands stay data"')
   printf 'export PATH=.\n' > "$wt/launch-config.sh"
   for prefix in "printf -v PATH '%s' $wt:/usr/bin:/bin;" "printf -vPATH '%s' $wt:/usr/bin:/bin;" \
     "readonly PATH=$wt:/usr/bin:/bin;" "export PATH=$wt:/usr/bin:/bin;" "PATH=$wt:/usr/bin:/bin;" \
-    "hash -p $wt/bash bash;" '. ./launch-config.sh;' "eval 'export PATH=.';"; do
+    "hash -p $wt/bash bash;" '. ./launch-config.sh;' "eval 'export PATH=.';" \
+    "trap '. ./launch-config.sh' DEBUG;" "trap '. ./launch-config.sh' ERR;" "trap '. ./launch-config.sh' RETURN;" \
+    "foo() { PATH=.; }; foo;" "alias bash='./bash';" "printf done;"; do
     for cmd in one one two; do
       printf '# launcher edit\n' >> "$wt/bash"
       hook "$policy" pre-tool-use run_command "$prefix bash tf.sh fetch $cmd"
-      if grep -qF 'Script this call runs:' "$saved"; then fail "prior shell mutations must keep later script context opaque: $prefix"; fi
+      if grep -qF 'Script this call runs:' "$saved"; then fail "non-simple commands must omit script context: $prefix"; fi
     done
     n=$((n + 3))
-    [ "$(cat "$attempts")" = "$n" ] || fail "prior shell mutations must not cache judge approvals: $prefix"
+    [ "$(cat "$attempts")" = "$n" ] || fail "non-simple commands must not cache judge approvals: $prefix"
   done
-  hook "$policy" pre-tool-use run_command "printf done; bash tf.sh fetch one"
-  grep -qF SCRIPT_ENVIRONMENT_MARKER "$saved" || fail "ordinary printf must still allow script context"
-  hook "$policy" pre-tool-use run_command "printf done; bash tf.sh fetch one"
-  [ "$(cat "$attempts")" = "$((n + 1))" ] || fail "ordinary printf must retain exact-input cache reuse"
-  pass "fm-agy-permission-policy: prior shell mutations keep script context opaque and judge approvals uncached"
+  # shellcheck disable=SC2016 # literal expansion/substitution inputs for the hook
+  for cmd in 'env bash tf.sh fetch one' 'command bash tf.sh fetch one' \
+    'source tf.sh' '. ./tf.sh' 'eval "./tf.sh fetch one"' \
+    'bash tf.sh fetch one > /dev/null' 'bash tf.sh fetch *' \
+    'bash tf.sh fetch "$QUERY"' 'bash tf.sh fetch "$(printf one)"' \
+    './tf.sh fetch one && ./tf.sh fetch two' './tf.sh fetch one
+./tf.sh fetch two'; do
+    hook "$policy" pre-tool-use run_command "$cmd"
+    hook "$policy" pre-tool-use run_command "$cmd"
+    n=$((n + 2))
+    [ "$(cat "$attempts")" = "$n" ] || fail "ambiguous calls must judge every retry: $cmd"
+    if grep -qF 'Script this call runs:' "$saved"; then fail "ambiguous calls must omit script context: $cmd"; fi
+  done
+  hook "$policy" pre-tool-use run_command './tf.sh fetch "literal ; () data"'
+  grep -qF SCRIPT_ENVIRONMENT_MARKER "$saved" || fail "quoted literal punctuation must remain eligible"
+  pass "fm-agy-permission-policy: only plain literal invocations receive script context and reusable verdicts"
 }
 
 test_task_script_mutable_scratch_launchers() {
@@ -1552,9 +1567,12 @@ echo "DECLINE: operands change the authorized effects"')
   hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/one' 7
   "$POLICY_SH" approve "$policy" agy-permission-c1-s7 </dev/null >/dev/null 2>&1 || fail "opaque call approval must succeed"
   hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/one' 8
-  abstained "$OUT" && [ "$(cat "$attempts")" = 5 ] || fail "firstmate must still be able to approve an opaque exact retry"
-  hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/two' 9
-  denied "$OUT" && [ "$(cat "$attempts")" = 6 ] || fail "opaque approvals must still retain every operand"
+  abstained "$OUT" && [ "$(cat "$attempts")" = 5 ] || fail "firstmate must be able to approve one opaque call"
+  hook "$policy" post-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/one' 8
+  hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/one' 9
+  denied "$OUT" && [ "$(cat "$attempts")" = 6 ] || fail "opaque calls must not reuse the consumed approval"
+  hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/two' 10
+  denied "$OUT" && [ "$(cat "$attempts")" = 7 ] || fail "opaque approvals must still retain every operand"
   pass "fm-agy-permission-policy: firstmate approvals and declines keep exact input while judge approvals may reuse shapes"
 }
 
@@ -2107,7 +2125,7 @@ test_judge_keeps_a_verdict_a_killed_attempt_already_gave
 test_judge_retry_is_not_weaker_than_the_first_attempt
 test_judge_probe_measures_without_touching_the_task
 test_task_script_contents_and_cache
-test_task_script_environment_mutations
+test_task_script_simple_boundary
 test_task_script_mutable_scratch_launchers
 test_task_script_cache_authority
 test_task_script_firstmate_approval_scope

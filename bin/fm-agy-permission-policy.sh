@@ -31,7 +31,7 @@
 #                              approve, decline, or retire.
 #   approve <key>              firstmate's resolution of a held call: caches
 #                              the verdict so the worker's retry runs. For a
-#                              never-approve or credential call approval is a one-shot
+#                              never-approve, credential, or uncached call approval is a one-shot
 #                              token consumed by one retry; a further retry
 #                              escalates again.
 #   decline <key>              firstmate's refusal of a held call: a retry of
@@ -545,10 +545,10 @@ case "$EVENT" in
       deny "firstmate declined this call; do not retry it"
     fi
     escalate_reason='' escalate_source='first judge'
-    if { [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ]; } && [ -n "$CACHE_DIR" ] \
+    if { [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 1 ]; } && [ -n "$CACHE_DIR" ] \
       && once_key=$(cache_key 2>/dev/null) && [ -n "$once_key" ] \
       && [ -f "$CACHE_DIR/$once_key.once" ]; then
-      # Firstmate's one-shot approval of a never-approve call: the token is
+      # Firstmate's one-shot approval of an uncached call: the token is
       # consumed by this retry, so a further retry escalates again. It is
       # bound to this invocation so a later denied retry cannot borrow proof
       # from an earlier authorized run, even if its post hook never arrived.
@@ -590,7 +590,7 @@ case "$EVENT" in
       if [ ! -e "$marker" ]; then
         ckey=$(cache_key 2>/dev/null || true)
         mclass=judge
-        if [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ]; then mclass=never; fi
+        if [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 1 ]; then mclass=never; fi
         printf '%s\n%s\n%s\n%s\n' "$key" "$summary" "$ckey" "$mclass" \
           > "$marker" 2>/dev/null || true
         status_append "needs-decision [key=$key]: agy worker held a tool call for firstmate - $TOOL ($escalate_source: $(one_line "$escalate_reason" 160)): $(one_line "$summary" 300)"
@@ -648,7 +648,7 @@ case "$EVENT" in
     if [ "$EVENT" = approve ]; then
       [ -n "$pckey" ] && rm -f "$CACHE_DIR/$pckey.declined" 2>/dev/null || true
       if [ "$pclass" = never ]; then
-        # A never-approve call cannot be cache-approved: the next identical
+        # An uncached call cannot be cache-approved: the next identical
         # call would run forever. The approval is a one-shot token the retry
         # consumes, so a further retry escalates again.
         if [ -n "$pckey" ] && mkdir -p "$CACHE_DIR" 2>/dev/null \

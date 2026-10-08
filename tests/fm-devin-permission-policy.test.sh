@@ -1825,10 +1825,10 @@ fi')
 
   hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/one && printf done" script_9
   hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/two && printf done" script_10
-  [ "$(cat "$attempts")" = 8 ] || fail "compound commands must keep their exact input"
+  [ "$(cat "$attempts")" = 8 ] || fail "compound commands must be judged without context or caching"
   printf '\n' >> "$script"
   hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/two && printf done" script_11
-  [ "$(cat "$attempts")" = 9 ] || fail "a compound call must also invalidate an edited script"
+  [ "$(cat "$attempts")" = 9 ] || fail "compound calls must re-judge every retry"
   hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/two && git merge origin/main" script_12
   [ -z "$OUT" ] && [ "$(cat "$attempts")" = 9 ] || fail "always-decline actions must still skip judge and cache"
 
@@ -1933,7 +1933,7 @@ fi')
   chmod +x "$wt/bash"
   n=$(cat "$attempts")
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/one'
-  grep -qF TASK_INTERPRETER_MARKER "$saved" || fail "a task-owned interpreter launcher must show its own body"
+  if grep -qF 'Script this call runs:' "$saved"; then fail "task-owned interpreter launchers must remain opaque"; fi
   printf '# delegated script edit\n' >> "$script"
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/one'
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/two'
@@ -1942,13 +1942,13 @@ fi')
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/two'
   [ "$(cat "$attempts")" = "$((n + 4))" ] || fail "a launcher edit must be judged again"
   PATH="$wt:$PATH" hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/one'
-  grep -qF TASK_INTERPRETER_MARKER "$saved" || fail "PATH-resolved task launchers must show their own body"
+  if grep -qF 'Script this call runs:' "$saved"; then fail "PATH-resolved task launchers must remain opaque"; fi
   PATH="$wt:$PATH" hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/two'
   [ "$(cat "$attempts")" = "$((n + 6))" ] || fail "PATH-resolved task launchers must also be judged again"
   pass "fm-devin-permission-policy: option operands identify the actual script; snapshots/cache need no file utility"
 }
 
-test_task_script_environment_mutations() {
+test_task_script_simple_boundary() {
   local policy dir wt saved attempts prefix cmd n=0
   # shellcheck disable=SC2016 # literal fake judge source
   policy=$(new_case script-environment '
@@ -1969,20 +1969,33 @@ echo "APPROVE: literal operands stay data"')
   printf 'export PATH=.\n' > "$wt/launch-config.sh"
   for prefix in "printf -v PATH '%s' $wt:/usr/bin:/bin;" "printf -vPATH '%s' $wt:/usr/bin:/bin;" \
     "readonly PATH=$wt:/usr/bin:/bin;" "export PATH=$wt:/usr/bin:/bin;" "PATH=$wt:/usr/bin:/bin;" \
-    "hash -p $wt/bash bash;" '. ./launch-config.sh;' "eval 'export PATH=.';"; do
+    "hash -p $wt/bash bash;" '. ./launch-config.sh;' "eval 'export PATH=.';" \
+    "trap '. ./launch-config.sh' DEBUG;" "trap '. ./launch-config.sh' ERR;" "trap '. ./launch-config.sh' RETURN;" \
+    "foo() { PATH=.; }; foo;" "alias bash='./bash';" "printf done;"; do
     for cmd in one one two; do
       printf '# launcher edit\n' >> "$wt/bash"
       hook "$policy" permission-request exec "$prefix bash tf.sh fetch $cmd"
-      if grep -qF 'Script this call runs:' "$saved"; then fail "prior shell mutations must keep later script context opaque: $prefix"; fi
+      if grep -qF 'Script this call runs:' "$saved"; then fail "non-simple commands must omit script context: $prefix"; fi
     done
     n=$((n + 3))
-    [ "$(cat "$attempts")" = "$n" ] || fail "prior shell mutations must not cache judge approvals: $prefix"
+    [ "$(cat "$attempts")" = "$n" ] || fail "non-simple commands must not cache judge approvals: $prefix"
   done
-  hook "$policy" permission-request exec "printf done; bash tf.sh fetch one"
-  grep -qF SCRIPT_ENVIRONMENT_MARKER "$saved" || fail "ordinary printf must still allow script context"
-  hook "$policy" permission-request exec "printf done; bash tf.sh fetch one"
-  [ "$(cat "$attempts")" = "$((n + 1))" ] || fail "ordinary printf must retain exact-input cache reuse"
-  pass "fm-devin-permission-policy: prior shell mutations keep script context opaque and judge approvals uncached"
+  # shellcheck disable=SC2016 # literal expansion/substitution inputs for the hook
+  for cmd in 'env bash tf.sh fetch one' 'command bash tf.sh fetch one' \
+    'source tf.sh' '. ./tf.sh' 'eval "./tf.sh fetch one"' \
+    'bash tf.sh fetch one > /dev/null' 'bash tf.sh fetch *' \
+    'bash tf.sh fetch "$QUERY"' 'bash tf.sh fetch "$(printf one)"' \
+    './tf.sh fetch one && ./tf.sh fetch two' './tf.sh fetch one
+./tf.sh fetch two'; do
+    hook "$policy" permission-request exec "$cmd"
+    hook "$policy" permission-request exec "$cmd"
+    n=$((n + 2))
+    [ "$(cat "$attempts")" = "$n" ] || fail "ambiguous calls must judge every retry: $cmd"
+    if grep -qF 'Script this call runs:' "$saved"; then fail "ambiguous calls must omit script context: $cmd"; fi
+  done
+  hook "$policy" permission-request exec './tf.sh fetch "literal ; () data"'
+  grep -qF SCRIPT_ENVIRONMENT_MARKER "$saved" || fail "quoted literal punctuation must remain eligible"
+  pass "fm-devin-permission-policy: only plain literal invocations receive script context and reusable verdicts"
 }
 
 test_task_script_mutable_scratch_launchers() {
@@ -2122,20 +2135,20 @@ echo "APPROVE: rule 3, operands remain lookup data"')
   [ "$(cat "$attempts")" = 1 ] || fail "direct script calls must still reuse their subcommand"
   hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/two'"
   [ "$(cat "$attempts")" = 2 ] || fail "shell strings must not inherit a direct script's approval"
-  grep -qF NESTED_SCRIPT_MARKER "$saved" || fail "nested scripts must still reach the judge"
+  if grep -qF NESTED_SCRIPT_MARKER "$saved"; then fail "nested calls must omit script context"; fi
   hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three'"
   hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three'"
-  [ "$(cat "$attempts")" = 3 ] || fail "shell strings must retain exact-input caching"
+  [ "$(cat "$attempts")" = 4 ] || fail "shell strings must re-judge exact retries"
   hook "$policy" permission-request exec "eval './tf.sh fetch https://lookup.example/two'"
   hook "$policy" permission-request exec "eval './tf.sh fetch https://lookup.example/three'"
   hook "$policy" permission-request exec "eval './tf.sh fetch https://lookup.example/three'"
-  [ "$(cat "$attempts")" = 5 ] || fail "eval must retain its own exact-input cache key"
+  [ "$(cat "$attempts")" = 7 ] || fail "eval must re-judge exact retries"
   printf '\n' >> "$script"
   hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three'"
-  [ "$(cat "$attempts")" = 6 ] || fail "nested script edits must still invalidate the exact-input key"
+  [ "$(cat "$attempts")" = 8 ] || fail "nested calls must remain uncached after script edits"
   hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three && git merge origin/main'"
-  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 6 ] || fail "nested always-decline actions must still skip judge and cache"
-  pass "fm-devin-permission-policy: nested scripts supply context while preserving their outer exact-input key"
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 8 ] || fail "nested always-decline actions must still skip judge and cache"
+  pass "fm-devin-permission-policy: nested calls omit script context and verdict caching while preserving always-decline rules"
 }
 
 test_task_script_prompt_approval_scope() {
@@ -2170,51 +2183,11 @@ echo "DECLINE: operands change the authorized effects"')
   hook "$policy" permission-request exec 'PATH=. bash tf.sh fetch https://lookup.example/one' prompt_opaque
   hook "$policy" post-tool-use exec 'PATH=. bash tf.sh fetch https://lookup.example/one' prompt_opaque
   hook "$policy" permission-request exec 'PATH=. bash tf.sh fetch https://lookup.example/one' prompt_opaque_retry
-  [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] && [ "$(cat "$attempts")" = 6 ] \
-    || fail "explicit prompt approvals must still authorize an opaque exact retry"
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 7 ] \
+    || fail "opaque calls must not reuse prompt approvals"
   hook "$policy" permission-request exec 'PATH=. bash tf.sh fetch https://lookup.example/two' prompt_opaque_other
-  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 7 ] || fail "an opaque prompt approval must not authorize another operand"
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 8 ] || fail "an opaque prompt approval must not authorize another operand"
   pass "fm-devin-permission-policy: prompt approvals keep exact input and cannot authorize a reusable script shape"
-}
-
-test_task_script_context_budget() {
-  local policy dir wt saved attempts cmd i bytes
-  # shellcheck disable=SC2016 # the body is the fake judge script's own source
-  policy=$(new_case script-budget '
-prompt=
-while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
-cp "$prompt" ../script-prompt.txt
-n=$(cat attempts 2>/dev/null || echo 0)
-echo "$((n + 1))" > attempts
-echo "APPROVE: rule 3, operands remain lookup data"')
-  dir=$(case_dir "$policy")
-  wt=$(jq -r .worktree "$policy")
-  saved="$dir/tmp/script-prompt.txt"
-  attempts="$dir/tmp/devin-permission-judge/attempts"
-  for ((i = 1; i <= 6; i++)); do
-    { printf '# AGGREGATE_SCRIPT_%s\n# ' "$i"; awk 'BEGIN {for (i=0; i<16000; i++) printf "x"}'; printf '\n'; } > "$wt/tf$i.sh"
-  done
-  cmd='./tf1.sh fetch one'
-  for ((i = 1; i < 8; i++)); do cmd="$cmd && ./tf1.sh fetch one"; done
-  hook "$policy" permission-request exec "$cmd"
-  [ "$(grep -c '^Script this call runs:' "$saved")" = 1 ] || fail "repeated snapshots must be shown only once"
-  hook "$policy" permission-request exec "$cmd"
-  [ "$(cat "$attempts")" = 1 ] || fail "deduplicated context must preserve exact-input cache hits"
-
-  cmd='./tf1.sh fetch one'
-  for ((i = 2; i <= 6; i++)); do cmd="$cmd && ./tf$i.sh fetch one"; done
-  hook "$policy" permission-request exec "$cmd"
-  grep -qF AGGREGATE_SCRIPT_1 "$saved" || fail "script context within the budget must still be shown"
-  if grep -qF AGGREGATE_SCRIPT_6 "$saved"; then fail "context beyond the aggregate limit must be omitted"; fi
-  grep -qF 'Additional script contents were omitted' "$saved" || fail "the judge must know when script context is incomplete"
-  bytes=$(awk '/^Script this call runs: / {on=1} on {print}' "$saved" | wc -c)
-  [ "$bytes" -le 65792 ] || fail "script context plus its fixed omission notice must remain bounded: $bytes bytes"
-  hook "$policy" permission-request exec "$cmd"
-  [ "$(cat "$attempts")" = 2 ] || fail "bounded context must preserve exact-input cache hits"
-  printf '\n' >> "$wt/tf6.sh"
-  hook "$policy" permission-request exec "$cmd"
-  [ "$(cat "$attempts")" = 3 ] || fail "even an omitted script edit must invalidate the verdict"
-  pass "fm-devin-permission-policy: script context is deduplicated/bounded while all eligible scripts invalidate the cache"
 }
 
 test_task_script_context_exclusions() {
@@ -2259,7 +2232,7 @@ echo "DECLINE: inspect scope"' "$grants")
   # Inline programs and stdin do not designate the script as the program run.
   printf '# INLINE_SCRIPT_MARKER\n' > "$wt/.scratch/tf.sh"
   hook "$policy" permission-request exec "bash -c '.scratch/tf.sh fetch https://lookup.example/one'"
-  grep -qF INLINE_SCRIPT_MARKER "$saved" || fail "a real script invocation inside a shell string must be shown"
+  if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "shell strings must omit script context"; fi
   hook "$policy" permission-request exec "python3 -c 'pass' .scratch/tf.sh"
   if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "inline code arguments must not be mistaken for a script"; fi
   hook "$policy" permission-request exec "bash .scratch/tf.sh < /dev/null"
@@ -2482,12 +2455,11 @@ test_every_fetch_positional_is_classified
 test_judge_prompt_carries_the_task_contract
 test_task_script_contents_and_cache
 test_task_script_interpreter_options
-test_task_script_environment_mutations
+test_task_script_simple_boundary
 test_task_script_mutable_scratch_launchers
 test_task_script_cache_authority
 test_task_script_nested_cache
 test_task_script_prompt_approval_scope
-test_task_script_context_budget
 test_task_script_context_exclusions
 test_missing_policy_file_still_refuses
 
