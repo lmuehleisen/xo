@@ -6,6 +6,8 @@
 // It retains What Changed and the original attestation bytes, drops generated
 // session evidence, and reports step completion without claiming tests passed.
 // It never creates or edits an attestation; all output still needs the full gate.
+// Retained v1 JSON allows only head_sha, steps (step/status), and optional
+// live_validation (verdict/live/total), with decoded enum and count validation.
 // Private no-mistakes-submissions rows are: <upstream> <fork> <contrib/branch>.
 // Only live GitHub facts bind the body to the approved fork branch and head.
 // This verifies author-editable v1 assertions, not cryptographic provenance.
@@ -80,20 +82,22 @@ try {
       // Never fall back to publishing raw evidence from an eligible body.
       // The original marker stays immutable, so private marker metadata refuses.
       const privateDisplay = /(?:```|~~~|<\/?(?:details|pre)\b|~[/\\]|\/(?:Users|home|tmp|private|var)\/|[A-Z]:\\Users\\|WATCHER DOWN|SUPERVISION IS OFF|^=== |\b[0-9A-HJKMNP-TV-Z]{26}\b|\b\d+(?:\.\d+)?(?:ms|[smh])(?:\d+(?:\.\d+)?[smh])*\b|\b\d{1,2}:\d{2}(?::\d{2})?\b)/im;
-      const privateMetadata = (value) => value && typeof value === "object"
-        && Object.entries(value).some(([key, nested]) =>
-          /(?:run|session|process|pane)[_-]?id|duration|elapsed|started_at|completed_at|timestamp/i.test(key)
-          || privateMetadata(nested));
-      if (privateDisplay.test(changed) || privateDisplay.test(match[0]) || privateMetadata(a)) process.exit(3);
+      const publicFields = (value, keys) => value && typeof value === "object"
+        && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
+      if (!publicFields(a, ["head_sha", "steps", "live_validation"])
+        || !a.steps.every((s) => publicFields(s, ["step", "status"]))
+        || privateDisplay.test(changed) || privateDisplay.test(match[0])) process.exit(3);
       const names = ["intent", "rebase", "review", "test", "document", "lint", "push", "pr", "ci"];
       const statuses = ["completed", "skipped", "running", "pending", "failed"];
       if ([...steps].some(([name, s]) => !names.includes(name) || !statuses.includes(s.status))) process.exit(3);
       const table = [...steps].map(([name, s]) => `| ${name} | ${s.status} |`).join("\n");
       let live = "";
       const v = a.live_validation;
-      if (v && ["go", "no-go", "inconclusive"].includes(v.verdict)
-        && Number.isSafeInteger(v.live) && Number.isSafeInteger(v.total)
-        && v.live >= 0 && v.total >= v.live) {
+      if (Object.hasOwn(a, "live_validation")) {
+        if (!publicFields(v, ["verdict", "live", "total"])
+          || !["go", "no-go", "inconclusive"].includes(v.verdict)
+          || !Number.isSafeInteger(v.live) || !Number.isSafeInteger(v.total)
+          || v.live < 0 || v.total < v.live) process.exit(3);
         live = `\nLive validation: ${v.verdict}; ${v.live} of ${v.total} scenarios driven live.\n`;
       }
       process.stdout.write(`## Intent\n\nThis contribution contains the completed changes summarized below.\n\n## What Changed\n\n${changed}\n\n## Pipeline\n\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n\n${match[0]}\n\nStep completion records pipeline execution, not a claim that every scenario passed.\n\n| Step | Status |\n| --- | --- |\n${table}\n${live}`);

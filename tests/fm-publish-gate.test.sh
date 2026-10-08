@@ -1896,6 +1896,49 @@ SH
   out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.unsafe" 2>&1) && fail "private immutable attestation metadata must refuse"
   assert_contains "$out" 'generated body has unsafe evidence' 'private marker metadata refuses without rewriting marker'
   [ ! -e "$received" ] || fail "private marker metadata reached gh"
+  # The marker is retained byte-for-byte, so its decoded JSON must contain
+  # only the documented public schema, even if unknown fields look harmless.
+  local metadata_case
+  for metadata_case in execution-id escaped-path escaped-key step-extra live-extra live-path live-count; do
+    FM_TEST_METADATA_CASE="$metadata_case" node --input-type=module - "$generated" "$generated.metadata" <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [source, target] = process.argv.slice(2);
+const body = readFileSync(source, "utf8");
+const match = /<!-- no-mistakes-pipeline-attestation:v1 ([\s\S]*?) -->/.exec(body);
+const a = JSON.parse(match[1]);
+switch (process.env.FM_TEST_METADATA_CASE) {
+  case "execution-id": a.execution_id = "fixture-execution"; break;
+  case "escaped-path": a.notes = "/home/example/private-fixture"; break;
+  case "escaped-key": a.execution_id = "fixture-execution"; break;
+  case "step-extra": a.steps[0].execution_id = "fixture-execution"; break;
+  case "live-extra": a.live_validation = { verdict: "go", live: 1, total: 1, notes: "fixture" }; break;
+  case "live-path": a.live_validation = { verdict: "/home/example/private-fixture", live: 1, total: 1 }; break;
+  case "live-count": a.live_validation = { verdict: "go", live: 2, total: 1 }; break;
+}
+// Force literal JSON escapes to reproduce scans that inspect raw bytes only.
+let json = JSON.stringify(a).replaceAll("/", "\\u002f");
+if (process.env.FM_TEST_METADATA_CASE === "escaped-key") json = json.replace("execution_id", "execution\\u005fid");
+writeFileSync(target, body.replace(match[1], () => json));
+JS
+    out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.metadata" 2>&1) && fail "nonpublic attestation metadata must refuse: $metadata_case"
+    assert_contains "$out" 'generated body has unsafe evidence' 'decoded public metadata schema'
+    [ ! -e "$received" ] || fail "nonpublic metadata reached gh"
+  done
+  node --input-type=module - "$generated" "$generated.metadata" <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [source, target] = process.argv.slice(2);
+const body = readFileSync(source, "utf8");
+const match = /<!-- no-mistakes-pipeline-attestation:v1 ([\s\S]*?) -->/.exec(body);
+const a = JSON.parse(match[1]);
+a.live_validation = { verdict: "inconclusive", live: 0, total: 4 };
+// Encoded public enum values still belong to the supported schema.
+const json = JSON.stringify(a).replace('"review"', '"\\u0072eview"');
+writeFileSync(target, body.replace(match[1], () => json));
+JS
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.metadata" 2>&1) || fail "decoded public metadata must pass: $out"
+  assert_equals "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$generated.metadata")" "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$received")" 'encoded public marker remains unchanged'
+  assert_contains "$(cat "$received")" 'Live validation: inconclusive; 0 of 4' 'honest decoded validation counts'
+  rm -f "$received"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/other "body:$body" 2>&1) && fail "unapproved branch must retain ordinary limits"
   out=$(FM_TEST_ATTESTED_HEAD=$(printf '%040d' 8) "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "stale attestation must refuse"
   printf '%s\n' "$PRIVATE_TERM" >>"$body"
@@ -1917,6 +1960,49 @@ SH
   rm -f "$CFG/no-mistakes-submissions"
   reset_trusted_gh
   pass "generated body exception binds destination, fork, branch, head and required steps while retaining literal and secret checks"
+}
+
+# Execute the adapter against independently copied publisher toolbelt versions.
+# A legacy helper, crash, or incomplete refresh must never publish raw/empty input.
+test_runtime_sanitizer_protocol() {
+  local toolbelt="$TMP_ROOT/sanitizer-toolbelt" body="$TMP_ROOT/sanitizer-input.md"
+  local received="$TMP_ROOT/sanitizer-received" out scenario
+  mkdir -p "$toolbelt"
+  cp -R "$ROOT/bin" "$toolbelt/bin"
+  cat >"$FAKEBIN/sanitizer-gh" <<'SH'
+#!/usr/bin/env bash
+cat >"$FM_TEST_SANITIZER_RECEIVED"
+SH
+  chmod +x "$FAKEBIN/sanitizer-gh"
+  {
+    printf '## Intent\n\nA completed fixture change.\n\n## What Changed\n\nThe retry condition is corrected.\n\n## Pipeline\n\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n\n'
+    printf '<!-- no-mistakes-pipeline-attestation:v1 {"head_sha":"%040d","steps":[{"step":"review","status":"completed"},{"step":"test","status":"completed"},{"step":"document","status":"completed"}]} -->\n' 7
+  } >"$body"
+  cat >"$toolbelt/bin/fm-no-mistakes-body.mjs" <<'JS'
+import { readFileSync } from "node:fs";
+switch (process.env.FM_TEST_SANITIZER_CASE) {
+  case "legacy": process.exit(0);
+  case "malformed": process.stdout.write("Not a pipeline publication.\n"); break;
+  case "marker-change": process.stdout.write(readFileSync(process.argv.at(-2), "utf8").replace('"head_sha"', '"changed_head_sha"')); break;
+  case "unknown": process.exit(42);
+  case "signal": process.kill(process.pid, "SIGTERM"); break;
+  case "overflow": process.stdout.write("x".repeat(2 * 1024 * 1024)); break;
+  case "ordinary": process.exit(1);
+}
+JS
+  for scenario in legacy malformed marker-change unknown signal overflow; do
+    rm -f "$received"
+    out=$(FM_TEST_SANITIZER_CASE="$scenario" FM_TEST_SANITIZER_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$toolbelt/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/sanitizer-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) && fail "bad sanitizer result must refuse: $scenario"
+    assert_contains "$out" 'no-mistakes body preparation' 'sanitizer protocol refusal'
+    [ ! -e "$received" ] || fail "bad sanitizer result reached gh: $scenario"
+  done
+  out=$(FM_TEST_SANITIZER_CASE=ordinary FM_TEST_SANITIZER_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$toolbelt/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/sanitizer-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) || fail "documented status 1 should retain ordinary checks: $out"
+  cmp -s "$body" "$received" || fail "ordinary-limit fallback changed stdin bytes"
+  rm -f "$received" "$toolbelt/bin/fm-no-mistakes-body.mjs"
+  out=$(FM_TEST_SANITIZER_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$toolbelt/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/sanitizer-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) && fail "missing sanitizer module must refuse"
+  assert_contains "$out" 'no-mistakes body preparation failed' 'missing module refusal'
+  [ ! -e "$received" ] || fail "missing sanitizer reached gh"
+  pass "legacy/invalid sanitizer output and process failures refuse while status 1 preserves ordinary checks"
 }
 
 test_contribution_poison_and_evidence_adapter() {
@@ -2335,6 +2421,7 @@ test_permission_fixtures_pass_the_secret_scan
 test_policy_text
 test_runtime_stdin_adapter
 test_no_mistakes_body_scope
+test_runtime_sanitizer_protocol
 test_contribution_poison_and_evidence_adapter
 test_local_gate_transport_preserves_hooks
 test_git_adapter_refuses_indirect_publication

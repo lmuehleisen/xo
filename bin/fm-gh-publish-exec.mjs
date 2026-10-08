@@ -6,6 +6,7 @@
 // the existing policy, then forwards the checked stdin bytes on approval.
 // Approved live-head-bound no-mistakes PR stdin bodies are compacted by
 // fm-no-mistakes-body.mjs before checking; ordinary bodies stay byte-identical.
+// Helper failures and empty/malformed successful output refuse publication.
 // Copy this adapter, its policy, and the body helper into an isolated publisher's
 // toolbelt together when refreshing it; a primary checkout update is insufficient.
 // Gist creation from stdin (including no filename) and gh api --input - are
@@ -60,10 +61,26 @@ try {
           config.stdout.trim(), real, target.repo, target.prBase || "", target.prHead || "",
           target.prNumber || "", target.prBranch || "", file, "--sanitize"],
         { encoding: "utf8", maxBuffer: 1024 * 1024 });
+        if (prepared.error || prepared.signal || ![0, 1, 2, 3].includes(prepared.status)
+          || (prepared.status === 1 && (prepared.stdout || prepared.stderr))) {
+          throw new Error("no-mistakes body preparation failed; refresh the publisher toolbelt");
+        }
         if (prepared.status === 2) throw new Error("malformed no-mistakes-submissions config");
         if (prepared.status === 3) throw new Error("generated body has unsafe evidence or an unsupported layout; rewrite its change summary or refresh the pipeline format");
         if (prepared.status === 0) {
-          input = Buffer.from(prepared.stdout);
+          const publication = prepared.stdout;
+          const markers = (text) => text.match(/<!-- no-mistakes-pipeline-attestation:v1 [\s\S]*? -->/g) || [];
+          const originalMarkers = markers(input.toString("utf8"));
+          const publishedMarkers = markers(publication);
+          if (!publication.trim() || publication.includes("\0")
+            || !publication.startsWith("## Intent\n") || !publication.includes("\n## What Changed\n")
+            || !publication.includes("\n## Pipeline\n")
+            || !publication.includes("Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)")
+            || originalMarkers.length !== 1 || publishedMarkers.length !== 1
+            || publishedMarkers[0] !== originalMarkers[0]) {
+            throw new Error("no-mistakes body preparation returned invalid output; refresh the publisher toolbelt");
+          }
+          input = Buffer.from(publication);
           // Use a new immutable snapshot; never rewrite the caller's source.
           const sanitized = path.join(dir, "publication.md");
           writeFileSync(sanitized, input, { mode: 0o400 });
