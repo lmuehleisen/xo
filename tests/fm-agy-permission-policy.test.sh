@@ -1389,7 +1389,8 @@ echo "APPROVE: literal operands stay data"')
   printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$wt/bash"
   chmod +x "$wt/bash"
   printf 'export PATH=.\n' > "$wt/launch-config.sh"
-  for prefix in "export PATH=$wt:/usr/bin:/bin;" "PATH=$wt:/usr/bin:/bin;" \
+  for prefix in "printf -v PATH '%s' $wt:/usr/bin:/bin;" "printf -vPATH '%s' $wt:/usr/bin:/bin;" \
+    "readonly PATH=$wt:/usr/bin:/bin;" "export PATH=$wt:/usr/bin:/bin;" "PATH=$wt:/usr/bin:/bin;" \
     "hash -p $wt/bash bash;" '. ./launch-config.sh;' "eval 'export PATH=.';"; do
     for cmd in one one two; do
       printf '# launcher edit\n' >> "$wt/bash"
@@ -1399,6 +1400,10 @@ echo "APPROVE: literal operands stay data"')
     n=$((n + 3))
     [ "$(cat "$attempts")" = "$n" ] || fail "prior shell mutations must not cache judge approvals: $prefix"
   done
+  hook "$policy" pre-tool-use run_command "printf done; bash tf.sh fetch one"
+  grep -qF SCRIPT_ENVIRONMENT_MARKER "$saved" || fail "ordinary printf must still allow script context"
+  hook "$policy" pre-tool-use run_command "printf done; bash tf.sh fetch one"
+  [ "$(cat "$attempts")" = "$((n + 1))" ] || fail "ordinary printf must retain exact-input cache reuse"
   pass "fm-agy-permission-policy: prior shell mutations keep script context opaque and judge approvals uncached"
 }
 

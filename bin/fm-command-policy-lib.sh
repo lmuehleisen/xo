@@ -2039,8 +2039,10 @@ analyze_segment() {
     JUDGE_SCRIPT_ENV_OPAQUE=1
   fi
   case "${E[0]-}" in
-    export|unset|declare|typeset|local|read|source|.|set|shopt|alias|unalias|hash|enable|function|*'()')
+    export|unset|declare|typeset|local|readonly|let|getopts|mapfile|readarray|read|source|.|set|shopt|alias|unalias|hash|enable|function|*'()')
       JUDGE_SCRIPT_ENV_OPAQUE=1 ;;
+    printf)
+      case "${E[1]-}" in -v*) JUDGE_SCRIPT_ENV_OPAQUE=1 ;; esac ;;
     eval) [ "$JUDGE_SCRIPT_SIMPLE" = 1 ] || JUDGE_SCRIPT_ENV_OPAQUE=1 ;;
   esac
   judge_script_input
