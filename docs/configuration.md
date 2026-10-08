@@ -1241,6 +1241,7 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
 | --- | --- |
 | Class `family` | Required; the model family a second opinion excludes. A harness and model routed by more than one class must keep one family. |
 | Class `unmetered` | Optional boolean; `true` declares every route in the class free of quota consumption, and the class's routes must not declare quota floors. |
+| Class `max_live` | Optional positive integer; excludes the class once its live worker count reaches the cap. Absent means no cap. |
 | Class `routes` | Required non-empty array of profiles, each one way to reach the class's model, validated exactly like a `use` profile. |
 | Class `experiment` | Optional; marks a trial class sampled for `share` (above 0, at most 1) of the tasks its lanes resolve. |
 | Class `data_policy` | Optional; names the `data_policies` entry a task must satisfy before any route of the class is eligible. |
@@ -1258,12 +1259,14 @@ A lane rule's `when`, `approval`, `min_confidence`, and `floor` keep their meani
 Every class route is evaluated like a profile, with a class's `unmetered` flag replacing only provider quota evidence.
 
 - A class with `unmetered: true` replaces provider quota evidence with the explicit label `unmetered (declared)` and a synthetic `spendPriority` of `0`; it does not claim a measured remaining percentage or runway.
-- This fixed score is the pace-neutral boundary: positive measured scores rank ahead, negative scores rank behind, and a tie escalates under the normal tie rule.
+- This fixed score is the pace-neutral boundary: positive measured scores rank ahead and negative scores rank behind.
 - The synthetic zero counts as not spending ahead of pace, so an unmetered route cannot open an `others-ahead-of-pace` gate.
-- Unmetered affects quota evidence only; class data policies, experiment sampling, approval, lane ordering, and other eligibility gates still apply.
+- Unmetered affects quota evidence only; class live caps, data policies, experiment sampling, approval, lane ordering, and other eligibility gates still apply.
 
 - An `ordered` lane takes the first class with any eligible route and ranks only inside that class; an eligible but unranked route keeps its class first rather than falling through to the next class.
 - A `pool` lane ranks every eligible route of every class together.
+- A class at its `max_live` cap is not eligible, so an ordered lane falls through and a pool lane ranks the remaining routes; [`fm-dispatch-resolve.sh`](../bin/fm-dispatch-resolve.sh)'s header owns the metadata counting and advisory-check contract.
+- An exact `spendPriority` tie across classes prefers the class with the fewest live workers and discloses the tie-break; any surviving tie escalates, including tied routes within one class.
 - A class gated `others-ahead-of-pace` stays eligible only while every rankable route of the lane's ungated classes has a negative `spendPriority` (spending ahead of pace) and the gated class's own best route does not; with no rankable ungated route the gate stays closed.
 - An experiment class is sampled from the task text's checksum, so the same brief always samples the same way; a sampled experiment with a rankable route takes the task, and an unsampled one is not eligible.
 - A class with a `data_policy` is eligible only when the task's project is in `allow_projects` or one of its data tags is in `allow_tags`, and never when one of its data tags is in `deny_tags`.
