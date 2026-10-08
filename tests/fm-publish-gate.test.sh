@@ -1884,6 +1884,17 @@ SH
   out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.bad" 2>&1) && fail "normalized changed text must still pass the denylist"
   assert_contains "$out" denylist 'normalized retained text scan'
   [ ! -e "$received" ] || fail "private normalized body reached gh"
+  local unsafe
+  for unsafe in 'WATCHER DOWN - SUPERVISION IS OFF' '~/dev/example-contrib/lab.fixture' 'elapsed 2m50s' '```text' '01AAAAAAAAAAAAAAAAAAAAAAAA'; do
+    sed "s|The retry condition now preserves the expected exit code.|$unsafe|" "$generated" >"$generated.unsafe"
+    out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.unsafe" 2>&1) && fail "unsafe retained summary must refuse deterministically"
+    assert_contains "$out" 'generated body has unsafe evidence' 'unsafe summary refuses before semantic judge'
+    [ ! -e "$received" ] || fail "unsafe summary reached gh"
+  done
+  sed 's/"head_sha"/"run_id":"fixture-run","head_sha"/' "$generated" >"$generated.unsafe"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.unsafe" 2>&1) && fail "private immutable attestation metadata must refuse"
+  assert_contains "$out" 'generated body has unsafe evidence' 'private marker metadata refuses without rewriting marker'
+  [ ! -e "$received" ] || fail "private marker metadata reached gh"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/other "body:$body" 2>&1) && fail "unapproved branch must retain ordinary limits"
   out=$(FM_TEST_ATTESTED_HEAD=$(printf '%040d' 8) "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "stale attestation must refuse"
   printf '%s\n' "$PRIVATE_TERM" >>"$body"

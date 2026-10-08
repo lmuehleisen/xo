@@ -61,6 +61,7 @@ try {
           target.prNumber || "", target.prBranch || "", file, "--sanitize"],
         { encoding: "utf8", maxBuffer: 1024 * 1024 });
         if (prepared.status === 2) throw new Error("malformed no-mistakes-submissions config");
+        if (prepared.status === 3) throw new Error("generated body has unsafe evidence or an unsupported layout; rewrite its change summary or refresh the pipeline format");
         if (prepared.status === 0) {
           input = Buffer.from(prepared.stdout);
           // Use a new immutable snapshot; never rewrite the caller's source.

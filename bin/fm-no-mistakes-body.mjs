@@ -10,6 +10,7 @@
 // Only live GitHub facts bind the body to the approved fork branch and head.
 // This verifies author-editable v1 assertions, not cryptographic provenance.
 // Exit 0 qualifies, 1 retains ordinary limits, 2 refuses malformed config.
+// In sanitize mode, exit 3 refuses an eligible body with an unsafe/unknown layout.
 import { readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -75,10 +76,18 @@ try {
       || (number && actualHead !== a.head_sha)) continue;
     if (mode === "--sanitize") {
       const changed = /^## What Changed\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im.exec(body)?.[1]?.trim();
-      if (!changed) process.exit(1);
+      if (!changed) process.exit(3);
+      // Never fall back to publishing raw evidence from an eligible body.
+      // The original marker stays immutable, so private marker metadata refuses.
+      const privateDisplay = /(?:```|~~~|<\/?(?:details|pre)\b|~[/\\]|\/(?:Users|home|tmp|private|var)\/|[A-Z]:\\Users\\|WATCHER DOWN|SUPERVISION IS OFF|^=== |\b[0-9A-HJKMNP-TV-Z]{26}\b|\b\d+(?:\.\d+)?(?:ms|[smh])(?:\d+(?:\.\d+)?[smh])*\b|\b\d{1,2}:\d{2}(?::\d{2})?\b)/im;
+      const privateMetadata = (value) => value && typeof value === "object"
+        && Object.entries(value).some(([key, nested]) =>
+          /(?:run|session|process|pane)[_-]?id|duration|elapsed|started_at|completed_at|timestamp/i.test(key)
+          || privateMetadata(nested));
+      if (privateDisplay.test(changed) || privateDisplay.test(match[0]) || privateMetadata(a)) process.exit(3);
       const names = ["intent", "rebase", "review", "test", "document", "lint", "push", "pr", "ci"];
       const statuses = ["completed", "skipped", "running", "pending", "failed"];
-      if ([...steps].some(([name, s]) => !names.includes(name) || !statuses.includes(s.status))) process.exit(1);
+      if ([...steps].some(([name, s]) => !names.includes(name) || !statuses.includes(s.status))) process.exit(3);
       const table = [...steps].map(([name, s]) => `| ${name} | ${s.status} |`).join("\n");
       let live = "";
       const v = a.live_validation;
