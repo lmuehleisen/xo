@@ -1320,6 +1320,35 @@ EOF
   pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
 }
 
+test_task_script_firstmate_approval_scope() {
+  local policy dir wt attempts
+  # shellcheck disable=SC2016 # the body is the fake judge script's own source
+  policy=$(new_case script-firstmate-scope '
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+echo "DECLINE: operands change the authorized effects"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  printf '# script with operand-dependent effects\n' > "$wt/tf.sh"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch https://lookup.example/one' 1
+  denied "$OUT" || fail "the judge must hold operand-sensitive calls"
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s1 </dev/null >/dev/null 2>&1 || fail "firstmate approval must succeed"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch https://lookup.example/one' 2
+  abstained "$OUT" && [ "$(cat "$attempts")" = 1 ] || fail "firstmate approval must still cache the exact call"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch https://lookup.example/two' 3
+  denied "$OUT" && [ "$(cat "$attempts")" = 2 ] || fail "firstmate approval must not authorize another operand"
+  "$POLICY_SH" decline "$policy" agy-permission-c1-s3 </dev/null >/dev/null 2>&1 || fail "firstmate decline must succeed"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch https://lookup.example/two' 4
+  denied "$OUT" 'firstmate declined this call' || fail "a declined exact retry must remain suppressed"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch https://lookup.example/three' 5
+  denied "$OUT" 'held for firstmate' && [ "$(cat "$attempts")" = 3 ] || fail "a decline must not spread to another operand"
+  printf '\n' >> "$wt/tf.sh"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch https://lookup.example/one' 6
+  denied "$OUT" && [ "$(cat "$attempts")" = 4 ] || fail "script edits must invalidate exact firstmate approvals too"
+  pass "fm-agy-permission-policy: firstmate approvals and declines keep exact input while judge approvals may reuse shapes"
+}
+
 # Git reads -v before the remote subcommand and a switch-like option after
 # -b <name>, so neither shape may pass as read-and-build: both change state.
 test_git_state_changes_are_not_read_and_build() {
@@ -1869,6 +1898,7 @@ test_judge_keeps_a_verdict_a_killed_attempt_already_gave
 test_judge_retry_is_not_weaker_than_the_first_attempt
 test_judge_probe_measures_without_touching_the_task
 test_task_script_contents_and_cache
+test_task_script_firstmate_approval_scope
 test_git_state_changes_are_not_read_and_build
 test_retire_closes_open_escalations
 test_grants_digest_pins_the_block

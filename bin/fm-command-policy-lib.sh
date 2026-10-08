@@ -55,8 +55,11 @@
 #   omits later literal non-option operands. An option among those operands
 #   keeps exact-input caching. All arguments still reach the judge on a miss;
 #   it may approve the reusable shape only when those operands remain data and
-#   cannot change the authorized effects. Compound calls keep exact-input keys
-#   augmented with the included scripts' hashes; other calls are unchanged.
+#   cannot change the authorized effects. Only judge approvals use this scope;
+#   escalation approvals remain exact. cache_key defaults to exact; its shape
+#   mode is used by cache_store for judge verdicts and checked by cache_lookup
+#   alongside exact approvals, with separate script-key scopes. Compound calls
+#   keep exact-input keys augmented with script hashes; other calls are unchanged.
 #
 #   Task grants: load_grants/grants_block/grants_digest/
 #   fm_grants_digest_of_file/granted_env_file*/granted_task_script/
@@ -3484,21 +3487,24 @@ judge_probe() {  # <static-class>
 
 # The script-context/key contract is in the header. Only approvals are stored;
 # adapters check refusals and never-approve before a reusable cache hit.
-cache_key() {
-  local h='' input=$CACHE_INPUT
+cache_key() {  # [shape] - exact by default, including pending escalation keys
+  local h='' input=$CACHE_INPUT scope=exact
   [ -n "$CACHE_DIR" ] && [ -n "$HASH_CMD" ] && [ -n "$TOOL" ] || return 1
   if [ -n "$JUDGE_SCRIPT_HASHES" ]; then
-    if [ "$JUDGE_SCRIPT_SIMPLE" = 1 ] && [ "$JUDGE_SCRIPT_COUNT" = 1 ] \
+    if [ "${1:-}" = shape ] && [ "$JUDGE_SCRIPT_SIMPLE" = 1 ] && [ "$JUDGE_SCRIPT_COUNT" = 1 ] \
       && [ -z "$NEVER_APPROVE" ] && [ -z "$SENSITIVE_HIT" ] \
       && [ -n "${FM_POLICY_COMMAND_FIELD:-}" ]; then
       # Preserve cwd and all other payload fields. Added read constraints or
       # an unfamiliar payload keep the exact input rather than losing context.
-      input=$(printf '%s' "$CACHE_INPUT" | jq -c \
+      if input=$(printf '%s' "$CACHE_INPUT" | jq -c \
         --arg field "$FM_POLICY_COMMAND_FIELD" --arg cmd "$CMD" --arg shape "$JUDGE_SCRIPT_SHAPE" \
-        'if .[$field] == $cmd then .[$field] = $shape else error("command field mismatch") end' 2>/dev/null) \
-        || input=$CACHE_INPUT
+        'if .[$field] == $cmd then .[$field] = $shape else error("command field mismatch") end' 2>/dev/null); then
+        scope=shape
+      else
+        input=$CACHE_INPUT
+      fi
     fi
-    input="$input"$'\n'"script-contents:$JUDGE_SCRIPT_HASHES"
+    input="$input"$'\n'"script-$scope:$JUDGE_SCRIPT_HASHES"
   fi
   h=$(printf '%s\n%s' "$TOOL" "$input" | $HASH_CMD 2>/dev/null) || return 1
   h=${h%% *}
@@ -3508,18 +3514,21 @@ cache_key() {
 
 CACHE_REASON=
 cache_lookup() {  # sets CACHE_REASON; 0 on a hit
-  local key
+  local key mode
   CACHE_REASON=
-  key=$(cache_key) || return 1
-  [ -f "$CACHE_DIR/$key" ] || return 1
-  IFS= read -r CACHE_REASON < "$CACHE_DIR/$key" 2>/dev/null || CACHE_REASON=''
-  [ -n "$CACHE_REASON" ] || CACHE_REASON="approved earlier in this task"
-  return 0
+  for mode in exact shape; do
+    key=$(cache_key "$mode") || return 1
+    [ -f "$CACHE_DIR/$key" ] || continue
+    IFS= read -r CACHE_REASON < "$CACHE_DIR/$key" 2>/dev/null || CACHE_REASON=''
+    [ -n "$CACHE_REASON" ] || CACHE_REASON="approved earlier in this task"
+    return 0
+  done
+  return 1
 }
 
 cache_store() {  # <reason> [key]
   local key=${2-}
-  [ -n "$key" ] || key=$(cache_key) || return 0
+  [ -n "$key" ] || key=$(cache_key shape) || return 0
   mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
   printf '%s\n' "$(one_line "$1" 200)" > "$CACHE_DIR/$key" 2>/dev/null || true
 }
@@ -3535,8 +3544,8 @@ close_pending() {  # <marker-file> <decision> <resolved-note> [decider]
   { IFS= read -r key; IFS= read -r summary; IFS= read -r ckey; } < "$marker" 2>/dev/null || true
   rm -f "$marker"
   [ -n "$key" ] || return 0
-  # The captain approving the call at the prompt is a verdict worth reusing for
-  # the rest of this task; a call that never ran is not.
+  # Approval at the prompt may be reused for this exact call for the rest of
+  # the task; a call that never ran is not an approval.
   [ "$2" = approved-at-prompt ] && [ -n "$ckey" ] \
     && cache_store "approved at the prompt earlier in this task" "$ckey"
   log_record "$2" "${4:-prompt}" "escalation $key" "$summary"
