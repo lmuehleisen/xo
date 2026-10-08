@@ -1244,7 +1244,7 @@ exit 0')
 }
 
 test_task_script_contents_and_cache() {
-  local policy dir wt root saved attempts before n
+  local policy dir wt root saved attempts before n cmd
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
   policy=$(new_case script-context '
 prompt=
@@ -1252,7 +1252,8 @@ while [ $# -gt 0 ]; do [ "$1" = -p ] && prompt=$2; shift; done
 printf "%s\n" "$prompt" > ../script-prompt.txt
 n=$(cat attempts 2>/dev/null || echo 0)
 echo "$((n + 1))" > attempts
-if printf "%s" "$prompt" | grep -qF AGY_SCRIPT_CONTEXT_MARKER; then
+if printf "%s" "$prompt" | grep -qF AGY_SCRIPT_CONTEXT_MARKER \
+  || printf "%s" "$prompt" | grep -qF "lookup.example/opaque-"; then
   echo "APPROVE: rule 3, operands remain lookup data"
 else
   echo "DECLINE: script contents unavailable"
@@ -1340,6 +1341,28 @@ EOF
   printf '# launcher edit\n' >> "$wt/bash"
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/two' 34
   [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "an agy launcher edit must invalidate its exact approval"
+  for root in "PATH=$wt:/usr/bin:/bin" "env PATH=$wt:/usr/bin:/bin"; do
+    hook "$policy" pre-tool-use run_command "$root bash tf.sh fetch https://lookup.example/one" 35
+    denied "$OUT" || fail "assigned launcher environments must keep the script opaque for agy"
+    if grep -qF AGY_SCRIPT_CONTEXT_MARKER "$saved"; then fail "agy must not show a script selected using the wrong environment"; fi
+  done
+  printf '#!%s\n# AGY_SCRIPT_CONTEXT_MARKER\n' "$wt/bash" > "$wt/shebanged.sh"
+  hook "$policy" pre-tool-use run_command './shebanged.sh fetch https://lookup.example/one' 36
+  denied "$OUT" || fail "a task-owned shebang must keep the script opaque for agy"
+  if grep -qF AGY_SCRIPT_CONTEXT_MARKER "$saved"; then fail "agy must not normalize a script behind a mutable shebang launcher"; fi
+  n=$(cat "$attempts")
+  for root in "PATH=$wt:/usr/bin:/bin" "env PATH=$wt:/usr/bin:/bin"; do
+    for cmd in one one two; do
+      hook "$policy" pre-tool-use run_command "$root bash tf.sh fetch https://lookup.example/opaque-$cmd" 37
+      abstained "$OUT" || fail "an opaque launcher verdict must still reach agy's hook"
+    done
+    [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "agy must not cache judge approvals for assigned launcher environments"
+    n=$((n + 3))
+  done
+  hook "$policy" pre-tool-use run_command './shebanged.sh fetch https://lookup.example/opaque-one' 38
+  printf '# launcher edit\n' >> "$wt/bash"
+  hook "$policy" pre-tool-use run_command './shebanged.sh fetch https://lookup.example/opaque-one' 39
+  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "agy must re-judge a mutable shebang launch after an interpreter edit"
   pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
 }
 
@@ -1369,6 +1392,12 @@ echo "DECLINE: operands change the authorized effects"')
   printf '\n' >> "$wt/tf.sh"
   hook "$policy" pre-tool-use run_command './tf.sh fetch https://lookup.example/one' 6
   denied "$OUT" && [ "$(cat "$attempts")" = 4 ] || fail "script edits must invalidate exact firstmate approvals too"
+  hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/one' 7
+  "$POLICY_SH" approve "$policy" agy-permission-c1-s7 </dev/null >/dev/null 2>&1 || fail "opaque call approval must succeed"
+  hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/one' 8
+  abstained "$OUT" && [ "$(cat "$attempts")" = 5 ] || fail "firstmate must still be able to approve an opaque exact retry"
+  hook "$policy" pre-tool-use run_command 'PATH=. bash tf.sh fetch https://lookup.example/two' 9
+  denied "$OUT" && [ "$(cat "$attempts")" = 6 ] || fail "opaque approvals must still retain every operand"
   pass "fm-agy-permission-policy: firstmate approvals and declines keep exact input while judge approvals may reuse shapes"
 }
 

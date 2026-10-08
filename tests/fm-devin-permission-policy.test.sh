@@ -1770,7 +1770,7 @@ exit 0' '{"credential_env_files": ["~/.config/acme/acme.env"], "remote_writes": 
 }
 
 test_task_script_contents_and_cache() {
-  local policy dir wt script saved attempts captured
+  local policy dir wt script saved attempts captured n cmd prefix
   # shellcheck disable=SC2016 # the body is the fake judge script's own source
   policy=$(new_case script-context '
 prompt=
@@ -1778,7 +1778,9 @@ while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
 cp "$prompt" ../script-prompt.txt
 n=$(cat attempts 2>/dev/null || echo 0)
 echo "$((n + 1))" > attempts
-if ! grep -qF SCRIPT_CONTEXT_MARKER "$prompt"; then
+if grep -qF "lookup.example/opaque-" "$prompt"; then
+  echo "APPROVE: literal operands stay data"
+elif ! grep -qF SCRIPT_CONTEXT_MARKER "$prompt"; then
   echo "DECLINE: script contents unavailable"
 elif grep -qF "gh pr merge" "$prompt"; then
   echo "DECLINE: rule 1, script merges a PR"
@@ -1845,6 +1847,21 @@ fi')
   [ "$(cat "$attempts")" = 12 ] || fail "option-first calls must still reuse an exact retry"
   hook "$policy" permission-request exec '.scratch/tf.sh --profile prod delete item' profile_other
   [ "$(cat "$attempts")" = 13 ] || fail "an option value and later subcommand must not be omitted from the key"
+  n=$(cat "$attempts")
+  for prefix in "PATH=$wt/.scratch:/usr/bin:/bin bash" "env PATH=$wt/.scratch:/usr/bin:/bin bash"; do
+    for cmd in one one two; do
+      hook "$policy" permission-request exec "$prefix .scratch/tf.sh fetch https://lookup.example/opaque-$cmd"
+      [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] || fail "an opaque launcher verdict must still reach the hook"
+    done
+    [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "judge approvals for assigned launcher environments must not be cached"
+    n=$((n + 3))
+  done
+  printf '#!/bin/sh\nexit 0\n' > "$wt/.scratch/local-sh"
+  printf '#!%s\n# SCRIPT_CONTEXT_MARKER\n' "$wt/.scratch/local-sh" > "$wt/.scratch/shebanged.sh"
+  hook "$policy" permission-request exec '.scratch/shebanged.sh fetch https://lookup.example/opaque-one'
+  printf '# launcher edit\n' >> "$wt/.scratch/local-sh"
+  hook "$policy" permission-request exec '.scratch/shebanged.sh fetch https://lookup.example/opaque-one'
+  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "a task-owned shebang launcher must not retain a judge approval after its edit"
   pass "fm-devin-permission-policy: script snapshots reach judge/probe; content, subcommand and invocation shape govern reuse"
 }
 
@@ -1990,6 +2007,13 @@ echo "DECLINE: operands change the authorized effects"')
   printf '\n' >> "$wt/tf.sh"
   hook "$policy" permission-request exec './tf.sh fetch https://lookup.example/one' prompt_edit
   [ -z "$OUT" ] && [ "$(cat "$attempts")" = 5 ] || fail "script edits must invalidate exact prompt approvals too"
+  hook "$policy" permission-request exec 'PATH=. bash tf.sh fetch https://lookup.example/one' prompt_opaque
+  hook "$policy" post-tool-use exec 'PATH=. bash tf.sh fetch https://lookup.example/one' prompt_opaque
+  hook "$policy" permission-request exec 'PATH=. bash tf.sh fetch https://lookup.example/one' prompt_opaque_retry
+  [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] && [ "$(cat "$attempts")" = 6 ] \
+    || fail "explicit prompt approvals must still authorize an opaque exact retry"
+  hook "$policy" permission-request exec 'PATH=. bash tf.sh fetch https://lookup.example/two' prompt_opaque_other
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 7 ] || fail "an opaque prompt approval must not authorize another operand"
   pass "fm-devin-permission-policy: prompt approvals keep exact input and cannot authorize a reusable script shape"
 }
 
@@ -2080,6 +2104,23 @@ echo "DECLINE: inspect scope"' "$grants")
   if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "inline code arguments must not be mistaken for a script"; fi
   hook "$policy" permission-request exec "bash .scratch/tf.sh < /dev/null"
   if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "stdin interpreter forms must keep today's behavior"; fi
+  # shellcheck disable=SC2016 # literal task launcher source
+  printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$wt/.scratch/bash"
+  chmod +x "$wt/.scratch/bash"
+  for target in "PATH=$wt/.scratch:/usr/bin:/bin" "env PATH=$wt/.scratch:/usr/bin:/bin"; do
+    hook "$policy" permission-request exec "$target bash .scratch/tf.sh fetch https://lookup.example/one"
+    if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "assigned launcher environments must keep the original opaque-script behavior"; fi
+  done
+  printf '#!%s\n# MUTABLE_SHEBANG_MARKER\n' "$wt/.scratch/bash" > "$wt/.scratch/shebanged.sh"
+  hook "$policy" permission-request exec '.scratch/shebanged.sh fetch https://lookup.example/one'
+  if grep -qF MUTABLE_SHEBANG_MARKER "$saved"; then fail "a task-owned shebang launcher must keep the script opaque"; fi
+  printf '#!/usr/bin/env bash\n# MUTABLE_SHEBANG_MARKER\n' > "$wt/.scratch/shebanged.sh"
+  PATH="$wt/.scratch:$PATH" hook "$policy" permission-request exec '.scratch/shebanged.sh fetch https://lookup.example/two'
+  if grep -qF MUTABLE_SHEBANG_MARKER "$saved"; then fail "env shebangs must resolve the task-owned launcher before showing context"; fi
+  printf '#!%s bash\n# MUTABLE_SHEBANG_MARKER\n' "$wt/.scratch/env" > "$wt/.scratch/shebanged.sh"
+  printf '#!/bin/sh\nexit 0\n' > "$wt/.scratch/env"
+  hook "$policy" permission-request exec '.scratch/shebanged.sh fetch https://lookup.example/three'
+  if grep -qF MUTABLE_SHEBANG_MARKER "$saved"; then fail "a task-owned env launcher must also keep the script opaque"; fi
   printf "# Task\n## Captain's intent\nDo not read .scratch/tf.sh.\n## Firstmate spec\nKeep the change narrow.\n" > "$dir/data/t1/brief.md"
   hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/one'
   if grep -qF INLINE_SCRIPT_MARKER "$saved"; then fail "read-restricted scripts must not be disclosed before judgment"; fi

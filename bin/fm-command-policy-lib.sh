@@ -44,6 +44,14 @@
 #   context entirely; prose restrictions cannot prove disclosure is allowed.
 #   A task-owned interpreter executable is inspected as the launcher itself
 #   and keeps an exact invocation key, even when found through PATH.
+#   Stripped wrappers/assignments and direct scripts with a task-owned or
+#   unresolvable shebang launcher omit this context and retain the original
+#   exact-input behavior; the hook does not reconstruct environments or launch
+#   chains. A plain /usr/bin/env <program> shebang uses the hook's PATH only
+#   for an unwrapped invocation; more complex env shebangs are omitted too.
+#   Wrapped interpreter calls and unsupported shebang launchers do not cache
+#   judge verdicts. Escalation approvals still use exact input, in a distinct
+#   opaque-launch scope so older automatic approvals cannot be inherited.
 #   This is input for the judge, not a static approval or a
 #   grant: the same always-decline and credential rules govern script effects.
 #   The snapshot shown to the judge also supplies the cache's content hash.
@@ -661,6 +669,7 @@ granted_script_invocation() {
 JUDGE_SCRIPT_INPUT='' JUDGE_SCRIPT_HASHES='' JUDGE_SCRIPT_SHAPE=''
 JUDGE_SCRIPT_COUNT=0 JUDGE_SCRIPT_SIMPLE=0
 JUDGE_SCRIPT_SEEN=() JUDGE_SCRIPT_OMITTED=0
+JUDGE_SCRIPT_UNCACHEABLE=0
 # Follow a file's symlinks without normalizing .. ahead of physical traversal.
 judge_script_path() {  # <word> <cwd>
   local abs link hops=0
@@ -674,10 +683,26 @@ judge_script_path() {  # <word> <cwd>
   printf '%s' "$abs"
 }
 
+judge_script_in_roots() {  # <physical-path>
+  local root
+  for root in "$WORKTREE" "$DATA_DIR" "$TASKTMP"; do
+    [ -n "$root" ] || continue
+    root=$(physical_target "$root" '' 1 2>/dev/null) || continue
+    strictly_inside "$1" "$root" && return 0
+  done
+  return 1
+}
+
 judge_script_input() {
-  local k=0 i abs logical word root phys bytes content hash base snapshot prior context launcher='' interpreter=0
+  local k=0 i abs logical word root phys bytes content hash base snapshot prior context launcher='' interpreter=0 first arg rest
   [ "${#E[@]}" -gt 0 ] || return 0
   base=${E[0]##*/}
+  # Prefixes can change PATH, cwd, or launch semantics. The ambient hook
+  # environment cannot prove which executable such a wrapped call runs.
+  if [ "${#SW[@]}" != "${#E[@]}" ]; then
+    plain_interpreter "$base" && JUDGE_SCRIPT_UNCACHEABLE=1
+    return 0
+  fi
   if plain_interpreter "$base"; then
     [ "${EV[0]}" = 0 ] && [ "${EG[0]}" = 0 ] || return 0
     word=${E[0]}
@@ -689,11 +714,7 @@ judge_script_input() {
     sensitive_text "$logical" && return 0
     granted_env_file "$logical" && return 0
     phys=$(judge_script_path "$word" "$CWD") || return 0
-    for root in "$WORKTREE" "$DATA_DIR" "$TASKTMP"; do
-      [ -n "$root" ] || continue
-      root=$(physical_target "$root" '' 1 2>/dev/null) || continue
-      if strictly_inside "$phys" "$root"; then launcher=$phys; break; fi
-    done
+    judge_script_in_roots "$phys" && launcher=$phys
     if [ -n "$launcher" ]; then
       # A task can change this executable; its name proves no interpreter
       # semantics. Inspect its own body and retain every invocation argument.
@@ -773,13 +794,8 @@ judge_script_input() {
     phys=$(judge_script_path "$root" '') || continue
     [ "$phys" != "$abs" ] || return 0
   done <<<"$GRANT_ENV_FILES"
-  phys=''
-  for root in "$WORKTREE" "$DATA_DIR" "$TASKTMP"; do
-    [ -n "$root" ] || continue
-    root=$(physical_target "$root" '' 1 2>/dev/null) || continue
-    if strictly_inside "$abs" "$root"; then phys=$abs; break; fi
-  done
-  [ -n "$phys" ] && [ -f "$abs" ] && [ -r "$abs" ] || return 0
+  judge_script_in_roots "$abs" || return 0
+  [ -f "$abs" ] && [ -r "$abs" ] || return 0
   bytes=$(wc -c < "$abs" 2>/dev/null) || return 0
   [ "$bytes" -le 16384 ] || return 0
   # Reject NUL and other binary control bytes without depending on `file`.
@@ -791,12 +807,31 @@ judge_script_input() {
   content=${content%.}
   local LC_ALL=C
   [ "${#content}" -le 16384 ] || return 0
+  if [ "$interpreter" = 0 ]; then
+    first=${content%%$'\n'*}
+    case "$first" in
+      '#!'*)
+        IFS=$' \t' read -r word arg rest <<<"${first#\#!}"
+        [ -n "$word" ] || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+        phys=$(judge_script_path "$word" "$CWD") || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+        judge_script_in_roots "$phys" && { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+        if [ "${word##*/}" = env ]; then
+          # The kernel passes an optional shebang argument as one word.
+          # Do not guess at env -S, assignments, or other option forms.
+          case "$arg" in ''|-*|*=*) JUDGE_SCRIPT_UNCACHEABLE=1; return 0 ;; esac
+          [ -z "$rest" ] || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+          word=$(CDPATH='' cd -- "$CWD" 2>/dev/null && command -v -- "$arg") || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+          phys=$(judge_script_path "$word" "$CWD") || { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+          judge_script_in_roots "$phys" && { JUDGE_SCRIPT_UNCACHEABLE=1; return 0; }
+        fi
+        ;;
+    esac
+  fi
   [ -n "$HASH_CMD" ] || return 0
   hash=$(printf '%s' "$content" | $HASH_CMD 2>/dev/null) || return 0
   hash=${hash%% *}
   case "$hash" in ''|*[!0-9a-f]*) return 0 ;; esac
   JUDGE_SCRIPT_COUNT=$((JUDGE_SCRIPT_COUNT + 1))
-  [ "${#SW[@]}" = "${#E[@]}" ] || JUDGE_SCRIPT_SIMPLE=0
   for ((i = 0; i < ${#E[@]}; i++)); do
     [ "${EV[i]}" = 0 ] && [ "${EG[i]}" = 0 ] || JUDGE_SCRIPT_SIMPLE=0
     if [ "$i" -gt "$k" ]; then
@@ -3197,6 +3232,7 @@ evaluate_exec() {
   JUDGE_SCRIPT_INPUT='' JUDGE_SCRIPT_HASHES='' JUDGE_SCRIPT_SHAPE=''
   JUDGE_SCRIPT_COUNT=0 JUDGE_SCRIPT_SIMPLE=1
   JUDGE_SCRIPT_SEEN=() JUDGE_SCRIPT_OMITTED=0
+  JUDGE_SCRIPT_UNCACHEABLE=0
   # shellcheck disable=SC2034 # output global; the agy adapter reads it after evaluate_exec.
   SENSITIVE_HIT=''
   FETCH_FILES=''
@@ -3524,8 +3560,10 @@ judge_probe() {  # <static-class>
 cache_key() {  # [shape] - exact by default, including pending escalation keys
   local h='' input=$CACHE_INPUT scope=exact
   [ -n "$CACHE_DIR" ] && [ -n "$HASH_CMD" ] && [ -n "$TOOL" ] || return 1
+  [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] || input="$input"$'\n'"script-opaque-launch"
   if [ -n "$JUDGE_SCRIPT_HASHES" ]; then
     if [ "${1:-}" = shape ] && [ "$JUDGE_SCRIPT_SIMPLE" = 1 ] && [ "$JUDGE_SCRIPT_COUNT" = 1 ] \
+      && [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] \
       && [ -z "$NEVER_APPROVE" ] && [ -z "$SENSITIVE_HIT" ] \
       && [ -n "${FM_POLICY_COMMAND_FIELD:-}" ]; then
       # Preserve cwd and all other payload fields. Added read constraints or
@@ -3562,6 +3600,7 @@ cache_lookup() {  # sets CACHE_REASON; 0 on a hit
 
 cache_store() {  # <reason> [key]
   local key=${2-}
+  [ -n "$key" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] || return 0
   [ -n "$key" ] || key=$(cache_key shape) || return 0
   mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
   printf '%s\n' "$(one_line "$1" 200)" > "$CACHE_DIR/$key" 2>/dev/null || true
