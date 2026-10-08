@@ -1885,6 +1885,7 @@ SH
   assert_contains "$out" denylist 'normalized retained text scan'
   [ ! -e "$received" ] || fail "private normalized body reached gh"
   local unsafe
+  # shellcheck disable=SC2088 # literal synthetic home-relative path, never expand it
   for unsafe in 'WATCHER DOWN - SUPERVISION IS OFF' '~/dev/example-contrib/lab.fixture' 'elapsed 2m50s' '```text' '01AAAAAAAAAAAAAAAAAAAAAAAA'; do
     sed "s|The retry condition now preserves the expected exit code.|$unsafe|" "$generated" >"$generated.unsafe"
     out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.unsafe" 2>&1) && fail "unsafe retained summary must refuse deterministically"
