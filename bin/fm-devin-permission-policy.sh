@@ -186,6 +186,7 @@ esac
 # judge skeleton, verdict cache, pending markers).
 # shellcheck source=bin/fm-command-policy-lib.sh
 . "$SCRIPT_DIR/fm-command-policy-lib.sh"
+FM_POLICY_COMMAND_FIELD=command
 # The judge budget is pinned per adapter so an inherited JUDGE_BUDGET cannot
 # stretch a hook invocation past the timeout the harness grants it; 100s fits
 # inside this adapter's 120s permission-hook timeout.

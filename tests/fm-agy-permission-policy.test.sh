@@ -1243,6 +1243,74 @@ exit 0')
   pass "fm-agy-permission-policy: judge-probe reports a tier's verdict and writes nothing"
 }
 
+test_task_script_contents_and_cache() {
+  local policy dir wt root saved attempts before
+  # shellcheck disable=SC2016 # the body is the fake judge script's own source
+  policy=$(new_case script-context '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = -p ] && prompt=$2; shift; done
+printf "%s\n" "$prompt" > ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+if printf "%s" "$prompt" | grep -qF AGY_SCRIPT_CONTEXT_MARKER; then
+  echo "APPROVE: rule 3, operands remain lookup data"
+else
+  echo "DECLINE: script contents unavailable"
+fi')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  for root in "$wt" "$dir/data/t1" "$dir/tmp"; do
+    printf '#!/usr/bin/env bash\n# AGY_SCRIPT_CONTEXT_MARKER\nprintf "lookup: %%s\\n" "$2"\n' > "$root/tf.sh"
+    hook "$policy" pre-tool-use run_command "'$root/tf.sh' fetch https://lookup.example/one"
+    abstained "$OUT" || fail "task-owned script contents must reach the agy judge: $OUT"
+    grep -qF "Script this call runs:" "$saved" || fail "prompt must identify the script run"
+    grep -qF 'printf "lookup: %s\n" "$2"' "$saved" || fail "agy prompt must contain the script body"
+    hook "$policy" pre-tool-use run_command "'$root/tf.sh' fetch https://lookup.example/two"
+    [ "$(tail -1 "$dir/state/agy-permission-log.jsonl" | jq -r .decider)" = cache ] \
+      || fail "agy must reuse the script/subcommand approval for another URL"
+  done
+  [ "$(cat "$attempts")" = 3 ] || fail "different script paths must each be judged once"
+  printf '\n' >> "$wt/tf.sh"
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one"
+  [ "$(cat "$attempts")" = 4 ] || fail "an edited agy script must be judged again"
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' search 'another query'"
+  [ "$(cat "$attempts")" = 5 ] || fail "a different subcommand must be judged again"
+  hook "$policy" pre-tool-use run_command "bash -eu '$wt/tf.sh' fetch https://lookup.example/one"
+  hook "$policy" pre-tool-use run_command "bash -eu '$wt/tf.sh' fetch https://lookup.example/two"
+  [ "$(cat "$attempts")" = 6 ] || fail "agy must also reuse plain-interpreter script calls"
+
+  # The same absolute script from another cwd or with other tool fields must
+  # not inherit a verdict whose scope was judged with different metadata.
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 20 \
+    "$(jq -nc --arg cwd "$dir/data/t1" '{Cwd:$cwd}')"
+  [ "$(cat "$attempts")" = 7 ] || fail "cwd must remain part of the script cache key"
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 21 '{"WaitMsBeforeAsync":1000}'
+  [ "$(cat "$attempts")" = 8 ] || fail "other tool fields must remain part of the script cache key"
+  cat > "$dir/data/t1/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Fix the flaky test.
+## Firstmate spec
+Keep the change narrow.
+DO NOT READ sibling research directories.
+EOF
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one" 22
+  [ "$(cat "$attempts")" = 9 ] || fail "changed read exclusions must still invalidate cached approval"
+
+  before=$(wc -l < "$dir/state/agy-permission-log.jsonl")
+  hook "$policy" judge-probe run_command "'$wt/tf.sh' fetch https://lookup.example/probe" 23
+  case "$OUT" in *static=residue*verdict=approve*) ;; *) fail "probe must see the same script context: $OUT" ;; esac
+  grep -qF https://lookup.example/probe "$saved" || fail "probe must still show the full input"
+  [ "$(wc -l < "$dir/state/agy-permission-log.jsonl")" = "$before" ] || fail "script probe must not write the observer log"
+
+  hook "$policy" pre-tool-use run_command "'$wt/tf.sh' fetch https://lookup.example/one && git merge origin/main" 24
+  denied "$OUT" || fail "always-decline actions must still hold beside a script invocation"
+  [ "$(cat "$attempts")" = 10 ] || fail "always-decline must skip judge and cache"
+  pass "fm-agy-permission-policy: task-root scripts reach judge/probe and cache by content/shape while retaining scope"
+}
+
 # Git reads -v before the remote subcommand and a switch-like option after
 # -b <name>, so neither shape may pass as read-and-build: both change state.
 test_git_state_changes_are_not_read_and_build() {
@@ -1791,6 +1859,7 @@ test_judge_tier_is_selected_never_assumed
 test_judge_keeps_a_verdict_a_killed_attempt_already_gave
 test_judge_retry_is_not_weaker_than_the_first_attempt
 test_judge_probe_measures_without_touching_the_task
+test_task_script_contents_and_cache
 test_git_state_changes_are_not_read_and_build
 test_retire_closes_open_escalations
 test_grants_digest_pins_the_block

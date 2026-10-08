@@ -135,6 +135,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/fm-command-policy-lib.sh"
 
 FM_POLICY_EXEC_TOOL=run_command
+FM_POLICY_COMMAND_FIELD=CommandLine
 # This launch runs under agy's full bypass, so the shared analysis refuses
 # statically visible writes and removals outside the task write roots
 # outright rather than sending them to a judge with no native prompt behind
