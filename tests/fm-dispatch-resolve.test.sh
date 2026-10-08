@@ -110,7 +110,7 @@ cat > "$FAKEBIN/curl" <<'SH'
 # Fake curl: records argv (minus the -o target), the stdin body, and the header
 # read from fd 3, then answers with FAKE_CURL_RESPONSE and FAKE_CURL_HTTP.
 set -u
-if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ]; then
+if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${DISPATCH_API_KEY_PRIVATE+x}" ] || [ -n "${OPENROUTER_API_KEY+x}" ]; then
   printf 'curl:secret-present\n' >> "${CHILD_ENV_LOG:?}"
 else
   printf 'curl:clean\n' >> "${CHILD_ENV_LOG:?}"
@@ -138,7 +138,7 @@ chmod +x "$FAKEBIN/curl"
 cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
 set -u
-if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ]; then
+if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${DISPATCH_API_KEY_PRIVATE+x}" ] || [ -n "${OPENROUTER_API_KEY+x}" ]; then
   printf 'quota-axi:secret-present\n' >> "${CHILD_ENV_LOG:?}"
 else
   printf 'quota-axi:clean\n' >> "${CHILD_ENV_LOG:?}"
@@ -210,6 +210,7 @@ run_without_curl() {
   printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
 }
 
+unset TYPESAFE_API_KEY OPENROUTER_API_KEY
 KEY='test-key-9f1c2d3e-never-on-argv'
 code='' out='' err=''
 
@@ -220,6 +221,7 @@ run code out err "$BRIEF" --project pager
 expect_code 0 "$code" "absent key exits 0"
 assert_equals '' "$out" "absent key prints nothing on stdout"
 assert_contains "$err" 'dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and' "absent key explains itself on stderr"
+assert_contains "$err" 'OPENROUTER_API_KEY absent from' "off line names the second provider"
 assert_absent "$LOG/argv" "absent key never calls curl"
 assert_absent "$LOG/quota-axi.calls" "absent key never reads quota-axi"
 pass "absent key is off: one stderr line, exit 0, no network call"
@@ -242,6 +244,39 @@ reset_log
 TYPESAFE_API_KEY=$KEY FM_CONFIG_OVERRIDE="$OVERRIDE_CONFIG" run code out err "$BRIEF" --project pager
 assert_contains "$out" '  status: clear' "FM_CONFIG_OVERRIDE selects the canonical rules directory"
 pass "TYPESAFE_API_KEY= in .env activates the tool; environment and config overrides work"
+
+# --- OpenRouter is opt-in through the home .env only -------------------------
+reset_log
+OPENROUTER_API_KEY=environment-only run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "environment-only OpenRouter key exits 0"
+assert_equals '' "$out" "environment-only OpenRouter key leaves resolution off"
+assert_contains "$err" 'dispatch-resolve: off' "environment-only OpenRouter key is ignored"
+assert_absent "$LOG/argv" "environment-only OpenRouter key never calls curl"
+assert_absent "$LOG/quota-axi.calls" "environment-only OpenRouter key never reads quota"
+printf 'OPENROUTER_API_KEY="%s"\n' "$KEY" > "$HOME_DIR/.env"
+reset_log
+OPENROUTER_API_KEY=environment-ignored run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "OpenRouter .env key resolves"
+assert_contains "$out" '  status: clear' "OpenRouter uses unchanged answer handling"
+assert_contains "$(cat "$LOG/argv")" 'https://openrouter.ai/api/v1/systemone' "OpenRouter endpoint is used"
+assert_equals '~typesafe/jev-latest' "$(jq -r .model "$LOG/body")" "OpenRouter moving alias is used"
+assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "OpenRouter .env key reaches curl on fd 3"
+assert_not_contains "$(cat "$LOG/argv")" "$KEY" "OpenRouter key never appears on argv"
+assert_equals $'curl:clean\nquota-axi:clean' "$(cat "$LOG/child-env")" "OpenRouter key is absent from child environments"
+openrouter_body=$(jq -c 'del(.model)' "$LOG/body")
+reset_log
+TYPESAFE_API_KEY=typesafe-wins run code out err "$BRIEF" --project pager
+assert_contains "$(cat "$LOG/argv")" 'https://api.typesafe.ai/v1/systemone' "TypeSafe environment key wins over OpenRouter .env key"
+assert_equals 'jev-latest' "$(jq -r .model "$LOG/body")" "TypeSafe model is preserved"
+assert_equals 'Authorization: Bearer typesafe-wins' "$(cat "$LOG/header")" "TypeSafe key wins"
+assert_equals "$openrouter_body" "$(jq -c 'del(.model)' "$LOG/body")" "only the model differs in the request body"
+printf 'TYPESAFE_API_KEY=typesafe-file-wins\n' >> "$HOME_DIR/.env"
+reset_log
+run code out err "$BRIEF" --project pager
+assert_contains "$(cat "$LOG/argv")" 'https://api.typesafe.ai/v1/systemone' "TypeSafe .env key wins over OpenRouter .env key"
+assert_equals 'Authorization: Bearer typesafe-file-wins' "$(cat "$LOG/header")" "TypeSafe .env key wins"
+rm -f "$HOME_DIR/.env"
+pass "OpenRouter .env opt-in preserves the request, answer handling, and TypeSafe precedence"
 
 # --- provider scope reaches the snapshot, including config overrides --------
 reset_log
@@ -335,6 +370,11 @@ printf '%s\n' '# private values' '' '  acme-ledger  ' > "$NEVER_SEND"
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$PRIVATE_BRIEF" --project pager
 expect_withheld "a case-insensitive literal match" "brief text matches $NEVER_SEND line 3" 'acme-ledger' 'Acme-Ledger'
+printf 'OPENROUTER_API_KEY=%s\n' "$KEY" > "$HOME_DIR/.env"
+reset_log
+run code out err "$PRIVATE_BRIEF" --project pager
+expect_withheld "an OpenRouter literal match" "brief text matches $NEVER_SEND line 3" 'acme-ledger' 'Acme-Ledger'
+rm -f "$HOME_DIR/.env"
 
 WRAPPED_BRIEF="$TMP_ROOT/wrapped-brief.md"
 printf '# Task\n## Captain'"'"'s intent\nFix the pager for Example Client\nLtd before\tthe\xc2\xa0release.\n' > "$WRAPPED_BRIEF"

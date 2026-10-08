@@ -9,13 +9,17 @@
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
 #   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
 #   accessor as FMX_PAIRING_TOKEN (bin/fm-env-lib.sh). The environment wins.
-#   Absent in both: one "dispatch-resolve: off" line on stderr, nothing on
+#   TypeSafe wins when both keys exist; otherwise OPENROUTER_API_KEY is read
+#   only from $FM_HOME/.env, never the environment, as deliberate opt-in.
+#   Absent for both providers: one "dispatch-resolve: off" line on stderr, nothing on
 #   stdout, exit 0, no network call, so firstmate dispatches exactly as today.
 #   The key lives in one shell variable and reaches curl as a header read from
 #   a file descriptor, never on argv; nothing logs or writes it.
 #
 # What it does when on with at least one rule: one POST to
-#   https://api.typesafe.ai/v1/systemone with the project name and the brief's
+#   https://api.typesafe.ai/v1/systemone (jev-latest), or
+#   https://openrouter.ai/api/v1/systemone (~typesafe/jev-latest),
+#   with the project name and the brief's
 #   `## Captain's intent` and `## Firstmate spec` sections, tagged when it is a
 #   scout brief (the whole brief when it has neither section), as state and
 #   ONE Choice question whose options are every rule's `when` from
@@ -55,7 +59,7 @@
 #   class, for a second opinion; it needs a lane, so a `use` rule or the
 #   default escalates.
 #   --lane <name> resolves that lane rule directly: no Choice request, so no
-#   TYPESAFE_API_KEY, curl, or never-send check is needed; it still reads the
+#   API key, curl, or never-send check is needed; it still reads the
 #   one quota snapshot.
 #
 # Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
@@ -95,16 +99,17 @@
 #   and each bound's usableRunwaySeconds; unknown runway remains unranked.
 #
 # Environment:
-#   TYPESAFE_API_KEY is the only resolver-specific environment setting.
+#   TYPESAFE_API_KEY activates resolution; OPENROUTER_API_KEY is ignored here
+#   and is accepted only from the home .env.
 #
 # Authority: this tool never replaces firstmate's judgment, quota-array-dispatch,
 #   the captain-approval gate, or fm-spawn.sh validation; it publishes one
 #   inspectable answer plus every candidate's evidence, in code.
 set -u
 
-TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
-export -n TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
-unset TYPESAFE_API_KEY
+DISPATCH_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
+export -n DISPATCH_API_KEY_PRIVATE 2>/dev/null || true
+unset TYPESAFE_API_KEY OPENROUTER_API_KEY
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -180,11 +185,16 @@ done
 # ---- opt-in gate ---------------------------------------------------------------
 # A named --lane sends no Choice request, so it needs no key.
 if [ -z "$LANE" ]; then
-  if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
-    TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
+  if [ -z "$DISPATCH_API_KEY_PRIVATE" ]; then
+    DISPATCH_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
   fi
-  if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
-    echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env)" >&2
+  if [ -z "$DISPATCH_API_KEY_PRIVATE" ]; then
+    DISPATCH_API_KEY_PRIVATE=$(fmx_env_get OPENROUTER_API_KEY "$FM_HOME/.env")
+    TS_BASE=https://openrouter.ai/api
+    TS_MODEL='~typesafe/jev-latest'
+  fi
+  if [ -z "$DISPATCH_API_KEY_PRIVATE" ]; then
+    echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env; OPENROUTER_API_KEY absent from $FM_HOME/.env)" >&2
     exit 0
   fi
 fi
@@ -420,7 +430,7 @@ else
   T0=$(fm_timing_now_ms)
   HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
     -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
-    -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE") \
+    -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$DISPATCH_API_KEY_PRIVATE") \
     --data-binary @- 2>/dev/null) || HTTP=000
   T1=$(fm_timing_now_ms)
   LAT_MS=$(( T1 - T0 ))
