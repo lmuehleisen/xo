@@ -28,7 +28,7 @@ set -o pipefail
 head=c2eac54c17a1ddc2633ad51b83e21e5fe888142e
 serve() {
   case "$*" in
-    "pr view "*" --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision --jq "*)
+    "pr view "*" --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt --jq "*)
       jq -n --arg head "$head" --arg state "${FM_TEST_STATE-OPEN}" \
         --arg merged "${FM_TEST_MERGED_AT-}" --arg draft "${FM_TEST_DRAFT-false}" \
         --arg mergeable "${FM_TEST_VIEW_MERGEABLE-MERGEABLE}" \
@@ -37,7 +37,12 @@ serve() {
           isDraft: ($draft == "true"), headRefOid: $head,
           author: {login: "prauthor", is_bot: false},
           mergeable: (if $mergeable == "null" then null else $mergeable end),
-          reviewDecision: $decision}'
+          reviewDecision: $decision, updatedAt: (env.FM_TEST_UPDATED_AT // "2020-01-01T00:00:00Z")}'
+      ;;
+    "api graphql "*)
+      [ "${FM_TEST_THREAD_ERROR:-0}" = 0 ] || exit 1
+      threads='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+      printf '%s\n' "${FM_TEST_THREADS:-$threads}"
       ;;
     "api /repos/o/r/pulls/7/reviews?per_page=100 --paginate --jq "*)
       printf '%s\n' "${FM_TEST_REVIEWS:-[]}"
@@ -231,8 +236,8 @@ test_help_states_what_silence_means_and_what_is_out_of_scope() {
     "help must not let empty output read as a verdict that the pull request can merge"
   assert_contains "$out" 'is absent from what this command reads' \
     "help must name the limit: a required context that never reported is absent from what is read"
-  assert_contains "$out" "Unresolved review-thread state is out of this command's scope" \
-    "help must state the thread-resolution boundary without inventing a reason for it"
+  assert_contains "$out" "Unresolved bot inline threads are printed with their comments for triage" \
+    "help must name the bot-thread read"
   pass "help states what empty output means and what is out of scope"
 }
 
@@ -284,3 +289,31 @@ test_no_reported_checks_is_unverified
 test_help_states_what_silence_means_and_what_is_out_of_scope
 test_unknown_mergeability_is_a_blocker
 test_refusals_exit_nonzero
+
+test_bot_threads_and_settle() {
+  local out threads empty_page
+  threads=$(jq -n '{data:{repository:{pullRequest:{reviewThreads:{nodes:[
+    {isResolved:false, comments:{pageInfo:{hasNextPage:false},nodes:[
+      {author:{__typename:"Bot",login:"review-bot"},url:"https://github.com/o/r/pull/7#discussion_r1",path:"bin/tool.sh",line:3,body:"Real finding"}]}},
+    {isResolved:true, comments:{pageInfo:{hasNextPage:false},nodes:[
+      {author:{__typename:"Bot",login:"review-bot"},body:"Resolved finding"}]}},
+    {isResolved:false, comments:{pageInfo:{hasNextPage:false},nodes:[
+      {author:{__typename:"User",login:"alice"},body:"Human note"}]}}
+  ]}}}}}')
+  # gh --paginate streams one JSON object per thread page.
+  empty_page='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+  out=$(FM_TEST_THREADS=$(printf '%s\n%s' "$empty_page" "$threads") run_state) || fail "bot thread lookup refused"
+  assert_contains "$out" 'BOT REVIEW THREAD:' "unresolved bot thread blocks ready"
+  assert_contains "$out" 'Real finding' "the finding is read, not just counted"
+  assert_not_contains "$out" 'Resolved finding' "resolved thread does not block"
+  assert_not_contains "$out" 'Human note' "human comment does not become a bot finding"
+  out=$(FM_TEST_UPDATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) run_state) || fail "recent PR lookup refused"
+  assert_contains "$out" 'BOT REVIEW SETTLE:' "recent activity waits for late reviews"
+  out=$(FM_TEST_THREAD_ERROR=1 run_state 2>&1) && fail "thread lookup failure passed readiness"
+  assert_contains "$out" 'could not read bot review threads' "thread lookup failure is explicit"
+  threads=$(printf '%s' "$threads" | jq '.data.repository.pullRequest.reviewThreads.nodes[0].comments.pageInfo.hasNextPage=true')
+  out=$(FM_TEST_THREADS="$threads" run_state) || fail "truncated thread lookup refused"
+  assert_contains "$out" 'unread replies beyond first 100' "nested pagination never silently truncates"
+  pass "bot findings, settle window, unread replies, and lookup failures prevent premature readiness"
+}
+test_bot_threads_and_settle

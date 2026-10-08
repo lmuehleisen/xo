@@ -581,3 +581,37 @@ test_post_enqueue_bookkeeping_failure_is_not_retryable
 test_meta_lock_contention_fails_bounded
 test_unwritable_inbox_fails_loudly
 test_empty_message_refused
+
+# Exercise the actual retry executable and fm-send together, so a stub sender
+# cannot accidentally accept a delivery option that production refuses.
+test_worker_provider_retry_rides_real_inbox() {
+  local dir err kind rc count action
+  for kind in ship scout; do
+    dir=$(setup_case "provider-retry-$kind")
+    err="$dir/send.err"
+    fm_write_meta "$dir/home/state/t1.meta" "window=sess:fm-t1" "kind=$kind" "harness=opencode"
+    printf 'paused [at=1] [key=provider-rate-limit]: provider rate limit until 2000-01-01T00:00:00Z\n' > "$dir/home/state/t1.status"
+    env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_SEND_LOG="$dir/send.log" \
+      FM_SEND_SETTLE=0 "$ROOT/bin/fm-rate-limit-retry.sh" t1 > "$dir/retry.out" 2> "$err" \
+      || fail "ordinary $kind retry was refused: $(cat "$err")"
+    [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "$kind retry did not reach the real inbox"
+    assert_contains "$(record_body "$dir" "$dir/home/state/t1.inbox/001.msg")" 'same model and provider' \
+      "$kind received its resume instruction"
+    touch -t 200001010000 "$dir/home/state/t1.inbox/001.msg"
+    action=$(FM_HOME="$dir/home" bash -c '. "$1"; fm_task_inbox_due_action "$2" t1' _ \
+      "$ROOT/bin/fm-task-inbox-lib.sh" "$dir/home/state")
+    [ "$action" = quiet ] || fail "provider retry entered the delivery escalation ladder: $action"
+    # An exact repeated delivery id stays one record; a later hourly id is new.
+    run_send "$dir" "$err" -- t1 --fire-and-forget 0123456789abcdef 'continue' || fail "$kind fire-and-forget refused"
+    run_send "$dir" "$err" -- t1 --fire-and-forget 0123456789abcdef 'continue' || fail "$kind exact resend refused"
+    count=$(find "$dir/home/state/t1.inbox" -maxdepth 1 -name '*.msg' | wc -l | tr -d ' ')
+    [ "$count" = 2 ] || fail "exact $kind resend duplicated delivery: $count"
+    run_send "$dir" "$err" -- t1 --fire-and-forget 1123456789abcdef 'continue' || fail "$kind later delivery refused"
+    count=$(find "$dir/home/state/t1.inbox" -maxdepth 1 -name '*.msg' | wc -l | tr -d ' ')
+    [ "$count" = 3 ] || fail "distinct $kind delivery id was lost"
+    run_send "$dir" "$err" -- sess:fm-t1 --fire-and-forget 2123456789abcdef 'continue'; rc=$?
+    [ "$rc" -ne 0 ] || fail "explicit endpoint got task-only fire-and-forget mode"
+  done
+  pass "ordinary provider retries deliver through real fm-send, deduplicate, and skip inbox escalation"
+}
+test_worker_provider_retry_rides_real_inbox

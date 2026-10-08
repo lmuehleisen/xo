@@ -16,7 +16,12 @@
 # each reviewer whose latest verdict still requests changes and marking it
 # STALE when it was left at a superseded head.
 # A closed or merged pull request reports that terminal state and nothing else.
-# Unresolved review-thread state is out of this command's scope.
+# Unresolved bot inline threads are printed with their comments for triage.
+# A ten-minute quiet window after the latest PR update covers opening/pushing
+# and conservatively restarts on other PR activity too; commit dates do not
+# prove when a head was pushed. FM_PR_REVIEW_SETTLE_SECS overrides 600 seconds.
+# Thread lookup failure refuses readiness; unread replies beyond the first 100
+# are reported for manual reading rather than silently omitted.
 #
 # Usage: fm-pr-state.sh <pr-url>
 #   Prints one line per blocker it can see and nothing when it sees none.
@@ -44,6 +49,10 @@ if [ "${1:-}" = --help ] || [ "${1:-}" = -h ]; then
 fi
 [ "$#" -eq 1 ] || die "usage: fm-pr-state.sh <pr-url>"
 command -v gh >/dev/null 2>&1 || die "gh is required"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
+SETTLE=${FM_PR_REVIEW_SETTLE_SECS:-600}
+case "$SETTLE" in ''|*[!0-9]*) die "invalid review settle interval" ;; esac
 
 URL=$1
 if ! fm_pr_url_parse "$URL" || [ "$FM_PR_PROVIDER" != github ]; then
@@ -55,14 +64,15 @@ NUMBER=$FM_PR_NUMBER
 ENDPOINT="/repos/$PATH_PART/pulls/$NUMBER"
 
 CORE=$(gh pr view "$URL" \
-  --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision --jq '
+  --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt --jq '
   "state=\(.state | ascii_downcase)",
   "merged_at=\(.mergedAt // "")",
   "draft=\(.isDraft)",
   "head=\(.headRefOid)",
   "author=\(.author.login)",
   "mergeability=\(if .mergeable == null or .mergeable == "UNKNOWN" then "unknown" else (.mergeable | ascii_downcase) end)",
-  "review_decision=\(.reviewDecision // "")"') || die "could not read $URL"
+  "review_decision=\(.reviewDecision // "")",
+  "updated_at=\(.updatedAt)"') || die "could not read $URL"
 
 STATE=
 MERGED_AT=
@@ -71,6 +81,7 @@ MERGEABILITY=
 HEAD=
 AUTHOR=
 REVIEW_DECISION=
+UPDATED_AT=
 while IFS= read -r row; do
   case "$row" in
     state=*) STATE=${row#state=} ;;
@@ -80,6 +91,7 @@ while IFS= read -r row; do
     author=*) AUTHOR=${row#author=} ;;
     mergeability=*) MERGEABILITY=${row#mergeability=} ;;
     review_decision=*) REVIEW_DECISION=${row#review_decision=} ;;
+    updated_at=*) UPDATED_AT=${row#updated_at=} ;;
   esac
 done <<EOF_CORE
 $CORE
@@ -151,3 +163,43 @@ if [ "$REVIEW_DECISION" = CHANGES_REQUESTED ]; then
       }
     }' | LC_ALL=C sort
 fi
+
+UPDATED_EPOCH=$(fm_utc_iso_to_epoch "$UPDATED_AT") || die "could not read PR update time for $URL"
+NOW=$(date +%s)
+AGE=$(( NOW - UPDATED_EPOCH ))
+if [ "$AGE" -lt "$SETTLE" ]; then
+  printf 'BOT REVIEW SETTLE: wait %ss after latest PR activity before readiness\n' "$(( SETTLE - AGE ))"
+fi
+
+# Paginate the thread connection. Nested replies have their own limit, so a
+# truncated thread explicitly blocks readiness even if its bot is off-page.
+# shellcheck disable=SC2016 # GraphQL variables must remain literal for GitHub.
+gh api graphql --paginate -F owner="${PATH_PART%%/*}" -F repo="${PATH_PART#*/}" -F number="$NUMBER" -f query='
+  query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $endCursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            isResolved
+            comments(first: 100) {
+              pageInfo { hasNextPage }
+              nodes { author { __typename login } url path line body }
+            }
+          }
+        }
+      }
+    }
+  }' --jq '
+    if .errors != null or .data.repository.pullRequest.reviewThreads == null
+    then error("incomplete review-thread response")
+    else .data.repository.pullRequest.reviewThreads.nodes[]
+      | select(.isResolved == false)
+      | if .comments.pageInfo.hasNextPage then
+          "REVIEW THREAD: unread replies beyond first 100; read full thread: \(.comments.nodes[0].url)"
+        else empty end,
+        (select(any(.comments.nodes[];
+          .author.__typename == "Bot" or ((.author.login // "") | endswith("[bot]"))))
+        | "BOT REVIEW THREAD: \(.comments.nodes[0].url)",
+          (.comments.nodes[] | "\(.author.login // "deleted") \(.path):\(.line // 0):\n\(.body)"))
+    end' || die "could not read bot review threads for $URL"

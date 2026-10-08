@@ -78,10 +78,11 @@ A second mate's stale wake is a liveness event: report it even when it presents 
 Report verdict captain for the finished result of work the captain requested, even when that result is healthy.
 A start or still-working update on requested work that brings no new artifact, finding, or decision is verdict routine.
 Set silent true for a task-level routine outcome only when it says the worker is still busy, nothing new has happened since the last outcome, and no action was taken.
+An unchanged known provider rate limit before its next timed retry also stays routine and silent; the recovery playbook owns scheduling and performing that retry.
 Any routine outcome reporting an action, state change, or new result stays rendered; captain outcomes are never silent.
 When in doubt, render.
 Also report verdict captain for:
-- work ready for review - include the PR's full https:// URL when the task's ready status or `pr=` metadata holds one, otherwise only the identifier you actually have, and count a PR as ready only under the check rule below;
+- work ready for review - include the PR's full https:// URL when the task's ready status or `pr=` metadata holds one, otherwise only the identifier you actually have, and count a PR as ready only under ship-landing's readiness rule below;
 - a decision only the captain can make, including every ask-user finding from a validation gate;
 - a real blocker or failure after the playbook is exhausted;
 - a needed credential or login;
@@ -91,8 +92,8 @@ Keep an unchanged fleet review silent as instructed above.
 When genuinely in doubt, choose captain: a spurious escalation costs a glance, a swallowed one costs trust.
 Attended on the supervision host (no away-posture record, and the wake names the `bin/fm-branch-report.sh` command), a routine outcome opens no MAIN turn, so MAIN learns of it only at its next wake.
 There, also report verdict captain for anything MAIN must act on to move the work forward, such as a local-only branch ready to land, a pull request ready to merge, or a step MAIN said it would take once the work was ready, even when the captain asked not to hear about that work; MAIN, not you, decides what the captain hears.
-A PR is ready only when no check is pending and every check has passed, or each remaining failure is shown to reproduce on the default branch and to be unrelated to the change; read the checks as `.agents/skills/ship-landing/SKILL.md`, which owns this rule, says (on GitHub, all of `gh pr checks <url>` and `bin/fm-pr-state.sh <url>`).
-While a check is pending or a failure is unexplained, the PR is not ready to review or merge in any posture: steer the worker with `bin/fm-send.sh` to wait for pending checks, fix a failure its change caused, or show each remaining failure reproducing on the default branch and unrelated, leave the PR check unarmed, and report verdict routine naming the check, never an outcome that calls the PR ready or awaiting review or merge.
+Apply `.agents/skills/ship-landing/SKILL.md`'s complete PR readiness rule before reporting ready in either posture, including its bot-thread triage and settle window (on GitHub, read both `gh pr checks <url>` and `bin/fm-pr-state.sh <url>`).
+While a check or bot review is pending, or a failure is unexplained, the PR is not ready to review or merge in any posture: steer the worker with `bin/fm-send.sh` to wait for pending checks, fix a failure its change caused, or show each remaining failure reproducing on the default branch and unrelated, leave the PR check unarmed, and report verdict routine naming the check, never an outcome that calls the PR ready or awaiting review or merge.
 Once every remaining failure has been shown to be pre-existing and unrelated, with nothing pending, report verdict captain as work ready for review and state that evidence in the summary.
 Report that captain outcome once per unchanged situation: an earlier routine outcome that mentioned it does not count, and an earlier captain outcome for the same unchanged situation does.
 Write summaries in the captain's outcome language - the project, the fix, the PR, the worker, the blocker - never internal mechanics like wake kinds, status prefixes, worktrees, or state file names.

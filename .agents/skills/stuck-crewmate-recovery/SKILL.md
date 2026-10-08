@@ -70,6 +70,16 @@ Never restart, stop, or update the shared daemon on a crewmate's claim.
 It is one instance serving every lane and home, so a restart kills other lanes' in-flight runs.
 Only positive socket refusal or absence is a daemon-down finding; escalate that finding, or a failed run record that names a daemon error, to the captain.
 
+## Provider rate limits
+
+After confirming an ordinary idle worker stopped on a provider rate limit, run `FM_HOME=<this-firstmate-home> bin/fm-rate-limit-retry.sh <task-id>` instead of repeatedly recording "waiting, no action".
+Its header owns the hourly timed-pause and resume mechanics; the existing watcher and away daemon recheck the pause in both attended and away postures.
+On each due recheck, inspect current state: if the same limit still holds, run the command again to attempt a resume on the same model and provider; if work resumed or a new outcome superseded it, stop retrying and reconcile the pause normally.
+Never change a model or provider automatically.
+A retry or delivery failure is actionable recovery evidence; an unchanged limit before the next retry is a quiet wait, not another blocker or credential request.
+Do not register a limit pause over an unrelated open decision, failed task, or finished delivery.
+Devin's existing hook-driven rate-limit retry remains its owner; do not add this schedule alongside it.
+
 ## Live-endpoint escalation
 
 Escalate in order:
