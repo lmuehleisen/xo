@@ -1402,8 +1402,15 @@ echo "APPROVE: literal operands stay data"')
     if grep -qF 'Script this call runs:' "$saved"; then fail "a launcher outside the context roots must keep its script opaque for agy"; fi
   done
   system=$(command -v bash)
-  TMPDIR="${system%/*}" hook "$policy" pre-tool-use run_command "'$system' tf.sh fetch one"
-  TMPDIR="${system%/*}" hook "$policy" pre-tool-use run_command "'$system' tf.sh fetch one"
+  # Keep timeout bookkeeping writable when the synthetic TMPDIR names the
+  # interpreter directory, including on GNU timeout's mktemp-based path.
+  # shellcheck disable=SC2016 # literal fake mktemp source
+  printf '#!/bin/sh\nexec "%s" "$SCRIPT_CACHE_TIMEOUT_TMP/${1##*/}"\n' "$(command -v mktemp)" > "$dir/bin/mktemp"
+  chmod +x "$dir/bin/mktemp"
+  SCRIPT_CACHE_TIMEOUT_TMP="$dir/tmp" PATH="$dir/bin:$PATH" TMPDIR="${system%/*}" \
+    hook "$policy" pre-tool-use run_command "'$system' tf.sh fetch one"
+  SCRIPT_CACHE_TIMEOUT_TMP="$dir/tmp" PATH="$dir/bin:$PATH" TMPDIR="${system%/*}" \
+    hook "$policy" pre-tool-use run_command "'$system' tf.sh fetch one"
   [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "agy must also guard launchers in the declared TMPDIR root"
 
   # Exercise the granted root independently of /tmp without changing the

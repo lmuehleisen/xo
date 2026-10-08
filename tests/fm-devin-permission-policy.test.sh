@@ -1980,8 +1980,15 @@ echo "APPROVE: literal operands stay data"')
     if grep -qF 'Script this call runs:' "$saved"; then fail "a launcher outside the context roots must keep its script opaque"; fi
   done
   system=$(command -v bash)
-  TMPDIR="${system%/*}" hook "$policy" permission-request exec "'$system' tf.sh fetch one"
-  TMPDIR="${system%/*}" hook "$policy" permission-request exec "'$system' tf.sh fetch one"
+  # Timeout bookkeeping must stay writable while TMPDIR names the interpreter
+  # directory; GNU timeout uses mktemp here, while the Perl fallback does not.
+  # shellcheck disable=SC2016 # literal fake mktemp source
+  printf '#!/bin/sh\nexec "%s" "$SCRIPT_CACHE_TIMEOUT_TMP/${1##*/}"\n' "$(command -v mktemp)" > "$dir/bin/mktemp"
+  chmod +x "$dir/bin/mktemp"
+  SCRIPT_CACHE_TIMEOUT_TMP="$dir/tmp" PATH="$dir/bin:$PATH" TMPDIR="${system%/*}" \
+    hook "$policy" permission-request exec "'$system' tf.sh fetch one"
+  SCRIPT_CACHE_TIMEOUT_TMP="$dir/tmp" PATH="$dir/bin:$PATH" TMPDIR="${system%/*}" \
+    hook "$policy" permission-request exec "'$system' tf.sh fetch one"
   [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "the declared TMPDIR root must also disable launcher caching"
 
   # Declaring the existing interpreter directory writable exercises the grant
