@@ -116,6 +116,12 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 
 This guidance applies only when preparing a contribution to an upstream repository that still requires no-mistakes evidence.
 This fork's own `direct-PR` and `local-only` work runs relevant tests and lint directly and never starts a no-mistakes pipeline.
+Use a `contrib/<name>` branch for an upstream submission; the publisher's generated-body exception is limited to that branch namespace.
+Before the pipeline publishes, add the exact upstream/fork/branch approval row to the isolated publisher's private `no-mistakes-submissions` file, and remove that row after publication or abandonment.
+[`bin/fm-no-mistakes-body.mjs`](../../../bin/fm-no-mistakes-body.mjs) owns row syntax, live-head eligibility, and generated-body normalization.
+An evidence-branch publish-judge refusal is expected and non-fatal; it does not authorize bypassing the contribution branch's publish checks.
+Let the pipeline generate its `## Pipeline` attestation and open the PR; never hand-write or repair its attestation marker.
+Refresh an isolated publisher's toolbelt from the landed scripts before retrying; updating the primary checkout does not update that copy.
 For an upstream no-mistakes submission, never configure a deterministic suite-walk `commands.test`, whether it selects the full suite, changed tests, a family, or a fixed script list.
 Targeted validation belongs to that upstream evidence path, while CI owns broad deterministic regression coverage.
 Firstmate PR #3644 demonstrated the cost: pinning a 75-162-script walk took 32.7 minutes per validation, while removing it restored the 3.6-minute targeted-validation posture.

@@ -1810,6 +1810,41 @@ SH
   } >"$body"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) || fail "scoped generated body should pass: $out"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body" 2>&1) || fail "live PR edit should qualify: $out"
+  local generated="$TMP_ROOT/generated-body.md" received="$TMP_ROOT/generated-received.md"
+  local prompts="$TMP_ROOT/generated-prompts" original_marker
+  {
+    printf '## Intent\n\nThe operator requested a fixture change.\n\n## What Changed\n\nThe retry condition now preserves the expected exit code.\n\n## Testing\n\nPrivate run fixture-run, elapsed 2m50s.\n'
+    sed -n '3,5p' "$body"
+    printf '\n<details>Private pipeline transcript</details>\n'
+  } >"$generated"
+  original_marker=$(grep '^<!-- no-mistakes-pipeline-attestation:' "$generated")
+  cat >"$FAKEBIN/generated-gh" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = api ]; then exec "$(dirname "$0")/gh" "$@"; fi
+printf '%s' "${GH_HOST:-}" >"$FM_TEST_GENERATED_HOST"
+cat >"$FM_TEST_GENERATED_RECEIVED"
+SH
+  chmod +x "$FAKEBIN/generated-gh"
+  local host="$TMP_ROOT/generated-host"
+  out=$(FM_TEST_JUDGE_PROMPTS="$prompts" FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" --repo acme/upstream pr create --base main --head acme:contrib/fixture --title 'Correct retry handling' --body-file - <"$generated" 2>&1) || fail "generated stdin must normalize before the gate: $out"
+  assert_contains "$(cat "$received")" 'The retry condition now preserves the expected exit code.' 'completed change retained'
+  assert_contains "$(cat "$received")" '| test | completed |' 'completion retained'
+  assert_contains "$(cat "$received")" 'not a claim that every scenario passed' 'completion is not success'
+  assert_equals "$original_marker" "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$received")" 'attestation bytes preserved'
+  assert_equals github.com "$(cat "$host")" 'generated write host'
+  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript' "$received"; then fail "private display narrative survived normalization"; fi
+  assert_contains "$(cat "$prompts")" 'The retry condition now preserves the expected exit code.' 'judge sees retained change'
+  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript' "$prompts"; then fail "judge received the unsanitized body"; fi
+  rm -f "$received"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated" 2>&1) && fail "unapproved generated body must not normalize"
+  [ ! -e "$received" ] || fail "unapproved body reached gh"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr edit 3 --repo acme/upstream --body-file=- <"$generated" 2>&1) && fail "normalized edit must honor write block"
+  assert_contains "$out" 'GitHub writes blocked' 'normalized write block'
+  [ ! -e "$received" ] || fail "blocked normalized body reached gh"
+  sed "s/The retry condition/$PRIVATE_TERM/" "$generated" >"$generated.bad"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.bad" 2>&1) && fail "normalized changed text must still pass the denylist"
+  assert_contains "$out" denylist 'normalized retained text scan'
+  [ ! -e "$received" ] || fail "private normalized body reached gh"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/other "body:$body" 2>&1) && fail "unapproved branch must retain ordinary limits"
   out=$(FM_TEST_ATTESTED_HEAD=$(printf '%040d' 8) "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "stale attestation must refuse"
   printf '%s\n' "$PRIVATE_TERM" >>"$body"

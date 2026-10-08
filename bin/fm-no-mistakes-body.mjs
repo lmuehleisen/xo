@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 // Verify eligibility for the generated no-mistakes body length exception.
 // Usage: fm-no-mistakes-body.mjs <config> <trusted-gh> <dest> <base> <head>
-//        <pr-number> <pr-branch> <body-file>
+//        <pr-number> <pr-branch> <body-file> [--sanitize]
+// --sanitize prints a compact publication body only after the same live checks.
+// It retains What Changed and the original attestation bytes, drops generated
+// session evidence, and reports step completion without claiming tests passed.
+// It never creates or edits an attestation; all output still needs the full gate.
 // Private no-mistakes-submissions rows are: <upstream> <fork> <contrib/branch>.
 // Only live GitHub facts bind the body to the approved fork branch and head.
 // This verifies author-editable v1 assertions, not cryptographic provenance.
@@ -10,7 +14,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
-const [config, gh, dest, base, head, pr, selector, file] = process.argv.slice(2);
+const [config, gh, dest, base, head, pr, selector, file, mode] = process.argv.slice(2);
 try {
   const scope = path.join(config, "no-mistakes-submissions");
   if (!existsSync(scope)) process.exit(1);
@@ -69,6 +73,22 @@ try {
     const ref = api(`repos/${approvedFork}/git/ref/heads/${approvedBranch}`);
     if (ref.object?.type !== "commit" || ref.object?.sha !== a.head_sha
       || (number && actualHead !== a.head_sha)) continue;
+    if (mode === "--sanitize") {
+      const changed = /^## What Changed\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im.exec(body)?.[1]?.trim();
+      if (!changed) process.exit(1);
+      const names = ["intent", "rebase", "review", "test", "document", "lint", "push", "pr", "ci"];
+      const statuses = ["completed", "skipped", "running", "pending", "failed"];
+      if ([...steps].some(([name, s]) => !names.includes(name) || !statuses.includes(s.status))) process.exit(1);
+      const table = [...steps].map(([name, s]) => `| ${name} | ${s.status} |`).join("\n");
+      let live = "";
+      const v = a.live_validation;
+      if (v && ["go", "no-go", "inconclusive"].includes(v.verdict)
+        && Number.isSafeInteger(v.live) && Number.isSafeInteger(v.total)
+        && v.live >= 0 && v.total >= v.live) {
+        live = `\nLive validation: ${v.verdict}; ${v.live} of ${v.total} scenarios driven live.\n`;
+      }
+      process.stdout.write(`## Intent\n\nThis contribution contains the completed changes summarized below.\n\n## What Changed\n\n${changed}\n\n## Pipeline\n\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n\n${match[0]}\n\nStep completion records pipeline execution, not a claim that every scenario passed.\n\n| Step | Status |\n| --- | --- |\n${table}\n${live}`);
+    }
     process.exit(0);
   }
   process.exit(1);
