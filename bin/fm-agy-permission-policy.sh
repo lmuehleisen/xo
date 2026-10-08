@@ -91,7 +91,10 @@
 #
 # Tool mapping: run_command maps onto the shared exec analysis with
 # CommandLine and Cwd; view_file, grep_search, and list_dir are the read
-# class; write_to_file and replace_file_content are the write class against
+# class, and a view_file or list_dir of the worker's own agy brain directory
+# (~/.gemini/antigravity-cli/brain/<conversationId>, its fetched-page store)
+# or a view_file of a file the brief directs it to read stays approved under
+# brief read exclusions, credential checks first; write_to_file and replace_file_content are the write class against
 # the task worktree and scratch roots; search_web and read_url_content are
 # read-only web lookups; manage_task kill requires firstmate approval until
 # native ownership is verified; every other tool name is residue for the judge.
@@ -295,6 +298,20 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='
       (($cacheargs) | tojson | s)
     ] | join("\u0000") + "\u0000"' 2>/dev/null)
 
+# The worker's own agy brain directory, where agy keeps what this
+# conversation's own tools fetched (.system_generated/steps/<n>/content.md).
+# Only this conversation id's directory is named: a subagent's calls arrive
+# under the subagent's own id, and no other conversation's directory counts.
+FM_POLICY_OWN_OUTPUT_DIR=''
+case "$SESSION_ID" in
+  ''|*[!A-Za-z0-9-]*) ;;
+  *)
+    [ -z "${HOME:-}" ] \
+      || FM_POLICY_OWN_OUTPUT_DIR=$(physical_target "$HOME/.gemini/antigravity-cli/brain/$SESSION_ID" '' 1 2>/dev/null) \
+      || FM_POLICY_OWN_OUTPUT_DIR=''
+    ;;
+esac
+
 # A hook call that cannot be read cannot be judged; under a bypass launch
 # abstaining would run it, so an unparseable payload denies.
 if [ "$EVENT" = pre-tool-use ] && [ -z "$TOOL" ]; then
@@ -408,9 +425,37 @@ declined_key_file() {  # cache entry marking a call firstmate declined
   printf '%s/%s.declined' "$CACHE_DIR" "$k"
 }
 
+# 0 when this file-tool read targets only the worker's own brain directory or
+# a file the brief directs it to read. Neither can be an excluded source: the
+# brain directory holds only what this conversation's own reviewed calls
+# fetched, and a directed file is part of the instructions. The target is
+# resolved physically, so a symlink out of either cannot carry the read with
+# it; the credential checks in evaluate_tool still run first.
+own_read() {
+  local target abs d
+  case "$TOOL" in
+    view_file) target=$FILE_PATH ;;
+    list_dir) target=$(printf '%s' "$PAYLOAD" | jq -r '.toolCall.args.DirectoryPath // ""' 2>/dev/null) ;;
+    *) return 1 ;;
+  esac
+  case "$target" in /*) ;; *) return 1 ;; esac
+  abs=$(physical_target "$target" '' 0 2>/dev/null) || return 1
+  abs=$(resolve_symlink_chain "$abs") || return 1
+  if [ -n "$FM_POLICY_OWN_OUTPUT_DIR" ]; then
+    [ "$abs" = "$FM_POLICY_OWN_OUTPUT_DIR" ] && return 0
+    strictly_inside "$abs" "$FM_POLICY_OWN_OUTPUT_DIR" && return 0
+  fi
+  [ "$TOOL" = view_file ] || return 1
+  while IFS= read -r d; do
+    [ -n "$d" ] && [ "$d" = "$abs" ] && return 0
+  done <<<"$(brief_directed_reads)"
+  return 1
+}
+
 apply_read_constraints() {
   READ_CONSTRAINTS=$(brief_read_constraints)
   [ -n "$READ_CONSTRAINTS" ] || return 0
+  own_read && return 0
   case "$TOOL" in
     run_command|view_file|grep_search|list_dir|search_web|read_url_content)
       no_approve "brief read exclusions require scope review"

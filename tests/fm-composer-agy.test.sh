@@ -57,3 +57,29 @@ test_agy_separated_composer() {
   pass 'agy composer requires full structure and preserves pending or ambiguous input'
 }
 test_agy_separated_composer
+
+# Herdr's styled visible read (`pane read --source visible --format ansi`)
+# terminates every row with CRLF. The shape below is a bypassed agy 1.3.1
+# worker just after an Escape interrupt, as herdr returned it: no mode cell,
+# the model alone on the right of the footer.
+test_agy_herdr_crlf_rows() {
+  local rule='────────────────────' pad='                                        ' screen
+  screen="${ESC}[0m  ⎿  Interrupted · What should Antigravity CLI do instead?${ESC}[0m"$'\r\n'
+  screen+="${ESC}[0m${ESC}[38;5;8m$rule${ESC}[0m"$'\r\n'
+  screen+="${ESC}[0m${ESC}[38;5;12m>${ESC}[0m"$'\r\n'
+  screen+="${ESC}[0m${ESC}[38;5;8m$rule${ESC}[0m"$'\r\n'
+  screen+="${ESC}[0m${ESC}[38;5;8m? for shortcuts$pad${ESC}[0m${ESC}[2mGemini 3.8 Flash · high${ESC}[0m$pad"
+  assert_screen 'agy herdr CRLF interrupted idle' empty "$CAPS_STYLED" "$screen"
+  [ -z "$(fm_composer_extract_selected_content "$CAPS_STYLED" "$screen")" ] \
+    || fail 'agy CRLF row terminator leaked into input extraction'
+  local from=">$ESC" to="> keep going$ESC"
+  assert_screen 'agy herdr CRLF pending input' pending "$CAPS_STYLED" "${screen/"$from"/$to}"
+  # A queued steer replaces the shortcut hint; that footer proves nothing.
+  from='? for shortcuts' to='  Press up to edit queued messages'
+  assert_screen 'agy herdr CRLF queued messages stay unproven' need-identity "$CAPS_STYLED" "${screen/"$from"/$to}"
+  # The terminator never stands in for the footer proof.
+  screen="$rule"$'\r\n>\r\n'"$rule"$'\r\n'
+  assert_screen 'CRLF shell between transcript rules is not agy' unknown $'styled=1\ncursor=1\nidentity=0' "$screen" 1
+  pass 'agy composer proof survives herdr CRLF rows without proving a queued or unfootered pane'
+}
+test_agy_herdr_crlf_rows

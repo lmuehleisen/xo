@@ -617,6 +617,14 @@ ok - agy 1.2.0: explicit and harness-less delivery matchers read busy
 
 `tests/fm-tmux-submit-busy.test.sh` covers harness isolation and the idle-to-busy submit path with an unreadable composer, including already-busy and failed-capture baselines that must remain unconfirmed.
 
+### Composer proof through herdr
+
+herdr 0.9.3's styled visible read, `herdr pane read <pane> --source visible --format ansi`, terminates every row with CRLF.
+With agy 1.3.1 under `--dangerously-skip-permissions`, the idle footer carries no mode cell, only `? for shortcuts` and the model name.
+The agy selector ignores the row terminator, so that idle shape classifies `empty` through herdr, while a `Press up to edit queued messages` footer stays unproven.
+`tests/fm-composer-agy.test.sh` pins both shapes portably.
+No live guard drives a herdr agy pane yet; re-read an idle agy pane through herdr after an agy or herdr upgrade to refresh this record.
+
 ### Catalog-backed quota buckets
 
 Verified 2026-10-06 with agy 1.3.0.
