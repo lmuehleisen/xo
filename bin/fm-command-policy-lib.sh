@@ -49,8 +49,8 @@
 #   exact-input behavior; the hook does not reconstruct environments or launch
 #   chains. A plain /usr/bin/env <program> shebang uses the hook's PATH only
 #   for an unwrapped invocation; more complex env shebangs are omitted too.
-#   Wrapped interpreter calls and unsupported shebang launchers do not cache
-#   judge verdicts. Escalation approvals still use exact input, in a distinct
+#   Wrapped calls and unsupported shebang launchers do not cache judge verdicts.
+#   Escalation approvals still use exact input, in a distinct
 #   opaque-launch scope so older automatic approvals cannot be inherited.
 #   This is input for the judge, not a static approval or a
 #   grant: the same always-decline and credential rules govern script effects.
@@ -664,8 +664,8 @@ granted_script_invocation() {
 }
 
 # Snapshot a segment's task-owned script for both the prompt and cache. E/EV
-# are the analyzed command words, so this also sees transparent wrappers and
-# nested commands; only a simple unwrapped call may omit operands in its key.
+# are the analyzed command words. Wrapped calls are omitted; nested scripts
+# may supply context. Only a simple unwrapped call omits operands in its key.
 JUDGE_SCRIPT_INPUT='' JUDGE_SCRIPT_HASHES='' JUDGE_SCRIPT_SHAPE=''
 JUDGE_SCRIPT_COUNT=0 JUDGE_SCRIPT_SIMPLE=0
 JUDGE_SCRIPT_SEEN=() JUDGE_SCRIPT_OMITTED=0
@@ -700,7 +700,7 @@ judge_script_input() {
   # Prefixes can change PATH, cwd, or launch semantics. The ambient hook
   # environment cannot prove which executable such a wrapped call runs.
   if [ "${#SW[@]}" != "${#E[@]}" ]; then
-    plain_interpreter "$base" && JUDGE_SCRIPT_UNCACHEABLE=1
+    JUDGE_SCRIPT_UNCACHEABLE=1
     return 0
   fi
   if plain_interpreter "$base"; then

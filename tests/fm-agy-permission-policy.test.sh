@@ -1351,9 +1351,12 @@ EOF
   denied "$OUT" || fail "a task-owned shebang must keep the script opaque for agy"
   if grep -qF AGY_SCRIPT_CONTEXT_MARKER "$saved"; then fail "agy must not normalize a script behind a mutable shebang launcher"; fi
   n=$(cat "$attempts")
-  for root in "PATH=$wt:/usr/bin:/bin" "env PATH=$wt:/usr/bin:/bin"; do
+  for root in "PATH=$wt:/usr/bin:/bin bash tf.sh" "env PATH=$wt:/usr/bin:/bin bash tf.sh" \
+    "PATH=$wt:/usr/bin:/bin ./tf.sh" "env PATH=$wt:/usr/bin:/bin ./tf.sh" \
+    "PATH=$wt:/usr/bin:/bin tf.sh" "env PATH=$wt:/usr/bin:/bin tf.sh"; do
     for cmd in one one two; do
-      hook "$policy" pre-tool-use run_command "$root bash tf.sh fetch https://lookup.example/opaque-$cmd" 37
+      printf '# launcher edit\n' >> "$wt/bash"
+      hook "$policy" pre-tool-use run_command "$root fetch https://lookup.example/opaque-$cmd" 37
       abstained "$OUT" || fail "an opaque launcher verdict must still reach agy's hook"
     done
     [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "agy must not cache judge approvals for assigned launcher environments"

@@ -1847,10 +1847,16 @@ fi')
   [ "$(cat "$attempts")" = 12 ] || fail "option-first calls must still reuse an exact retry"
   hook "$policy" permission-request exec '.scratch/tf.sh --profile prod delete item' profile_other
   [ "$(cat "$attempts")" = 13 ] || fail "an option value and later subcommand must not be omitted from the key"
+  printf '#!/usr/bin/env bash\n# SCRIPT_CONTEXT_MARKER\n' > "$script"
+  printf '#!/bin/sh\nexit 0\n' > "$wt/.scratch/bash"
+  chmod +x "$wt/.scratch/bash"
   n=$(cat "$attempts")
-  for prefix in "PATH=$wt/.scratch:/usr/bin:/bin bash" "env PATH=$wt/.scratch:/usr/bin:/bin bash"; do
+  for prefix in "PATH=$wt/.scratch:/usr/bin:/bin bash .scratch/tf.sh" "env PATH=$wt/.scratch:/usr/bin:/bin bash .scratch/tf.sh" \
+    "PATH=$wt/.scratch:/usr/bin:/bin .scratch/tf.sh" "env PATH=$wt/.scratch:/usr/bin:/bin .scratch/tf.sh" \
+    "PATH=$wt/.scratch:/usr/bin:/bin tf.sh" "env PATH=$wt/.scratch:/usr/bin:/bin tf.sh"; do
     for cmd in one one two; do
-      hook "$policy" permission-request exec "$prefix .scratch/tf.sh fetch https://lookup.example/opaque-$cmd"
+      printf '# launcher edit\n' >> "$wt/.scratch/bash"
+      hook "$policy" permission-request exec "$prefix fetch https://lookup.example/opaque-$cmd"
       [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] || fail "an opaque launcher verdict must still reach the hook"
     done
     [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "judge approvals for assigned launcher environments must not be cached"
