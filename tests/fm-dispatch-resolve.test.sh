@@ -1431,6 +1431,14 @@ FM_STATE_OVERRIDE="$OVERRIDE_STATE" run_lane code out err "$BRIEF" --lane live -
 assert_contains "$out" 'genuine spendPriority tie' "tied routes within one class still escalate"
 pass "class counts include all provider routes once and respect the effective state directory"
 
+# Spawn writes model=default when a route omits the model.
+jq '.classes["muse-spark"].routes[0] |= del(.model) |
+  .classes["muse-spark"].max_live = 1' "$LIVE_RULES" > "$RULES"
+printf 'kind=ship\nharness=opencode\nmodel=default\n' > "$LIVE_STATE/default-model.meta"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'candidate: opencode:-  class=muse-spark family=muse  -> not eligible: at live cap 1/1  live=1 max_live=1' "default-model metadata matches a route with no model"
+pass "class caps count routes that use the harness default model"
+
 for bad_cap in 0 -1 1.5 '"1"' null true '{}' '[]'; do
   jq --argjson cap "$bad_cap" '.classes["muse-spark"].max_live = $cap' "$LIVE_RULES" > "$RULES"
   run_lane code out err "$BRIEF" --lane live --project xo

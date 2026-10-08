@@ -51,7 +51,8 @@
 #   A class at its optional max_live cap is not eligible. Live counts read
 #   ordinary task records (kind not secondmate) from $FM_HOME/state/*.meta
 #   (FM_STATE_OVERRIDE replaces state), matching harness and model to any
-#   class route, regardless of effort or model_family. Unreadable records
+#   class route, regardless of effort or model_family; model=default matches
+#   a route with no model. Unreadable records
 #   count as nothing; a finished task not yet cleaned up still counts.
 #   This check is advisory; fm-spawn.sh does not enforce class caps.
 #   Exact spendPriority ties across classes prefer fewer live workers;
@@ -517,7 +518,7 @@ LIVE_TASKS=$(
     jq -Rsc '
       [split("\n")[] | capture("^(?<key>kind|harness|model)=(?<value>.*)$")]
       | from_entries | select(.kind != "secondmate")
-      | {harness, model: (.model // "")}
+      | {harness, model: (if .model == "default" then "" else (.model // "") end)}
     ' <<<"$meta_text"
   done | jq -sc '.'
 ) || emit_error "live task snapshot failed"
