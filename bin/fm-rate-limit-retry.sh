@@ -51,7 +51,7 @@ if status_is_paused "$LAST" && [ "$(_fm_decision_key "$LAST")" = provider-rate-l
   ACTION=retried
 else
   case "$(status_line_verb "$(last_status_line "$STATE/$ID.status")")" in
-    done|failed|needs-decision|captain-held|blocked)
+    done|failed|needs-decision|captain-held|blocked|paused)
       echo 'fm-rate-limit-retry: reconcile terminal status or open call before scheduling' >&2
       exit 1 ;;
   esac

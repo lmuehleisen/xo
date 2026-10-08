@@ -2,6 +2,9 @@
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
 # Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] <text...>
+#   --fire-and-forget accepts recorded ships, scouts, and secondmates; its
+#   delivery token travels in the body so exact retries deduplicate. Explicit
+#   endpoint targets are refused for this option. Ordinary steers are unchanged.
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -603,11 +606,15 @@ if [ -n "$FIRE_AND_FORGET_ID" ]; then
       echo "error: --fire-and-forget delivery id must be 16 lowercase hex characters" >&2
       exit 1
     }
-  [ "$MARK_FROM_FIRSTMATE" = 1 ] ||
+  [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] ||
     {
-      echo "error: --fire-and-forget requires a recorded secondmate task selector" >&2
+      echo "error: --fire-and-forget requires a recorded task selector" >&2
       exit 1
     }
+  case "$(fm_meta_get "$TARGET_META" kind)" in
+    ship|scout|secondmate) ;;
+    *) echo "error: --fire-and-forget requires a recorded ship, scout, or secondmate" >&2; exit 1 ;;
+  esac
   [ -z "$RESOLVE_KEYS" ] ||
     {
       echo "error: --fire-and-forget cannot accompany --resolve-key" >&2
@@ -811,9 +818,13 @@ else
   # The pre-marker answer text, kept for the closing resolved note so the
   # durable ledger records the plain answer without marker or corr bytes.
   RESOLVE_ANSWER_TEXT=$MESSAGE
-  if [ "$MARK_FROM_FIRSTMATE" = 1 ] && [ -n "$FIRE_AND_FORGET_ID" ]; then
-    fm_message_mark_from_firstmate "$MESSAGE" MESSAGE
-    MESSAGE="${FM_FROMFIRST_MARK}delivery=${FIRE_AND_FORGET_ID} ${MESSAGE#"$FM_FROMFIRST_MARK"}"
+  if [ -n "$FIRE_AND_FORGET_ID" ]; then
+    if [ "$MARK_FROM_FIRSTMATE" = 1 ]; then
+      fm_message_mark_from_firstmate "$MESSAGE" MESSAGE
+      MESSAGE="${FM_FROMFIRST_MARK}delivery=${FIRE_AND_FORGET_ID} ${MESSAGE#"$FM_FROMFIRST_MARK"}"
+    else
+      MESSAGE="[delivery=${FIRE_AND_FORGET_ID}] $MESSAGE"
+    fi
     FM_SEND_IDEMPOTENT=1
   elif [ "$MARK_FROM_FIRSTMATE" = 1 ]; then
     # Reuse an existing correlation id for recovery resends; otherwise create a
