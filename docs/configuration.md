@@ -1272,10 +1272,14 @@ Every class route is evaluated like a profile, with a class's `unmetered` flag r
 `fm-spawn.sh` records `model_family=` in task meta when the launched harness and model match a class route, which is the family a later second opinion excludes; a launch outside every class records none and is never refused for it.
 Experiments such as evaluation runs or calibration arms are exempt from lanes and launch with explicit `--harness`, `--model`, and `--effort` flags.
 
-## Typed dispatch resolution (.env TYPESAFE_API_KEY)
+<a id="typed-dispatch-resolution-env-typesafe_api_key"></a>
+
+## Typed dispatch resolution (.env API keys)
 
 `bin/fm-dispatch-resolve.sh` resolves one concrete crewmate or scout profile from a written brief with typesafe.ai's System One model (Jev), so the rule match that firstmate otherwise reasons out in its own context becomes one short tool turn.
-It is off unless `TYPESAFE_API_KEY` is non-empty in the calling environment or the home's gitignored `.env` holds a `TYPESAFE_API_KEY=` line; the environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
+`TYPESAFE_API_KEY` in the calling environment or the home's gitignored `.env` selects TypeSafe; the environment wins, and TypeSafe takes precedence over OpenRouter.
+Otherwise, `OPENROUTER_API_KEY` is accepted only from the home's `.env` as deliberate opt-in to sending brief text; an exported key for other tools cannot activate the resolver.
+The Relay accessor in `bin/fm-env-lib.sh` reads both `.env` keys.
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 A named `--lane` is the one exception: it sends nothing, so it runs without the key, as described under Lane resolution below.
@@ -1374,7 +1378,7 @@ When the picked rule is a lane, code resolves its classes as [Lanes and model cl
 bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name> --lane <lane> [--data-tag <tag>]... [--exclude-family <family>]
 ```
 
-- `--lane <name>` resolves that lane rule directly, with no Choice request, so it needs no `TYPESAFE_API_KEY`, sends nothing, and makes no call besides the one quota read.
+- `--lane <name>` resolves that lane rule directly, with no Choice request, so it needs no API key, sends nothing, and makes no call besides the one quota read.
 - `--data-tag <tag>` names a data tag the task carries, repeatable; a class's data policy admits or refuses the task from the project and these tags.
 - `--exclude-family <family>` asks for a second opinion: it drops every class of that family and every experiment class, and escalates when the resolved rule is not a lane.
 
@@ -1405,9 +1409,9 @@ Firstmate passes its profile line unless it states a reason to override, such as
 
 **Key handling and fixed settings**
 
-- The resolver and bootstrap copy an environment-provided key into a non-exported private variable and unset `TYPESAFE_API_KEY` before launching child processes, so the secret is absent from child environments.
+- The resolver keeps the selected key in one non-exported private variable and unsets both API-key environment variables before launching child processes; bootstrap also unsets `TYPESAFE_API_KEY` before its validation children run.
 - The resolver sends the key to `curl` only as a header read from a file descriptor, never on argv, and nothing prints, logs, or writes it.
-- The resolver fixes the endpoint at `https://api.typesafe.ai`, model at `jev-latest`, default confidence floor at 0.6, and request timeout at 5 seconds; `TYPESAFE_API_KEY` is its only resolver-specific environment setting.
+- The fixed endpoint/model pairs are `https://api.typesafe.ai/v1/systemone` with `jev-latest` and `https://openrouter.ai/api/v1/systemone` with `~typesafe/jev-latest`; both use the same request and answer handling, default confidence floor of 0.6, and 5-second timeout.
 
 The live rule-match evidence is recorded in [`verification/dispatch-resolve.md`](verification/dispatch-resolve.md).
 
@@ -2515,7 +2519,8 @@ FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainl
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
 FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/x-outbox/ without posting or requiring a token
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
-TYPESAFE_API_KEY=       # typed dispatch resolution opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh is off (docs/configuration.md "Typed dispatch resolution")
+TYPESAFE_API_KEY=       # typed dispatch resolution via TypeSafe; environment or .env, wins over OpenRouter ("Typed dispatch resolution")
+OPENROUTER_API_KEY=     # typed dispatch resolution via OpenRouter; home .env only, environment ignored ("Typed dispatch resolution")
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting Relay completion follow-ups (7 days)
