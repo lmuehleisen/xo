@@ -1810,6 +1810,135 @@ SH
   } >"$body"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) || fail "scoped generated body should pass: $out"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body" 2>&1) || fail "live PR edit should qualify: $out"
+  local generated="$TMP_ROOT/generated-body.md" received="$TMP_ROOT/generated-received.md"
+  local prompts="$TMP_ROOT/generated-prompts" original_marker
+  {
+    # Redacted structural reproduction of the generated upstream body:
+    # raw lab evidence is private even when the semantic judge allows it.
+    cat <<'BODY'
+## Intent
+
+The operator requested a fixture change.
+
+## What Changed
+
+The retry condition now preserves the expected exit code.
+
+## Risk Assessment
+
+The fixture change has a bounded effect.
+
+## Testing
+
+Private run fixture-run, elapsed 2m50s.
+
+<details>
+<summary>Evidence: fixture lab transcript</summary>
+
+```text
+=== partial
+WATCHER DOWN - SUPERVISION IS OFF
+1 task(s) in flight; last beat: never, grace 300s.
+config-push: ~/dev/example-contrib/tmp/lab.fixture -> live homes
+secondmate example (example-host:/example/home):
+  pushed: config/example
+exit=1 sends=1 marker=example.pending
+```
+</details>
+- Outcome: across 2 runs (2m50s)
+BODY
+    sed -n '3,5p' "$body"
+    printf '\n<details>Private pipeline transcript</details>\n'
+  } >"$generated"
+  original_marker=$(grep '^<!-- no-mistakes-pipeline-attestation:' "$generated")
+  cat >"$FAKEBIN/generated-gh" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = api ]; then exec "$(dirname "$0")/gh" "$@"; fi
+printf '%s' "${GH_HOST:-}" >"$FM_TEST_GENERATED_HOST"
+cat >"$FM_TEST_GENERATED_RECEIVED"
+SH
+  chmod +x "$FAKEBIN/generated-gh"
+  local host="$TMP_ROOT/generated-host"
+  out=$(FM_TEST_JUDGE_PROMPTS="$prompts" FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" --repo acme/upstream pr create --base main --head acme:contrib/fixture --title 'Correct retry handling' --body-file - <"$generated" 2>&1) || fail "generated stdin must normalize before the gate: $out"
+  assert_contains "$(cat "$received")" 'The retry condition now preserves the expected exit code.' 'completed change retained'
+  assert_contains "$(cat "$received")" '| test | completed |' 'completion retained'
+  assert_contains "$(cat "$received")" 'not a claim that every scenario passed' 'completion is not success'
+  assert_equals "$original_marker" "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$received")" 'attestation bytes preserved'
+  assert_equals github.com "$(cat "$host")" 'generated write host'
+  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript|WATCHER DOWN|example-contrib|example-host|last beat:|marker=example|Evidence: fixture' "$received"; then fail "private display narrative survived normalization"; fi
+  assert_contains "$(cat "$prompts")" 'The retry condition now preserves the expected exit code.' 'judge sees retained change'
+  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript|WATCHER DOWN|example-contrib|example-host|last beat:|marker=example|Evidence: fixture' "$prompts"; then fail "judge received the unsanitized body"; fi
+  rm -f "$received"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated" 2>&1) && fail "unapproved oversized body must retain ordinary limits"
+  [ ! -e "$received" ] || fail "unapproved oversized body reached gh"
+  {
+    printf '## Intent\n\nThe operator requested a fixture change.\n\n## What Changed\n\nThe retry condition now preserves the expected exit code.\n\n## Pipeline\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n%s\n' "$original_marker"
+  } >"$generated.short"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated.short" 2>&1) || fail "ordinary body should retain its normal policy checks: $out"
+  cmp -s "$generated.short" "$received" || fail "unapproved body was normalized"
+  rm -f "$received"
+  out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr edit 3 --repo acme/upstream --body-file=- <"$generated" 2>&1) && fail "normalized edit must honor write block"
+  assert_contains "$out" 'GitHub writes blocked' 'normalized write block'
+  [ ! -e "$received" ] || fail "blocked normalized body reached gh"
+  sed "s/The retry condition/$PRIVATE_TERM/" "$generated" >"$generated.bad"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.bad" 2>&1) && fail "normalized changed text must still pass the denylist"
+  assert_contains "$out" denylist 'normalized retained text scan'
+  [ ! -e "$received" ] || fail "private normalized body reached gh"
+  local unsafe
+  # shellcheck disable=SC2088 # literal synthetic home-relative path, never expand it
+  for unsafe in 'WATCHER DOWN - SUPERVISION IS OFF' '~/dev/example-contrib/lab.fixture' 'elapsed 2m50s' '```text' '01AAAAAAAAAAAAAAAAAAAAAAAA'; do
+    sed "s|The retry condition now preserves the expected exit code.|$unsafe|" "$generated" >"$generated.unsafe"
+    out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.unsafe" 2>&1) && fail "unsafe retained summary must refuse deterministically"
+    assert_contains "$out" 'generated body has unsafe evidence' 'unsafe summary refuses before semantic judge'
+    [ ! -e "$received" ] || fail "unsafe summary reached gh"
+  done
+  sed 's/"head_sha"/"run_id":"fixture-run","head_sha"/' "$generated" >"$generated.unsafe"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.unsafe" 2>&1) && fail "private immutable attestation metadata must refuse"
+  assert_contains "$out" 'generated body has unsafe evidence' 'private marker metadata refuses without rewriting marker'
+  [ ! -e "$received" ] || fail "private marker metadata reached gh"
+  # The marker is retained byte-for-byte, so its decoded JSON must contain
+  # only the documented public schema, even if unknown fields look harmless.
+  local metadata_case
+  for metadata_case in execution-id escaped-path escaped-key step-extra live-extra live-path live-count; do
+    FM_TEST_METADATA_CASE="$metadata_case" node --input-type=module - "$generated" "$generated.metadata" <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [source, target] = process.argv.slice(2);
+const body = readFileSync(source, "utf8");
+const match = /<!-- no-mistakes-pipeline-attestation:v1 ([\s\S]*?) -->/.exec(body);
+const a = JSON.parse(match[1]);
+switch (process.env.FM_TEST_METADATA_CASE) {
+  case "execution-id": a.execution_id = "fixture-execution"; break;
+  case "escaped-path": a.notes = "/home/example/private-fixture"; break;
+  case "escaped-key": a.execution_id = "fixture-execution"; break;
+  case "step-extra": a.steps[0].execution_id = "fixture-execution"; break;
+  case "live-extra": a.live_validation = { verdict: "go", live: 1, total: 1, notes: "fixture" }; break;
+  case "live-path": a.live_validation = { verdict: "/home/example/private-fixture", live: 1, total: 1 }; break;
+  case "live-count": a.live_validation = { verdict: "go", live: 2, total: 1 }; break;
+}
+// Force literal JSON escapes to reproduce scans that inspect raw bytes only.
+let json = JSON.stringify(a).replaceAll("/", "\\u002f");
+if (process.env.FM_TEST_METADATA_CASE === "escaped-key") json = json.replace("execution_id", "execution\\u005fid");
+writeFileSync(target, body.replace(match[1], () => json));
+JS
+    out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.metadata" 2>&1) && fail "nonpublic attestation metadata must refuse: $metadata_case"
+    assert_contains "$out" 'generated body has unsafe evidence' 'decoded public metadata schema'
+    [ ! -e "$received" ] || fail "nonpublic metadata reached gh"
+  done
+  node --input-type=module - "$generated" "$generated.metadata" <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [source, target] = process.argv.slice(2);
+const body = readFileSync(source, "utf8");
+const match = /<!-- no-mistakes-pipeline-attestation:v1 ([\s\S]*?) -->/.exec(body);
+const a = JSON.parse(match[1]);
+a.live_validation = { verdict: "inconclusive", live: 0, total: 4 };
+// Encoded public enum values still belong to the supported schema.
+const json = JSON.stringify(a).replace('"review"', '"\\u0072eview"');
+writeFileSync(target, body.replace(match[1], () => json));
+JS
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/fixture --title Fix --body-file - <"$generated.metadata" 2>&1) || fail "decoded public metadata must pass: $out"
+  assert_equals "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$generated.metadata")" "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$received")" 'encoded public marker remains unchanged'
+  assert_contains "$(cat "$received")" 'Live validation: inconclusive; 0 of 4' 'honest decoded validation counts'
+  rm -f "$received"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/other "body:$body" 2>&1) && fail "unapproved branch must retain ordinary limits"
   out=$(FM_TEST_ATTESTED_HEAD=$(printf '%040d' 8) "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) && fail "stale attestation must refuse"
   printf '%s\n' "$PRIVATE_TERM" >>"$body"
@@ -1831,6 +1960,49 @@ SH
   rm -f "$CFG/no-mistakes-submissions"
   reset_trusted_gh
   pass "generated body exception binds destination, fork, branch, head and required steps while retaining literal and secret checks"
+}
+
+# Execute the adapter against independently copied publisher toolbelt versions.
+# A legacy helper, crash, or incomplete refresh must never publish raw/empty input.
+test_runtime_sanitizer_protocol() {
+  local toolbelt="$TMP_ROOT/sanitizer-toolbelt" body="$TMP_ROOT/sanitizer-input.md"
+  local received="$TMP_ROOT/sanitizer-received" out scenario
+  mkdir -p "$toolbelt"
+  cp -R "$ROOT/bin" "$toolbelt/bin"
+  cat >"$FAKEBIN/sanitizer-gh" <<'SH'
+#!/usr/bin/env bash
+cat >"$FM_TEST_SANITIZER_RECEIVED"
+SH
+  chmod +x "$FAKEBIN/sanitizer-gh"
+  {
+    printf '## Intent\n\nA completed fixture change.\n\n## What Changed\n\nThe retry condition is corrected.\n\n## Pipeline\n\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n\n'
+    printf '<!-- no-mistakes-pipeline-attestation:v1 {"head_sha":"%040d","steps":[{"step":"review","status":"completed"},{"step":"test","status":"completed"},{"step":"document","status":"completed"}]} -->\n' 7
+  } >"$body"
+  cat >"$toolbelt/bin/fm-no-mistakes-body.mjs" <<'JS'
+import { readFileSync } from "node:fs";
+switch (process.env.FM_TEST_SANITIZER_CASE) {
+  case "legacy": process.exit(0);
+  case "malformed": process.stdout.write("Not a pipeline publication.\n"); break;
+  case "marker-change": process.stdout.write(readFileSync(process.argv.at(-2), "utf8").replace('"head_sha"', '"changed_head_sha"')); break;
+  case "unknown": process.exit(42);
+  case "signal": process.kill(process.pid, "SIGTERM"); break;
+  case "overflow": process.stdout.write("x".repeat(2 * 1024 * 1024)); break;
+  case "ordinary": process.exit(1);
+}
+JS
+  for scenario in legacy malformed marker-change unknown signal overflow; do
+    rm -f "$received"
+    out=$(FM_TEST_SANITIZER_CASE="$scenario" FM_TEST_SANITIZER_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$toolbelt/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/sanitizer-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) && fail "bad sanitizer result must refuse: $scenario"
+    assert_contains "$out" 'no-mistakes body preparation' 'sanitizer protocol refusal'
+    [ ! -e "$received" ] || fail "bad sanitizer result reached gh: $scenario"
+  done
+  out=$(FM_TEST_SANITIZER_CASE=ordinary FM_TEST_SANITIZER_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$toolbelt/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/sanitizer-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) || fail "documented status 1 should retain ordinary checks: $out"
+  cmp -s "$body" "$received" || fail "ordinary-limit fallback changed stdin bytes"
+  rm -f "$received" "$toolbelt/bin/fm-no-mistakes-body.mjs"
+  out=$(FM_TEST_SANITIZER_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$toolbelt/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/sanitizer-gh" pr create --repo acme/widgets --title Fix --body-file - <"$body" 2>&1) && fail "missing sanitizer module must refuse"
+  assert_contains "$out" 'no-mistakes body preparation failed' 'missing module refusal'
+  [ ! -e "$received" ] || fail "missing sanitizer reached gh"
+  pass "legacy/invalid sanitizer output and process failures refuse while status 1 preserves ordinary checks"
 }
 
 test_contribution_poison_and_evidence_adapter() {
@@ -2249,6 +2421,7 @@ test_permission_fixtures_pass_the_secret_scan
 test_policy_text
 test_runtime_stdin_adapter
 test_no_mistakes_body_scope
+test_runtime_sanitizer_protocol
 test_contribution_poison_and_evidence_adapter
 test_local_gate_transport_preserves_hooks
 test_git_adapter_refuses_indirect_publication

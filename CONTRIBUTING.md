@@ -23,6 +23,7 @@ Commits take their identity from git config or the launch pin only, and pushes a
 
 For contributions to [upstream Firstmate](https://github.com/kunchenguid/firstmate), follow that repository's contribution instructions.
 Upstream enforces its own pull-request requirements independently of this fork.
+The [upstream submission procedure](.agents/skills/firstmate-coding-guidelines/SKILL.md#upstream-no-mistakes-submissions) owns the pipeline publication steps.
 
 ## Maintaining required checks
 

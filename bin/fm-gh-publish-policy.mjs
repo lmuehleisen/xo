@@ -989,7 +989,7 @@ function checkGh(position, tokens, cwd, context) {
   const target = ghTarget(command, spec, parsed, tokens, cwd, context);
   if (!target) return ALLOW;
   if (target.decision) return target;
-  return runGate(target);
+  return context.targetOnly ? target : runGate(target);
 }
 
 // The judge named and then its override verb, anywhere on one line.
@@ -1217,4 +1217,16 @@ function runtimeStdinFlags(argv) {
   return Object.keys(spec?.file || {}).filter((flag) => ["-F", "--body-file", "--notes-file"].includes(flag));
 }
 
-export { decision, runtimeOperation, runtimeCommand, runtimeStdinFlags };
+// Reuse the policy parser for the narrow generated-stdin preparation seam.
+// Unsupported/conflicting argv never acquire normalization authority.
+function runtimePrTarget(argv, cwd) {
+  const selected = runtimeCommand(argv);
+  if (selected?.group !== "pr" || !["create", "edit"].includes(selected.verb)) return null;
+  const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
+  const tokens = new Lexer(["gh", ...argv].map(quote).join(" ")).tokenize().tokens;
+  const target = checkGh(commandPosition(tokens), tokens, cwd,
+    { compound: false, cwdKnown: true, targetOnly: true });
+  return target?.repo && !target.decision ? target : null;
+}
+
+export { decision, runtimeOperation, runtimeCommand, runtimeStdinFlags, runtimePrTarget };
