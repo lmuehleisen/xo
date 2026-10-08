@@ -173,6 +173,7 @@ fi
 
 # Paginate the thread connection. Nested replies have their own limit, so a
 # truncated thread explicitly blocks readiness even if its bot is off-page.
+# shellcheck disable=SC2016 # GraphQL variables must remain literal for GitHub.
 gh api graphql --paginate -F owner="${PATH_PART%%/*}" -F repo="${PATH_PART#*/}" -F number="$NUMBER" -f query='
   query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
     repository(owner: $owner, name: $repo) {

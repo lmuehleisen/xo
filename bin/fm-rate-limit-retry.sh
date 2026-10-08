@@ -23,7 +23,10 @@ STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-[ "$#" -eq 1 ] && fm_pr_task_id_valid "$1" || { echo 'usage: fm-rate-limit-retry.sh <task-id>' >&2; exit 2; }
+if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
+  echo 'usage: fm-rate-limit-retry.sh <task-id>' >&2
+  exit 2
+fi
 ID=$1
 INTERVAL=${FM_RATE_LIMIT_RETRY_SECS:-3600}
 case "$INTERVAL" in ''|*[!0-9]*) echo 'invalid retry interval' >&2; exit 2 ;; esac

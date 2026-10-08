@@ -606,11 +606,10 @@ if [ -n "$FIRE_AND_FORGET_ID" ]; then
       echo "error: --fire-and-forget delivery id must be 16 lowercase hex characters" >&2
       exit 1
     }
-  [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] ||
-    {
-      echo "error: --fire-and-forget requires a recorded task selector" >&2
-      exit 1
-    }
+  if [ -z "$TARGET_SELECTOR" ] || [ -z "$TARGET_META" ]; then
+    echo "error: --fire-and-forget requires a recorded task selector" >&2
+    exit 1
+  fi
   case "$(fm_meta_get "$TARGET_META" kind)" in
     ship|scout|secondmate) ;;
     *) echo "error: --fire-and-forget requires a recorded ship, scout, or secondmate" >&2; exit 1 ;;
