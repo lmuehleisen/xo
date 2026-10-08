@@ -1335,12 +1335,13 @@ EOF
   n=$(cat "$attempts")
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/one' 31
   grep -qF AGY_TASK_INTERPRETER_MARKER "$saved" || fail "agy must inspect a task-owned launcher's own body"
+  printf '# delegated script edit\n' >> "$wt/tf.sh"
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/one' 32
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/two' 33
-  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "agy task-owned launchers must retain exact input"
+  [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "agy task-owned launchers must re-judge edits to delegated scripts and exact retries"
   printf '# launcher edit\n' >> "$wt/bash"
   hook "$policy" pre-tool-use run_command './bash tf.sh fetch https://lookup.example/two' 34
-  [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "an agy launcher edit must invalidate its exact approval"
+  [ "$(cat "$attempts")" = "$((n + 4))" ] || fail "an agy launcher edit must be judged again"
   for root in "PATH=$wt:/usr/bin:/bin" "env PATH=$wt:/usr/bin:/bin"; do
     hook "$policy" pre-tool-use run_command "$root bash tf.sh fetch https://lookup.example/one" 35
     denied "$OUT" || fail "assigned launcher environments must keep the script opaque for agy"
@@ -1462,6 +1463,26 @@ fi'
   jq '.grants_sha = ""' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
   hook "$policy" pre-tool-use run_command './tf.sh fetch two' 2
   denied "$OUT" && [ "$(cat "$attempts")" = 2 ] || fail "withdrawing the grants pin must invalidate agy script approval"
+  # Simulate an instruction update after the original prompt reaches the
+  # judge. The old approval must not become an approval for the new authority.
+  # shellcheck disable=SC2016 # literal fake judge source
+  policy=$(new_case script-authority-inflight '
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+if [ "$n" = 0 ]; then
+  printf "# Task\n## Captain\047s intent\nNO_SCRIPT_AUTHORITY\n## Firstmate spec\nKeep the change narrow.\n" > ../../data/t1/brief.md
+  echo "APPROVE: the original authority sanctioned this call"
+else
+  echo "DECLINE: authority was withdrawn"
+fi')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/agy-permission-judge/attempts"
+  printf '# script under review\n' > "$wt/tf.sh"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch one' 1
+  denied "$OUT" || fail "an authority change during agy judgment must hold the approval"
+  hook "$policy" pre-tool-use run_command './tf.sh fetch two' 2
+  denied "$OUT" && [ "$(cat "$attempts")" = 2 ] || fail "agy must not cache the old approval under the newer authority"
   pass "fm-agy-permission-policy: script approvals bind current instructions and verified grants"
 }
 

@@ -1934,16 +1934,17 @@ fi')
   n=$(cat "$attempts")
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/one'
   grep -qF TASK_INTERPRETER_MARKER "$saved" || fail "a task-owned interpreter launcher must show its own body"
+  printf '# delegated script edit\n' >> "$script"
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/one'
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/two'
-  [ "$(cat "$attempts")" = "$((n + 2))" ] || fail "task-owned launchers must retain exact input"
+  [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "task-owned launchers must re-judge edits to delegated scripts and exact retries"
   printf '# launcher edit\n' >> "$wt/bash"
   hook "$policy" permission-request exec './bash .scratch/tf.sh fetch https://lookup.example/two'
-  [ "$(cat "$attempts")" = "$((n + 3))" ] || fail "a launcher edit must invalidate its exact approval"
+  [ "$(cat "$attempts")" = "$((n + 4))" ] || fail "a launcher edit must be judged again"
   PATH="$wt:$PATH" hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/one'
   grep -qF TASK_INTERPRETER_MARKER "$saved" || fail "PATH-resolved task launchers must show their own body"
   PATH="$wt:$PATH" hook "$policy" permission-request exec 'bash .scratch/tf.sh fetch https://lookup.example/two'
-  [ "$(cat "$attempts")" = "$((n + 5))" ] || fail "PATH-resolved task launchers must also retain exact input"
+  [ "$(cat "$attempts")" = "$((n + 6))" ] || fail "PATH-resolved task launchers must also be judged again"
   pass "fm-devin-permission-policy: option operands identify the actual script; snapshots/cache need no file utility"
 }
 
@@ -2040,6 +2041,26 @@ fi'
   jq '.grants_sha = ""' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
   hook "$policy" permission-request exec './tf.sh fetch two'
   [ -z "$OUT" ] && [ "$(cat "$attempts")" = 2 ] || fail "withdrawing the grants pin must invalidate script approval"
+  # Change authority after the judge has received the original prompt, before
+  # it returns its approval. That verdict must not be relabelled or cached.
+  # shellcheck disable=SC2016 # literal fake judge source
+  policy=$(new_case script-authority-inflight '
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+if [ "$n" = 0 ]; then
+  printf "# Task\n## Captain\047s intent\nNO_SCRIPT_AUTHORITY\n## Firstmate spec\nKeep the change narrow.\n" > ../../data/t1/brief.md
+  echo "APPROVE: the original authority sanctioned this call"
+else
+  echo "DECLINE: authority was withdrawn"
+fi')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  printf '# script under review\n' > "$wt/tf.sh"
+  hook "$policy" permission-request exec './tf.sh fetch one' authority_race_one
+  [ -z "$OUT" ] || fail "an authority change during judgment must hold the approval"
+  hook "$policy" permission-request exec './tf.sh fetch two' authority_race_two
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 2 ] || fail "the old approval must not be stored under the newer authority"
   pass "fm-devin-permission-policy: script approvals bind current instructions and verified grants"
 }
 

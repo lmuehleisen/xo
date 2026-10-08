@@ -43,7 +43,8 @@
 #   are never read. Explicit brief read constraints omit automatic script
 #   context entirely; prose restrictions cannot prove disclosure is allowed.
 #   A task-owned interpreter executable is inspected as the launcher itself
-#   and keeps an exact invocation key, even when found through PATH.
+#   even when found through PATH. Its judge verdict is never cached: that
+#   launcher may delegate to another mutable file whose body was not inspected.
 #   Launchers in other scratch (/tmp or $TMPDIR) or granted write roots are
 #   mutable too: omit their script context and automatic verdict caching.
 #   Stripped wrappers/assignments and direct scripts with a task-owned or
@@ -75,7 +76,8 @@
 #   alongside exact approvals, with separate script-key scopes. Compound calls
 #   keep exact-input keys augmented with script hashes; other calls are unchanged.
 #   Script cache keys also bind the full brief contents and recorded grants
-#   digest, so changes to task authority require fresh judgment.
+#   digest. The key is captured before judgment; a changed authority rejects
+#   an approval, and storing it never recomputes a key under newer authority.
 #
 #   Task grants: load_grants/grants_block/grants_digest/
 #   fm_grants_digest_of_file/granted_env_file*/granted_task_script/
@@ -674,6 +676,7 @@ JUDGE_SCRIPT_INPUT='' JUDGE_SCRIPT_HASHES='' JUDGE_SCRIPT_SHAPE=''
 JUDGE_SCRIPT_COUNT=0 JUDGE_SCRIPT_SIMPLE=0
 JUDGE_SCRIPT_SEEN=() JUDGE_SCRIPT_OMITTED=0
 JUDGE_SCRIPT_UNCACHEABLE=0
+JUDGE_CACHE_KEY=''
 # Follow a file's symlinks without normalizing .. ahead of physical traversal.
 judge_script_path() {  # <word> <cwd>
   local abs link hops=0
@@ -738,8 +741,9 @@ judge_script_input() {
     fi
     if [ -n "$launcher" ]; then
       # A task can change this executable; its name proves no interpreter
-      # semantics. Inspect its own body and retain every invocation argument.
+      # semantics. Its body may also delegate to another mutable script.
       JUDGE_SCRIPT_SIMPLE=0
+      JUDGE_SCRIPT_UNCACHEABLE=1
     else
       interpreter=1
     fi
@@ -3254,6 +3258,7 @@ evaluate_exec() {
   JUDGE_SCRIPT_COUNT=0 JUDGE_SCRIPT_SIMPLE=1
   JUDGE_SCRIPT_SEEN=() JUDGE_SCRIPT_OMITTED=0
   JUDGE_SCRIPT_UNCACHEABLE=0
+  JUDGE_CACHE_KEY=''
   # shellcheck disable=SC2034 # output global; the agy adapter reads it after evaluate_exec.
   SENSITIVE_HIT=''
   FETCH_FILES=''
@@ -3506,6 +3511,10 @@ run_judge() {
   # shellcheck disable=SC2034 # JUDGE_VERDICT is this function's output contract, read by the sourcing adapter
   JUDGE_VERDICT=decline JUDGE_REASON='' JUDGE_RETRYABLE=0
   JUDGE_ELAPSED_SECONDS=0 JUDGE_ATTEMPTS=0 JUDGE_TIMEOUTS=0
+  JUDGE_CACHE_KEY=''
+  if [ -n "$JUDGE_SCRIPT_HASHES" ] && [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ]; then
+    JUDGE_CACHE_KEY=$(cache_key shape) || JUDGE_CACHE_KEY=''
+  fi
   if [ -z "$JUDGE_MODEL" ]; then JUDGE_REASON="first judge disabled"; return 0; fi
   if ! fm_judge_tier_known "${JUDGE_TIER-}"; then
     # An unrecognised tier is a configuration error, not a reason to fall back
@@ -3540,6 +3549,10 @@ run_judge() {
     t0=$SECONDS
     JUDGE_ATTEMPTS=$attempt
     run_judge_attempt "$bound"
+    if [ "$JUDGE_VERDICT" = approve ] && [ -n "$JUDGE_CACHE_KEY" ] \
+      && [ "$(cache_key shape)" != "$JUDGE_CACHE_KEY" ]; then
+      JUDGE_VERDICT=decline JUDGE_REASON='task authority changed during judgment' JUDGE_RETRYABLE=0
+    fi
     elapsed=$((elapsed + SECONDS - t0))
     JUDGE_ELAPSED_SECONDS=$elapsed
     [ "$JUDGE_RETRYABLE" = 1 ] || return 0
@@ -3627,6 +3640,7 @@ cache_lookup() {  # sets CACHE_REASON; 0 on a hit
 cache_store() {  # <reason> [key]
   local key=${2-}
   [ -n "$key" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] || return 0
+  [ -n "$key" ] || key=$JUDGE_CACHE_KEY
   [ -n "$key" ] || key=$(cache_key shape) || return 0
   mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
   printf '%s\n' "$(one_line "$1" 200)" > "$CACHE_DIR/$key" 2>/dev/null || true
