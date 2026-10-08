@@ -36,13 +36,16 @@
 #   <policy-file minus .json>-pending/ and the cache in -cache/ beside it.
 #
 #   Script context: a directly invoked script, or the first non-option script
-#   argument of a plain_interpreter (excluding inline programs and stdin), is
-#   shown to the judge as data when it physically resolves inside WORKTREE,
+#   argument of a plain_interpreter (excluding inline programs, stdin, and
+#   unknown options), is shown as data when it physically resolves inside WORKTREE,
 #   DATA_DIR, or TASKTMP and is a readable regular text file of at most 16384
 #   bytes. Credential paths, including granted env files and symlink targets,
 #   are never read. This is input for the judge, not a static approval or a
 #   grant: the same always-decline and credential rules govern script effects.
 #   The snapshot shown to the judge also supplies the cache's content hash.
+#   Interpreter options qualify only when their operand handling is known:
+#   shell/Python flag clusters, shell -o, Bash -O, Python -W/-X, and a few Bash
+#   long flags. Other option forms keep the existing exact-input behavior.
 #   For one unwrapped invocation without redirections, shell operators,
 #   expansions, or globs, the cache retains the interpreter/options, script
 #   path, first script argument (subcommand), cwd, and other tool fields, but
@@ -680,10 +683,30 @@ judge_script_input() {
       case "$base:${E[k]}" in
         node:-p*|node:--print*|perl:-[^-]*e*|php:-r*|php:--run*) return 0 ;;
       esac
+      [ "${EV[k]}" = 0 ] && [ "${EG[k]}" = 0 ] || return 0
+      case "$base:${E[k]}" in
+        bash:+*|sh:+*|zsh:+*|ksh:+*|dash:+*) return 0 ;;
+      esac
       case "${E[k]}" in
         -) return 0 ;;
         --) k=$((k + 1)); break ;;
-        -*) continue ;;
+        -*)
+          case "$base:${E[k]}" in
+            bash:-o|bash:-O|sh:-o|zsh:-o|ksh:-o|dash:-o|\
+            python:-W|python:-X|python2:-W|python3:-W|python3:-X)
+              k=$((k + 1))
+              [ "$k" -lt "${#E[@]}" ] && [ "${EV[k]}" = 0 ] && [ "${EG[k]}" = 0 ] || return 0 ;;
+            bash:--noprofile|bash:--norc|bash:--posix) ;;
+            *)
+              # An unknown option may consume the next word, which must not
+              # be mistaken for the program whose contents/hash we inspect.
+              case "$base" in
+                bash) case "${E[k]#-}" in *[!abefhiklmnprtuvxBCEHPT]*) return 0 ;; esac ;;
+                sh|zsh|ksh|dash) case "${E[k]#-}" in *[!efnuvx]*) return 0 ;; esac ;;
+                python|python2|python3) case "${E[k]#-}" in *[!bBdhiIOPqsSuvVx]*) return 0 ;; esac ;;
+                *) return 0 ;;
+              esac ;;
+          esac ;;
         *) break ;;
       esac
     done
@@ -718,11 +741,10 @@ judge_script_input() {
   [ -n "$phys" ] && [ -f "$abs" ] && [ -r "$abs" ] || return 0
   bytes=$(wc -c < "$abs" 2>/dev/null) || return 0
   [ "$bytes" -le 16384 ] || return 0
-  case "$(LC_ALL=C file -b --mime-type "$abs" 2>/dev/null)" in
-    text/*|application/javascript|application/json|application/x-empty|inode/x-empty) ;;
-    *) return 0 ;;
-  esac
-  [ "$bytes" -eq 0 ] || LC_ALL=C grep -Iq '' "$abs" 2>/dev/null || return 0
+  # Reject NUL and other binary control bytes without depending on `file`.
+  # Tabs, newlines, CR, printable ASCII, and non-ASCII text bytes are allowed.
+  bytes=$(LC_ALL=C tr -d '\011\012\015\040-\176\200-\377' < "$abs" 2>/dev/null | wc -c) || return 0
+  [ "$bytes" -eq 0 ] || return 0
   # Preserve trailing newlines so an edit to them also changes the digest.
   content=$(head -c 16385 "$abs" 2>/dev/null && printf '.') || return 0
   content=${content%.}
@@ -3128,6 +3150,8 @@ evaluate_exec() {
   FETCH_FILES=''
   analyze_command "$1" "$start_cwd"
   while [ "$q" -lt "${#NESTED[@]}" ] && [ "$q" -lt 32 ]; do
+    # A nested script may supply context, but cannot replace its outer call.
+    JUDGE_SCRIPT_SIMPLE=0
     analyze_command "${NESTED[q]}" "${NESTED_CWD[q]}"
     q=$((q + 1))
   done

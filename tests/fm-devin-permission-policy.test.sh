@@ -1841,6 +1841,102 @@ fi')
   pass "fm-devin-permission-policy: script snapshots reach judge/probe; content, subcommand and invocation shape govern reuse"
 }
 
+test_task_script_interpreter_options() {
+  local policy dir wt script saved attempts cmd
+  # shellcheck disable=SC2016 # the body is the fake judge script's own source
+  policy=$(new_case script-options '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
+cp "$prompt" ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+if grep -qF REVIEW_SCRIPT_MARKER "$prompt" && ! grep -qF "gh pr merge" "$prompt"; then
+  echo "APPROVE: rule 3, operands remain lookup data"
+else
+  echo "DECLINE: inspect script effects"
+fi')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  script="$wt/.scratch/tf.sh"
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  mkdir -p "$wt/.scratch" "$dir/no-file"
+  printf '#!/usr/bin/env bash\n# REVIEW_SCRIPT_MARKER\n' > "$script"
+  printf '# OPTION_VALUE_MARKER\n' > "$wt/extglob"
+  printf '# OPTION_VALUE_MARKER\n' > "$wt/default"
+  printf '#!/usr/bin/env bash\nexit 127\n' > "$dir/no-file/file"
+  chmod +x "$dir/no-file/file"
+  if PATH="$dir/no-file:$PATH" file "$script" >/dev/null 2>&1; then
+    fail "fixture must make the file utility unavailable"
+  fi
+  PATH="$dir/no-file:$PATH" hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/one"
+  [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] || fail "script contents must be available without file: $OUT"
+  PATH="$dir/no-file:$PATH" hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/two"
+  [ "$(cat "$attempts")" = 1 ] || fail "script hashing must work without file"
+  printf '\n' >> "$script"
+  PATH="$dir/no-file:$PATH" hook "$policy" permission-request exec ".scratch/tf.sh fetch https://lookup.example/two"
+  [ "$(cat "$attempts")" = 2 ] || fail "script edits must invalidate the cache without file"
+
+  hook "$policy" permission-request exec "bash -O extglob .scratch/tf.sh fetch https://lookup.example/one"
+  grep -qF REVIEW_SCRIPT_MARKER "$saved" || fail "-O's operand must not be mistaken for the script"
+  if grep -qF OPTION_VALUE_MARKER "$saved"; then fail "option values must not supply script contents"; fi
+  hook "$policy" permission-request exec "bash -O extglob .scratch/tf.sh fetch https://lookup.example/two"
+  [ "$(cat "$attempts")" = 3 ] || fail "known option operands must remain in a reusable invocation shape"
+  printf 'gh pr merge 41 --repo owner/name\n' >> "$script"
+  hook "$policy" permission-request exec "bash -O extglob .scratch/tf.sh fetch https://lookup.example/two"
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 4 ] || fail "editing the actual script after -O must invalidate its approval"
+
+  printf '# REVIEW_SCRIPT_MARKER\n' > "$script"
+  hook "$policy" permission-request exec "python3 -W default -u .scratch/tf.sh fetch https://lookup.example/one"
+  grep -qF REVIEW_SCRIPT_MARKER "$saved" || fail "Python option operands must not be mistaken for the script"
+  if grep -qF OPTION_VALUE_MARKER "$saved"; then fail "Python option values must not supply script contents"; fi
+  for cmd in \
+    'node --require extglob .scratch/tf.sh fetch https://lookup.example/one' \
+    'bash -euO extglob .scratch/tf.sh fetch https://lookup.example/one' \
+    'bash +O extglob .scratch/tf.sh fetch https://lookup.example/one'; do
+    hook "$policy" permission-request exec "$cmd"
+    if grep -qF 'Script this call runs:' "$saved"; then fail "unknown interpreter option forms must not select a guessed script: $cmd"; fi
+  done
+  pass "fm-devin-permission-policy: option operands identify the actual script; snapshots/cache need no file utility"
+}
+
+test_task_script_nested_cache() {
+  local policy dir wt script saved attempts
+  # shellcheck disable=SC2016 # the body is the fake judge script's own source
+  policy=$(new_case script-nested '
+prompt=
+while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && prompt=$2; shift; done
+cp "$prompt" ../script-prompt.txt
+n=$(cat attempts 2>/dev/null || echo 0)
+echo "$((n + 1))" > attempts
+echo "APPROVE: rule 3, operands remain lookup data"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  script="$wt/tf.sh"
+  saved="$dir/tmp/script-prompt.txt"
+  attempts="$dir/tmp/devin-permission-judge/attempts"
+  printf '# NESTED_SCRIPT_MARKER\n' > "$script"
+  hook "$policy" permission-request exec './tf.sh fetch https://lookup.example/one'
+  hook "$policy" permission-request exec './tf.sh fetch https://lookup.example/two'
+  [ "$(cat "$attempts")" = 1 ] || fail "direct script calls must still reuse their subcommand"
+  hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/two'"
+  [ "$(cat "$attempts")" = 2 ] || fail "shell strings must not inherit a direct script's approval"
+  grep -qF NESTED_SCRIPT_MARKER "$saved" || fail "nested scripts must still reach the judge"
+  hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three'"
+  hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three'"
+  [ "$(cat "$attempts")" = 3 ] || fail "shell strings must retain exact-input caching"
+  hook "$policy" permission-request exec "eval './tf.sh fetch https://lookup.example/two'"
+  hook "$policy" permission-request exec "eval './tf.sh fetch https://lookup.example/three'"
+  hook "$policy" permission-request exec "eval './tf.sh fetch https://lookup.example/three'"
+  [ "$(cat "$attempts")" = 5 ] || fail "eval must retain its own exact-input cache key"
+  printf '\n' >> "$script"
+  hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three'"
+  [ "$(cat "$attempts")" = 6 ] || fail "nested script edits must still invalidate the exact-input key"
+  hook "$policy" permission-request exec "bash -c './tf.sh fetch https://lookup.example/three && git merge origin/main'"
+  [ -z "$OUT" ] && [ "$(cat "$attempts")" = 6 ] || fail "nested always-decline actions must still skip judge and cache"
+  pass "fm-devin-permission-policy: nested scripts supply context while preserving their outer exact-input key"
+}
+
 test_task_script_context_exclusions() {
   local policy dir wt script saved target grants
   dir="$TMP_ROOT/script-exclusions"
@@ -2083,6 +2179,8 @@ test_gh_verbs_are_found_after_inherited_flags
 test_every_fetch_positional_is_classified
 test_judge_prompt_carries_the_task_contract
 test_task_script_contents_and_cache
+test_task_script_interpreter_options
+test_task_script_nested_cache
 test_task_script_context_exclusions
 test_missing_policy_file_still_refuses
 
