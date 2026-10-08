@@ -120,6 +120,7 @@ Use a `contrib/<name>` branch for an upstream submission; the publisher's genera
 Before the pipeline publishes, add the exact upstream/fork/branch approval row to the isolated publisher's private `no-mistakes-submissions` file, and remove that row after publication or abandonment.
 [`bin/fm-no-mistakes-body.mjs`](../../../bin/fm-no-mistakes-body.mjs) owns row syntax, live-head eligibility, and generated-body normalization.
 An evidence-branch publish-judge refusal is expected and non-fatal; it does not authorize bypassing the contribution branch's publish checks.
+Keep publication blocks enabled while capturing or previewing a generated body; use the publisher's checked dry/probe paths instead of a live `pr` step with blocks lifted.
 Let the pipeline generate its `## Pipeline` attestation and open the PR; never hand-write or repair its attestation marker.
 Refresh an isolated publisher's toolbelt from the landed scripts before retrying; updating the primary checkout does not update that copy.
 For an upstream no-mistakes submission, never configure a deterministic suite-walk `commands.test`, whether it selects the full suite, changed tests, a family, or a fixed script list.

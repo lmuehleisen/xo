@@ -1813,7 +1813,40 @@ SH
   local generated="$TMP_ROOT/generated-body.md" received="$TMP_ROOT/generated-received.md"
   local prompts="$TMP_ROOT/generated-prompts" original_marker
   {
-    printf '## Intent\n\nThe operator requested a fixture change.\n\n## What Changed\n\nThe retry condition now preserves the expected exit code.\n\n## Testing\n\nPrivate run fixture-run, elapsed 2m50s.\n'
+    # Redacted structural reproduction of the generated upstream body:
+    # raw lab evidence is private even when the semantic judge allows it.
+    cat <<'BODY'
+## Intent
+
+The operator requested a fixture change.
+
+## What Changed
+
+The retry condition now preserves the expected exit code.
+
+## Risk Assessment
+
+The fixture change has a bounded effect.
+
+## Testing
+
+Private run fixture-run, elapsed 2m50s.
+
+<details>
+<summary>Evidence: fixture lab transcript</summary>
+
+```text
+=== partial
+WATCHER DOWN - SUPERVISION IS OFF
+1 task(s) in flight; last beat: never, grace 300s.
+config-push: ~/dev/example-contrib/tmp/lab.fixture -> live homes
+secondmate example (example-host:/example/home):
+  pushed: config/example
+exit=1 sends=1 marker=example.pending
+```
+</details>
+- Outcome: across 2 runs (2m50s)
+BODY
     sed -n '3,5p' "$body"
     printf '\n<details>Private pipeline transcript</details>\n'
   } >"$generated"
@@ -1832,12 +1865,17 @@ SH
   assert_contains "$(cat "$received")" 'not a claim that every scenario passed' 'completion is not success'
   assert_equals "$original_marker" "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$received")" 'attestation bytes preserved'
   assert_equals github.com "$(cat "$host")" 'generated write host'
-  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript' "$received"; then fail "private display narrative survived normalization"; fi
+  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript|WATCHER DOWN|example-contrib|example-host|last beat:|marker=example|Evidence: fixture' "$received"; then fail "private display narrative survived normalization"; fi
   assert_contains "$(cat "$prompts")" 'The retry condition now preserves the expected exit code.' 'judge sees retained change'
-  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript' "$prompts"; then fail "judge received the unsanitized body"; fi
+  if grep -Eq 'operator requested|fixture-run|2m50s|Private pipeline transcript|WATCHER DOWN|example-contrib|example-host|last beat:|marker=example|Evidence: fixture' "$prompts"; then fail "judge received the unsanitized body"; fi
   rm -f "$received"
-  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated" 2>&1) || fail "ordinary body should retain its normal policy checks: $out"
-  cmp -s "$generated" "$received" || fail "unapproved body was normalized"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated" 2>&1) && fail "unapproved oversized body must retain ordinary limits"
+  [ ! -e "$received" ] || fail "unapproved oversized body reached gh"
+  {
+    printf '## Intent\n\nThe operator requested a fixture change.\n\n## What Changed\n\nThe retry condition now preserves the expected exit code.\n\n## Pipeline\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n%s\n' "$original_marker"
+  } >"$generated.short"
+  out=$(FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr create --repo acme/upstream --base main --head acme:contrib/other --title Fix --body-file=- <"$generated.short" 2>&1) || fail "ordinary body should retain its normal policy checks: $out"
+  cmp -s "$generated.short" "$received" || fail "unapproved body was normalized"
   rm -f "$received"
   out=$(FM_PUBLISH_EXEC_BLOCK=1 FM_TEST_GENERATED_HOST="$host" FM_TEST_GENERATED_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/generated-gh" pr edit 3 --repo acme/upstream --body-file=- <"$generated" 2>&1) && fail "normalized edit must honor write block"
   assert_contains "$out" 'GitHub writes blocked' 'normalized write block'
