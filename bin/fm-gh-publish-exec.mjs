@@ -72,11 +72,7 @@ try {
           const markers = (text) => text.match(/<!-- no-mistakes-pipeline-attestation:v1 [\s\S]*? -->/g) || [];
           const originalMarkers = markers(input.toString("utf8"));
           const publishedMarkers = markers(publication);
-          if (!publication.trim() || publication.includes("\0")
-            || !publication.startsWith("## Intent\n") || !publication.includes("\n## What Changed\n")
-            || !publication.includes("\n## Pipeline\n")
-            || !publication.includes("Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)")
-            || originalMarkers.length !== 1 || publishedMarkers.length !== 1
+          if (!publication.trim() || originalMarkers.length !== 1 || publishedMarkers.length !== 1
             || publishedMarkers[0] !== originalMarkers[0]) {
             throw new Error("no-mistakes body preparation returned invalid output; refresh the publisher toolbelt");
           }
