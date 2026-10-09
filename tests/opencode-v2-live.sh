@@ -16,7 +16,7 @@ MODEL=${FM_OPENCODE_LIVE_MODEL:-opencode/muse-spark-1.3-contributor-free}
 REAL_TMUX=$(command -v tmux)
 unset TMUX TMUX_PANE
 CODE_ROOT="$LAB/code"
-mkdir -p "$CODE_ROOT/.agents/skills/fm-local-skill-probe"
+mkdir -p "$CODE_ROOT/.agents/skills/fm-local-skill-probe" "$CODE_ROOT/.agents/skills/fm-worktree-skill-probe"
 CODE_ROOT=$(cd "$CODE_ROOT" && pwd -P)
 ln -s "$ROOT/bin" "$CODE_ROOT/bin"
 ln -s "$ROOT/.opencode" "$CODE_ROOT/.opencode"
@@ -26,6 +26,13 @@ name: fm-local-skill-probe
 description: Load only to verify worker skill discovery.
 ---
 The verification token is FM_OPENCODE_LOCAL_SKILL_OK.
+SKILL
+cat > "$CODE_ROOT/.agents/skills/fm-worktree-skill-probe/SKILL.md" <<'SKILL'
+---
+name: fm-worktree-skill-probe
+description: Load only to verify worktree skill precedence.
+---
+The verification token is FM_OPENCODE_PRIMARY_SKILL_STALE.
 SKILL
 export FM_HOME="$LAB/home" FM_ROOT_OVERRIDE="$CODE_ROOT"
 LAB_HOME_HELPER="$ROOT/bin/fm-lab-home.sh"
@@ -54,6 +61,15 @@ printf 'tmux\n' > "$FM_HOME/config/backend"
 # A fresh independent fixture repository, never the fleet's shared worktree pool.
 fm_git_init_commit "$LAB/project"
 git clone -q --no-local "$LAB/project" "$LAB/wt"
+mkdir -p "$LAB/wt/.agents/skills/fm-worktree-skill-probe"
+cat > "$LAB/wt/.agents/skills/fm-worktree-skill-probe/SKILL.md" <<'SKILL'
+---
+name: fm-worktree-skill-probe
+description: Load only to verify worktree skill precedence.
+---
+The verification token is FM_OPENCODE_WORKTREE_SKILL_OK.
+SKILL
+printf '.agents/skills/fm-worktree-skill-probe/\n' >> "$LAB/wt/.git/info/exclude"
 # Only allocation is stubbed: no fleet pool or linked worktree is administered.
 cat > "$LAB/shim/treehouse" <<SH
 #!/usr/bin/env bash
@@ -66,9 +82,10 @@ cat > "$FM_HOME/data/$ID/brief.md" <<BRIEF
 ## Captain's intent
 Verify a trivial runtime task.
 ## Firstmate spec
-Do not edit or inspect any project files.
-Call the skill tool with id="fm-local-skill-probe" before reporting.
-Append a newline-terminated line containing "working: brief processed" and the verification token from the skill tool's returned body to $FM_HOME/state/$ID.status.
+Do not edit any project files.
+Inspect skill instructions only through the skill tool.
+Call the skill tool with id="fm-local-skill-probe" and then id="fm-worktree-skill-probe" before reporting.
+Append a newline-terminated line containing "working: brief processed" and both verification tokens from the skill tool's returned bodies to $FM_HOME/state/$ID.status.
 Do not read SKILL.md through a file tool or use a fallback; if the skill tool fails, report its error and stop.
 Then reply BRIEF_OK and stop until an instruction arrives.
 Your steering inbox is $FM_HOME/state/$ID.inbox.
@@ -104,11 +121,14 @@ assert_local_skill_loaded() {
     || fail "$VERSION: could not find the scratch worker session"
   (cd "$LAB/wt" && opencode session export --standalone "$session") > "$LAB/skill-session.json" \
     || fail "$VERSION: could not export the scratch worker session"
-  jq -e --arg base "$CODE_ROOT/.agents/skills/fm-local-skill-probe" '
+  jq -e --arg base "$CODE_ROOT/.agents/skills/fm-local-skill-probe" \
+    --arg worktree_base "$(cd "$LAB/wt/.agents/skills/fm-worktree-skill-probe" && pwd -P)" '
     [.messages[] | select(.type == "assistant") | .content[] |
-      select(.type == "tool" and .name == "skill" and .state.status == "completed" and
-        .state.input.id == "fm-local-skill-probe" and .state.metadata.directory == $base and
-        any(.state.content[]; .type == "text" and (.text | contains("FM_OPENCODE_LOCAL_SKILL_OK"))))] | length > 0
+      select(.type == "tool" and .name == "skill" and .state.status == "completed")] as $skills |
+    any($skills[]; .state.input.id == "fm-local-skill-probe" and .state.metadata.directory == $base and
+      any(.state.content[]; .type == "text" and (.text | contains("FM_OPENCODE_LOCAL_SKILL_OK")))) and
+    any($skills[]; .state.input.id == "fm-worktree-skill-probe" and .state.metadata.directory == $worktree_base and
+      any(.state.content[]; .type == "text" and (.text | contains("FM_OPENCODE_WORKTREE_SKILL_OK"))))
   ' "$LAB/skill-session.json" > /dev/null || {
     jq -c '.messages[] | select(.type == "assistant") | .content[] |
       select(.type == "tool" and .name == "skill") |
@@ -155,7 +175,7 @@ wait_idle
 wait_file_text "$FM_HOME/state/$ID.status" 'FM_OPENCODE_LOCAL_SKILL_OK'
 assert_local_skill_loaded
 [ -z "$(git -C "$LAB/wt" status --porcelain)" ] || fail "$VERSION: skill probe wrote to the scratch project"
-pass "$VERSION: native skill tool loads a home-local skill outside Firstmate without project config"
+pass "$VERSION: native skill tool loads home-local and worktree override skills without project config"
 [ -f "$FM_HOME/state/$ID.turn-ended" ] || fail "$VERSION: no turn-end notification"
 PLUGIN="/tmp/fm-$ID/opencode-plugin-$(cat "$FM_HOME/state/$ID.busy-gen")/index.mjs"
 [ -f "$PLUGIN" ] || fail "$VERSION: missing per-task V2 plugin"

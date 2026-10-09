@@ -1058,11 +1058,16 @@ test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
 }
 
 test_opencode_exposes_firstmate_skills_in_launch_config() {
-  local rec id out status launch config kind model plugin
+  local rec id out status launch config kind model plugin worktree_skills
   for kind in ship scout; do
     id="profile-opencode-skills-$kind"
     rec=$(make_spawn_case "$id" opencode "$id")
     read_case_record "$rec"
+    worktree_skills=
+    if [ "$kind" = scout ]; then
+      mkdir -p "$WT_DIR/.agents/skills"
+      worktree_skills=$(cd "$WT_DIR/.agents/skills" && pwd -P)
+    fi
     model=default
     if [ "$kind" = ship ]; then
       out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
@@ -1082,8 +1087,9 @@ SH
     fm_eval_launch "$launch" "$WT_DIR" "$FAKEBIN_DIR" "FM_OPENCODE_CONFIG_CAPTURE=$config" \
       || fail "OpenCode $kind launch could not deliver its config"
     plugin="/tmp/fm-$id/opencode-plugin-$(cat "$HOME_DIR/state/$id.busy-gen")"
-    jq -e --arg skills "$ROOT/.agents/skills" --arg plugin "$plugin" --arg model "$model" '
-      .skills == [$skills] and .plugins == [$plugin] and
+    jq -e --arg skills "$ROOT/.agents/skills" --arg worktree_skills "$worktree_skills" \
+      --arg plugin "$plugin" --arg model "$model" '
+      .skills == ([$skills] + (if $worktree_skills == "" then [] else [$worktree_skills] end)) and .plugins == [$plugin] and
       (if $model == "default" then has("model") | not else
         .model == $model and .agents.build.model == $model end)
     ' "$config" > /dev/null || fail "OpenCode $kind config lost its Firstmate skill source, plugin, or model"

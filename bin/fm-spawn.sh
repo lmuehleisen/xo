@@ -6031,10 +6031,14 @@ if [ "$RAW_LAUNCH" -eq 0 ]; then
     # the server inherit this spawn's environment instead of reusing a daemon.
     # Neither model selection nor plugin installation writes project config.
     OPENCODE_SKILLS_DIR=$(cd "$FM_ROOT/.agents/skills" && pwd -P) || exit 1
+    OPENCODE_WORKTREE_SKILLS_DIR=
+    if [ -d "$WT/.agents/skills" ]; then
+      OPENCODE_WORKTREE_SKILLS_DIR=$(cd "$WT/.agents/skills" && pwd -P) || exit 1
+    fi
     OPENCODECONFIG=$(jq -cn --arg model "$MODEL" --arg variant "$EFFORTFLAG" \
       --arg plugin "$TASK_TMP/opencode-plugin-${BUSY_GEN:-}" --arg kind "$KIND" \
-      --arg skills "$OPENCODE_SKILLS_DIR" '
-      {skills:[$skills]} +
+      --arg skills "$OPENCODE_SKILLS_DIR" --arg worktree_skills "$OPENCODE_WORKTREE_SKILLS_DIR" '
+      {skills:([$skills] + (if $worktree_skills == "" then [] else [$worktree_skills] end))} +
       (if $kind == "secondmate" then {} else {plugins:[$plugin]} end) +
       (if $model == "" or $model == "default" then {} else
         {model:$model, default_agent:"build", agents:{build:{model:($model +

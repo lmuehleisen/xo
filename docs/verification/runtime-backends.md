@@ -2673,21 +2673,22 @@ V2 primary operation is deferred as documented by the [harness reference](../../
 
 ### External worker skills
 
-Verified on 2026-10-08 with `opencode v2.0.18`, a disposable profile, a private tmux server, and `opencode/step-5-preview-free`:
+Verified on 2026-10-09 with `opencode v2.0.18`, a disposable profile, a private tmux server, and `opencode/muse-spark-1.3-contributor-free`:
 
 ```sh
-FM_OPENCODE_LIVE_BACKEND=tmux FM_OPENCODE_LIVE_MODEL=opencode/step-5-preview-free FM_OPENCODE_LIVE_E2E=1 bash bin/fm-test-run.sh tests/fm-opencode-primary-live-e2e.test.sh
+FM_OPENCODE_LIVE_BACKEND=tmux FM_OPENCODE_LIVE_MODEL=opencode/muse-spark-1.3-contributor-free FM_OPENCODE_LIVE_E2E=1 bash bin/fm-test-run.sh tests/fm-opencode-primary-live-e2e.test.sh
 ```
 
 The added result line was:
 
 ```text
-ok - opencode v2.0.18: native skill tool loads a home-local skill outside Firstmate without project config
+ok - opencode v2.0.18: native skill tool loads home-local and worktree override skills without project config
 ```
 
-The guard creates an untracked skill only in its Firstmate code-root fixture and launches the worker in a separate scratch project.
-The native session export must contain a completed `skill` call with the expected ID, body token, and exact base directory, both after fresh launch and after bare relaunch.
+The guard creates a home-only skill and a duplicate skill in its Firstmate code-root fixture, then launches the worker in a separate scratch project with an overriding definition of the duplicate.
+The native session export must contain completed `skill` calls with both expected IDs, body tokens, and exact base directories, both after fresh launch and after bare relaunch.
 The scratch project remains clean after the initial skill load; the guard uses no project-local or global config write to expose the skill.
+The worktree source follows the home source so its duplicate IDs retain precedence.
 The launch source uses V2's supported [`skills` array](https://opencode.ai/v2/docs/skills/); `tests/fm-spawn-dispatch-profile.test.sh` covers the generated ship/scout configuration with default and explicit models.
 
 ### Herdr worker lifecycle
