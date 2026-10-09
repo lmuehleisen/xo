@@ -48,13 +48,16 @@
 #   Code picks: a sampled experiment class with a rankable route first; in
 #   an `ordered` lane the first class with any eligible route, ranked inside
 #   that class; in a `pool` lane the spendPriority argmax over every class.
-#   A class at its optional max_live cap is not eligible. Live counts read
-#   ordinary task records (kind not secondmate) from $FM_HOME/state/*.meta
+#   A class at its optional max_live cap or live_cap_group cap is not eligible.
+#   Live counts read ordinary task records (kind not secondmate) from
+#   $FM_HOME/state/*.meta
 #   (FM_STATE_OVERRIDE replaces state), matching harness and model to any
 #   class route, regardless of effort or model_family; model=default matches
 #   a route with no model. Unreadable records
 #   count as nothing; a finished task not yet cleaned up still counts.
-#   This check is advisory; fm-spawn.sh does not enforce class caps.
+#   A group counts each record once across all routes of all configured member
+#   classes, including classes outside the selected lane and excluded classes.
+#   These checks are advisory; fm-spawn.sh does not enforce live caps.
 #   Exact spendPriority ties across classes prefer fewer live workers;
 #   ties that remain escalate, including ties between routes of one class.
 #   A class gated `others-ahead-of-pace` stays eligible only while every
@@ -92,7 +95,8 @@
 #     candidate: <harness>:<model> [class=.. family=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     Unmetered class routes print quota=unmetered (declared), spendPriority=0, runway=unmetered; these are declared facts, not measured quota.
 #     class: <name> family=<family> [experiment]   (lane rules, status clear only)
-#     Lane candidate lines end with live=<count> [max_live=<cap>].
+#     Lane candidate lines end with live=<count> [max_live=<cap>] and, for a
+#     grouped class, live_cap_group=<name> group_live=<count> group_max_live=<cap>.
 #     tie_break: <class> has fewest live workers (<count>) among spendPriority ties
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
@@ -510,7 +514,7 @@ fi
 
 # Snapshot readable ordinary task records without executing their contents.
 # Last field wins, as in fm-spawn.sh's away spend cap; one record counts once
-# per matching class even when multiple effort routes share harness and model.
+# per matching class or group even when routes share harness and model.
 LIVE_TASKS=$(
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] && [ -r "$meta" ] || continue
@@ -638,26 +642,34 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     elif any($tags[]; . as $t | ($p.allow_tags // []) | index($t)) then null
     else "data policy \($name) does not admit project \(if $project == "" then "(none given)" else $project end) without an allowed data tag (\(($p.allow_tags // []) | join(", ")))"
     end;
+  def live_count($routes):
+    [$live_tasks[] | . as $task |
+      select(any($routes[]; .harness == $task.harness and (.model // "") == $task.model))] | length;
   def class_exclusion($k):
     if $k.max_live != null and $k.live >= $k.max_live then "at live cap \($k.live)/\($k.max_live)"
+    elif $k.group_max_live != null and $k.group_live >= $k.group_max_live then "at live cap group \($k.live_cap_group) \($k.group_live)/\($k.group_max_live)"
     elif $exclude != "" and $k.family == $exclude then "second opinion excludes family \($k.family)"
     elif $exclude != "" and $k.experiment != null then "an experiment class never serves a second opinion"
     elif $k.experiment != null and $sample >= ($k.experiment.share * 100) then "experiment not sampled for this task"
     elif $k.data_policy != null then policy_block($k.data_policy)
     else null end;
   def lane_eval($rule):
+    (($cfg.live_cap_groups // {}) | with_entries(.key as $group |
+      .value = live_count([$cfg.classes[] | select(.live_cap_group == $group) | .routes[]]))) as $group_counts |
     [dispatch_lane_refs($rule)[] | . as $ref | ($cfg.classes[$ref.class]) as $def |
       {name: $ref.class, gate: ($ref.gate // null), family: $def.family,
        experiment: ($def.experiment // null), data_policy: ($def.data_policy // null),
        unmetered: ($def.unmetered // false), routes: $def.routes,
        max_live: ($def.max_live // null),
-       live: ([$live_tasks[] | . as $task |
-         select(any($def.routes[]; .harness == $task.harness and (.model // "") == $task.model))] | length)}
+       live: live_count($def.routes), live_cap_group: ($def.live_cap_group // null),
+       group_live: ($group_counts[$def.live_cap_group // ""] // null),
+       group_max_live: ($cfg.live_cap_groups[$def.live_cap_group // ""].max_live // null)}
       | . + {excluded: class_exclusion(.)}
       | . as $k
       | . + {candidates: [.routes[] |
           (if $k.excluded != null then {profile: ., eligible: false, reason: $k.excluded} else evaluate_route(.; $k.unmetered) end)
-          + {class: $k.name, family: $k.family, live: $k.live, max_live: $k.max_live}
+          + {class: $k.name, family: $k.family, live: $k.live, max_live: $k.max_live,
+             live_cap_group: $k.live_cap_group, group_live: $k.group_live, group_max_live: $k.group_max_live}
           + (if $k.experiment != null then {experiment: true} else {} end)]}
     ] as $classes0 |
     ([$classes0[] | select(.gate == null) | .candidates[] | select(rankable)]) as $others |
@@ -821,7 +833,8 @@ TEXT=$(jq -r '
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
       + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)
-      + (if .class then "  live=\(.live)" + (if .max_live then " max_live=\(.max_live)" else "" end) else "" end)),
+      + (if .class then "  live=\(.live)" + (if .max_live then " max_live=\(.max_live)" else "" end)
+          + (if .live_cap_group then " live_cap_group=\(.live_cap_group | flat) group_live=\(.group_live) group_max_live=\(.group_max_live)" else "" end) else "" end)),
   (if .chosen.class then "  class: \(.chosen.class | flat)  family=\(.chosen.family | flat)" + (if .chosen.experiment then "  experiment" else "" end) else empty end),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)

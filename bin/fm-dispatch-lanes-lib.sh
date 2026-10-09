@@ -46,17 +46,30 @@ FM_DISPATCH_LANES_JQ='
   def dl_policy_tags($p): (($p.allow_tags // []) + ($p.deny_tags // []));
   def dispatch_lanes_error:
     dl_classes as $classes |
+    (.live_cap_groups // {}) as $groups |
     (.data_policies // {}) as $policies |
     ([(.rules // [])[]? | objects | select(has("classes"))]) as $lanes |
     if has("classes") and (.classes | type) != "object" then "classes must be an object of named model classes"
     elif any($classes | keys[]; dl_name | not) then "class names must match ^[a-z0-9]+(-[a-z0-9]+)*$"
     elif any($classes[]; type != "object") then "each class must be an object"
-    elif any($classes[]; (keys - ["family", "routes", "experiment", "data_policy", "unmetered", "max_live", "why"]) | length > 0) then
-      "unknown class field: " + ([$classes[] | keys - ["family", "routes", "experiment", "data_policy", "unmetered", "max_live", "why"] | .[]] | unique | join(", "))
+    elif any($classes[]; (keys - ["family", "routes", "experiment", "data_policy", "unmetered", "max_live", "live_cap_group", "why"]) | length > 0) then
+      "unknown class field: " + ([$classes[] | keys - ["family", "routes", "experiment", "data_policy", "unmetered", "max_live", "live_cap_group", "why"] | .[]] | unique | join(", "))
     elif any($classes[]; has("max_live") and (
         (.max_live | type) != "number" or .max_live <= 0
         or (.max_live | isinfinite) or .max_live != (.max_live | floor))) then
       "class max_live must be a positive integer"
+    elif has("live_cap_groups") and (.live_cap_groups | type) != "object" then "live_cap_groups must be an object of named cap groups"
+    elif any($groups | keys[]; dl_name | not) then "live cap group names must match ^[a-z0-9]+(-[a-z0-9]+)*$"
+    elif any($groups[]; type != "object") then "each live cap group must be an object"
+    elif any($groups[]; (keys - ["max_live"]) | length > 0) then
+      "unknown live cap group field: " + ([$groups[] | keys - ["max_live"] | .[]] | unique | join(", "))
+    elif any($groups[];
+        (.max_live | type) != "number" or .max_live <= 0
+        or (.max_live | isinfinite) or .max_live != (.max_live | floor)) then
+      "live cap group max_live must be a positive integer"
+    elif any($classes[]; has("live_cap_group") and (
+        (.live_cap_group | dl_name | not) or ($groups[.live_cap_group] == null))) then
+      "class live_cap_group must name a declared live cap group"
     elif any($classes[]; has("unmetered") and (.unmetered | type) != "boolean") then
       "class unmetered must be a boolean"
     elif any($classes[]; .family | dl_name | not) then "each class needs family matching ^[a-z0-9]+(-[a-z0-9]+)*$"

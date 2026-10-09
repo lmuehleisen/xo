@@ -1214,6 +1214,8 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
     "<class>": {
       "family": "<model family>",
       "unmetered": true,
+      "max_live": 2,
+      "live_cap_group": "<group>",
       "routes": [
         { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>", "provider": "<optional quota-axi provider>" }
       ],
@@ -1221,6 +1223,9 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
       "data_policy": "<optional policy name>",
       "why": "<optional rationale>"
     }
+  },
+  "live_cap_groups": {
+    "<group>": { "max_live": 3 }
   },
   "data_policies": {
     "<policy>": { "allow_projects": ["<project>"], "allow_tags": ["<tag>"], "deny_tags": ["<tag>"], "why": "<optional>" }
@@ -1242,6 +1247,8 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
 | Class `family` | Required; the model family a second opinion excludes. A harness and model routed by more than one class must keep one family. |
 | Class `unmetered` | Optional boolean; `true` declares every route in the class free of quota consumption, and the class's routes must not declare quota floors. |
 | Class `max_live` | Optional positive integer; excludes the class once its live worker count reaches the cap. Absent means no cap. |
+| Top-level `live_cap_groups` | Optional map of named groups, each containing only a required positive integer `max_live`. |
+| Class `live_cap_group` | Optional; names a declared `live_cap_groups` entry whose cap applies across all member classes, alongside any class `max_live`. |
 | Class `routes` | Required non-empty array of profiles, each one way to reach the class's model, validated exactly like a `use` profile. |
 | Class `experiment` | Optional; marks a trial class sampled for `share` (above 0, at most 1) of the tasks its lanes resolve. |
 | Class `data_policy` | Optional; names the `data_policies` entry a task must satisfy before any route of the class is eligible. |
@@ -1251,7 +1258,7 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
 | Rule `order` | `pool` (the default) or `ordered`. |
 | Class reference `gate` | Only `others-ahead-of-pace`, and only in a pool lane. |
 
-Class, family, lane, policy, and tag names match `^[a-z0-9]+(-[a-z0-9]+)*$`.
+Class, family, lane, live cap group, policy, and tag names match `^[a-z0-9]+(-[a-z0-9]+)*$`.
 A lane rule's `when`, `approval`, `min_confidence`, and `floor` keep their meanings from the rule schema above.
 
 **How a lane resolves**
@@ -1265,7 +1272,7 @@ Every class route is evaluated like a profile, with a class's `unmetered` flag r
 
 - An `ordered` lane takes the first class with any eligible route and ranks only inside that class; an eligible but unranked route keeps its class first rather than falling through to the next class.
 - A `pool` lane ranks every eligible route of every class together.
-- A class at its `max_live` cap is not eligible, so an ordered lane falls through and a pool lane ranks the remaining routes; [`fm-dispatch-resolve.sh`](../bin/fm-dispatch-resolve.sh)'s header owns the metadata counting and advisory-check contract.
+- A class at its `max_live` cap or its `live_cap_group` cap is not eligible, so an ordered lane falls through and a pool lane ranks the remaining routes; [`fm-dispatch-resolve.sh`](../bin/fm-dispatch-resolve.sh)'s header owns the metadata counting and advisory-check contract.
 - An exact `spendPriority` tie across classes prefers the class with the fewest live workers and discloses the tie-break; any surviving tie escalates, including tied routes within one class.
 - A class gated `others-ahead-of-pace` stays eligible only while every rankable route of the lane's ungated classes has a negative `spendPriority` (spending ahead of pace) and the gated class's own best route does not; with no rankable ungated route the gate stays closed.
 - An experiment class is sampled from the task text's checksum, so the same brief always samples the same way; a sampled experiment with a rankable route takes the task, and an unsampled one is not eligible.
