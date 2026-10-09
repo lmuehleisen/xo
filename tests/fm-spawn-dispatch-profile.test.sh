@@ -1057,6 +1057,50 @@ test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
   pass "OpenCode startup retains task ownership after possible brief delivery, including closed endpoints"
 }
 
+test_opencode_exposes_firstmate_skills_in_launch_config() {
+  local rec id out status launch config kind model plugin worktree_skills
+  for kind in ship scout; do
+    id="profile-opencode-skills-$kind"
+    rec=$(make_spawn_case "$id" opencode "$id")
+    read_case_record "$rec"
+    worktree_skills=
+    if [ "$kind" = scout ]; then
+      mkdir -p "$WT_DIR/.agents/skills"
+      worktree_skills=$(cd "$WT_DIR/.agents/skills" && pwd -P)
+    fi
+    model=default
+    if [ "$kind" = ship ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+    else
+      model=opencode/skill-probe
+      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout --model "$model")
+    fi
+    status=$?
+    expect_code 0 "$status" "OpenCode $kind skill-source spawn failed: $out"
+    IFS= read -r launch < "$LAUNCH_LOG"
+    config="$CASE_DIR/opencode-config.json"
+    cat > "$FAKEBIN_DIR/opencode" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$OPENCODE_CONFIG_CONTENT" > "$FM_OPENCODE_CONFIG_CAPTURE"
+SH
+    chmod +x "$FAKEBIN_DIR/opencode"
+    fm_eval_launch "$launch" "$WT_DIR" "$FAKEBIN_DIR" "FM_OPENCODE_CONFIG_CAPTURE=$config" \
+      || fail "OpenCode $kind launch could not deliver its config"
+    plugin="/tmp/fm-$id/opencode-plugin-$(cat "$HOME_DIR/state/$id.busy-gen")"
+    jq -e --arg skills "$ROOT/.agents/skills" --arg worktree_skills "$worktree_skills" \
+      --arg plugin "$plugin" --arg model "$model" '
+      .skills == ([$skills] + (if $worktree_skills == "" then [] else [$worktree_skills] end)) and .plugins == [$plugin] and
+      (if $model == "default" then has("model") | not else
+        .model == $model and .agents.build.model == $model end)
+    ' "$config" > /dev/null || fail "OpenCode $kind config lost its Firstmate skill source, plugin, or model"
+    [ ! -e "$WT_DIR/opencode.json" ] && [ ! -e "$WT_DIR/.opencode" ] \
+      || fail "OpenCode $kind spawn wrote project configuration"
+    [ ! -e "$HOME_DIR/user-home/.config/opencode/opencode.json" ] \
+      || fail "OpenCode $kind spawn wrote global configuration"
+  done
+  pass "OpenCode ship/scout launch configs expose Firstmate skills without project or global config writes"
+}
+
 test_opencode_threads_model_and_effort_variant() {
   local rec id out status launch
   id=profile-opencode-z7
@@ -3159,6 +3203,7 @@ test_claude_worker_launch_covers_task_channel_dirs() {
   pass "claude worker launches cover the task-channel directories in auto and manual modes"
 }
 
+test_opencode_exposes_firstmate_skills_in_launch_config
 test_worker_launch_delivers_role_scope
 test_no_profile_keeps_claude_profile_defaults
 test_claude_launch_brief_publishes_record_doorbell

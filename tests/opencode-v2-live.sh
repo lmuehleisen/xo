@@ -15,7 +15,26 @@ ID="oc-v2-probe-$$"
 MODEL=${FM_OPENCODE_LIVE_MODEL:-opencode/muse-spark-1.3-contributor-free}
 REAL_TMUX=$(command -v tmux)
 unset TMUX TMUX_PANE
-export FM_HOME="$LAB/home" FM_ROOT_OVERRIDE="$ROOT"
+CODE_ROOT="$LAB/code"
+mkdir -p "$CODE_ROOT/.agents/skills/fm-local-skill-probe" "$CODE_ROOT/.agents/skills/fm-worktree-skill-probe"
+CODE_ROOT=$(cd "$CODE_ROOT" && pwd -P)
+ln -s "$ROOT/bin" "$CODE_ROOT/bin"
+ln -s "$ROOT/.opencode" "$CODE_ROOT/.opencode"
+cat > "$CODE_ROOT/.agents/skills/fm-local-skill-probe/SKILL.md" <<'SKILL'
+---
+name: fm-local-skill-probe
+description: Load only to verify worker skill discovery.
+---
+The verification token is FM_OPENCODE_LOCAL_SKILL_OK.
+SKILL
+cat > "$CODE_ROOT/.agents/skills/fm-worktree-skill-probe/SKILL.md" <<'SKILL'
+---
+name: fm-worktree-skill-probe
+description: Load only to verify worktree skill precedence.
+---
+The verification token is FM_OPENCODE_PRIMARY_SKILL_STALE.
+SKILL
+export FM_HOME="$LAB/home" FM_ROOT_OVERRIDE="$CODE_ROOT"
 LAB_HOME_HELPER="$ROOT/bin/fm-lab-home.sh"
 "$LAB_HOME_HELPER" create "$FM_HOME" >/dev/null
 LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$FM_HOME")
@@ -42,6 +61,15 @@ printf 'tmux\n' > "$FM_HOME/config/backend"
 # A fresh independent fixture repository, never the fleet's shared worktree pool.
 fm_git_init_commit "$LAB/project"
 git clone -q --no-local "$LAB/project" "$LAB/wt"
+mkdir -p "$LAB/wt/.agents/skills/fm-worktree-skill-probe"
+cat > "$LAB/wt/.agents/skills/fm-worktree-skill-probe/SKILL.md" <<'SKILL'
+---
+name: fm-worktree-skill-probe
+description: Load only to verify worktree skill precedence.
+---
+The verification token is FM_OPENCODE_WORKTREE_SKILL_OK.
+SKILL
+printf '.agents/skills/fm-worktree-skill-probe/\n' >> "$LAB/wt/.git/info/exclude"
 # Only allocation is stubbed: no fleet pool or linked worktree is administered.
 cat > "$LAB/shim/treehouse" <<SH
 #!/usr/bin/env bash
@@ -54,8 +82,11 @@ cat > "$FM_HOME/data/$ID/brief.md" <<BRIEF
 ## Captain's intent
 Verify a trivial runtime task.
 ## Firstmate spec
-Do not edit or inspect any project files.
-Append a newline-terminated line containing "working: brief processed" to $FM_HOME/state/$ID.status.
+Do not edit any project files.
+Inspect skill instructions only through the skill tool.
+Call the skill tool with id="fm-local-skill-probe" and then id="fm-worktree-skill-probe" before reporting.
+Append a newline-terminated line containing "working: brief processed" and both verification tokens from the skill tool's returned bodies to $FM_HOME/state/$ID.status.
+Do not read SKILL.md through a file tool or use a fallback; if the skill tool fails, report its error and stop.
 Then reply BRIEF_OK and stop until an instruction arrives.
 Your steering inbox is $FM_HOME/state/$ID.inbox.
 Read each *.msg there when instructed and acknowledge it by moving it into handled/.
@@ -83,6 +114,27 @@ wait_idle() {
     i=$((i + 1)); sleep 0.5
   done
   fail "$VERSION: busy state did not settle: $verdict"
+}
+assert_local_skill_loaded() {
+  local session
+  session=$(cd "$LAB/wt" && opencode session list --standalone --max-count 1 --format json | jq -er '.[0].id') \
+    || fail "$VERSION: could not find the scratch worker session"
+  (cd "$LAB/wt" && opencode session export --standalone "$session") > "$LAB/skill-session.json" \
+    || fail "$VERSION: could not export the scratch worker session"
+  jq -e --arg base "$CODE_ROOT/.agents/skills/fm-local-skill-probe" \
+    --arg worktree_base "$(cd "$LAB/wt/.agents/skills/fm-worktree-skill-probe" && pwd -P)" '
+    [.messages[] | select(.type == "assistant") | .content[] |
+      select(.type == "tool" and .name == "skill" and .state.status == "completed")] as $skills |
+    any($skills[]; .state.input.id == "fm-local-skill-probe" and .state.metadata.directory == $base and
+      any(.state.content[]; .type == "text" and (.text | contains("FM_OPENCODE_LOCAL_SKILL_OK")))) and
+    any($skills[]; .state.input.id == "fm-worktree-skill-probe" and .state.metadata.directory == $worktree_base and
+      any(.state.content[]; .type == "text" and (.text | contains("FM_OPENCODE_WORKTREE_SKILL_OK"))))
+  ' "$LAB/skill-session.json" > /dev/null || {
+    jq -c '.messages[] | select(.type == "assistant") | .content[] |
+      select(.type == "tool" and .name == "skill") |
+      {name,status:.state.status,input:.state.input,directory:.state.metadata.directory}' "$LAB/skill-session.json" >&2
+    fail "$VERSION: native skill tool did not load the home-local skill from the Firstmate code root"
+  }
 }
 . "$ROOT/bin/fm-busy-lib.sh"
 # A tmux cursor can prove readiness while cursorless backends reject the same
@@ -120,6 +172,10 @@ pass "$VERSION: fresh home version label, cursorless styled/plain readiness and 
 bash "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB/project" --scout --harness opencode --model "$MODEL"
 wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
 wait_idle
+wait_file_text "$FM_HOME/state/$ID.status" 'FM_OPENCODE_LOCAL_SKILL_OK'
+assert_local_skill_loaded
+[ -z "$(git -C "$LAB/wt" status --porcelain)" ] || fail "$VERSION: skill probe wrote to the scratch project"
+pass "$VERSION: native skill tool loads home-local and worktree override skills without project config"
 [ -f "$FM_HOME/state/$ID.turn-ended" ] || fail "$VERSION: no turn-end notification"
 PLUGIN="/tmp/fm-$ID/opencode-plugin-$(cat "$FM_HOME/state/$ID.busy-gen")/index.mjs"
 [ -f "$PLUGIN" ] || fail "$VERSION: missing per-task V2 plugin"
@@ -149,7 +205,8 @@ bash "$ROOT/bin/fm-send.sh" "$ID" "Append 'working: steer processed' to $FM_HOME
 wait_file_text "$FM_HOME/state/$ID.status" 'steer processed'
 wait_idle
 find "$FM_HOME/state/$ID.inbox/handled" -name '*.msg' | grep -q . || fail "$VERSION: steer was not acknowledged"
-bash "$ROOT/bin/fm-send.sh" "$ID" "Run sleep 30 in the shell tool. Do not run other tools until it finishes."
+bash "$ROOT/bin/fm-send.sh" "$ID" "Acknowledge this inbox message by moving it into handled/ before running sleep 30 in the shell tool. Do not run other tools until sleep finishes."
+wait_file_text "$FM_HOME/state/$ID.inbox/handled/002.msg" 'sleep 30'
 i=0
 while [ "$i" -lt 90 ]; do
   SCREEN=$(tmux capture-pane -p -t "$TARGET")
@@ -169,6 +226,7 @@ bash "$ROOT/bin/fm-spawn.sh" "$ID" --relaunch
 [ "$(cat "$LAB/wt/progress.txt")" = 'preserved work' ] || fail "$VERSION: relaunch changed work"
 wait_file_text "$FM_HOME/state/$ID.status" 'relaunched'
 wait_idle
+assert_local_skill_loaded
 SCREEN=$(tmux capture-pane -p -t "$TARGET")
 [ "$(fm_composer_classify_screen styled=0 "$SCREEN")" = empty ] || fail "$VERSION: restarted cursorless idle unreadable"
 if [ "$MODEL" = opencode/muse-spark-1.3-contributor-free ]; then
