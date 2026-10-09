@@ -3593,7 +3593,9 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
       case "$verdict" in
         busy) printf 'empty'; return 0 ;;
-        unknown) printf 'unknown'; return 0 ;;
+        unknown)
+          fm_backend_herdr_submit_diagnostic enter-confirmation-unknown 1 "${#text}" "${#content}" "$enter_attempts"
+          printf 'unknown'; return 0 ;;
       esac
       # Native stayed idle. Composer empty is positive delivery (a landed
       # Claude turn that never flipped agent_status). Proven pending retries.
@@ -3601,7 +3603,9 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       case "$verdict" in
         empty) printf 'empty'; return 0 ;;
         pending|pending-unproven) ;;
-        *) printf '%s' "$verdict"; return 0 ;;
+        *)
+          fm_backend_herdr_submit_diagnostic composer-confirmation-unknown 1 "${#text}" "${#content}" "$enter_attempts"
+          printf '%s' "$verdict"; return 0 ;;
       esac
     else
       sleep "$sleep_s"
@@ -3614,7 +3618,9 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       case "$verdict" in
         busy) printf 'empty'; return 0 ;;
         empty) printf 'empty'; return 0 ;;
-        unknown) printf 'unknown'; return 0 ;;
+        unknown)
+          fm_backend_herdr_submit_diagnostic composer-confirmation-unknown 1 "${#text}" "${#content}" "$enter_attempts"
+          printf 'unknown'; return 0 ;;
       esac
     fi
     i=$((i + 1))

@@ -4935,22 +4935,26 @@ test_send_text_submit_send_failed() {
 }
 
 test_send_text_submit_unknown_on_capture_failure() {
-  local dir log resp fb out enter_count
+  local dir log resp fb out enter_count diag
   dir="$TMP_ROOT/submit-read-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/2.out"
   printf '1\n' > "$resp/4.exit"
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = unknown ] || fail "send_text_submit should report unknown when the post-Enter agent-get read fails, got '$out'"
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01; printf "\ndiag=%s" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" )
+  [ "${out%%$'\n'*}" = unknown ] || fail "send_text_submit should report unknown when the post-Enter agent-get read fails, got '$out'"
+  diag=${out##*$'\ndiag='}
+  assert_contains "$diag" 'stage=enter-confirmation-unknown rc=1' 'unreadable confirmation lost its failure stage'
+  assert_contains "$diag" 'enter_attempts=1 clear_attempts=0' 'unreadable confirmation lost its exact counts'
+  assert_not_contains "$diag" 'payload=' 'unreadable confirmation logged a payload field'
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit must never retry past an unreadable target (that is a hard I/O failure, not a timing race), sent $enter_count Enter(s)"
   pass "fm_backend_herdr_send_text_submit: reports 'unknown' when the post-Enter agent-get read fails (never retries past an unreadable target)"
 }
 
 test_send_text_submit_unknown_on_composer_capture_failure() {
-  local dir log resp fb out enter_count
+  local dir log resp fb out enter_count diag
   dir="$TMP_ROOT/submit-composer-read-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/2.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
@@ -4958,8 +4962,12 @@ test_send_text_submit_unknown_on_composer_capture_failure() {
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = unknown ] || fail "send_text_submit should report unknown when native status stays idle but the composer cannot be read, got '$out'"
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01; printf "\ndiag=%s" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" )
+  [ "${out%%$'\n'*}" = unknown ] || fail "send_text_submit should report unknown when native status stays idle but the composer cannot be read, got '$out'"
+  diag=${out##*$'\ndiag='}
+  assert_contains "$diag" 'stage=composer-confirmation-unknown rc=1' 'unreadable confirmation lost its failure stage'
+  assert_contains "$diag" 'enter_attempts=1 clear_attempts=0' 'unreadable confirmation lost its exact counts'
+  assert_not_contains "$diag" 'payload=' 'unreadable confirmation logged a payload field'
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit must not retry Enter after composer verification becomes unreadable, sent $enter_count Enter(s)"
   pass "fm_backend_herdr_send_text_submit: an unreadable composer stops Enter retries after native status stays idle"
