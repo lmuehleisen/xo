@@ -6030,8 +6030,11 @@ if [ "$RAW_LAUNCH" -eq 0 ]; then
     # Config content is the highest-precedence V2 source. --standalone makes
     # the server inherit this spawn's environment instead of reusing a daemon.
     # Neither model selection nor plugin installation writes project config.
+    OPENCODE_SKILLS_DIR=$(cd "$FM_ROOT/.agents/skills" && pwd -P) || exit 1
     OPENCODECONFIG=$(jq -cn --arg model "$MODEL" --arg variant "$EFFORTFLAG" \
-      --arg plugin "$TASK_TMP/opencode-plugin-${BUSY_GEN:-}" --arg kind "$KIND" '
+      --arg plugin "$TASK_TMP/opencode-plugin-${BUSY_GEN:-}" --arg kind "$KIND" \
+      --arg skills "$OPENCODE_SKILLS_DIR" '
+      {skills:[$skills]} +
       (if $kind == "secondmate" then {} else {plugins:[$plugin]} end) +
       (if $model == "" or $model == "default" then {} else
         {model:$model, default_agent:"build", agents:{build:{model:($model +
