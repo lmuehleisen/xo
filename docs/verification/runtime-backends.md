@@ -1409,6 +1409,26 @@ FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh
 ok - live Herdr submit confirm: Claude Code (2.1.283 (Claude Code)) on herdr 0.9.0 proves and submits a typed /exit behind its command popup
 ```
 
+### Exit-send failure metadata
+
+Verified 2026-10-09 on Bash 3.2.57 with the portable mocked-CLI suites; no live Herdr session or harness was exercised.
+The adapter regressions pin failure-stage return codes, lengths, capture availability, and exact Enter/clear counts without changing the existing submit verdicts.
+They also verify that payload, draft, and captured suffix text never enter diagnostic metadata, that metadata resets per call, and that a separator-bearing payload retains its proof.
+The control and secondmate regressions verify the first error line, retained rollback journal, and remote restart outcome report.
+The script headers own the diagnostic interfaces.
+
+```sh
+TMPDIR=/tmp bash bin/fm-test-run.sh tests/fm-backend-herdr.test.sh tests/fm-control.test.sh tests/fm-control-relaunch.test.sh tests/fm-secondmate-restart.test.sh tests/fm-remote-secondmate-relaunch.test.sh tests/fm-composer-lib.test.sh tests/fm-composer-ghost.test.sh --jobs 1
+```
+
+```text
+ok - Herdr submit failures report private stage/return-code/count metadata without changing delivery
+ok - Herdr submit diagnostics reset per call and preserve separator-bearing payload proof
+ok - Herdr exit diagnostics reach the first error line and retained relaunch journal without input text
+ok - remote restart preserves sanitized exit-send diagnostics through the transport and outcome report
+FM_TEST_SUMMARY total=7 failed=0 skipped_gate=0 duration_ms=820543
+```
+
 ### Prune and respawn
 
 The real label-collision reproduction is owned by:

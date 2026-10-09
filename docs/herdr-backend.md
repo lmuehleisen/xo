@@ -560,6 +560,7 @@ If the composer cannot be verified empty again, the submit reports `unknown` ins
 
 Other harnesses, and panes with no native identity, skip this proof and keep the type-then-Enter path.
 They skip it because their paste placeholders and composer shapes are not live-verified.
+Herdr exit-send failures include metadata-only stage details in the control error and the private relaunch journal; `bin/fm-control.sh` and `bin/backends/herdr.sh` own the diagnostic fields and unchanged delivery verdicts.
 
 ### Submit confirmation
 

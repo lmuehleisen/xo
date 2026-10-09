@@ -83,8 +83,8 @@
 #              Records a durable checkpoint and that note, exits the old agent,
 #              then delegates the launch to its single owner,
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
-#              the prior durable record in place and reports the concrete
-#              state; it never leaves a half-transitioned task claiming to be
+#              the prior record and stopping-phase exit_send_diagnostic in place;
+#              it reports concrete state and never leaves a half-transitioned task claiming to be
 #              running. A launch failure after publication still waits for the
 #              agent, so a late start completes the transaction.
 #
@@ -559,6 +559,7 @@ retire_busy_incarnation() {
 # `already-stopped`, `endpoint-gone`, or `stopped`.
 do_exit() {
   local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed
+  local submit_output submit_rc=0 diagnostic=''
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -642,12 +643,33 @@ do_exit() {
   # authoritative proof is the agent-state wait below. The retried Enter still
   # matters, because a slash command opens a completion popup on some TUIs that
   # swallows the first Enter.
-  verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
-  [ "$verdict" != send-failed ] \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
+  if [ "$BACKEND" = herdr ]; then
+    submit_output=$(
+      unset FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC
+      fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>/dev/null
+      submit_rc=$?
+      printf '\037'
+      fm_backend_herdr_submit_diagnostic 2>/dev/null || true
+      exit "$submit_rc"
+    ) || submit_rc=$?
+    verdict=${submit_output%$'\x1f'*}
+    diagnostic=${submit_output##*$'\x1f'}
+    if [ "$submit_rc" -ne 0 ]; then
+      diagnostic=${diagnostic:-stage=submit-call rc=$submit_rc}
+      record_exit_send_diagnostic "$diagnostic"
+      die "the exit command could not be sent to task $ID on $BACKEND; $diagnostic"
+    fi
+  else
+    verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
+      || die "the exit command could not be sent to task $ID on $BACKEND"
+  fi
+  [ "$verdict" != send-failed ] || {
+    record_exit_send_diagnostic "$diagnostic"
+    die "the exit command could not be sent to task $ID on $BACKEND${diagnostic:+; $diagnostic}"
+  }
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
-    die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
+    record_exit_send_diagnostic "$diagnostic"
+    die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s${diagnostic:+; $diagnostic}"
   }
   # The incarnation is over: retire its busy wiring so no stale record or
   # orphaned generation survives the agent that produced it.
@@ -684,8 +706,11 @@ TARGET_MODEL=
 TARGET_EFFORT=
 
 journal_write() {  # <phase> [extra-line]...
-  local phase=$1
+  local phase=$1 diagnostic=''
   shift
+  if [ "$phase" = failed:stopping ]; then
+    diagnostic=$(fm_meta_get "$JOURNAL" exit_send_diagnostic)
+  fi
   if {
     echo "v1"
     echo "task=$ID"
@@ -705,11 +730,17 @@ journal_write() {  # <phase> [extra-line]...
     for line in "$@"; do
       echo "$line"
     done
+    [ -z "$diagnostic" ] || echo "exit_send_diagnostic=$diagnostic"
   } > "$JOURNAL.tmp" && mv -f "$JOURNAL.tmp" "$JOURNAL"; then
     RELAUNCH_PHASE=$phase
     return 0
   fi
   return 1
+}
+
+record_exit_send_diagnostic() {
+  [ -n "$1" ] && [ "$RELAUNCH_ACTIVE" = 1 ] && [ "$RELAUNCH_PHASE" = stopping ] || return 0
+  journal_write stopping "${CHECKPOINT_LINES[@]}" "${note_line:-note=none}" "exit_send_diagnostic=$1" || true
 }
 
 relaunch_rollback() {

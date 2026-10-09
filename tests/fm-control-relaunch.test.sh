@@ -2590,7 +2590,11 @@ case "${1:-} ${2:-}" in
       cat "$D/herdr-agent-registration"
     elif [ -f "$D/herdr-agent-live" ]; then
       # The agent came back with its server. Nothing here is reclaimable.
-      printf '{"result":{"agent":{"agent_status":"idle"}}}\n'
+      if [ -f "$D/submit-literal-failure" ]; then
+        printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n'
+      else
+        printf '{"result":{"agent":{"agent_status":"idle"}}}\n'
+      fi
     else
       # A pane that comes back holding no agent is the adoptable state.
       printf '{"error":{"code":"agent_not_found"}}\n'
@@ -2615,6 +2619,10 @@ case "${1:-} ${2:-}" in
     # back before deciding what was delivered - exactly as the tmux fake above
     # and tests/fixtures.sh do.
     payload=${4:-}
+    if [ -f "$D/submit-literal-failure" ]; then
+      printf 'RAW_INPUT_MUST_NOT_BE_LOGGED\n' >&2
+      exit 23
+    fi
     case "$payload" in
       ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
     esac
@@ -2720,6 +2728,44 @@ herdr_case_or_skip() {  # <name> <id> [session] [surviving-pane]
   add_herdr_ship_task "$HERDR_CASE_DIR" "$2" "${3:-fmlab}" "${4:-%7}"
   make_herdr_stub "$HERDR_CASE_DIR"
   return 0
+}
+
+test_herdr_exit_failure_diagnostics_reach_error_and_journal() {
+  local dir id verb out rc before diag
+  for verb in exit relaunch; do
+    id="submit-diag-$verb"
+    herdr_case_or_skip "$id" "$id" || return 0
+    dir=$HERDR_CASE_DIR
+    rm -f "$dir/fake/herdr-stopped"
+    : > "$dir/fake/herdr-agent-live"
+    : > "$dir/fake/submit-literal-failure"
+    printf '  ❯\n' > "$dir/fake/opencode-screen"
+    before=$(cat "$dir/home/data/$id/brief.md")
+    rc=0
+    if [ "$verb" = relaunch ]; then
+      out=$(run_control "$dir" "$id" "$verb" --note 'resume preserved work') || rc=$?
+    else
+      out=$(run_control "$dir" "$id" "$verb") || rc=$?
+    fi
+    expect_code 1 "$rc" 'a failed Herdr literal send must retain the failure outcome'
+    assert_contains "${out%%$'\n'*}" 'stage=literal-transport' 'first error line lost the failure stage'
+    assert_contains "$out" 'rc=23' 'exit error lost the transport return code'
+    assert_contains "$out" 'enter_attempts=0' 'failed literal send reported an Enter'
+    assert_contains "$out" 'capture_source=ansi' 'exit error lost the available capture source'
+    assert_not_contains "$out" 'RAW_INPUT_MUST_NOT_BE_LOGGED' 'exit error leaked native input text'
+    [ -f "$dir/fake/herdr-agent-live" ] || fail 'diagnostics stopped the old agent'
+    [ "$(cat "$dir/home/data/$id/brief.md")" = "$before" ] || fail 'diagnostics did not preserve the original instructions'
+    if [ "$verb" = relaunch ]; then
+      [ "$(journal_field "$dir" "$id" phase)" = failed:stopping ] || fail 'diagnostics changed the rollback phase'
+      [ "$(journal_field "$dir" "$id" rollback)" = instructions-restored-agent-alive ] || fail 'diagnostics changed rollback ownership'
+      diag=$(journal_field "$dir" "$id" exit_send_diagnostic)
+      assert_contains "$diag" 'stage=literal-transport' 'rollback journal lost the failure stage'
+      assert_contains "$diag" 'rc=23' 'rollback journal lost the transport return code'
+      assert_not_contains "$diag" 'RAW_INPUT_MUST_NOT_BE_LOGGED' 'rollback journal leaked native input text'
+      assert_not_contains "$(cat "$dir/fake/herdr-log")" 'tab create' 'failed exit launched a replacement'
+    fi
+  done
+  pass 'Herdr exit diagnostics reach the first error line and retained relaunch journal without input text'
 }
 
 test_opencode_cursorless_relaunch_submits_after_v2_footer_readiness() {
@@ -3117,6 +3163,7 @@ test_tmux_refuses_a_window_missing_from_its_session
 test_tmux_refuses_a_session_that_cannot_be_found
 test_tmux_refuses_when_the_server_is_gone
 test_reclaim_refuses_an_unreadable_endpoint
+test_herdr_exit_failure_diagnostics_reach_error_and_journal
 test_opencode_cursorless_relaunch_submits_after_v2_footer_readiness
 test_opencode_rebind_failure_keeps_recovery_endpoint_without_completing_control
 test_herdr_relaunch_resumes_only_the_registered_pi_session

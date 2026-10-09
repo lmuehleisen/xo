@@ -4421,7 +4421,7 @@ test_send_text_submit_detects_landed_send() {
 }
 
 test_send_text_submit_detects_swallowed_enter() {
-  local dir log resp fb out
+  local dir log resp fb out diag
   dir="$TMP_ROOT/submit-swallow"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   # Every post-Enter agent-get read still reports idle, and the composer still
   # holds the typed text: a genuine swallow, not a queued Enter.
@@ -4435,8 +4435,15 @@ test_send_text_submit_detects_swallowed_enter() {
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = pending ] || fail "send_text_submit should report pending once retries are exhausted with agent_status never going busy and the composer still holding the text, got '$out'"
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01
+      printf "\ndiag=%s" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" )
+  [ "${out%%$'\n'*}" = pending ] || fail "send_text_submit should report pending once retries are exhausted with agent_status never going busy and the composer still holding the text, got '$out'"
+  diag=${out##*$'\ndiag='}
+  assert_contains "$diag" 'stage=enter-retries-exhausted rc=1' 'swallowed Enter retries lost their failure stage'
+  assert_contains "$diag" 'enter_attempts=2 clear_attempts=0' 'swallowed Enter retries lost their exact counts'
+  assert_not_contains "$diag" 'hello captain' 'swallowed Enter diagnostics leaked input'
+  [ "$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")" -eq 2 ] || fail 'diagnostics changed the Enter retry budget'
   pass "fm_backend_herdr_send_text_submit: reports 'pending' when agent_status stays idle and the composer still holds unsent text after retried Enters (swallowed)"
 }
 
@@ -4782,6 +4789,139 @@ test_send_text_submit_slow_transition_within_one_enter_needs_no_extra_enter() {
   pass "fm_backend_herdr_send_text_submit: a slow transition landing on a later sample within one Enter's budget is confirmed WITHOUT sending a needless extra Enter"
 }
 
+test_send_text_submit_failure_diagnostics() {
+  local stage dir log resp fb out diag text expected want_literal want_enter want_clear n
+  text='PAYLOAD_MUST_NOT_BE_LOGGED'
+  for stage in pre-type-capture pre-type-extraction pre-type-nonempty literal-transport \
+    post-type-capture post-type-extraction post-type-payload clear-transport clear-exhausted enter-transport; do
+    dir="$TMP_ROOT/submit-diagnostic-$stage"
+    mkdir -p "$dir/responses"
+    log="$dir/log"; resp="$dir/responses"; : > "$log"
+    herdr_submit_claude_prefix "$resp" "$text"
+    expected=send-failed; want_literal=0; want_enter=0; want_clear=0
+    case "$stage" in
+      pre-type-capture)
+        printf '11\n' > "$resp/2.exit"
+        printf '12\n' > "$resp/3.exit"
+        ;;
+      pre-type-extraction) printf 'screen without an input row\n' > "$resp/2.out" ;;
+      pre-type-nonempty) printf '  ❯ DRAFT_MUST_NOT_BE_LOGGED\n' > "$resp/2.out" ;;
+      literal-transport)
+        want_literal=1
+        printf '17\n' > "$resp/3.exit"
+        printf '%s\n' "$text" > "$resp/3.err"
+        ;;
+      post-type-capture)
+        want_literal=1; want_clear=1
+        printf '19\n' > "$resp/4.exit"
+        printf '20\n' > "$resp/5.exit"
+        printf '  ❯\n' > "$resp/7.out"
+        ;;
+      post-type-extraction)
+        want_literal=1; want_clear=1
+        printf 'screen without an input row\n' > "$resp/4.out"
+        printf '  ❯\n' > "$resp/6.out"
+        ;;
+      post-type-payload|clear-transport|clear-exhausted)
+        want_literal=1; want_clear=1
+        printf '  ❯ SUFFIX_MUST_NOT_BE_LOGGED\n' > "$resp/4.out"
+        printf '  ❯\n' > "$resp/6.out"
+        if [ "$stage" = clear-transport ]; then
+          expected=unknown
+          printf '23\n' > "$resp/5.exit"
+        elif [ "$stage" = clear-exhausted ]; then
+          expected=unknown; want_clear=20
+          for ((n = 6; n <= 44; n += 2)); do
+            printf '  ❯ SUFFIX_MUST_NOT_BE_LOGGED\n' > "$resp/$n.out"
+          done
+        fi
+        ;;
+      enter-transport)
+        want_literal=1; want_enter=3
+        printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/5.out"
+        for n in 6 7 8; do printf '31\n' > "$resp/$n.exit"; done
+        ;;
+    esac
+    fb=$(make_herdr_fakebin "$dir")
+    out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_COMPOSER_CAPTURE_LINES=20 \
+      bash -c '. "$0/bin/backends/herdr.sh"
+        fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0 0
+        printf "\ncall_rc=%s\ndiag=%s\n" "$?" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" "$text" 2>/dev/null)
+    [ "${out%%$'\n'*}" = "$expected" ] || fail "$stage changed the submit verdict: $out"
+    assert_contains "$out" 'call_rc=0' "$stage changed the public return code"
+    diag=${out##*$'\ndiag='}
+    case "$stage" in
+      clear-transport|clear-exhausted) assert_contains "$diag" 'stage=post-type-payload' "$stage lost the primary failure" ;;
+      *) assert_contains "$diag" "stage=$stage" "$stage did not identify its failed stage" ;;
+    esac
+    assert_contains "$diag" "payload_len=${#text}" "$stage omitted the payload length"
+    assert_contains "$diag" "enter_attempts=$want_enter" "$stage reported the wrong Enter count"
+    assert_contains "$diag" "clear_attempts=$want_clear" "$stage reported the wrong clear count"
+    assert_not_contains "$diag" "$text" "$stage leaked the payload"
+    assert_not_contains "$diag" 'DRAFT_MUST_NOT_BE_LOGGED' "$stage leaked existing input"
+    assert_not_contains "$diag" 'SUFFIX_MUST_NOT_BE_LOGGED' "$stage leaked captured input"
+    case "$stage" in
+      pre-type-capture)
+        assert_contains "$diag" 'capture_source=none' 'failed captures were reported available'
+        assert_contains "$diag" 'ansi_rc=11' 'ANSI failure return code was lost'
+        assert_contains "$diag" 'plain_rc=12' 'plain failure return code was lost'
+        ;;
+      pre-type-extraction|post-type-extraction)
+        assert_contains "$diag" 'capture_source=ansi' 'available ANSI capture was lost'
+        assert_contains "$diag" 'extract_rc=1' 'extraction failure return code was lost'
+        ;;
+      literal-transport) assert_contains "$diag" 'rc=17' 'literal transport return code was lost' ;;
+      post-type-capture)
+        assert_contains "$diag" 'ansi_rc=19' 'post-type ANSI failure return code was lost'
+        assert_contains "$diag" 'plain_rc=20' 'post-type plain failure return code was lost'
+        assert_contains "$diag" 'clear_rc=0' 'successful clear was not recorded'
+        ;;
+      post-type-payload)
+        assert_contains "$diag" 'rc=1' 'payload mismatch return code was lost'
+        assert_contains "$diag" 'clear_rc=0' 'successful clear was not recorded'
+        ;;
+      clear-transport)
+        assert_contains "$diag" 'clear_rc=1' 'failed clear was not recorded'
+        assert_contains "$diag" 'clear_key_rc=23' 'clear transport return code was lost'
+        ;;
+      clear-exhausted) assert_contains "$diag" 'clear_rc=1' 'exhausted clear was not recorded' ;;
+      enter-transport) assert_contains "$diag" 'rc=31' 'Enter transport return code was lost' ;;
+    esac
+    [ "$(grep -c $'\x1f''pane'$'\x1f''send-text' "$log" || true)" -eq "$want_literal" ] \
+      || fail "$stage changed the number of literal sends"
+    [ "$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log" || true)" -eq "$want_enter" ] \
+      || fail "$stage changed the number of Enter sends"
+    [ "$(herdr_ctrl_u_count "$log")" -eq "$want_clear" ] || fail "$stage changed the clear budget"
+  done
+  pass "Herdr submit failures report private stage/return-code/count metadata without changing delivery"
+}
+
+test_send_text_submit_diagnostics_reset_and_preserve_separator_payload() {
+  local dir log resp fb out text
+  dir="$TMP_ROOT/submit-diagnostic-reset"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  text=$'HEAD\x1fPAYLOAD_MUST_NOT_BE_LOGGED'
+  herdr_submit_claude_prefix "$resp" "$text"
+  printf '17\n' > "$resp/3.exit"
+  printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n' > "$resp/4.out"
+  printf '  ❯\n' > "$resp/5.out"
+  printf '  ❯ %s\n' "$text" > "$resp/7.out"
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/8.out"
+  printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/10.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0 0
+      printf "\ndiag_first=%s\n" "$(fm_backend_herdr_submit_diagnostic)"
+      fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0 0
+      printf "\ndiag_second=%s\n" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" "$text")
+  assert_contains "$out" 'diag_first=stage=literal-transport' 'first failure did not record diagnostics'
+  assert_contains "$out" $'\nempty\ndiag_second=' 'separator-bearing payload did not retain its exact proof'
+  [ "${out##*$'\ndiag_second='}" = '' ] || fail 'successful submission retained stale failure diagnostics'
+  assert_not_contains "$out" 'PAYLOAD_MUST_NOT_BE_LOGGED' 'diagnostic receipt leaked its payload'
+  pass "Herdr submit diagnostics reset per call and preserve separator-bearing payload proof"
+}
+
 test_send_text_submit_send_failed() {
   local dir log resp fb out
   dir="$TMP_ROOT/submit-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -4795,22 +4935,26 @@ test_send_text_submit_send_failed() {
 }
 
 test_send_text_submit_unknown_on_capture_failure() {
-  local dir log resp fb out enter_count
+  local dir log resp fb out enter_count diag
   dir="$TMP_ROOT/submit-read-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/2.out"
   printf '1\n' > "$resp/4.exit"
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = unknown ] || fail "send_text_submit should report unknown when the post-Enter agent-get read fails, got '$out'"
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01; printf "\ndiag=%s" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" )
+  [ "${out%%$'\n'*}" = unknown ] || fail "send_text_submit should report unknown when the post-Enter agent-get read fails, got '$out'"
+  diag=${out##*$'\ndiag='}
+  assert_contains "$diag" 'stage=enter-confirmation-unknown rc=1' 'unreadable confirmation lost its failure stage'
+  assert_contains "$diag" 'enter_attempts=1 clear_attempts=0' 'unreadable confirmation lost its exact counts'
+  assert_not_contains "$diag" 'payload=' 'unreadable confirmation logged a payload field'
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit must never retry past an unreadable target (that is a hard I/O failure, not a timing race), sent $enter_count Enter(s)"
   pass "fm_backend_herdr_send_text_submit: reports 'unknown' when the post-Enter agent-get read fails (never retries past an unreadable target)"
 }
 
 test_send_text_submit_unknown_on_composer_capture_failure() {
-  local dir log resp fb out enter_count
+  local dir log resp fb out enter_count diag
   dir="$TMP_ROOT/submit-composer-read-fail"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/2.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
@@ -4818,8 +4962,12 @@ test_send_text_submit_unknown_on_composer_capture_failure() {
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = unknown ] || fail "send_text_submit should report unknown when native status stays idle but the composer cannot be read, got '$out'"
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01; printf "\ndiag=%s" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" )
+  [ "${out%%$'\n'*}" = unknown ] || fail "send_text_submit should report unknown when native status stays idle but the composer cannot be read, got '$out'"
+  diag=${out##*$'\ndiag='}
+  assert_contains "$diag" 'stage=composer-confirmation-unknown rc=1' 'unreadable confirmation lost its failure stage'
+  assert_contains "$diag" 'enter_attempts=1 clear_attempts=0' 'unreadable confirmation lost its exact counts'
+  assert_not_contains "$diag" 'payload=' 'unreadable confirmation logged a payload field'
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit must not retry Enter after composer verification becomes unreadable, sent $enter_count Enter(s)"
   pass "fm_backend_herdr_send_text_submit: an unreadable composer stops Enter retries after native status stays idle"
@@ -5840,6 +5988,8 @@ test_wait_transition_clean_timeout_returns_1() {
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
+test_send_text_submit_failure_diagnostics
+test_send_text_submit_diagnostics_reset_and_preserve_separator_payload
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
