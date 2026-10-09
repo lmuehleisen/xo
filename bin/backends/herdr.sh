@@ -3418,6 +3418,10 @@ fm_backend_herdr_read_composer() {
 }
 
 fm_backend_herdr_submit_diagnostic() {
+  if [ "$#" -eq 0 ]; then
+    printf '%s' "${FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC:-}"
+    return 0
+  fi
   local extra=${6:-}
   FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC="stage=$1 rc=$2 payload_len=$3 content_len=$4 enter_attempts=$5 clear_attempts=${FM_BACKEND_HERDR_CLEAR_ATTEMPTS:-0} clear_key_rc=${FM_BACKEND_HERDR_CLEAR_KEY_RC:-not-attempted} ${FM_BACKEND_HERDR_READ_DIAGNOSTIC:-capture_source=not-attempted}${extra:+ $extra}"
 }

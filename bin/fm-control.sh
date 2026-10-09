@@ -648,7 +648,8 @@ do_exit() {
       FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC=
       fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>/dev/null
       submit_rc=$?
-      printf '\037%s' "${FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC:-}"
+      printf '\037'
+      fm_backend_herdr_submit_diagnostic 2>/dev/null || true
       exit "$submit_rc"
     ) || submit_rc=$?
     verdict=${submit_output%$'\x1f'*}

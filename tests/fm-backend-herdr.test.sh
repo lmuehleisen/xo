@@ -4839,7 +4839,7 @@ test_send_text_submit_failure_diagnostics() {
     out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_COMPOSER_CAPTURE_LINES=20 \
       bash -c '. "$0/bin/backends/herdr.sh"
         fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0 0
-        printf "\ncall_rc=%s\ndiag=%s\n" "$?" "${FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC:-}"' "$ROOT" "$text" 2>/dev/null)
+        printf "\ncall_rc=%s\ndiag=%s\n" "$?" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" "$text" 2>/dev/null)
     [ "${out%%$'\n'*}" = "$expected" ] || fail "$stage changed the submit verdict: $out"
     assert_contains "$out" 'call_rc=0' "$stage changed the public return code"
     diag=${out##*$'\ndiag='}
@@ -4905,9 +4905,9 @@ test_send_text_submit_diagnostics_reset_and_preserve_separator_payload() {
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"
       fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0 0
-      printf "\ndiag_first=%s\n" "${FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC:-}"
+      printf "\ndiag_first=%s\n" "$(fm_backend_herdr_submit_diagnostic)"
       fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0 0
-      printf "\ndiag_second=%s\n" "${FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC:-}"' "$ROOT" "$text")
+      printf "\ndiag_second=%s\n" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" "$text")
   assert_contains "$out" 'diag_first=stage=literal-transport' 'first failure did not record diagnostics'
   assert_contains "$out" $'\nempty\ndiag_second=' 'separator-bearing payload did not retain its exact proof'
   [ "${out##*$'\ndiag_second='}" = '' ] || fail 'successful submission retained stale failure diagnostics'
