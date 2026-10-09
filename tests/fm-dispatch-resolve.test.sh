@@ -1446,6 +1446,76 @@ for bad_cap in 0 -1 1.5 '"1"' null true '{}' '[]'; do
   assert_contains "$err" 'class max_live must be a positive integer' "the max_live schema error is explicit"
 done
 pass "max_live accepts only positive integers"
+
+# Shared counts span every configured member, including classes outside this
+# lane, and overlapping routes still count each ordinary task record once.
+GROUP_RULES="$TMP_ROOT/group-rules.json"
+jq '.live_cap_groups = {shared:{max_live:3}, independent:{max_live:2}} |
+  .classes["muse-spark"] += {live_cap_group:"shared", max_live:2} |
+  .classes["sol-high"].live_cap_group = "shared" |
+  .classes["opus-high"].live_cap_group = "shared" |
+  .classes["opus-shadow"] = (.classes["opus-high"] | .routes |= map(.effort = "medium")) |
+  .classes["swe-2"].live_cap_group = "independent"' "$LIVE_RULES" > "$GROUP_RULES"
+cp "$GROUP_RULES" "$RULES"
+lane_quota claude=0.4 kiro=0.3 codex=-0.2 devin=-0.4
+run_lane code out err "$BRIEF" --lane live --project xo
+expect_code 0 "$code" "shared caps resolve successfully"
+assert_contains "$out" 'class=muse-spark family=muse  -> not eligible: at live cap group shared 3/3  live=1 max_live=2 live_cap_group=shared group_live=3 group_max_live=3' "outside-lane routes count once across overlapping member classes"
+assert_contains "$out" 'class=sol-high family=gpt  -> not eligible: at live cap group shared 3/3  live=0 live_cap_group=shared group_live=3 group_max_live=3' "the shared cap excludes every member, including an idle class"
+assert_contains "$out" 'runway=unmetered  -> eligible  live=1 live_cap_group=independent group_live=1 group_max_live=2' "the other pool remains independent and ignores secondmates"
+assert_contains "$out" "profile: --harness 'devin' --model 'swe-2-max'" "a pool lane skips the capped shared group"
+
+jq '.rules[0].order = "ordered"' "$GROUP_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" "profile: --harness 'devin' --model 'swe-2-max'" "an ordered lane falls through a group-capped class"
+
+jq '.live_cap_groups.shared.max_live = 4' "$GROUP_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'runway=unmetered  -> eligible  live=1 max_live=2 live_cap_group=shared group_live=3 group_max_live=4' "an under-cap shared group remains eligible"
+jq '.live_cap_groups.shared.max_live = 4 | .classes["muse-spark"].max_live = 1' "$GROUP_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'not eligible: at live cap 1/1  live=1 max_live=1 live_cap_group=shared group_live=3 group_max_live=4' "a class cap still applies when its group has room"
+FM_STATE_OVERRIDE="$OVERRIDE_STATE" run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'runway=unmetered  -> eligible  live=0 max_live=1 live_cap_group=shared group_live=0 group_max_live=4' "shared counts respect the state override"
+
+jq '.classes["muse-spark"].routes[0] |= del(.model)' "$GROUP_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'candidate: opencode:-  class=muse-spark family=muse  -> not eligible: at live cap group shared 3/3  live=1 max_live=2 live_cap_group=shared group_live=3 group_max_live=3' "shared groups count default-model routes"
+printf 'kind=ship\nharness=opencode\nmodel=unrelated\n' > "$LIVE_STATE/route-one.meta"
+cp "$GROUP_RULES" "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'runway=unmetered  -> eligible  live=1 max_live=2 live_cap_group=shared group_live=2 group_max_live=3' "relaunch removes the old route from the shared count"
+pass "shared caps count all member routes once, remain independent, and combine with class caps"
+
+for bad_cap in 0 -1 1.5 '"1"' null true '{}' '[]' 1e999; do
+  jq --argjson cap "$bad_cap" '.live_cap_groups.shared.max_live = $cap' "$GROUP_RULES" > "$RULES"
+  run_lane code out err "$BRIEF" --lane live --project xo
+  expect_code 2 "$code" "malformed group max_live $bad_cap is a configuration error"
+  assert_contains "$err" 'live cap group max_live must be a positive integer' "the group cap schema error is explicit"
+done
+for bad_group in '"missing"' '"Bad Name"' null true 1 '{}' '[]'; do
+  jq --argjson group "$bad_group" '.classes["muse-spark"].live_cap_group = $group' "$GROUP_RULES" > "$RULES"
+  run_lane code out err "$BRIEF" --lane live --project xo
+  expect_code 2 "$code" "malformed group reference $bad_group is a configuration error"
+  assert_contains "$err" 'class live_cap_group must name a declared live cap group' "the group reference schema error is explicit"
+done
+for bad_groups in null true '[]' '"shared"'; do
+  jq --argjson groups "$bad_groups" '.live_cap_groups = $groups' "$GROUP_RULES" > "$RULES"
+  run_lane code out err "$BRIEF" --lane live --project xo
+  expect_code 2 "$code" "malformed group map $bad_groups is a configuration error"
+  assert_contains "$err" 'live_cap_groups must be an object of named cap groups' "the group map schema error is explicit"
+done
+jq '.live_cap_groups = {"Bad Name":{max_live:1}}' "$GROUP_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+expect_code 2 "$code" "malformed group names are configuration errors"
+assert_contains "$err" 'live cap group names must match' "the group name schema error is explicit"
+for bad_definition in null 1 '[]' '{}' '{"max_live":1,"extra":true}'; do
+  jq --argjson definition "$bad_definition" '.live_cap_groups.shared = $definition' "$GROUP_RULES" > "$RULES"
+  run_lane code out err "$BRIEF" --lane live --project xo
+  expect_code 2 "$code" "malformed group definition $bad_definition is a configuration error"
+  assert_contains "$err" 'live cap group' "the group definition error is explicit"
+done
+pass "shared caps validate group maps, definitions, names, caps, and references"
 rm -rf "$LIVE_STATE"
 cp "$TEMPLATE" "$RULES"
 lane_quota claude=-0.3 codex=0 grok=-0.5 agy=-0.1 devin=-0.4 kiro=-0.6
