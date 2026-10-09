@@ -645,7 +645,7 @@ do_exit() {
   # swallows the first Enter.
   if [ "$BACKEND" = herdr ]; then
     submit_output=$(
-      FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC=
+      unset FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC
       fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>/dev/null
       submit_rc=$?
       printf '\037'
