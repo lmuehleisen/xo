@@ -480,6 +480,10 @@ case "${rargs[1]:-}" in
     ;;
   relaunch)
     case "${FM_FAKE_SSH_MODE:-ok}" in
+      diagnostic-relaunch)
+        printf 'error: the exit command could not be sent to task %s on herdr; stage=post-type-payload rc=1 payload_len=5 content_len=2 enter_attempts=0 clear_attempts=1 clear_rc=0 capture_source=ansi\n' "${rargs[2]}" >&2
+        exit 1
+        ;;
       slow-relaunch)
         : > "$FM_FAKE_DIR/remote-relaunch-start"
         /bin/sleep 2
@@ -504,6 +508,22 @@ SH
   export FM_FAKE_SSH_LOG="$dir/ssh.log"
   export FM_FAKE_SSH_MODE="$mode"
   export FM_TEST_SSH_BIN="$fb/fake-ssh"
+}
+
+test_remote_restart_preserves_exit_send_diagnostics() {
+  local dir out rc
+  dir=$(new_case remote-diagnostic)
+  setup_remote_case "$dir" sm4 diagnostic-relaunch
+  export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm4.status"
+  out=$(run_restart "$dir" sm4); rc=$?
+  unset FM_FAKE_ANSWER_STATUS
+  expect_code 3 "$rc" 'a diagnostic relaunch refusal must remain an unknown restart outcome'
+  assert_contains "$out" 'unreached: sm4: the restart outcome is unknown:' 'remote refusal lost its outcome classification'
+  assert_contains "$out" 'stage=post-type-payload rc=1' 'remote restart report lost the exit-send stage'
+  assert_contains "$out" 'enter_attempts=0 clear_attempts=1 clear_rc=0 capture_source=ansi' 'remote restart report lost diagnostic metadata'
+  assert_not_contains "$out" 'restarted: sm4' 'diagnostics claimed a refused restart succeeded'
+  assert_not_contains "$out" 'nudged: sm4' 'diagnostics attributed an unknown outcome to the old agent'
+  pass 'remote restart preserves sanitized exit-send diagnostics through the transport and outcome report'
 }
 
 test_remote_mate_restarts_over_the_transport_hop() {
@@ -882,6 +902,7 @@ test_refused_restart_falls_back_without_claiming_a_reload
 test_local_restart_uses_the_home_pin_and_reports_what_ran
 test_native_ultra_restart_keeps_local_and_remote_profiles
 test_remote_codex_ultra_refuses_before_persist_or_restart
+test_remote_restart_preserves_exit_send_diagnostics
 test_remote_mate_restarts_over_the_transport_hop
 test_unreachable_host_is_reported_unknown
 test_concurrent_reply_cannot_release_persist_gate

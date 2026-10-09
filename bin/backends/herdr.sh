@@ -3320,9 +3320,9 @@ fm_backend_herdr_rendered_busy_state() {  # <target> [harness] -> busy|idle|unkn
 # footer may supply the same generating signal because live Claude never leaves
 # idle. The policy is fm_composer_queued_enter_verdict; this adapter only
 # supplies the busy primitive.
-# Echoes empty|pending|unknown|send-failed, a subset of the proof-carrying
-# submit vocabulary. Empty means confirmed submitted for every backend; how
-# each backend confirms it is an internal decision.
+# Echoes empty|pending|unknown|send-failed; FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC holds sanitized failure metadata.
+# Empty means confirmed submitted for every backend; how each backend
+# confirms it is an internal decision.
 #
 # fm_backend_herdr_queued_enter_busy: delivery-busy for the shared queued-Enter
 # conversion. Native agent_status=working is generating; blocked is not (a
@@ -3375,17 +3375,51 @@ fm_backend_herdr_proof_lines() {  # <text>
 # 2.1.283 draws a typed slash command in muted grey 38;2;112;112;112 (verified
 # live), which that strip dropped, judging a typed /exit unsent. Claude's own
 # ghost suggestion is SGR-2 dim and is still stripped.
-# [row-separator] joins composer rows for owned-input recovery.
+# [row-separator] joins rows; FM_BACKEND_HERDR_READ_DIAGNOSTIC records capture/extraction metadata.
 fm_backend_herdr_composer_content() {  # <target> [row-separator]
-  local target=$1 cap caps
-  if cap=$(fm_backend_herdr_visible_capture_ansi "$target" 2>/dev/null) && [ -n "$cap" ]; then
+  local target=$1 cap caps='' source=none content='' rc=1
+  local ansi_rc=0 ansi_len=0 plain_rc=not-attempted plain_len=0 extract_rc=not-attempted
+  cap=$(fm_backend_herdr_visible_capture_ansi "$target" 2>/dev/null) || ansi_rc=$?
+  ansi_len=${#cap}
+  if [ "$ansi_rc" -eq 0 ] && [ -n "$cap" ]; then
+    source=ansi
     caps=$(printf 'styled=1\ncursor=0\nidentity=0')
-  elif cap=$(fm_backend_herdr_visible_capture "$target") && [ -n "$cap" ]; then
-    caps=$(printf 'styled=0\ncursor=0\nidentity=0')
   else
-    return 1
+    plain_rc=0
+    cap=$(fm_backend_herdr_visible_capture "$target") || plain_rc=$?
+    plain_len=${#cap}
+    if [ "$plain_rc" -eq 0 ] && [ -n "$cap" ]; then
+      source=plain
+      caps=$(printf 'styled=0\ncursor=0\nidentity=0')
+    fi
   fi
-  FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$caps" "$cap" "${2:-}"
+  if [ -n "$caps" ]; then
+    rc=0
+    content=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$caps" "$cap" "${2:-}") || rc=$?
+    extract_rc=$rc
+  fi
+  FM_BACKEND_HERDR_READ_DIAGNOSTIC="capture_source=$source ansi_rc=$ansi_rc ansi_len=$ansi_len plain_rc=$plain_rc plain_len=$plain_len extract_rc=$extract_rc"
+  printf '%s' "$content"
+  return "$rc"
+}
+
+fm_backend_herdr_read_composer() {
+  local record rc=0
+  record=$(
+    FM_BACKEND_HERDR_READ_DIAGNOSTIC=
+    fm_backend_herdr_composer_content "$1"
+    rc=$?
+    printf '\037%s' "${FM_BACKEND_HERDR_READ_DIAGNOSTIC:-}"
+    exit "$rc"
+  ) || rc=$?
+  printf -v "$2" '%s' "${record%$'\x1f'*}"
+  FM_BACKEND_HERDR_READ_DIAGNOSTIC=${record##*$'\x1f'}
+  return "$rc"
+}
+
+fm_backend_herdr_submit_diagnostic() {
+  local extra=${6:-}
+  FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC="stage=$1 rc=$2 payload_len=$3 content_len=$4 enter_attempts=$5 clear_attempts=${FM_BACKEND_HERDR_CLEAR_ATTEMPTS:-0} clear_key_rc=${FM_BACKEND_HERDR_CLEAR_KEY_RC:-not-attempted} ${FM_BACKEND_HERDR_READ_DIAGNOSTIC:-capture_source=not-attempted}${extra:+ $extra}"
 }
 
 # fm_backend_herdr_composer_owned_input: herdr's counterpart of
@@ -3448,9 +3482,13 @@ fm_backend_herdr_composer_payload_shown() {  # <text> <after>
 # 0 only when the composer is verified empty again.
 fm_backend_herdr_composer_clear() {  # <target> <text>
   local target=$1 text=$2 presses i=0
+  FM_BACKEND_HERDR_CLEAR_ATTEMPTS=0
+  FM_BACKEND_HERDR_CLEAR_KEY_RC=not-attempted
   presses=$(fm_backend_herdr_proof_lines "$text")
   while [ "$i" -lt "$presses" ]; do
-    fm_backend_herdr_send_key "$target" C-u || return 1
+    FM_BACKEND_HERDR_CLEAR_ATTEMPTS=$((i + 1))
+    FM_BACKEND_HERDR_CLEAR_KEY_RC=0
+    fm_backend_herdr_send_key "$target" C-u || { FM_BACKEND_HERDR_CLEAR_KEY_RC=$?; return 1; }
     i=$((i + 1))
     [ "$(fm_backend_herdr_composer_state "$target")" = empty ] && return 0
   done
@@ -3459,7 +3497,12 @@ fm_backend_herdr_composer_clear() {  # <target> <text>
 
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
-  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 identity proof=0 content
+  local raw_status footer_baseline='' allow_rendered=0 enter_sent=0 identity proof=0 content=''
+  local read_rc=0 proof_rc=0 send_rc=0 clear_rc=0 enter_rc=0 enter_attempts=0 stage
+  FM_BACKEND_HERDR_SUBMIT_DIAGNOSTIC=
+  FM_BACKEND_HERDR_READ_DIAGNOSTIC=
+  FM_BACKEND_HERDR_CLEAR_ATTEMPTS=0
+  FM_BACKEND_HERDR_CLEAR_KEY_RC=not-attempted
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   # Claude on Herdr is the live-verified truncation shape: Enter is withheld
   # unless the composer, empty before the send, shows this payload. A suffix
@@ -3468,20 +3511,49 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   identity=$(fm_backend_herdr_agent_identity_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE") || identity=
   if [ "${identity%%$'\t'*}" = claude ]; then
     proof=1
-    content=$(fm_backend_herdr_composer_content "$target") \
-      || { printf 'send-failed'; return 0; }
-    [ -z "${content//[$' \t\r\n\v\f']/}" ] || { printf 'send-failed'; return 0; }
+    fm_backend_herdr_read_composer "$target" content || read_rc=$?
+    if [ "$read_rc" -ne 0 ]; then
+      stage=pre-type-extraction
+      case "$FM_BACKEND_HERDR_READ_DIAGNOSTIC" in capture_source=none\ *) stage=pre-type-capture ;; esac
+      fm_backend_herdr_submit_diagnostic "$stage" "$read_rc" "${#text}" "${#content}" "$enter_attempts"
+      printf 'send-failed'
+      return 0
+    fi
+    [ -z "${content//[$' \t\r\n\v\f']/}" ] || {
+      fm_backend_herdr_submit_diagnostic pre-type-nonempty 1 "${#text}" "${#content}" "$enter_attempts"
+      printf 'send-failed'
+      return 0
+    }
   fi
-  fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
+  fm_backend_herdr_send_literal "$target" "$text" || send_rc=$?
+  if [ "$send_rc" -ne 0 ]; then
+    fm_backend_herdr_submit_diagnostic literal-transport "$send_rc" "${#text}" "${#content}" "$enter_attempts"
+    printf 'send-failed'
+    return 0
+  fi
   sleep "$settle"
   if [ "$proof" = 1 ]; then
-    if ! content=$(fm_backend_herdr_composer_content "$target") \
-      || ! fm_backend_herdr_composer_payload_shown "$text" "$content"; then
-      if fm_backend_herdr_composer_clear "$target" "$text"; then
-        printf 'send-failed'
-      else
-        printf 'unknown'
+    read_rc=0
+    fm_backend_herdr_read_composer "$target" content || read_rc=$?
+    if [ "$read_rc" -eq 0 ]; then
+      fm_backend_herdr_composer_payload_shown "$text" "$content" || proof_rc=$?
+    fi
+    if [ "$read_rc" -ne 0 ] || [ "$proof_rc" -ne 0 ]; then
+      stage=post-type-payload
+      send_rc=$proof_rc
+      if [ "$read_rc" -ne 0 ]; then
+        stage=post-type-extraction
+        send_rc=$read_rc
+        case "$FM_BACKEND_HERDR_READ_DIAGNOSTIC" in capture_source=none\ *) stage=post-type-capture ;; esac
       fi
+      if fm_backend_herdr_composer_clear "$target" "$text"; then
+        verdict=send-failed
+      else
+        clear_rc=$?
+        verdict=unknown
+      fi
+      fm_backend_herdr_submit_diagnostic "$stage" "$send_rc" "${#text}" "${#content}" "$enter_attempts" "clear_rc=$clear_rc"
+      printf '%s' "$verdict"
       return 0
     fi
   fi
@@ -3496,16 +3568,21 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     footer_baseline=$(fm_backend_herdr_rendered_busy_state "$target")
   fi
   while :; do
+    enter_attempts=$((enter_attempts + 1))
     if fm_backend_herdr_send_key "$target" Enter; then
       enter_sent=1
-    elif [ "$enter_sent" -eq 0 ]; then
-      i=$((i + 1))
-      if [ "$i" -ge "$retries" ]; then
-        printf 'send-failed'
-        return 0
+    else
+      enter_rc=$?
+      if [ "$enter_sent" -eq 0 ]; then
+        i=$((i + 1))
+        if [ "$i" -ge "$retries" ]; then
+          fm_backend_herdr_submit_diagnostic enter-transport "$enter_rc" "${#text}" "${#content}" "$enter_attempts"
+          printf 'send-failed'
+          return 0
+        fi
+        sleep "$sleep_s"
+        continue
       fi
-      sleep "$sleep_s"
-      continue
     fi
     if [ "$baseline" = idle ]; then
       verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
@@ -3539,6 +3616,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     i=$((i + 1))
     if [ "$i" -ge "$retries" ]; then
       if [ "$enter_sent" -eq 0 ]; then
+        fm_backend_herdr_submit_diagnostic enter-transport "$enter_rc" "${#text}" "${#content}" "$enter_attempts"
         printf 'send-failed'
       else
         fm_composer_queued_enter_verdict "$verdict" \
