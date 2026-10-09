@@ -11,9 +11,15 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/pi-package.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pi-package.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-pi-branch-extension)
 EXT="$ROOT/.pi/extensions/fm-branch-supervision.ts"
+PI_PACKAGE_DIR=
+if fm_test_pi_package_dir; then
+  PI_PACKAGE_DIR=$FM_TEST_PI_PACKAGE_DIR
+fi
 export NODE_NO_WARNINGS=1
 # The Pi release whose stock renderer stopped supplying an implicit reset at
 # multiline boundaries, which is the contract this file's renderer cases
@@ -4913,9 +4919,9 @@ test_real_pi_picker_primitives_stay_bounded_and_searchable() {
     return
   fi
   local package_dir fixture original_dir out status
-  package_dir=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
-  if [ ! -f "$package_dir/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  package_dir=$PI_PACKAGE_DIR
+  if [ -z "$package_dir" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return
   fi
   fixture="$TMP_ROOT/real-picker-primitives"
@@ -5059,9 +5065,9 @@ test_outcomes_tool_uses_stock_execution_and_export_consumers() {
     return
   fi
   local package_dir package_version fixture out status
-  package_dir=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
-  if [ ! -f "$package_dir/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+  package_dir=$PI_PACKAGE_DIR
+  if [ -z "$package_dir" ]; then
+    echo "skip: $FM_TEST_PI_PACKAGE_REASON"
     return
   fi
   # This case compares the extension's own renderers against Pi's stock

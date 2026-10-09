@@ -3,17 +3,19 @@
 set -u
 # shellcheck source=tests/tmproot-guard.sh
 . "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
+# shellcheck source=tests/pi-package.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pi-package.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 command -v npm >/dev/null 2>&1 || { echo "skip: Pi extension typecheck prerequisite not found: npm"; exit 0; }
 command -v tsc >/dev/null 2>&1 || { echo "skip: Pi extension typecheck prerequisite not found: tsc"; exit 0; }
 
-PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g)/@earendil-works/pi-coding-agent"}
-if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-  echo "skip: Pi extension typecheck prerequisite not found: installed @earendil-works/pi-coding-agent package"
+if ! fm_test_pi_package_dir; then
+  echo "skip: $FM_TEST_PI_PACKAGE_REASON"
   exit 0
 fi
+PI_PACKAGE_DIR=$FM_TEST_PI_PACKAGE_DIR
 if [ ! -d "$PI_PACKAGE_DIR/node_modules/typebox" ] || \
    [ ! -d "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" ] || \
    [ ! -d "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-ai" ] || \
