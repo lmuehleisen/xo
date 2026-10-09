@@ -3623,8 +3623,12 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         fm_backend_herdr_submit_diagnostic enter-transport "$enter_rc" "${#text}" "${#content}" "$enter_attempts"
         printf 'send-failed'
       else
-        fm_composer_queued_enter_verdict "$verdict" \
-          "$(fm_backend_herdr_queued_enter_busy "$target" "$allow_rendered")"
+        verdict=$(fm_composer_queued_enter_verdict "$verdict" \
+          "$(fm_backend_herdr_queued_enter_busy "$target" "$allow_rendered")")
+        if [ "$verdict" != empty ]; then
+          fm_backend_herdr_submit_diagnostic enter-retries-exhausted 1 "${#text}" "${#content}" "$enter_attempts"
+        fi
+        printf '%s' "$verdict"
       fi
       return 0
     fi

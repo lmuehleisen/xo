@@ -4421,7 +4421,7 @@ test_send_text_submit_detects_landed_send() {
 }
 
 test_send_text_submit_detects_swallowed_enter() {
-  local dir log resp fb out
+  local dir log resp fb out diag
   dir="$TMP_ROOT/submit-swallow"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   # Every post-Enter agent-get read still reports idle, and the composer still
   # holds the typed text: a genuine swallow, not a queued Enter.
@@ -4435,8 +4435,15 @@ test_send_text_submit_detects_swallowed_enter() {
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01' "$ROOT" )
-  [ "$out" = pending ] || fail "send_text_submit should report pending once retries are exhausted with agent_status never going busy and the composer still holding the text, got '$out'"
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 2 0.01 0.01
+      printf "\ndiag=%s" "$(fm_backend_herdr_submit_diagnostic)"' "$ROOT" )
+  [ "${out%%$'\n'*}" = pending ] || fail "send_text_submit should report pending once retries are exhausted with agent_status never going busy and the composer still holding the text, got '$out'"
+  diag=${out##*$'\ndiag='}
+  assert_contains "$diag" 'stage=enter-retries-exhausted rc=1' 'swallowed Enter retries lost their failure stage'
+  assert_contains "$diag" 'enter_attempts=2 clear_attempts=0' 'swallowed Enter retries lost their exact counts'
+  assert_not_contains "$diag" 'hello captain' 'swallowed Enter diagnostics leaked input'
+  [ "$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")" -eq 2 ] || fail 'diagnostics changed the Enter retry budget'
   pass "fm_backend_herdr_send_text_submit: reports 'pending' when agent_status stays idle and the composer still holds unsent text after retried Enters (swallowed)"
 }
 
