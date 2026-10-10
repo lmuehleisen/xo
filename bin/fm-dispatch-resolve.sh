@@ -163,6 +163,7 @@ BRIEF='' LANE='' LAT_MS=null RESULT='{}'
 # The exit handler owns only temporaries created by this invocation, never
 # paths inherited from the caller through generic environment variable names.
 RULES='' RESP_FILE='' QUOTA='' TASK_TEXT='' SEND_TEXT=''
+# shellcheck disable=SC2329 # Registered by the EXIT trap below.
 dispatch_exit() {
   local rc=$?
   fm_dispatch_history_router "$FM_HOME" "$BRIEF" "$HISTORY_STATUS" "$HISTORY_REASON" \
