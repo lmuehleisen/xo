@@ -185,6 +185,45 @@ assert_meta_profile() {
   assert_grep "effort=$effort" "$meta" "meta missing effort=$effort"
 }
 
+test_dispatch_spawn_history() {
+  local rec id out status history expected kind
+  for kind in ship scout; do
+    id="history-$kind-z1"
+    rec=$(make_spawn_case "history-$kind" claude "$id")
+    read_case_record "$rec"
+    history="$HOME_DIR/state/dispatch-history.jsonl"
+    if [ "$kind" = ship ]; then
+      # Several resolver calls and a later unrelated entry must still pair by id.
+      printf '{"kind":"router","task_id":"%s","status":"off"}\n' "$id" > "$history"
+      printf '{"kind":"spawn","task_id":"other"}\n' >> "$history"
+      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode direct-PR --yolo off --harness claude --model sonnet --effort high)
+    else
+      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout --harness claude --model sonnet --effort high)
+    fi
+    status=$?
+    expect_code 0 "$status" "logged $kind spawn should succeed"
+    tail -n 1 "$history" | jq -e --arg id "$id" --argjson paired "$([ "$kind" = ship ] && echo true || echo false)" '
+      .kind == "spawn" and .task_id == $id and (.time | type) == "number" and
+      .harness == "claude" and .model == "sonnet" and .effort == "high" and
+      .resolver_exists == $paired' >/dev/null || fail "spawn history lost the final profile or pairing"
+    expected="spawned $id harness=claude kind=$kind"
+    [ "$kind" != ship ] || expected="$expected mode=direct-PR yolo=off"
+    expected="$expected window=firstmate:fm-$id worktree=$WT_DIR"
+    assert_equals "$expected" "$(printf '%s\n' "$out" | tail -n 1)" "history leaves the success output unchanged"
+  done
+
+  id=history-write-failure-z1
+  rec=$(make_spawn_case history-write-failure claude "$id")
+  read_case_record "$rec"
+  mkdir "$HOME_DIR/state/dispatch-history.jsonl"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode direct-PR --yolo off 2> "$CASE_DIR/stderr")
+  status=$?
+  expect_code 0 "$status" "failed history write must not fail spawn"
+  assert_equals "spawned $id harness=claude kind=ship mode=direct-PR yolo=off window=firstmate:fm-$id worktree=$WT_DIR" "$(printf '%s\n' "$out" | tail -n 1)" "failed history write leaves success output unchanged"
+  assert_not_contains "$out$(cat "$CASE_DIR/stderr")" 'dispatch-history' "failed history write emits no diagnostic"
+  pass "ship/scout history records final profiles and pairing without changing spawn output"
+}
+
 test_no_profile_keeps_claude_profile_defaults() {
   local rec id out status expected launch
   id=profile-off-z1
@@ -3205,6 +3244,7 @@ test_claude_worker_launch_covers_task_channel_dirs() {
 
 test_opencode_exposes_firstmate_skills_in_launch_config
 test_worker_launch_delivers_role_scope
+test_dispatch_spawn_history
 test_no_profile_keeps_claude_profile_defaults
 test_claude_launch_brief_publishes_record_doorbell
 test_claude_secondmate_launch_brief_publishes_into_its_own_home

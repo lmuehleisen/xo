@@ -109,6 +109,9 @@
 #   --lane, an undeclared --exclude-family or --data-tag), which is
 #   actionable, never selected around.
 #
+# Private call history: bin/fm-dispatch-history-lib.sh owns the append-only
+#   router/spawn JSONL log, including off and error calls.
+#
 # Runway gate: --completion-horizon is a positive number of seconds (default
 #   3600, a conservative one-hour completion budget). The output discloses it
 #   and each bound's usableRunwaySeconds; unknown runway remains unranked.
@@ -151,14 +154,32 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-brief-heading-lib.sh
 . "$SCRIPT_DIR/fm-brief-heading-lib.sh"
 
+# shellcheck source=bin/fm-dispatch-history-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-history-lib.sh"
+
+HISTORY_STATUS=error HISTORY_REASON=''
+HISTORY_EVIDENCE='{}' HISTORY_MODEL=''
+BRIEF='' LANE='' LAT_MS=null RESULT='{}'
+dispatch_exit() {
+  local rc=$?
+  fm_dispatch_history_router "$FM_HOME" "$BRIEF" "$HISTORY_STATUS" "$HISTORY_REASON" \
+    "$RESULT" "$HISTORY_EVIDENCE" "$LANE" "$LAT_MS" "$HISTORY_MODEL" || true
+  if [ -n "${RULES:-}${RESP_FILE:-}${QUOTA:-}${TASK_TEXT:-}${SEND_TEXT:-}" ]; then
+    rm -f "${RULES:-}" "${RESP_FILE:-}" "${QUOTA:-}" "${TASK_TEXT:-}" "${SEND_TEXT:-}"
+  fi
+  return "$rc"
+}
+trap dispatch_exit EXIT
+
 CONFIDENCE_FLOOR=0.6
 TS_MODEL=jev-latest
 TS_BASE=https://api.typesafe.ai
 TS_TIMEOUT=5
 DEFAULT_WHEN="No listed rule applies to this task."
 
-die() { printf 'error: %s\n' "$1" >&2; exit 2; }
+die() { HISTORY_REASON='usage or configuration error'; printf 'error: %s\n' "$1" >&2; exit 2; }
 no_rules() {
+  HISTORY_STATUS=escalate HISTORY_REASON='no rules to match'
   printf 'dispatch-resolve:\n  status: escalate\n  reason: no rules to match\n'
   exit 0
 }
@@ -192,7 +213,7 @@ while [ $# -gt 0 ]; do
       fi
       shift 2 ;;
     --project) [ $# -ge 2 ] || die "--project needs a value"; PROJECT=$2; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
+    -h|--help) trap - EXIT; usage; exit 0 ;;
     -*) die "unknown flag $1" ;;
     *) [ -z "$BRIEF" ] || die "one brief file only"; BRIEF=$1; shift ;;
   esac
@@ -210,6 +231,7 @@ if [ -z "$LANE" ]; then
     TS_MODEL='~typesafe/jev-latest'
   fi
   if [ -z "$DISPATCH_API_KEY_PRIVATE" ]; then
+    HISTORY_STATUS=off HISTORY_REASON='API key absent'
     echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env; OPENROUTER_API_KEY absent from $FM_HOME/.env)" >&2
     exit 0
   fi
@@ -225,7 +247,6 @@ fi
 [ -r "$RULES_PATH" ] || die "rules file not readable: $RULES_PATH"
 command -v jq >/dev/null 2>&1 || die "jq required"
 RULES=$(mktemp) || die "mktemp failed"
-trap 'rm -f "$RULES"' EXIT
 cp "$RULES_PATH" "$RULES" || die "could not snapshot rules file: $RULES_PATH"
 chmod 400 "$RULES" || die "could not protect rules snapshot"
 VERIFIED_HARNESSES=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
@@ -349,6 +370,9 @@ undeclared_tags=$(jq -r --argjson tags "$DATA_TAGS" '
 
 emit_error() {
   local reason=$1
+  # HTTP diagnostics may include an arbitrary response body; retain only the
+  # error category in history so a server cannot echo secrets into the log.
+  HISTORY_STATUS=error HISTORY_REASON=${reason%%: *} RESULT='{}'
   echo "dispatch-resolve: error ($reason)" >&2
   printf 'dispatch-resolve:\n  status: error\n  reason: %s\n' "$reason"
   exit 0
@@ -362,9 +386,9 @@ RESP_FILE=$(mktemp) || die "mktemp failed"
 QUOTA=$(mktemp) || { rm -f "$RESP_FILE"; die "mktemp failed"; }
 TASK_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA"; die "mktemp failed"; }
 SEND_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA" "$TASK_TEXT"; die "mktemp failed"; }
-trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT"' EXIT
 
 never_send_off() {
+  HISTORY_STATUS=off HISTORY_REASON=$1
   echo "dispatch-resolve: off ($1; nothing sent)" >&2
   exit 0
 }
@@ -443,6 +467,7 @@ else
       }
     }')
   never_send_check
+  HISTORY_MODEL=$TS_MODEL
   T0=$(fm_timing_now_ms)
   HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
     -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
@@ -466,6 +491,11 @@ else
        (.usage.output_tokens | type) == "number"))' \
     "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
 fi
+
+# Retain only validated score/usage fields for errors after the API succeeded.
+HISTORY_EVIDENCE=$(jq -c '{model, tokens: (.usage // null),
+  rule: .answers.rule.choice, confidence: .answers.rule.confidence,
+  probabilities: .answers.rule.probabilities}' "$RESP_FILE" 2>/dev/null) || HISTORY_EVIDENCE='{}'
 
 # Experiment sampling bucket, only when a class declares an experiment: the
 # same task text always lands in the same bucket.

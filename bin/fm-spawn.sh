@@ -563,6 +563,8 @@
 # keeps no data/backlog.md. A configured non-markdown adapter remains
 # active without a markdown file; any active automatic backend without
 # compatible tasks-axi refuses before creating lifecycle state.
+# Private dispatch call history is owned by bin/fm-dispatch-history-lib.sh.
+#
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
@@ -608,6 +610,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-codex-catalog-lib.sh
 . "$SCRIPT_DIR/fm-codex-catalog-lib.sh"
+# shellcheck source=bin/fm-dispatch-history-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-history-lib.sh"
 # shellcheck source=bin/fm-dispatch-lanes-lib.sh
 . "$SCRIPT_DIR/fm-dispatch-lanes-lib.sh"
 
@@ -6639,4 +6643,7 @@ SPAWN_ACCOUNT=
 [ -z "$WORKER_ACCOUNT_PROVIDER" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT account_provider=$WORKER_ACCOUNT_PROVIDER"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
+if [ "$KIND" != secondmate ]; then
+  fm_dispatch_history_spawn "$FM_HOME" "$ID" "$HARNESS" "$MODEL" "$EFFORT" || true
+fi
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY$SPAWN_JUDGE window=$META_WINDOW worktree=$WT$SPAWN_ACCOUNT"
