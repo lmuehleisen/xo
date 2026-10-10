@@ -160,6 +160,9 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 HISTORY_STATUS=error HISTORY_REASON=''
 HISTORY_EVIDENCE='{}' HISTORY_MODEL=''
 BRIEF='' LANE='' LAT_MS=null RESULT='{}'
+# The exit handler owns only temporaries created by this invocation, never
+# paths inherited from the caller through generic environment variable names.
+RULES='' RESP_FILE='' QUOTA='' TASK_TEXT='' SEND_TEXT=''
 dispatch_exit() {
   local rc=$?
   fm_dispatch_history_router "$FM_HOME" "$BRIEF" "$HISTORY_STATUS" "$HISTORY_REASON" \

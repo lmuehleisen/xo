@@ -226,6 +226,46 @@ assert_absent "$LOG/argv" "absent key never calls curl"
 assert_absent "$LOG/quota-axi.calls" "absent key never reads quota-axi"
 pass "absent key is off: one stderr line, exit 0, no network call"
 
+# Early exits must not treat caller-exported paths as resolver-owned temporaries.
+CALLER_TEMPS="$TMP_ROOT/caller-temps"
+mkdir "$CALLER_TEMPS"
+for temp_name in RULES RESP_FILE QUOTA TASK_TEXT SEND_TEXT; do
+  printf 'caller-owned %s\n' "$temp_name" > "$CALLER_TEMPS/$temp_name"
+done
+for early_path in off usage no-rules; do
+  case "$early_path" in
+    off)
+      early_args=("$BRIEF")
+      early_key=''
+      early_code=0
+      ;;
+    usage)
+      early_args=("$BRIEF" --unknown)
+      early_key=$KEY
+      early_code=2
+      ;;
+    no-rules)
+      early_args=("$BRIEF")
+      early_key=$KEY
+      mv "$RULES" "$TMP_ROOT/saved-rules.json"
+      early_code=0
+      ;;
+  esac
+  TYPESAFE_API_KEY=$early_key RULES="$CALLER_TEMPS/RULES" \
+    RESP_FILE="$CALLER_TEMPS/RESP_FILE" QUOTA="$CALLER_TEMPS/QUOTA" \
+    TASK_TEXT="$CALLER_TEMPS/TASK_TEXT" SEND_TEXT="$CALLER_TEMPS/SEND_TEXT" \
+    run code out err "${early_args[@]}"
+  expect_code "$early_code" "$code" "inherited cleanup paths preserve $early_path exit status"
+  for temp_name in RULES RESP_FILE QUOTA TASK_TEXT SEND_TEXT; do
+    assert_equals "caller-owned $temp_name" "$(cat "$CALLER_TEMPS/$temp_name")" \
+      "$early_path must preserve caller-exported $temp_name"
+  done
+  if [ "$early_path" = no-rules ]; then
+    mv "$TMP_ROOT/saved-rules.json" "$RULES"
+  fi
+done
+pass "off, usage and no-rules exits preserve every caller-exported temporary path"
+
 # --- .env key, and the environment wins over it ------------------------------
 printf '%s\n' '# local secrets' 'FMX_PAIRING_TOKEN=abc' "export TYPESAFE_API_KEY=\"$KEY\"" > "$HOME_DIR/.env"
 reset_log
