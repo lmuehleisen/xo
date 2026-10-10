@@ -6,7 +6,6 @@ This record supports current session-start, turn-end, watcher-continuity, superv
 Operator behavior and active limits remain in the linked current guides.
 Task-specific chronology, temporary paths, run identifiers, and delivery transcripts remain in private reports or PR evidence.
 
-
 ## Finished GitHub PR follow-up
 
 The verification entry point below was exercised on 2026-10-09 with Bash 3.2.57 and jq 1.7.1.
@@ -15,7 +14,14 @@ It proves an unmonitored finished PR cannot be recorded as routine, a PR with no
 It also checks duplicate suppression, review lookup failures, terminal failures, pending registration's parent and ledger silence, continued merge detection, and cleanup.
 
 ```sh
-bash bin/fm-test-run.sh tests/fm-pr-check-security.test.sh tests/fm-pr-state.test.sh
+bash bin/fm-test-run.sh --jobs 1 tests/fm-pr-check-security.test.sh tests/fm-pr-state.test.sh
+```
+
+Observed follow-up assertions:
+
+```text
+ok - finished PR with none checks gets one durable readiness recheck after its wait
+ok - finished PR with pending checks gets one durable readiness recheck after its wait
 ```
 
 The PR poll and outcome writer do not depend on worker harness or endpoint transport.

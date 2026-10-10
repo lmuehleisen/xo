@@ -3784,6 +3784,12 @@ SH
     assert_grep 'stop-cycle' "$dir/watch.out" "unchanged readiness was reported again"
     assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "unchanged PR repeated its wake"
     ack_watcher_cycle "$state" || fail "could not acknowledge duplicate check cycle"
+    if [ "$bucket" = none ]; then
+      FM_TEST_THREAD_BLOCKERS='BOT REVIEW THREAD: https://github.com/o/r/pull/1#discussion_r1' readiness_cycle "$dir"
+      assert_grep "PR readiness recheck: $url" "$dir/watch.out" "no-check PR bot finding was stranded"
+      assert_no_grep 'PR ready' "$dir/watch.out" "recheck claimed bot findings were cleared"
+      ack_watcher_cycle "$state" || fail "could not acknowledge no-check bot triage wake"
+    fi
     if [ "$bucket" = pending ]; then
       FM_TEST_THREAD_FAIL=1 readiness_cycle "$dir"
       assert_grep 'stop-cycle' "$dir/watch.out" "review lookup failure declared readiness"

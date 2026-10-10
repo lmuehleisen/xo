@@ -82,7 +82,7 @@ case "$provider" in
       case "$blockers" in *'BOT REVIEW SETTLE:'*) exit 0 ;; esac
       command -v jq >/dev/null 2>&1 || exit 0
       checks=$(gh pr checks "$url" --json name,state,bucket 2>/dev/null) || true
-      if [ -z "$checks" ] && [ "$blockers" = 'CHECKS: none reported yet' ]; then
+      if [ -z "$checks" ] && printf '%s\n' "$blockers" | grep -Fxq 'CHECKS: none reported yet'; then
         checks='[]'
       fi
       # gh exits nonzero for pending or failed checks even with valid JSON.
