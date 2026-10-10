@@ -209,8 +209,9 @@ lab tab focus "$LEASE_TAB" >/dev/null || fail "could not focus the finished task
 OUT=$(drive fm_backend_herdr_projection_close_finished_task \
   "$LAB_SESSION" "$LEASE_PANE" "$TMP_ROOT/state" example "$TMP_ROOT")
 STATUS=$?
-[ "$STATUS" -ne 0 ] && pane_exists "$LEASE_PANE" \
-  || fail "the initial lease did not protect the attached viewer: $OUT"
+if [ "$STATUS" -eq 0 ] || ! pane_exists "$LEASE_PANE"; then
+  fail "the initial lease did not protect the attached viewer: $OUT"
+fi
 printf '10900\n' > "$LEASE_CLOCK"
 OUT=$(drive fm_backend_herdr_projection_close_finished_task \
   "$LAB_SESSION" "$LEASE_PANE" "$TMP_ROOT/state" example "$TMP_ROOT")

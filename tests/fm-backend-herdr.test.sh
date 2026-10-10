@@ -2313,7 +2313,7 @@ test_finished_task_focus_lease_fails_closed_and_resets() {
     assert_not_contains "$(cat "$dir/log")" 'pane close' "$mode allowed an expired close"
     [ ! -e "$dir/state/example.herdr-focus-lease" ] || fail "$mode retained its expired deadline"
     if [ "$mode" = late-focus ]; then
-      [ "$(cat "$dir/focus")" = w9:t2 ] || fail 'refused close restored over the viewer’s fresh target selection'
+      [ "$(cat "$dir/focus")" = w9:t2 ] || fail "refused close restored over the viewer's fresh target selection"
     fi
     if [ "$mode" != late-focus ] && [ "$mode" != focus-fails ]; then
       assert_not_contains "$(cat "$dir/log")" 'tab focus' "$mode moved focus despite an ambiguous probe/binding"
@@ -2330,6 +2330,35 @@ test_finished_task_focus_lease_fails_closed_and_resets() {
     esac
   done
   pass 'herdr finished-task focus lease: unknown probes, absent or mismatched parent, failed handoff, and a late focus change keep the pane'
+}
+
+test_finished_task_focus_lease_repairs_symlink_and_refuses_directory() {
+  local dir lease expected
+  dir=$(make_focus_lease_case symlink) || fail 'could not build focus lease fixture'
+  lease="$dir/state/example.herdr-focus-lease"
+  refuse_focus_lease_case "$dir"
+  mv "$lease" "$dir/lease-target"
+  expected=$(cat "$dir/lease-target")
+  ln -s "$dir/lease-target" "$lease"
+  printf '10900\n' > "$dir/clock"
+  refuse_focus_lease_case "$dir"
+  if [ -L "$lease" ] || [ ! -f "$lease" ]; then
+    fail 'symlinked lease was not replaced with a regular lease'
+  fi
+  [ "$(cat "$dir/lease-target")" = "$expected" ] || fail 'symlink reset changed its target'
+  [ "$(jq -r .since "$lease")" = 10900 ] || fail 'symlink reset reused the expired deadline'
+  assert_not_contains "$(cat "$dir/log")" 'tab focus' 'symlinked lease authorized a handoff'
+  printf '11800\n' > "$dir/clock"
+  close_focus_lease_case "$dir" || fail "restarted lease did not expire: $(cat "$dir/stderr")"
+
+  dir=$(make_focus_lease_case directory) || fail 'could not build focus lease fixture'
+  lease="$dir/state/example.herdr-focus-lease"
+  mkdir "$lease"
+  printf 'keep\n' > "$lease/marker"
+  refuse_focus_lease_case "$dir"
+  [ "$(cat "$lease/marker")" = keep ] || fail 'directory refusal changed the lease path'
+  assert_not_contains "$(cat "$dir/log")" 'tab focus' 'directory lease authorized a handoff'
+  pass 'herdr finished-task focus lease: a symlink restarts without touching its target; a directory stays untouched and refuses'
 }
 
 test_finished_task_focus_lease_resets_on_binding_clock_and_focus_changes() {
@@ -6250,6 +6279,7 @@ test_projection_close_refuses_unknown_foreground_reason
 test_projection_close_allows_stale_active_tab_without_foreground_client
 test_finished_task_focus_lease_expires_and_uses_current_parent_tab
 test_finished_task_focus_lease_fails_closed_and_resets
+test_finished_task_focus_lease_repairs_symlink_and_refuses_directory
 test_finished_task_focus_lease_resets_on_binding_clock_and_focus_changes
 test_projection_close_reports_focus_restore_failure
 test_projection_close_rechecks_required_agent_state_at_boundary

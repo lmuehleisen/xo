@@ -981,7 +981,7 @@ fm_backend_herdr_finished_task_focus_binding() {  # <session> <pane> <state> <id
     # shellcheck source=bin/fm-classify-lib.sh
     . "$FM_BACKEND_HERDR_ROOT/bin/fm-classify-lib.sh"
   fi
-  [ "$(status_line_verb "$(last_status_line "$state/$id.status")")" = done ] || return 1
+  [ "$(status_line_verb "$(last_status_line "$state/$id.status")")" = 'done' ] || return 1
   kind=$(fm_backend_herdr_projection_journal_field "$meta" kind) || return 1
   case "$kind" in ship|scout) ;; *) return 1 ;; esac
   generation=$(fm_backend_herdr_projection_journal_field "$meta" spawn_gen) || return 1
@@ -1055,8 +1055,13 @@ fm_backend_herdr_projection_close_finished_task() {  # <session> <pane> <state> 
   now=$(date +%s) || return 1
   case "$now" in ''|*[!0-9]*) rm -f "$lease"; return 1 ;; esac
   since=$now
-  if [ -e "$lease" ] || [ -L "$lease" ]; then
-    [ -f "$lease" ] && [ ! -L "$lease" ] || return 1
+  if [ -L "$lease" ]; then
+    rm -f "$lease" || return 1
+  elif [ -e "$lease" ] && [ ! -f "$lease" ]; then
+    echo "warning: herdr finished-task focus lease path is not a regular file; refusing cleanup" >&2
+    return 1
+  fi
+  if [ -f "$lease" ]; then
     observed=$(jq -ser --argjson binding "$binding" --argjson now "$now" '
       select(length == 1) | .[0]
       | select(.binding == $binding)
