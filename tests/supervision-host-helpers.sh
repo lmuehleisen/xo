@@ -1202,6 +1202,97 @@ test_claude_stop_hook_delivers_a_main_only_pass_through() {
   pass "host+hook: an attended main-only pass-through rewakes main and keeps its successor watcher"
 }
 
+# A recovery close is main-only too. Once main acknowledges its empty drain,
+# taking over the successor must not manufacture another recovery episode.
+test_acknowledged_host_recovery_settles() {
+  local home acknowledged real_mktemp
+  home=$(make_primary_home hook-recovery-settles)
+  real_mktemp=$(command -v mktemp)
+  # Hold the watcher's EXIT cleanup beyond the old five-second takeover stop
+  # window, after TERM lands but before downtime is published and it exits.
+  cat > "$home/fakebin/mktemp" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *'/.watcher-down.tmp.'*)
+    if [ -e "\$FM_HOME/hold-cleanup" ]; then
+      rm -f "\$FM_HOME/hold-cleanup"
+      : > "\$FM_HOME/cleanup-held"
+      sleep 8
+    fi ;;
+esac
+exec "$real_mktemp" "\$@"
+SH
+  chmod +x "$home/fakebin/mktemp"
+  FM_HOME="$home" bash -c '. "$1"; fm_recovery_marker_publish "$2" downtime' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$home/state/.watcher-down" || fail "fixture: could not publish downtime"
+  start_hook_session "$home"
+  turn_end "$home"
+  wait_until 250 hook_exited "$home" || fail "recovery: the first close did not reach main"
+  assert_rewoke_main "$home" recovery
+  assert_re '^check: rearm-resurface$' "$home/hook.err" "recovery: genuine downtime must resurface"
+  main_drain "$home" > "$home/main-drain"
+  assert_contains "$MAIN_ACK" '--ack-through 0' "fixture: the recovery drain must have no queued work"
+  # shellcheck disable=SC2086 # the printed acknowledgement arguments
+  FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" "$@"' "$ROOT/bin/fm-wake-drain.sh" $MAIN_ACK \
+    > "$home/main-ack" 2>&1 || fail "recovery: main's acknowledgement failed"
+  acknowledged=$(cat "$home/state/.watcher-down")
+  assert_re '^acked:' "$home/state/.watcher-down" "recovery: main did not retire the episode"
+  : > "$home/hold-cleanup"
+  turn_end "$home"
+  wait_until 150 test -e "$home/cleanup-held" || fail "fixture: the successor did not enter its slow cleanup"
+  wait_until 600 host_owns_the_only_cycle "$home" \
+    || fail "recovery: the next park did not take over its successor: $(cat "$home/state/.supervision-host.log")"
+  sleep 3
+  ! hook_exited "$home" || fail "recovery: the acknowledged empty close woke main again: $(cat "$home/hook.err")"
+  [ "$(cat "$home/state/.watcher-down")" = "$acknowledged" ] \
+    || fail "recovery: taking over the successor reopened acknowledged downtime"
+  [ "$(grep -c 'main-only.*check: rearm-resurface' "$home/state/.supervision-host.log")" -eq 1 ] \
+    || fail "recovery: the host regenerated its own recovery close"
+  : > "$home/session.stop"
+  stop_home_processes "$home"
+  assert_re 'signal=TERM.*reason=signal-exit' "$home/state/.watch-cycle-exits.log" \
+    "fixture: the old watcher must actually end from the takeover's TERM"
+  pass "host+hook: an acknowledged empty recovery hand-back settles despite a delayed takeover stop"
+}
+
+test_host_recovery_after_real_successor_downtime() {
+  local home successor
+  home=$(make_primary_home hook-real-downtime)
+  start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "downtime: the first watcher did not start"
+  append_status "$home" 'which export format?' needs-decision
+  wait_until 250 hook_exited "$home" || fail "downtime: the decision close did not reach main"
+  assert_rewoke_main "$home" downtime
+  main_drain "$home" >/dev/null
+  # shellcheck disable=SC2086 # the printed acknowledgement arguments
+  FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" "$@"' "$ROOT/bin/fm-wake-drain.sh" $MAIN_ACK \
+    > "$home/main-ack" 2>&1 || fail "downtime: main's acknowledgement failed"
+  successor=$(cat "$home/state/.watch.lock/pid")
+  kill -TERM "$successor" || fail "fixture: the successor was not running"
+  wait_until 150 bash -c '! kill -0 "$1" 2>/dev/null' _ "$successor" \
+    || fail "fixture: the successor did not stop"
+  turn_end "$home"
+  wait_until 250 hook_exited "$home" || fail "downtime: the stopped successor was not resurfaced"
+  assert_rewoke_main "$home" downtime
+  assert_re '^check: rearm-resurface$' "$home/hook.err" "downtime: a real watcher gap must still resurface"
+  assert_re '^(pending|announced):' "$home/state/.watcher-down" "downtime: recovery must remain acknowledgeable"
+  main_drain "$home" > "$home/recovery-drain"
+  assert_contains "$MAIN_ACK" '--ack-through 0' "downtime: the recovery must have no queued work"
+  # shellcheck disable=SC2086 # the printed acknowledgement arguments
+  FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" "$@"' "$ROOT/bin/fm-wake-drain.sh" $MAIN_ACK \
+    > "$home/recovery-ack" 2>&1 || fail "downtime: the recovery acknowledgement failed"
+  turn_end "$home"
+  wait_until 250 host_owns_the_only_cycle "$home" || fail "downtime: the recovery successor was not taken over"
+  sleep 3
+  ! hook_exited "$home" || fail "downtime: acknowledged real downtime resurfaced again"
+  [ "$(grep -c 'main-only.*check: rearm-resurface' "$home/state/.supervision-host.log")" -eq 1 ] \
+    || fail "downtime: real downtime must resurface only once after acknowledgement"
+  : > "$home/session.stop"
+  stop_home_processes "$home"
+  pass "host+hook: real successor downtime still resurfaces for main"
+}
+
 # Close the confirmed handling watcher after the engine has acknowledged its
 # wake but before its captain outcome returns to the host.
 test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main() {
@@ -2875,4 +2966,3 @@ test_superseded_host_leaves_the_owner_untouched() {
     || fail "superseded: the owner host did not stop on TERM"
   pass "host: a host under a superseded auto-arm generation stands down without touching the owner"
 }
-

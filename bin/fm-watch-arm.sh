@@ -78,6 +78,8 @@
 # arm would, and otherwise this arm owns a fresh cycle as a plain arm does.
 # Recovery restoration follows docs/watcher-continuity.md "Generation reuse";
 # an unconfirmed stop leaves downtime for the fresh cycle's recovery check.
+# Stop completion is awaited up to fm_watcher_stall_bound seconds, so a slow
+# EXIT cleanup keeps its handover snapshot instead of becoming a plain attach.
 # Any other watcher, or one that outlives the stop,
 # is attached to exactly as a plain arm attaches.
 #
@@ -626,16 +628,18 @@ fi
 # 1 when it was not stopped (its handover state was unreadable, or it outlived
 # the stop), which leaves it to the plain attach below.
 take_over_cycle() {  # <watcher-pid> <identity>
-  local pid=$1 i owner_signal
+  local pid=$1 i owner_signal deadline
   cycle_begin "$pid" attached "$2"
   fm_recovery_marker_handover_snapshot "$STATE/.watcher-down" || return 1
+  deadline=$(( $(date +%s) + STALL_BOUND ))
   if attached_holder_live "$pid"; then
     kill -TERM "$pid" 2>/dev/null || true
   fi
-  i=0
-  while [ "$i" -lt 50 ] && fm_pid_alive "$pid"; do
+  # Retain the handover through slow EXIT cleanup. Falling into ordinary attach
+  # after five seconds lost the snapshot, so our own TERM became fresh downtime
+  # on every subsequent park even after main acknowledged its empty recovery.
+  while fm_pid_alive "$pid" && [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 0.1
-    i=$((i + 1))
   done
   if fm_pid_alive "$pid"; then
     return 1
