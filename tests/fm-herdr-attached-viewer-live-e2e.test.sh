@@ -113,7 +113,11 @@ drive() { # <function> <argument...>
     }
     fn=$2
     shift 2
-    "$fn" "$@"
+    "$fn" "$@" || exit $?
+    if [ "$fn" = fm_backend_herdr_projection_create_task ]; then
+      printf "%s\t%s\t%s\n" "$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID" \
+        "$FM_BACKEND_HERDR_PROJECTION_TAB_ID" "$FM_BACKEND_HERDR_PROJECTION_PANE_ID"
+    fi
   ' _ "$ROOT" "$@" 2>&1
 }
 
@@ -159,6 +163,65 @@ REASON=$(foreground_reason) || fail "could not probe the session's foreground cl
   || fail "the attached pty viewer did not register as a foreground client (reason=$REASON)"
 pass "attached viewer: a pty sized before the fork registers as a real Herdr foreground client"
 
+# Projection creation must keep the attached viewer's exact prior selection.
+# The CLI shim also scopes version/server probes to this same guarded lab.
+FIXTURE=$(new_workspace observer-focus) || fail "could not create the observer workspace"
+BEFORE_CREATE=${FIXTURE#*$'\t'}
+BEFORE_CREATE=${BEFORE_CREATE%%$'\t'*}
+lab tab focus "$BEFORE_CREATE" >/dev/null || fail "could not focus the observer tab"
+BEFORE_CREATE=$(focused_tab) || fail "could not capture attached-viewer focus"
+OUT=$(HERDR_SESSION="$LAB_SESSION" drive fm_backend_herdr_projection_create_task \
+  "$ROOT" '└ example · p:AbCdEfGhIjKlMnOpQrStUv' 'fm-example')
+STATUS=$?
+[ "$STATUS" -eq 0 ] || fail "attached-viewer projection creation failed: $OUT"
+[ "$(focused_tab)" = "$BEFORE_CREATE" ] || fail "projection creation moved attached-viewer focus"
+pass "attached viewer: projected workspace and task creation preserve the exact prior tab"
+
+# Advance only the adapter's clock, leaving the lab helper and viewer on real
+# time, to exercise the production lease against an actual attached client.
+IFS=$'\t' read -r LEASE_WS LEASE_TAB LEASE_PANE <<<"$OUT"
+LEASE_PARENT=$(lab tab get "$BEFORE_CREATE" | jq -er '.result.tab.workspace_id') \
+  || fail "could not resolve the launching workspace"
+LEASE_PARENT_LABEL=$(lab workspace list | jq -er --arg ws "$LEASE_PARENT" \
+  '.result.workspaces[] | select(.workspace_id == $ws) | .label') \
+  || fail "could not read the exact launching workspace label"
+mkdir -p "$TMP_ROOT/state"
+drive fm_backend_herdr_projection_journal_create "$TMP_ROOT/state" example >/dev/null \
+  || fail "could not create the live lease journal"
+drive fm_backend_herdr_projection_journal_write_v2 "$TMP_ROOT/state/example.herdr-presentation" \
+  example AbCdEfGhIjKlMnOpQrStUv "$TMP_ROOT" "$LAB_SESSION" \
+  "$LEASE_WS" "$LEASE_TAB" "$LEASE_PANE" "$LEASE_PARENT" "$LEASE_PARENT_LABEL" \
+  '└ example · p:AbCdEfGhIjKlMnOpQrStUv' fm-example >/dev/null \
+  || fail "could not bind the live lease journal"
+printf '%s\n' 'kind=ship' 'spawn_gen=live-example' "window=$LAB_SESSION:$LEASE_PANE" \
+  "herdr_session=$LAB_SESSION" "herdr_workspace_id=$LEASE_WS" \
+  "herdr_tab_id=$LEASE_TAB" "herdr_pane_id=$LEASE_PANE" > "$TMP_ROOT/state/example.meta"
+printf 'done [at=10000]: ready\n' > "$TMP_ROOT/state/example.status"
+LEASE_CLOCK="$TMP_ROOT/lease-clock"
+export LEASE_CLOCK
+printf '10000\n' > "$LEASE_CLOCK"
+cat > "$FAKEBIN/date" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = +%s ]; then cat "$LEASE_CLOCK"; else exec /bin/date "$@"; fi
+SH
+chmod +x "$FAKEBIN/date"
+lab tab focus "$LEASE_TAB" >/dev/null || fail "could not focus the finished task"
+OUT=$(drive fm_backend_herdr_projection_close_finished_task \
+  "$LAB_SESSION" "$LEASE_PANE" "$TMP_ROOT/state" example "$TMP_ROOT")
+STATUS=$?
+[ "$STATUS" -ne 0 ] && pane_exists "$LEASE_PANE" \
+  || fail "the initial lease did not protect the attached viewer: $OUT"
+printf '10900\n' > "$LEASE_CLOCK"
+OUT=$(drive fm_backend_herdr_projection_close_finished_task \
+  "$LAB_SESSION" "$LEASE_PANE" "$TMP_ROOT/state" example "$TMP_ROOT")
+STATUS=$?
+rm -f "$FAKEBIN/date"
+[ "$STATUS" -eq 0 ] || fail "the real attached-viewer lease did not expire: $OUT"
+if pane_exists "$LEASE_PANE"; then fail "the expired lease left the finished pane"; fi
+[ "$(focused_tab)" = "$BEFORE_CREATE" ] || fail "lease expiry did not preserve the exact launching tab"
+[ "$(foreground_reason)" = cleared ] || fail "lease expiry detached the foreground viewer"
+pass "attached viewer: finished-task focus lease refuses initially and closes after a verified launching-tab handoff at expiry"
+
 # --- scenario 3: a viewer on the target tab blocks the close ---------------
 
 FIXTURE=$(new_workspace viewer-active) || fail "could not create the scenario 3 workspace"
@@ -196,6 +259,8 @@ assert_contains "$OUT" "target is the captain's active tab" \
   "the late-switch refusal did not come from the fresh active-tab check: $OUT"
 pane_exists "$PANE_FOUR_A" \
   || fail "the close destroyed a tab the viewer had moved onto before the mutation boundary"
+[ "$(focused_tab)" = "$TAB_FOUR_A" ] \
+  || fail "the refused close restored over the viewer's fresh target selection"
 pass "attached viewer: focus moving onto the target between planning and mutation still blocks the close"
 
 # --- scenario 5: the viewer moves OFF the target mid-close -----------------

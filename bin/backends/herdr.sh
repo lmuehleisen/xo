@@ -969,6 +969,162 @@ fm_backend_herdr_foreground_client_present() {  # <session>
   esac
 }
 
+# Teardown alone may expire a finished projected task's focus lease. Bind the
+# allowance to ordinary endpoint metadata, its spawn incarnation, this home,
+# and the recorded launching workspace; a visual label alone grants nothing.
+fm_backend_herdr_finished_task_focus_binding() {  # <session> <pane> <state> <id> <home>
+  local session=$1 pane=$2 state=$3 id=$4 home=$5 meta journal generation kind key value
+  meta="$state/$id.meta"
+  journal="$state/$id.herdr-presentation"
+  [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  if ! declare -F last_status_line >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-classify-lib.sh
+    . "$FM_BACKEND_HERDR_ROOT/bin/fm-classify-lib.sh"
+  fi
+  [ "$(status_line_verb "$(last_status_line "$state/$id.status")")" = done ] || return 1
+  kind=$(fm_backend_herdr_projection_journal_field "$meta" kind) || return 1
+  case "$kind" in ship|scout) ;; *) return 1 ;; esac
+  generation=$(fm_backend_herdr_projection_journal_field "$meta" spawn_gen) || return 1
+  [ -n "$generation" ] || return 1
+  home=$(fm_backend_herdr_projection_home_identity "$home") || return 1
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
+  [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] \
+    && [ "$FM_BACKEND_HERDR_JOURNAL_HOME" = "$home" ] \
+    && [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] \
+    && [ "$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$pane" ] \
+    && [ "$FM_BACKEND_HERDR_JOURNAL_PARENT_WORKSPACE_ID" != "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" ] || return 1
+  for key in window herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id; do
+    value=$(fm_backend_herdr_projection_journal_field "$meta" "$key") || return 1
+    case "$key" in
+      window) [ "$value" = "$session:$pane" ] || return 1 ;;
+      herdr_session) [ "$value" = "$session" ] || return 1 ;;
+      herdr_workspace_id) [ "$value" = "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" ] || return 1 ;;
+      herdr_tab_id) [ "$value" = "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" ] || return 1 ;;
+      herdr_pane_id) [ "$value" = "$pane" ] || return 1 ;;
+    esac
+  done
+  jq -cn --arg home "$home" --arg id "$id" --arg generation "$generation" \
+    --arg session "$session" --arg pane "$pane" \
+    --arg workspace "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" \
+    --arg tab "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" \
+    --arg parent "$FM_BACKEND_HERDR_JOURNAL_PARENT_WORKSPACE_ID" \
+    --arg parent_label "$FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL" \
+    --arg token "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" \
+    '{home:$home,task_id:$id,spawn_gen:$generation,session:$session,pane:$pane,
+      workspace:$workspace,tab:$tab,parent:$parent,parent_label:$parent_label,token:$token}'
+}
+
+# fm_backend_herdr_projection_close_finished_task: teardown's bounded exception
+# to the active-tab guard, called under the task/meta and named-session locks
+# after the ordinary landed-work gates. state/<id>.herdr-focus-lease stores an
+# exact binding and wall-clock since/observed seconds, atomically and privately.
+# The 900-second lease begins at the first refused cleanup, resets on every
+# observed focus/binding change, unknown probe, or clock rollback, and is retired
+# after a verified handoff or successful teardown. It is NOT input inactivity or
+# remote-client detection: Herdr exposes neither. A real reader who keeps this
+# finished tab focused for 15 minutes can also be switched to the launching
+# workspace. Other closes, unfinished tasks, and ambiguous bindings keep the
+# ordinary refusal. Polling cannot see focus changes between observations, and
+# Herdr offers no atomic compare-focus-and-switch; immediate rechecks bound the
+# same checkpoint-to-mutation race as the ordinary close guard.
+fm_backend_herdr_projection_close_finished_task() {  # <session> <pane> <state> <id> <home>
+  local session=$1 pane=$2 state=$3 id=$4 home=$5 lease binding focus target now since observed tmp foreground_rc=0
+  local info parent_tab parent_focus fresh
+  lease="$state/$id.herdr-focus-lease"
+  if ! binding=$(fm_backend_herdr_finished_task_focus_binding "$session" "$pane" "$state" "$id" "$home"); then
+    rm -f "$lease"
+    fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane"
+    return $?
+  fi
+  fm_backend_herdr_foreground_client_present "$session" || foreground_rc=$?
+  focus=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
+    rm -f "$lease"
+    return 1
+  }
+  target=$(printf '%s' "$binding" | jq -r '[.workspace,.tab] | @tsv') || return 1
+  if [ "$foreground_rc" -eq 1 ] || [ "$focus" != "$target" ]; then
+    rm -f "$lease"
+    fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane"
+    return $?
+  fi
+  if [ "$foreground_rc" -ne 0 ]; then
+    rm -f "$lease"
+    echo "warning: herdr finished-task focus lease could not verify the foreground client; refusing cleanup" >&2
+    return 1
+  fi
+  now=$(date +%s) || return 1
+  case "$now" in ''|*[!0-9]*) rm -f "$lease"; return 1 ;; esac
+  since=$now
+  if [ -e "$lease" ] || [ -L "$lease" ]; then
+    [ -f "$lease" ] && [ ! -L "$lease" ] || return 1
+    observed=$(jq -ser --argjson binding "$binding" --argjson now "$now" '
+      select(length == 1) | .[0]
+      | select(.binding == $binding)
+      | select((.since | type) == "number" and (.observed | type) == "number")
+      | select(.since >= 0 and .since == (.since | floor)
+          and .observed >= .since and .observed <= $now and .observed == (.observed | floor))
+      | [.since,.observed] | @tsv' "$lease" 2>/dev/null) || observed=
+    if [ -n "$observed" ]; then
+      since=${observed%%$'\t'*}
+    fi
+  fi
+  tmp=$(mktemp "$state/.${id}.herdr-focus-lease.XXXXXX") || return 1
+  if ! chmod 0600 "$tmp" \
+    || ! jq -cn --argjson binding "$binding" --argjson since "$since" --argjson now "$now" \
+      '{binding:$binding,since:$since,observed:$now}' > "$tmp" \
+    || ! mv -f "$tmp" "$lease"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [ $((now - since)) -lt 900 ]; then
+    echo "warning: herdr finished-task target remains focused; refusing cleanup during its 15-minute focus lease" >&2
+    return 1
+  fi
+  # An expired attempt consumes its deadline before probing or switching.
+  # Ambiguous probes, responses, or a crash must start a new lease on retry.
+  rm -f "$lease" || return 1
+  # Revalidate the exact target and resolve the launching workspace's CURRENT
+  # tab, never a neighbor inferred from ordering or a remembered tab id.
+  info=$(fm_backend_herdr_cli "$session" pane get "$pane" 2>/dev/null) || return 1
+  printf '%s' "$info" | jq -e --argjson b "$binding" '
+    .result.pane | .pane_id == $b.pane and .tab_id == $b.tab and .workspace_id == $b.workspace
+  ' >/dev/null 2>&1 || return 1
+  info=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
+  fresh=$(printf '%s' "$info" | jq -er '
+    [.result.workspaces[]? | select(.focused == true)] | select(length == 1)
+    | .[0] | [.workspace_id,.active_tab_id] | @tsv' 2>/dev/null) || fresh=
+  if [ "$fresh" != "$target" ]; then
+    rm -f "$lease"
+    return 1
+  fi
+  parent_tab=$(printf '%s' "$info" | jq -er --argjson b "$binding" '
+    .result.workspaces as $spaces
+    | select(([$spaces[]? | select(.workspace_id == $b.workspace)] | length) == 1)
+    | select(([$spaces[]? | select((.label // "") | endswith(" · p:" + $b.token))] | map(.workspace_id)) == [$b.workspace])
+    | [$spaces[]? | select(.workspace_id == $b.parent)] | select(length == 1)
+    | .[0] | select(.label == $b.parent_label)
+    | .active_tab_id | select(type == "string" and length > 0 and . != $b.tab)
+  ' 2>/dev/null) || return 1
+  info=$(fm_backend_herdr_cli "$session" tab get "$parent_tab" 2>/dev/null) || return 1
+  printf '%s' "$info" | jq -e --argjson b "$binding" --arg tab "$parent_tab" '
+    .result.tab | .tab_id == $tab and .workspace_id == $b.parent
+  ' >/dev/null 2>&1 || return 1
+  fresh=$(fm_backend_herdr_finished_task_focus_binding "$session" "$pane" "$state" "$id" "$home") || fresh=
+  foreground_rc=0
+  fm_backend_herdr_foreground_client_present "$session" || foreground_rc=$?
+  focus=$(fm_backend_herdr_projection_focus_snapshot "$session") || focus=
+  if [ "$fresh" != "$binding" ] || [ "$foreground_rc" -ne 0 ] || [ "$focus" != "$target" ]; then
+    rm -f "$lease"
+    return 1
+  fi
+  fm_backend_herdr_cli "$session" tab focus "$parent_tab" >/dev/null 2>&1 || return 1
+  parent_focus=$(printf '%s' "$binding" | jq -r --arg tab "$parent_tab" '[.parent,$tab] | @tsv') || return 1
+  focus=$(fm_backend_herdr_projection_focus_snapshot "$session") || focus=
+  [ "$focus" = "$parent_focus" ] || return 1
+  echo "warning: herdr finished-task focus lease expired; switched to the verified launching workspace before cleanup" >&2
+  fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane"
+}
+
 fm_backend_herdr_projection_target_tab_mutation_allowed() {  # <session> <tab-id>
   local session=$1 target_tab=$2 foreground_rc=0 focus active_tab
   FM_BACKEND_HERDR_PROJECTION_MUTATION_FOCUS=""
@@ -1009,7 +1165,7 @@ fm_backend_herdr_projection_target_tab_mutation_allowed() {  # <session> <tab-id
 fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
   local session=$1 pane_id=$2 required_agent_state=${3:-}
   local before active_tab info target_pane target_tab target_ws close_status state plan plan_shell_pid plan_move_record workspace_presence
-  local skip_restore=0
+  local skip_restore=0 focus_refused=0
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -1080,6 +1236,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
       fi
     else
       close_status=1
+      focus_refused=1
     fi
   elif fm_backend_herdr_projection_target_tab_mutation_allowed "$session" "$target_tab"; then
     if [ -n "${FM_BACKEND_HERDR_PROJECTION_MUTATION_FOCUS:-}" ]; then
@@ -1093,6 +1250,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     fi
   else
     close_status=1
+    focus_refused=1
   fi
   if [ "$close_status" -eq 0 ] && [ -n "$plan_move_record" ]; then
     workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
@@ -1104,6 +1262,10 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   if [ "$close_status" -ne 0 ]; then
     fm_backend_herdr_emptying_move_rollback "$plan_move_record" "$session" "$target_tab" || true
   fi
+  # A fresh viewer selection that REFUSED the close is not damage to restore.
+  # In particular, a viewer returning to the task after a lease handoff keeps
+  # that selection; restoring the old snapshot here would yank it away again.
+  [ "$focus_refused" -eq 0 ] || return 1
   if [ "$skip_restore" -eq 0 ]; then
     fm_backend_herdr_projection_focus_restore "$session" "$before" "pane close" || return 2
   fi

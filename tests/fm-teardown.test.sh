@@ -2741,7 +2741,9 @@ set -u
 printf '%s\n' "$*" >> "${FM_FAKE_HERDR_LOG:?}"
 case "${1:-} ${2:-}" in
   "workspace list")
-    if [ -e "${FM_FAKE_HERDR_RESTORED:?}" ]; then
+    if [ "${FM_FAKE_HERDR_FOCUS_LEASE:-0}" = 1 ] && [ ! -e "${FM_FAKE_HERDR_RESTORED:?}" ]; then
+      printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t2","label":"firstmate/task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":true},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":false}]}}'
+    elif [ -e "${FM_FAKE_HERDR_RESTORED:?}" ]; then
       printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":false}]}}'
     elif [ -e "${FM_FAKE_HERDR_CLOSED:?}" ]; then
       printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":true}]}}'
@@ -2751,6 +2753,7 @@ case "${1:-} ${2:-}" in
     ;;
   "tab list")
     case "$*" in
+      *"--workspace w1"*) printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":false},{"tab_id":"w1:t2","focused":true}]}}' ;;
       *"--workspace w2"*) printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t2","focused":true}]}}' ;;
       *"--workspace w3"*) printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' ;;
       *) printf '%s\n' '{"result":{"tabs":[]}}' ;;
@@ -2758,6 +2761,9 @@ case "${1:-} ${2:-}" in
     ;;
   "status --json")
     printf '%s\n' '{"server":{"running":true}}'
+    ;;
+  "terminal title")
+    printf '%s\n' '{"result":{"reason":"cleared"}}'
     ;;
   "session list")
     printf '%s\n' '{"sessions":[{"name":"fmtest","running":true,"socket_path":"/tmp/fmtest.sock"}]}'
@@ -2796,6 +2802,42 @@ case "${1:-} ${2:-}" in
 esac
 SH
   chmod +x "$case_dir/fakebin/herdr"
+}
+
+test_herdr_projection_teardown_bounds_finished_task_focus() {
+  local case_dir log closed restored
+  case_dir=$(make_case herdr-finished-focus-lease)
+  write_meta "$case_dir" local-only ship
+  configure_herdr_projection_teardown_case "$case_dir"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+  printf 'done [at=10000]: ready\n' > "$case_dir/state/task-x1.status"
+  printf '%s\n' 'version=2' 'task_id=task-x1' 'projection_id=AbCdEfGhIjKlMnOpQrStUv' \
+    "home=$case_dir" 'session=fmtest' 'workspace_id=w1' 'tab_id=w1:t2' 'pane_id=w1:p2' \
+    'parent_workspace_id=w2' 'parent_label=2ndmate-bravo' \
+    'workspace_label=└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv' 'task_label=fm-task-x1' \
+    > "$case_dir/state/task-x1.herdr-presentation"
+  cat > "$case_dir/fakebin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = +%s ]; then printf '%s\n' "$FM_FAKE_HERDR_NOW"; else exec /bin/date "$@"; fi
+SH
+  chmod +x "$case_dir/fakebin/date"
+  if FM_HOME="$case_dir" FM_FAKE_HERDR_FOCUS_LEASE=1 FM_FAKE_HERDR_NOW=10000 \
+    FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"; then
+    fail 'finished-task lease: initial teardown unexpectedly succeeded'
+  fi
+  assert_present "$case_dir/state/task-x1.meta" 'finished-task lease: refusal erased the task record'
+  assert_present "$case_dir/state/task-x1.herdr-focus-lease" 'finished-task lease: teardown did not start the lease'
+  assert_absent "$closed" 'finished-task lease: first attempt closed the watched pane'
+  FM_HOME="$case_dir" FM_FAKE_HERDR_FOCUS_LEASE=1 FM_FAKE_HERDR_NOW=10900 \
+    FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "finished-task lease: expiry failed: $(cat "$case_dir/stderr")"
+  assert_present "$closed" 'finished-task lease: expiry did not close the exact pane'
+  assert_present "$restored" 'finished-task lease: expiry did not focus the launching tab'
+  assert_absent "$case_dir/state/task-x1.meta" 'finished-task lease: successful teardown retained metadata'
+  assert_absent "$case_dir/state/task-x1.herdr-focus-lease" 'finished-task lease: successful teardown retained the timer'
+  pass 'herdr teardown starts the finished-task lease on refusal, hands focus to the launcher at expiry, and retires the timer'
 }
 
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close() {
@@ -4577,6 +4619,7 @@ test_forced_secondmate_herdr_child_preflight_refuses_before_changes
 test_forced_secondmate_teardown_holds_descendant_lifecycle_locks
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed
+test_herdr_projection_teardown_bounds_finished_task_focus
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup

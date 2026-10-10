@@ -2194,6 +2194,178 @@ test_projection_close_allows_stale_active_tab_without_foreground_client() {
   pass "herdr presentation focus: cleanup closes a persisted-focused tab when no live client is attached"
 }
 
+# Stateful CLI fixture: every close runs in a fresh shell, as teardown retries
+# do. The fake clock advances the public 15-minute lease without real sleeps.
+make_focus_lease_case() { # <name> -> case directory
+  local dir="$TMP_ROOT/focus-lease-$1"
+  mkdir -p "$dir/state" "$dir/fakebin"
+  printf '10000\n' > "$dir/clock"
+  printf 'w9:t2\n' > "$dir/focus"
+  printf 'w1:t2\n' > "$dir/parent-tab"
+  printf 'cleared\n' > "$dir/reason"
+  : > "$dir/log"
+  printf '%s\n' 'kind=ship' 'spawn_gen=example-generation' 'window=fmtest:w9:p2' \
+    'herdr_session=fmtest' 'herdr_workspace_id=w9' 'herdr_tab_id=w9:t2' \
+    'herdr_pane_id=w9:p2' > "$dir/state/example.meta"
+  printf 'done [at=10000]: ready\n' > "$dir/state/example.status"
+  : > "$dir/state/example.herdr-presentation"
+  bash -c '
+    . "$1/bin/backends/herdr.sh"
+    token=AbCdEfGhIjKlMnOpQrStUv
+    fm_backend_herdr_projection_journal_write_v2 "$2/state/example.herdr-presentation" \
+      example "$token" "$2" fmtest w9 w9:t2 w9:p2 w1 firstmate \
+      "$(fm_backend_herdr_projection_workspace_label example "$token")" fm-example
+  ' _ "$ROOT" "$dir" || return 1
+  cat > "$dir/fakebin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = +%s ]; then cat "$FM_LEASE_CASE/clock"; else exec /bin/date "$@"; fi
+SH
+  cat > "$dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+cd "$FM_LEASE_CASE" || exit 1
+printf '%s\n' "$*" >> log
+focus=$(cat focus)
+parent=$(cat parent-tab)
+case "$1 $2" in
+  'status --json') printf '{"server":{"running":true}}\n' ;;
+  'terminal title') jq -cn --arg reason "$(cat reason)" '{result:{reason:$reason}}' ;;
+  'workspace list')
+    [ ! -e unknown-focus ] || { printf '{}\n'; exit 0; }
+    jq -cn --arg focus "$focus" --arg parent "$parent" \
+      --arg label "$(sed -n 's/^workspace_label=//p' state/example.herdr-presentation)" \
+      --arg parent_label "$(if [ -e wrong-parent-label ]; then printf other; else printf firstmate; fi)" \
+      --argjson missing "$(if [ -e missing-parent ]; then printf true; else printf false; fi)" '
+      {result:{workspaces: ([{workspace_id:"w9",active_tab_id:"w9:t2",label:$label,focused:($focus == "w9:t2")},
+        {workspace_id:"w8",active_tab_id:"w8:t1",label:"other",focused:($focus == "w8:t1")}]
+        + if $missing then [] else [{workspace_id:"w1",active_tab_id:$parent,label:$parent_label,focused:($focus == $parent)}] end)}}'
+    ;;
+  'tab list')
+    case "$4" in
+      w9) printf '{"result":{"tabs":[{"tab_id":"w9:t1","focused":false},{"tab_id":"w9:t2","focused":true}]}}\n' ;;
+      w8) printf '{"result":{"tabs":[{"tab_id":"w8:t1","focused":true}]}}\n' ;;
+      w1) jq -cn --arg tab "$parent" '{result:{tabs:[{tab_id:$tab,focused:true}]}}' ;;
+      *) exit 1 ;;
+    esac ;;
+  'tab get')
+    [ ! -e wrong-parent-tab ] || exit 1
+    jq -cn --arg tab "$3" '{result:{tab:{tab_id:$tab,workspace_id:"w1"}}}' ;;
+  'tab focus')
+    [ ! -e focus-fails ] || exit 1
+    printf '%s\n' "$3" > focus ;;
+  'pane get')
+    if [ -e closed ]; then printf '{"error":{"code":"pane_not_found"}}\n' >&2; exit 1; fi
+    if [ "$focus" = "$parent" ] && [ -e late-focus ]; then
+      printf 'w9:t2\n' > focus
+      rm late-focus
+    fi
+    printf '{"result":{"pane":{"pane_id":"w9:p2","tab_id":"w9:t2","workspace_id":"w9"}}}\n' ;;
+  'pane close') [ ! -e close-fails ] || exit 1; : > closed ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$dir/fakebin/date" "$dir/fakebin/herdr"
+  printf '%s' "$dir"
+}
+
+close_focus_lease_case() { # <case> [session]
+  PATH="$1/fakebin:$PATH" FM_LEASE_CASE="$1" bash -c '
+    . "$1/bin/backends/herdr.sh"
+    fm_backend_herdr_projection_close_finished_task "$3" w9:p2 "$2/state" example "$2"
+  ' _ "$ROOT" "$1" "${2:-fmtest}" > "$1/stdout" 2> "$1/stderr"
+}
+
+refuse_focus_lease_case() { # <case> [session]
+  if close_focus_lease_case "$@"; then fail "focus lease $(basename "$1") unexpectedly closed: $(cat "$1/stderr")"; fi
+  [ ! -e "$1/closed" ] || fail 'focus lease refusal removed the target pane'
+}
+
+test_finished_task_focus_lease_expires_and_uses_current_parent_tab() {
+  local dir
+  dir=$(make_focus_lease_case expiry) || fail 'could not build focus lease fixture'
+  refuse_focus_lease_case "$dir"
+  assert_not_contains "$(cat "$dir/log")" 'tab focus' 'first refusal switched focus'
+  printf '10899\n' > "$dir/clock"
+  refuse_focus_lease_case "$dir"
+  assert_not_contains "$(cat "$dir/log")" 'tab focus' 'unexpired lease switched focus'
+  printf '10900\n' > "$dir/clock"
+  printf 'w1:t3\n' > "$dir/parent-tab"
+  close_focus_lease_case "$dir" || fail "expired lease failed: $(cat "$dir/stderr")"
+  [ -e "$dir/closed" ] || fail 'expired lease did not close the pane'
+  [ "$(cat "$dir/focus")" = w1:t3 ] || fail 'expired lease did not preserve the current parent tab'
+  [ ! -e "$dir/state/example.herdr-focus-lease" ] || fail 'successful handoff retained its lease'
+  assert_contains "$(cat "$dir/log")" 'tab focus w1:t3' 'lease used a remembered or neighboring tab'
+  pass 'herdr finished-task focus lease: recent viewer refuses; expiry switches to the current exact launching tab and closes'
+}
+
+test_finished_task_focus_lease_fails_closed_and_resets() {
+  local dir mode
+  for mode in unknown-client unknown-focus missing-parent wrong-parent-label wrong-parent-tab focus-fails late-focus; do
+    dir=$(make_focus_lease_case "$mode") || fail 'could not build focus lease fixture'
+    refuse_focus_lease_case "$dir"
+    printf '10900\n' > "$dir/clock"
+    case "$mode" in
+      unknown-client) printf 'unexpected\n' > "$dir/reason" ;;
+      unknown-focus) : > "$dir/unknown-focus" ;;
+      *) : > "$dir/$mode" ;;
+    esac
+    refuse_focus_lease_case "$dir"
+    assert_not_contains "$(cat "$dir/log")" 'pane close' "$mode allowed an expired close"
+    [ ! -e "$dir/state/example.herdr-focus-lease" ] || fail "$mode retained its expired deadline"
+    if [ "$mode" = late-focus ]; then
+      [ "$(cat "$dir/focus")" = w9:t2 ] || fail 'refused close restored over the viewer’s fresh target selection'
+    fi
+    if [ "$mode" != late-focus ] && [ "$mode" != focus-fails ]; then
+      assert_not_contains "$(cat "$dir/log")" 'tab focus' "$mode moved focus despite an ambiguous probe/binding"
+    fi
+    case "$mode" in
+      unknown-client|unknown-focus|late-focus)
+        [ ! -e "$dir/state/example.herdr-focus-lease" ] || fail "$mode retained its expired lease"
+        printf 'cleared\n' > "$dir/reason"
+        rm -f "$dir/unknown-focus"
+        printf 'w9:t2\n' > "$dir/focus"
+        printf '10901\n' > "$dir/clock"
+        refuse_focus_lease_case "$dir"
+        ;;
+    esac
+  done
+  pass 'herdr finished-task focus lease: unknown probes, absent or mismatched parent, failed handoff, and a late focus change keep the pane'
+}
+
+test_finished_task_focus_lease_resets_on_binding_clock_and_focus_changes() {
+  local dir mode
+  for mode in generation parent home unfinished legacy rollback observed-focus; do
+    dir=$(make_focus_lease_case "reset-$mode") || fail 'could not build focus lease fixture'
+    refuse_focus_lease_case "$dir"
+    printf '10900\n' > "$dir/clock"
+    case "$mode" in
+      generation) printf 'kind=ship\nspawn_gen=new-generation\nwindow=fmtest:w9:p2\nherdr_session=fmtest\nherdr_workspace_id=w9\nherdr_tab_id=w9:t2\nherdr_pane_id=w9:p2\n' > "$dir/state/example.meta" ;;
+      parent) sed 's/^parent_workspace_id=.*/parent_workspace_id=w8/' "$dir/state/example.herdr-presentation" > "$dir/journal"; mv "$dir/journal" "$dir/state/example.herdr-presentation" ;;
+      home) sed 's|^home=.*|home=/other-home|' "$dir/state/example.herdr-presentation" > "$dir/journal"; mv "$dir/journal" "$dir/state/example.herdr-presentation" ;;
+      unfinished) printf 'working [at=10900]: resumed\n' >> "$dir/state/example.status" ;;
+      legacy) printf 'version=1\ntask_id=example\nprojection_id=AbCdEfGhIjKlMnOpQrStUv\n' > "$dir/state/example.herdr-presentation" ;;
+      rollback)
+        printf '10500\n' > "$dir/clock"; refuse_focus_lease_case "$dir"
+        printf '10300\n' > "$dir/clock"; refuse_focus_lease_case "$dir"
+        printf '10900\n' > "$dir/clock" ;;
+      observed-focus)
+        printf 'w8:t1\n' > "$dir/focus"; : > "$dir/close-fails"
+        refuse_focus_lease_case "$dir"
+        rm "$dir/close-fails"; : > "$dir/log"
+        printf 'w9:t2\n' > "$dir/focus" ;;
+    esac
+    refuse_focus_lease_case "$dir"
+    assert_not_contains "$(cat "$dir/log")" 'tab focus' "$mode reused an expired lease"
+    assert_not_contains "$(cat "$dir/log")" 'pane close' "$mode authorized a target close"
+  done
+  dir=$(make_focus_lease_case session) || fail 'could not build focus lease fixture'
+  refuse_focus_lease_case "$dir"
+  printf '10900\n' > "$dir/clock"
+  refuse_focus_lease_case "$dir" other-session
+  assert_not_contains "$(cat "$dir/log")" 'tab focus' 'another session reused the lease'
+  pass 'herdr finished-task focus lease: binding, completion, clock rollback, and observed focus changes reset expiry; other sessions cannot reuse it'
+}
+
 test_projection_close_reports_focus_restore_failure() {
   local dir log resp fb out status
   dir="$TMP_ROOT/projection-focus-restore-failure"; mkdir -p "$dir/responses"
@@ -6076,6 +6248,9 @@ test_projection_close_restores_exact_prior_focus
 test_projection_close_refuses_active_tab
 test_projection_close_refuses_unknown_foreground_reason
 test_projection_close_allows_stale_active_tab_without_foreground_client
+test_finished_task_focus_lease_expires_and_uses_current_parent_tab
+test_finished_task_focus_lease_fails_closed_and_resets
+test_finished_task_focus_lease_resets_on_binding_clock_and_focus_changes
 test_projection_close_reports_focus_restore_failure
 test_projection_close_rechecks_required_agent_state_at_boundary
 test_projection_close_rechecks_foreground_client_after_agent_validation
