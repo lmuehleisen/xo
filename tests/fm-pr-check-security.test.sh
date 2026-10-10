@@ -146,7 +146,20 @@ case "${1:-} ${2:-}" in
   "api graphql")
     if [ "${FM_TEST_READINESS:-0}" = 1 ]; then
       [ "${FM_TEST_THREAD_FAIL:-0}" = 0 ] || exit 1
-      printf '%s' "${FM_TEST_THREAD_BLOCKERS:-}"
+      if [ "${FM_TEST_THREAD_BODY+x}" = x ]; then
+        prog=
+        prev=
+        for arg in "$@"; do
+          [ "$prev" != --jq ] || prog=$arg
+          prev=$arg
+        done
+        jq -n --arg body "$FM_TEST_THREAD_BODY" '{data:{repository:{pullRequest:{reviewThreads:{nodes:[
+          {isResolved:false, comments:{pageInfo:{hasNextPage:false},nodes:[
+            {author:{__typename:"Bot",login:"review-bot"},url:"https://github.com/o/r/pull/1#discussion_r1",path:"bin/tool.sh",line:3,body:$body}]}}
+        ]}}}}}' | jq -r "$prog" || exit 1
+      else
+        printf '%s' "${FM_TEST_THREAD_BLOCKERS:-}"
+      fi
       exit 0
     fi
     printf '%s\n' \
@@ -3826,7 +3839,7 @@ SH
     assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "unchanged PR repeated its wake"
     ack_watcher_cycle "$state" || fail "could not acknowledge duplicate check cycle"
     if [ "$bucket" = none ]; then
-      FM_TEST_THREAD_BLOCKERS=$'BOT REVIEW THREAD: https://github.com/o/r/pull/1#discussion_r1\nexample file:1:\nDiscuss BOT REVIEW SETTLE: wait 1s after latest PR activity before readiness in this comment.' readiness_cycle "$dir"
+      FM_TEST_THREAD_BODY=$'Discuss BOT REVIEW SETTLE: inside this comment.\nBOT REVIEW SETTLE: wait 1s after latest PR activity before readiness\nCHECKS: none reported yet' readiness_cycle "$dir"
       assert_grep "PR readiness recheck: $url" "$dir/watch.out" "no-check PR bot finding was stranded"
       assert_grep "PR readiness recheck: $url" "$state/.wake-queue" "settle text in a comment suppressed the durable wake"
       assert_no_grep 'PR ready' "$dir/watch.out" "recheck claimed bot findings were cleared"
