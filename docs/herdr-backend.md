@@ -303,7 +303,7 @@ Both behaviors are fixed in Herdr 0.8.0, and the exact rules live in the adapter
 Projected cleanup therefore:
 
 - Runs under the same session lock.
-- Refuses to delete the tab a live foreground client is viewing.
+- Protects a foreground client's focused tab, with the finished-task focus lease described below.
 - Treats a workspace-emptying close as a focus-safe removal.
 
 A focus-safe removal takes these steps:
@@ -315,6 +315,14 @@ A focus-safe removal takes these steps:
 
 The persisted `.focused` pointer is not a live viewer.
 When `herdr terminal title clear` reports `no_foreground_client`, cleanup proceeds on that tab because no human is attached, and skips restoration of the tab it destroys.
+
+Finished projected tasks with an exact version 2 launching-workspace binding have a 15-minute focus lease beginning at their first refused cleanup.
+When that lease expires, teardown switches to the verified launching workspace's current tab before closing the finished task.
+This bounds unchanged focus, not input inactivity: Herdr exposes no public viewer activity or liveness signal, and its remote bridge timeout is renewed by server output.
+A person quietly reading the finished tab for 15 minutes can also have their view switched away.
+The allowance applies to local and remote foreground viewers alike because the public API does not distinguish them.
+Observed focus changes, unknown probes, or a changed task binding reset the lease; unfinished tasks and projections without an exact launching-workspace binding retain the active-tab refusal.
+`bin/backends/herdr.sh` owns the lease record, eligibility checks, expiry, and final focus checkpoints.
 
 Herdr currently has no atomic client-aware mutation.
 So a fresh target-focus and foreground-client checkpoint runs immediately before each move, signal, or explicit close.
