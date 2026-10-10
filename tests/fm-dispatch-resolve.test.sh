@@ -1347,6 +1347,31 @@ assert_contains "$out" 'status: escalate' "a measured zero ties the unmetered ne
 assert_contains "$out" 'genuine spendPriority tie' "unmetered ties use the normal explicit tie escalation"
 pass "unmetered routes use the pace-neutral boundary without starving positive measured routes or breaking ties by class order"
 
+# Configured unmetered scores rank alongside measured scores, with zero as the
+# compatible default. Distinct scores decide before live-count tie-breaking.
+PRIORITY_RULES="$TMP_ROOT/priority-rules.json"
+jq '.rules = [{lane:"priority", when:"ordinary work", classes:["swe-2", "sol-high", "muse-spark"]}] |
+  .classes["muse-spark"].spend_priority = 5' "$TEMPLATE" > "$PRIORITY_RULES"
+cp "$PRIORITY_RULES" "$RULES"
+lane_quota codex=0.84
+run_lane code out err "$BRIEF" --lane priority --project xo
+expect_code 0 "$code" "a configured unmetered priority resolves successfully"
+assert_contains "$out" "profile: --harness 'opencode' --model 'opencode/muse-spark-1.3-contributor-free'" "unmetered priority 5 outranks paid priority 0.84"
+assert_contains "$out" 'quota=unmetered (declared)  spendPriority=5  runway=unmetered  -> eligible' "the configured score is printed"
+assert_contains "$out" 'scope=all_models  remaining=60%  spendPriority=0.84' "the measured score is unchanged"
+assert_contains "$out" 'class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=0' "an absent spend_priority still yields zero"
+
+jq '.classes["swe-2"].spend_priority = 3' "$PRIORITY_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane priority --project xo
+assert_contains "$out" 'class: muse-spark  family=muse' "the higher unmetered score wins regardless of class order"
+jq '.classes["swe-2"].spend_priority = 6' "$PRIORITY_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane priority --project xo
+assert_contains "$out" 'class: swe-2  family=swe' "reversing the unmetered score preference reverses the winner"
+jq '.classes["swe-2"].spend_priority = 5' "$PRIORITY_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane priority --project xo
+assert_contains "$out" 'genuine spendPriority tie' "equal positive unmetered scores retain tie escalation"
+pass "unmetered spend_priority controls ranking and display without changing measured scores or ties"
+
 # Live counts are home-local, count ordinary records regardless of status,
 # and match harness/model rather than effort or a stale model_family.
 LIVE_RULES="$TMP_ROOT/live-rules.json"
@@ -1376,6 +1401,21 @@ assert_contains "$out" "profile: --harness 'devin' --model 'swe-2-max'" "an exac
 assert_contains "$out" 'tie_break: swe-2 has fewest live workers (0) among spendPriority ties' "the live-count tie-break is disclosed"
 assert_contains "$out" 'class=muse-spark family=muse  provider=opencode  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible  live=1' "without a cap a matching finished ordinary task leaves the class eligible"
 assert_contains "$out" 'class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=0  runway=unmetered  -> eligible  live=0' "secondmates and unreadable records do not count"
+
+jq '.classes["muse-spark"].spend_priority = 5 | .classes["swe-2"].spend_priority = 5' "$LIVE_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane live --project xo
+assert_contains "$out" 'tie_break: swe-2 has fewest live workers (0) among spendPriority ties' "equal positive unmetered scores still prefer fewer live workers"
+jq '.classes["muse-spark"].spend_priority = 5 | .classes["muse-spark"].max_live = 1' "$PRIORITY_RULES" > "$RULES"
+lane_quota codex=0.84
+run_lane code out err "$BRIEF" --lane priority --project xo
+assert_contains "$out" 'class=muse-spark family=muse  -> not eligible: at live cap 1/1' "a high unmetered score does not bypass max_live"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "the paid route wins when the preferred free class is capped"
+jq '.classes["muse-spark"].live_cap_group = "shared" |
+  .live_cap_groups = {shared:{max_live:1}}' "$PRIORITY_RULES" > "$RULES"
+run_lane code out err "$BRIEF" --lane priority --project xo
+assert_contains "$out" 'not eligible: at live cap group shared 1/1' "a high unmetered score does not bypass live_cap_group"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'" "the paid route wins when the preferred free group is capped"
+lane_quota codex=-0.2 devin=-0.4
 
 jq '.classes["muse-spark"].max_live = 1' "$LIVE_RULES" > "$RULES"
 run_lane code out err "$BRIEF" --lane live --project xo
@@ -1540,6 +1580,26 @@ run_lane code out err "$BRIEF" --lane scoped --project xo
 assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "an ungated lane ranks the same class without the pace condition"
 pass "the Gemini pace gate applies only where the lane declares it"
 
+# Changing a synthetic score never changes pace, on either side of the gate.
+for priority in 0 5 -5; do
+  jq --argjson priority "$priority" '.classes["muse-spark"].spend_priority = $priority |
+    .rules = [{lane:"pace", when:"ordinary work", classes:["muse-spark", "sol-high", {class:"gemini-flash-high", gate:"others-ahead-of-pace"}]}]' "$TEMPLATE" > "$RULES"
+  lane_quota codex=-0.2 agy=0.4
+  run_lane code out err "$BRIEF" --lane pace --project xo
+  assert_contains "$out" 'not eligible: pace gate closed: muse-spark not spending ahead of pace' "ungated unmetered priority $priority keeps the gate closed"
+
+  jq --argjson priority "$priority" '.classes["swe-2"].spend_priority = $priority |
+    .rules = [{lane:"pace", when:"ordinary work", classes:["sol-high", {class:"swe-2", gate:"others-ahead-of-pace"}]}]' "$TEMPLATE" > "$RULES"
+  run_lane code out err "$BRIEF" --lane pace --project xo
+  assert_contains "$out" "class=swe-2 family=swe  provider=devin  quota=unmetered (declared)  spendPriority=$priority  runway=unmetered  -> eligible" "gated unmetered priority $priority stays pace-neutral when others are ahead"
+  lane_quota codex=0
+  run_lane code out err "$BRIEF" --lane pace --project xo
+  assert_contains "$out" 'not eligible: pace gate closed: sol-high not spending ahead of pace' "gated unmetered priority $priority cannot bypass a closed gate"
+done
+cp "$TEMPLATE" "$RULES"
+lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
+pass "configured unmetered priorities leave pace gates unchanged"
+
 # Ordered lanes stop at the first class with any eligible route.
 run_lane code out err "$BRIEF" --lane judgment
 assert_contains "$out" "profile: --harness 'claude' --model 'claude-opus-5-5' --effort 'xhigh'" "the first viable class wins over a higher-priority later class"
@@ -1697,6 +1757,30 @@ jq '.classes["muse-spark"].unmetered = "yes"' "$TEMPLATE" > "$RULES"
 run_lane code out err "$BRIEF" --lane bulk
 expect_code 2 "$code" "an invalid unmetered class value is refused"
 assert_contains "$err" 'class unmetered must be a boolean' "the unmetered type error is explicit"
+for bad_priority in '"5"' null true '{}' '[]' 1e309; do
+  jq --argjson priority "$bad_priority" '.classes["muse-spark"].spend_priority = $priority' "$TEMPLATE" > "$RULES"
+  run_lane code out err "$BRIEF" --lane bulk
+  expect_code 2 "$code" "invalid spend_priority $bad_priority is refused"
+  assert_contains "$err" 'class spend_priority must be a finite number' "the spend_priority type error is explicit"
+done
+for metered_flag in false null; do
+  jq --argjson flag "$metered_flag" '.classes["muse-spark"].unmetered = $flag |
+    (if $flag == null then del(.classes["muse-spark"].unmetered) else . end) |
+    .classes["muse-spark"].spend_priority = 5' "$TEMPLATE" > "$RULES"
+  run_lane code out err "$BRIEF" --lane bulk
+  expect_code 2 "$code" "spend_priority without unmetered true is refused"
+  assert_contains "$err" 'class spend_priority requires unmetered: true' "the unmetered requirement is explicit"
+done
+jq '.classes["muse-spark"].routes[0].spend_priority = 5' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane bulk
+expect_code 2 "$code" "spend_priority on a route is refused"
+assert_contains "$err" 'spend_priority belongs on the class, not on a route' "the priority belongs to the class"
+for profile_config in '{"rules":[{"when":"Coding","use":{"harness":"codex","spend_priority":5}}]}' '{"default":{"harness":"codex","spend_priority":5}}'; do
+  printf '%s\n' "$profile_config" > "$RULES"
+  TYPESAFE_API_KEY=$KEY run_lane code out err "$BRIEF"
+  expect_code 2 "$code" "spend_priority on an ordinary profile is refused"
+  assert_contains "$err" 'spend_priority must be declared on a lane class, not a profile' "the priority is lane-only"
+done
 jq '.classes["muse-spark"].routes[0].floor = {scope:"all_models", min_percent:50}' "$TEMPLATE" > "$RULES"
 run_lane code out err "$BRIEF" --lane bulk
 expect_code 2 "$code" "an unmetered class cannot declare a quota floor"

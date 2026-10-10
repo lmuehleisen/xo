@@ -1246,6 +1246,7 @@ Lane rules and profile rules can share one file, and a file with no `classes` ke
 | --- | --- |
 | Class `family` | Required; the model family a second opinion excludes. A harness and model routed by more than one class must keep one family. |
 | Class `unmetered` | Optional boolean; `true` declares every route in the class free of quota consumption, and the class's routes must not declare quota floors. |
+| Class `spend_priority` | Optional finite number, valid only with `unmetered: true`; supplies the synthetic ranking score, defaulting to `0`. |
 | Class `max_live` | Optional positive integer; excludes the class once its live worker count reaches the cap. Absent means no cap. |
 | Top-level `live_cap_groups` | Optional map of named groups, each containing only a required positive integer `max_live`. |
 | Class `live_cap_group` | Optional; names a declared `live_cap_groups` entry whose cap applies across all member classes, alongside any class `max_live`. |
@@ -1265,16 +1266,17 @@ A lane rule's `when`, `approval`, `min_confidence`, and `floor` keep their meani
 
 Every class route is evaluated like a profile, with a class's `unmetered` flag replacing only provider quota evidence.
 
-- A class with `unmetered: true` replaces provider quota evidence with the explicit label `unmetered (declared)` and a synthetic `spendPriority` of `0`; it does not claim a measured remaining percentage or runway.
-- This fixed score is the pace-neutral boundary: positive measured scores rank ahead and negative scores rank behind.
-- The synthetic zero counts as not spending ahead of pace, so an unmetered route cannot open an `others-ahead-of-pace` gate.
+- A class with `unmetered: true` replaces provider quota evidence with the explicit label `unmetered (declared)` and its `spend_priority` as synthetic `spendPriority`; it does not claim a measured remaining percentage or runway.
+- Absent `spend_priority` keeps the score at `0`, so positive measured scores rank ahead and negative scores rank behind; setting it to `5`, for example, prefers the class over eligible routes with lower scores.
+- An unmetered route always counts as not spending ahead of pace, regardless of its synthetic score, so changing `spend_priority` cannot open or close an `others-ahead-of-pace` gate.
 - Unmetered affects quota evidence only; class live caps, data policies, experiment sampling, approval, lane ordering, and other eligibility gates still apply.
 
 - An `ordered` lane takes the first class with any eligible route and ranks only inside that class; an eligible but unranked route keeps its class first rather than falling through to the next class.
 - A `pool` lane ranks every eligible route of every class together.
 - A class at its `max_live` cap or its `live_cap_group` cap is not eligible, so an ordered lane falls through and a pool lane ranks the remaining routes; [`fm-dispatch-resolve.sh`](../bin/fm-dispatch-resolve.sh)'s header owns the metadata counting and advisory-check contract.
 - An exact `spendPriority` tie across classes prefers the class with the fewest live workers and discloses the tie-break; any surviving tie escalates, including tied routes within one class.
-- A class gated `others-ahead-of-pace` stays eligible only while every rankable route of the lane's ungated classes has a negative `spendPriority` (spending ahead of pace) and the gated class's own best route does not; with no rankable ungated route the gate stays closed.
+  Distinct `spend_priority` values avoid ties between unmetered classes.
+- A class gated `others-ahead-of-pace` stays eligible only while every rankable route of the lane's ungated classes is metered with a negative `spendPriority` (spending ahead of pace) and the gated class's own best route is not ahead of pace; with no rankable ungated route the gate stays closed.
 - An experiment class is sampled from the task text's checksum, so the same brief always samples the same way; a sampled experiment with a rankable route takes the task, and an unsampled one is not eligible.
 - A class with a `data_policy` is eligible only when the task's project is in `allow_projects` or one of its data tags is in `allow_tags`, and never when one of its data tags is in `deny_tags`.
 - A second opinion resolves the originating task's lane again with that task's model family excluded; every experiment class is excluded from a second opinion too.

@@ -43,8 +43,9 @@
 #
 # Lanes: a rule with `classes` is a lane (bin/fm-dispatch-lanes-lib.sh owns its
 #   structural checks). Each class route is evaluated like a profile, except a
-#   class declared unmetered receives a fixed neutral spendPriority of 0 and
-#   skips provider quota evidence; its other eligibility gates still apply.
+#   class declared unmetered receives its configured spend_priority (default 0)
+#   as synthetic spendPriority and skips provider quota evidence; its other
+#   eligibility gates still apply.
 #   Code picks: a sampled experiment class with a rankable route first; in
 #   an `ordered` lane the first class with any eligible route, ranked inside
 #   that class; in a `pool` lane the spendPriority argmax over every class.
@@ -60,9 +61,12 @@
 #   These checks are advisory; fm-spawn.sh does not enforce live caps.
 #   Exact spendPriority ties across classes prefer fewer live workers;
 #   ties that remain escalate, including ties between routes of one class.
+#   Distinct unmetered spend_priority values avoid ties between those classes.
 #   A class gated `others-ahead-of-pace` stays eligible only while every
-#   rankable route of the lane's ungated classes has spendPriority below 0 and
-#   its own best route has spendPriority of 0 or more. An experiment class is
+#   rankable route of the lane's ungated classes is metered with spendPriority
+#   below 0 and its own best route is not ahead of pace. Unmetered routes
+#   always count as pace-neutral, regardless of their configured score, so
+#   changing spend_priority cannot change a pace gate. An experiment class is
 #   sampled when the brief text's cksum modulo 100 is below share x 100, so a
 #   rerun on the same brief gives the same answer. A class bound to a data
 #   policy is not eligible unless --project is in its allow_projects or a
@@ -275,6 +279,7 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson verified_harn
   elif any((.rules // [])[]; (.when | type) != "string" or (.when | length) == 0) then "each rule needs non-empty when"
   elif (dispatch_lanes_error // null) != null then dispatch_lanes_error
   elif any(([(.rules // [])[] | profiles(.use)[]] + profiles(.default // null))[]; type == "object" and has("unmetered")) then "unmetered must be declared on a lane class, not a profile"
+  elif any(([(.rules // [])[] | profiles(.use)[]] + profiles(.default // null))[]; type == "object" and has("spend_priority")) then "spend_priority must be declared on a lane class, not a profile"
   elif any((.rules // [])[]; (has("classes") | not) and (profiles(.use) | length) == 0) then "each rule needs at least one use profile"
   elif any((.rules // [])[]; has("approval") and .approval != "captain") then "approval must be \"captain\" when present"
   elif any((.rules // [])[]; has("min_confidence") and ((.min_confidence | type) != "number" or .min_confidence < 0 or .min_confidence > 1)) then "min_confidence must be a number from 0 through 1 when present"
@@ -556,11 +561,11 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     end;
   def evidence($rows):
     $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), usableRunwaySeconds: (.runway.usableRunwaySeconds // null), spendPriority: (.selection.spendPriority // null)});
-  def evaluate_route($c; $unmetered):
+  def evaluate_route($c; $unmetered; $spend_priority):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
     elif $unmetered then
-      {profile: $c, provider: $p, unmetered: true, spendPriority: 0, eligible: true, reason: "unmetered (declared)"}
+      {profile: $c, provider: $p, unmetered: true, spendPriority: $spend_priority, eligible: true, reason: "unmetered (declared)"}
     elif prov($p; $lane) == null then
       {profile: $c, provider: $p, eligible: true, unranked: true,
        reason: (if any($q.providers[]; .provider == $p)
@@ -622,7 +627,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
     end;
-  def evaluate($c): evaluate_route($c; false);
+  def evaluate($c): evaluate_route($c; false; 0);
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -631,6 +636,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def declared_confidence($c): rule_at($c) as $x | $x != null and ($x | has("min_confidence"));
   def confidence_floor($c): if declared_confidence($c) then rule_at($c).min_confidence else ($floor | tonumber) end;
   def rankable: .eligible and ((.unranked // false) | not);
+  # Synthetic unmetered scores rank routes but never measure quota pace.
+  def ahead_of_pace: .unmetered != true and .spendPriority < 0;
   def blocked($reason): . + {eligible: false, unranked: false, unknown: false, reason: $reason};
   # A data policy admits its class only for an allowed project or data tag, and
   # never with a denied tag.
@@ -659,7 +666,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     [dispatch_lane_refs($rule)[] | . as $ref | ($cfg.classes[$ref.class]) as $def |
       {name: $ref.class, gate: ($ref.gate // null), family: $def.family,
        experiment: ($def.experiment // null), data_policy: ($def.data_policy // null),
-       unmetered: ($def.unmetered // false), routes: $def.routes,
+       unmetered: ($def.unmetered // false), spend_priority: ($def.spend_priority // 0), routes: $def.routes,
        max_live: ($def.max_live // null),
        live: live_count($def.routes), live_cap_group: ($def.live_cap_group // null),
        group_live: ($group_counts[$def.live_cap_group // ""] // null),
@@ -667,7 +674,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       | . + {excluded: class_exclusion(.)}
       | . as $k
       | . + {candidates: [.routes[] |
-          (if $k.excluded != null then {profile: ., eligible: false, reason: $k.excluded} else evaluate_route(.; $k.unmetered) end)
+          (if $k.excluded != null then {profile: ., eligible: false, reason: $k.excluded} else evaluate_route(.; $k.unmetered; $k.spend_priority) end)
           + {class: $k.name, family: $k.family, live: $k.live, max_live: $k.max_live,
              live_cap_group: $k.live_cap_group, group_live: $k.group_live, group_max_live: $k.group_max_live}
           + (if $k.experiment != null then {experiment: true} else {} end)]}
@@ -677,10 +684,10 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       if .gate == "others-ahead-of-pace" and .excluded == null then
         ([.candidates[] | select(rankable)] | max_by(.spendPriority)) as $own |
         (if ($others | length) == 0 then "pace gate closed: no ungated class in the lane has a rankable spendPriority"
-         elif any($others[]; .spendPriority >= 0) then
-           "pace gate closed: \([$others[] | select(.spendPriority >= 0) | .class] | unique | join(", ")) not spending ahead of pace"
+         elif any($others[]; ahead_of_pace | not) then
+           "pace gate closed: \([$others[] | select(ahead_of_pace | not) | .class] | unique | join(", ")) not spending ahead of pace"
          elif $own == null then "pace gate closed: this class has no rankable spendPriority"
-         elif $own.spendPriority < 0 then "pace gate closed: this class is itself spending ahead of pace"
+         elif ($own | ahead_of_pace) then "pace gate closed: this class is itself spending ahead of pace"
          else null end) as $closed |
         if $closed == null then . + {gate_open: true}
         else .candidates |= map(if .eligible then blocked($closed) else . end) end
@@ -828,7 +835,7 @@ TEXT=$(jq -r '
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
       + (if .class then "  class=\(.class | flat) family=\(.family | flat)" + (if .experiment then " experiment" else "" end) else "" end)
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
-      + (if .unmetered then "  quota=unmetered (declared)  spendPriority=0  runway=unmetered"
+      + (if .unmetered then "  quota=unmetered (declared)  spendPriority=\(show(.spendPriority))  runway=unmetered"
          elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
