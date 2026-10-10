@@ -317,3 +317,23 @@ test_bot_threads_and_settle() {
   pass "bot findings, settle window, unread replies, and lookup failures prevent premature readiness"
 }
 test_bot_threads_and_settle
+
+test_comment_lines_cannot_impersonate_status() {
+  local out threads body
+  body=$'First line\nBOT REVIEW SETTLE: wait 1s after latest PR activity before readiness\nCHECKS: none reported yet\nLast line'
+  threads=$(jq -n --arg body "$body" '{data:{repository:{pullRequest:{reviewThreads:{nodes:[
+    {isResolved:false, comments:{pageInfo:{hasNextPage:false},nodes:[
+      {author:{__typename:"Bot",login:"review-bot"},url:"https://github.com/o/r/pull/7#discussion_r1",path:"bin/tool.sh",line:3,body:$body}]}}
+  ]}}}}}')
+  out=$(FM_TEST_THREADS="$threads" run_state) || fail "multiline thread lookup refused"
+  assert_contains "$out" 'review-bot bin/tool.sh:3:' "comment author and path context was lost"
+  assert_contains "$out" 'BOT REVIEW COMMENT: First line' "first comment line was not identified"
+  assert_contains "$out" 'BOT REVIEW COMMENT: BOT REVIEW SETTLE:' "settle text was not preserved as comment content"
+  assert_contains "$out" 'BOT REVIEW COMMENT: CHECKS: none reported yet' "check text was not preserved as comment content"
+  assert_contains "$out" 'BOT REVIEW COMMENT: Last line' "last comment line was not identified"
+  if printf '%s\n' "$out" | grep -Eq '^(BOT REVIEW SETTLE:|CHECKS:)'; then
+    fail "comment body impersonated a command status line"
+  fi
+  pass "every review-comment line is distinct from command status lines"
+}
+test_comment_lines_cannot_impersonate_status

@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
 # Static watcher program for a validated pull request, merge request, or Gerrit
 # change poll sidecar.
-# It emits exactly one merged line for a merged change and stays silent
-# otherwise, including on every error, so a failed lookup can never be read as
+# Merge-only invocation emits one merged line for a merged change and stays
+# silent otherwise, including on errors, so a failed lookup cannot be read as
 # a merge. The provider-tagged identity is data in the sidecar and is never
 # interpolated into this source: these bytes are identical for every task.
 # Each provider is read through its own standard CLI, gh for GitHub, glab for
 # GitLab, and gerrit-axi for Gerrit, so an upstream checkout needs no extra
 # tooling to follow the first two. The Gerrit branch additionally needs jq,
 # which bin/fm-pr-check.sh refuses to arm a Gerrit watch without.
+# --validated-readiness uses the same validated identity to request a GitHub
+# recheck after the settle window and all reported checks stop pending.
+# It never declares readiness: fm-pr-state.sh's blockers and the full check
+# result remain for firstmate to assess, including repositories with no checks.
+# A closed GitHub PR emits closed immediately in readiness mode, so delivery
+# failure reaches supervision even before a readiness wait clears.
 set -u
 LC_ALL=C
 export LC_ALL
 
-if [ "$#" -eq 6 ] && [ "$1" = --validated ]; then
+readiness=0
+if [ "$#" -eq 6 ] && { [ "$1" = --validated ] || [ "$1" = --validated-readiness ]; }; then
+  [ "$1" != --validated-readiness ] || readiness=1
   provider=$2
   url=$3
   host=$4
@@ -66,7 +74,40 @@ case "$provider" in
     esac
     [ "$url" = "https://github.com/$owner/$repo/pull/$number" ] || exit 0
     state=$(gh pr view "$url" --json state -q .state 2>/dev/null) || exit 0
-    [ "$state" = MERGED ] && printf '%s\n' merged
+    if [ "$state" = MERGED ]; then
+      printf '%s\n' merged
+    elif [ "$state" = CLOSED ] && [ "$readiness" = 1 ]; then
+      printf '%s\n' closed
+    elif [ "$state" = OPEN ] && [ "$readiness" = 1 ]; then
+      script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 0
+      activity=$(gh pr view "$url" --json headRefOid,updatedAt --jq '[.headRefOid,.updatedAt] | @tsv' 2>/dev/null) || exit 0
+      [ -n "$activity" ] || exit 0
+      blockers=$("$script_dir/fm-pr-state.sh" "$url" 2>/dev/null) || exit 0
+      if printf '%s\n' "$blockers" | grep -Eq '^BOT REVIEW SETTLE: wait [0-9]+s after latest PR activity before readiness$'; then
+        exit 0
+      fi
+      command -v jq >/dev/null 2>&1 || exit 0
+      checks=$(gh pr checks "$url" --json name,state,bucket 2>/dev/null) || true
+      if [ -z "$checks" ] && printf '%s\n' "$blockers" | grep -Fxq 'CHECKS: none reported yet'; then
+        checks='[]'
+      fi
+      # gh exits nonzero for pending or failed checks even with valid JSON.
+      # Validate the data, and wake for terminal failures as well as passes so
+      # triage is never stranded. Unknown or unreadable buckets stay pending.
+      checks=$(printf '%s\n' "$checks" | jq -ce 'if type == "array" and all(.[];
+        (.name | type) == "string" and (.state | type) == "string" and
+        (.bucket == "pass" or .bucket == "fail" or .bucket == "cancel" or .bucket == "skipping"))
+        then sort_by(.name, .state, .bucket) else error("checks are pending or unreadable") end' \
+        2>/dev/null) || exit 0
+      # Bind duplicate suppression to the PR's live activity and head, so a
+      # refreshed done report can earn a new recheck on the same PR.
+      latest_activity=$(gh pr view "$url" --json headRefOid,updatedAt --jq '[.headRefOid,.updatedAt] | @tsv' 2>/dev/null) || exit 0
+      [ "$activity" = "$latest_activity" ] || exit 0
+      # shellcheck source=bin/fm-pr-lib.sh
+      . "$script_dir/fm-pr-lib.sh"
+      fingerprint=$(printf '%s\n' "$url" "$activity" "$blockers" "$checks" | fm_pr_sha256 /dev/stdin) || exit 0
+      printf 'recheck %s\n' "$fingerprint"
+    fi
     ;;
   gitlab)
     [ "${#host}" -ge 1 ] && [ "${#host}" -le 253 ] || exit 0
@@ -81,20 +122,20 @@ case "$provider" in
     # A GitLab project sits under at least one group at no fixed depth, and
     # GitLab reserves the "-" segment as its route separator.
     rest=$path
-    segments=0
+    segment_count=0
     while [ -n "$rest" ]; do
       case "$rest" in
         */*) segment=${rest%%/*}; rest=${rest#*/} ;;
         *) segment=$rest; rest= ;;
       esac
-      segments=$((segments + 1))
-      [ "$segments" -le 20 ] || exit 0
+      segment_count=$((segment_count + 1))
+      [ "$segment_count" -le 20 ] || exit 0
       [ "${#segment}" -ge 1 ] && [ "${#segment}" -le 255 ] || exit 0
       case "$segment" in
         .|..|-*|*.git|*.atom|*[!A-Za-z0-9._-]*) exit 0 ;;
       esac
     done
-    [ "$segments" -ge 2 ] || exit 0
+    [ "$segment_count" -ge 2 ] || exit 0
     [ "$url" = "https://$host/$path/-/merge_requests/$number" ] || exit 0
     # glab resolves the instance from the project URL passed to -R, so the host
     # comes from the validated record rather than glab's configured default.
@@ -122,20 +163,20 @@ case "$provider" in
     # group, so one segment is canonical here where GitLab needs two, and Gerrit
     # reserves no route segment inside it.
     rest=$path
-    segments=0
+    segment_count=0
     while [ -n "$rest" ]; do
       case "$rest" in
         */*) segment=${rest%%/*}; rest=${rest#*/} ;;
         *) segment=$rest; rest= ;;
       esac
-      segments=$((segments + 1))
-      [ "$segments" -le 20 ] || exit 0
+      segment_count=$((segment_count + 1))
+      [ "$segment_count" -le 20 ] || exit 0
       [ "${#segment}" -ge 1 ] && [ "${#segment}" -le 255 ] || exit 0
       case "$segment" in
         .|..|-*|*.git|*[!A-Za-z0-9._-]*) exit 0 ;;
       esac
     done
-    [ "$segments" -ge 1 ] || exit 0
+    [ "$segment_count" -ge 1 ] || exit 0
     [ "$url" = "https://$host/c/$path/+/$number" ] || exit 0
     # gerrit-axi resolves its server from the current directory's origin remote
     # first, and the watcher runs in no repository, so the host must be passed

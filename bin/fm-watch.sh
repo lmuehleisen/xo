@@ -2785,7 +2785,7 @@ while :; do
             triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
             continue
           fi
-          run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
+          run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated-readiness \
             "$provider" "$url" "$host" "$path" "$number" || exit 1
           out=$FM_CHECK_RESULT
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
@@ -2824,6 +2824,37 @@ EOF
           fi
         fi
         reason="check: $c: $out"
+        if [ "$is_pr_poll" -eq 1 ]; then
+          case "$out" in
+            recheck\ *|closed)
+              # A recheck is an obligation to read readiness again, never
+              # permission to merge or an assertion that blockers are clear.
+              if [ "$(fm_meta_get "$STATE/$id.meta" kind)" = secondmate ]; then
+                pr_poll_control_release || exit 1
+                continue
+              fi
+              fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
+                || { pr_poll_control_release; continue; }
+              if [ "$out" = closed ]; then
+                # Keep the poll for a possible reopen, but report closure once
+                # as a delivery failure, never as a landed merge.
+                reason="check: $c: PR closed without merging: $url; delivery requires follow-up"
+                fingerprint=$(printf '%s\n' "$url" closed | fm_pr_sha256 /dev/stdin) || exit 1
+              else
+                reason="check: $c: PR readiness recheck: $url"
+                fingerprint=${out#recheck }
+              fi
+              fm_pr_poll_recheck_report "$STATE" "$id" "$fingerprint" "$reason" \
+                || [ "$FM_PR_RECHECK_NEW" = 1 ] || exit 1
+              pr_poll_control_release || exit 1
+              if [ "$FM_PR_RECHECK_NEW" = 1 ]; then
+                touch "$STATE/.last-check"
+                wake "$reason"
+              fi
+              continue
+              ;;
+          esac
+        fi
         if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
           if [ "$(fm_meta_get "$STATE/$id.meta" kind)" = secondmate ]; then
             # A merge poll armed on a secondmate is residue: the mate is a

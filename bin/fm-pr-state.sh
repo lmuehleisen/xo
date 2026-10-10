@@ -17,6 +17,7 @@
 # STALE when it was left at a superseded head.
 # A closed or merged pull request reports that terminal state and nothing else.
 # Unresolved bot inline threads are printed with their comments for triage.
+# Every comment-body line is prefixed so it cannot impersonate a status line.
 # A ten-minute quiet window after the latest PR update covers opening/pushing
 # and conservatively restarts on other PR activity too; commit dates do not
 # prove when a head was pushed. FM_PR_REVIEW_SETTLE_SECS overrides 600 seconds.
@@ -201,5 +202,6 @@ gh api graphql --paginate -F owner="${PATH_PART%%/*}" -F repo="${PATH_PART#*/}" 
         (select(any(.comments.nodes[];
           .author.__typename == "Bot" or ((.author.login // "") | endswith("[bot]"))))
         | "BOT REVIEW THREAD: \(.comments.nodes[0].url)",
-          (.comments.nodes[] | "\(.author.login // "deleted") \(.path):\(.line // 0):\n\(.body)"))
+          (.comments.nodes[] | "\(.author.login // "deleted") \(.path):\(.line // 0):\n"
+            + ((.body // "") | split("\n") | map("BOT REVIEW COMMENT: " + .) | join("\n"))))
     end' || die "could not read bot review threads for $URL"

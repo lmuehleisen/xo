@@ -6,6 +6,31 @@ This record supports current session-start, turn-end, watcher-continuity, superv
 Operator behavior and active limits remain in the linked current guides.
 Task-specific chronology, temporary paths, run identifiers, and delivery transcripts remain in private reports or PR evidence.
 
+## Finished GitHub PR follow-up
+
+The verification entry point below was exercised on 2026-10-09 with Bash 3.2.57 and jq 1.7.1.
+The portable regression exercises the real outcome writer, pending registration, static poll, watcher and durable wake queue with fixture forge responses and a controlled clock.
+It proves an unmonitored finished PR cannot be recorded as routine, a PR with no checks wakes after the settle window, and a pending advisory check delays the wake until completion.
+It also checks duplicate suppression, closure during pending waits, reopened PR waits, marker-publication failure delivery, exact status lines inside multiline review comments, review lookup failures, terminal failures, pending registration's parent and ledger silence, continued merge detection, and cleanup.
+
+```sh
+bash bin/fm-test-run.sh --jobs 1 tests/fm-pr-check-security.test.sh tests/fm-pr-state.test.sh
+```
+
+Observed follow-up assertions:
+
+```text
+ok - finished PR with none checks gets one durable readiness recheck after its wait
+ok - finished PR with pending checks gets one durable readiness recheck after its wait
+```
+
+The PR poll and outcome writer do not depend on worker harness or endpoint transport.
+Inspection covered the primary protocols for Claude, Codex, Pi/pi-signed, Grok, Cursor, omp and agy, the generic fallback used by Kimi, and the tmux, Herdr, zellij, Orca and cmux adapter boundaries.
+The shared watcher owns the PR check before endpoint-specific processing; Pi and the supervision host also use the shared outcome writer.
+This change does not add a verified wake adapter for the generic fallback.
+No harness output classifier, lifecycle operation or backend API changed.
+GitLab and Gerrit retain their merge-only polls; pending readiness registration explicitly refuses them.
+
 ## Native session-start delivery
 
 The [Agy native startup verification](runtime-backends-fork.md#primary-and-secondmate-supervision) records the opening-invocation nudge and real session ownership.

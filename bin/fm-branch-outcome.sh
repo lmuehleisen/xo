@@ -79,6 +79,8 @@
 #   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
 #       --summary <text> [--wake <text>] [--silent true|false]
 #     Append one outcome record; prints the assigned seq.
+#     A routine finished GitHub PR requires an authenticated matching poll;
+#     arm it with fm-pr-check.sh --pending before recording a readiness wait.
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
 #   fm-branch-outcome.sh mark-read --through <seq>
@@ -521,6 +523,26 @@ case "$CMD" in
     if [ "$SILENT" = true ] && [ "$VERDICT" != routine ]; then
       echo "error: silent outcomes must have the routine verdict" >&2
       exit 2
+    fi
+    if [ "$VERDICT" = routine ] && [ -f "$STATE/$TASK.meta" ] \
+      && [ "$(sed -n 's/^kind=//p' "$STATE/$TASK.meta" | tail -1)" = ship ]; then
+      # A routine outcome opens no main turn. Do not consume a finished PR's
+      # status coverage unless the watcher owns its next readiness check.
+      CURRENT=$(status_current_line "$STATE/$TASK.status" ship)
+      if [ "$(status_line_verb "$CURRENT")" = 'done' ]; then
+        # shellcheck source=bin/fm-dod-lib.sh
+        . "$SCRIPT_DIR/fm-dod-lib.sh"
+        # shellcheck source=bin/fm-pr-lib.sh
+        . "$SCRIPT_DIR/fm-pr-lib.sh"
+        if PR_URL=$(fm_dod_pr_url_from_done_note "$(status_line_note "$CURRENT")") \
+          && fm_pr_url_parse "$PR_URL" && [ "$FM_PR_PROVIDER" = github ]; then
+          if ! fm_pr_poll_snapshot_capture "$STATE" "$TASK" "$SCRIPT_DIR/fm-pr-poll.sh" \
+            || [ "$FM_PR_POLL_SNAPSHOT_URL" != "$PR_URL" ]; then
+            echo "error: finished PR has no readiness follow-up; run bin/fm-pr-check.sh --pending $TASK $PR_URL before recording routine, or report a captain outcome if registration is blocked" >&2
+            exit 1
+          fi
+        fi
+      fi
     fi
     fm_lock_acquire_wait "$LOCK"
     if ! LAST_SEQ=$(last_seq); then

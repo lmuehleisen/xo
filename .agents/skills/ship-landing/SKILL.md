@@ -19,8 +19,11 @@ Fix real issues and resolve their threads after verification; dismiss a non-issu
 A settle notice means wait and read again; a lookup failure or unread replies means review coverage is unconfirmed, so keep the PR pending until read.
 A required check that never reported while others did is invisible to these reads; `bin/fm-pr-merge.sh` still refuses it at merge time.
 A red or pending PR goes back to the worker through `bin/fm-send.sh`: wait for pending checks, fix a failure its change caused, or show each remaining failure reproducing on the default branch and unrelated, then report ready again.
-Until then the PR is not registered below, listed among the captain's calls, or described as awaiting review or merge, because registration also announces a secondmate's PR as ready to its parent; when the pre-existing-failure exception applies, present the PR with that evidence stated plainly.
-Once the PR is ready, run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
+On a GitHub finished PR signal, run `bin/fm-pr-check.sh --pending <id> <PR url>` before deferring readiness; its header owns pending registration and automatic recheck mechanics.
+A pending registration announces no review-ready result to the parent or fleet ledger.
+If registration fails, surface the failure instead of filing an unmonitored wait as routine.
+Until ready, the PR is not listed among the captain's calls or described as awaiting review or merge; when the pre-existing-failure exception applies, present the PR with that evidence stated plainly.
+Once the PR is ready, run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal - it records `pr=` and the forge's `pr_head=` when available in the task's meta and keeps the watcher's poll armed.
 `bin/fm-dod-lib.sh` owns the named-head gate on that ready signal: a ship `done:` whose named head exists only in the worker's disposable copy is not ready (`bin/fm-crew-state.sh` reports blocked, `bin/fm-pr-check.sh` refuses to register, and a secondmate does not publish that done upstream).
 That blocked reading is the gate working, not a stuck worker, so steer the worker on the commit the refusal names rather than waiting.
 A direct-PR worker pushes that commit to its PR branch, and a local-only worker commits it on its ship branch.
