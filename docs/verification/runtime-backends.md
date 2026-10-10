@@ -1656,6 +1656,36 @@ not ok - could not attach a real foreground Herdr viewer over a sized pty
 Re-run this guard after every Herdr upgrade.
 A release that changed the foreground-client contract, the window-grid requirement, or the nested-viewer refusal would fail here first, and the detached regressions would keep passing while saying nothing about it.
 
+### Finished-task focus lease
+
+Verified on 2026-10-10 against Herdr 0.9.3 protocol 22 in guarded named sessions:
+
+```sh
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh bash bin/fm-test-run.sh \
+  tests/fm-backend-herdr.test.sh \
+  tests/fm-teardown.test.sh \
+  tests/fm-herdr-attached-viewer-live-e2e.test.sh \
+  tests/fm-backend-herdr-stale-active-tab-e2e.test.sh
+```
+
+The two live guards ran without gate skips and reported:
+
+```text
+ok - attached viewer: projected workspace and task creation preserve the exact prior tab
+ok - attached viewer: finished-task focus lease refuses initially and closes after a verified launching-tab handoff at expiry
+ok - attached viewer: a live client on the target tab refuses the close and keeps the pane
+ok - attached viewer: focus moving onto the target between planning and mutation still blocks the close
+ok - attached viewer: a close preserves the fresh non-target focus the viewer moved to
+ok - detached client: persisted .focused on the target tab does not block pane close
+FM_TEST_SUMMARY total=4 failed=0 skipped_gate=0 duration_ms=467787
+```
+
+The attached guard advances only the adapter's clock from the first refusal to the 900-second boundary; its viewer remains attached throughout, and the lab helper keeps the real clock.
+This proves the bounded handoff with a real viewer and exact launching tab, not detection of sleeping clients or elapsed real-time inactivity.
+The same guard confirms projected creation preserves the existing viewer focus, so no spawn focus change was needed.
+The portable adapter and teardown cases additionally cover the pre-expiry refusal, unknown probes, changed bindings, observed focus changes, clock rollback, missing or mismatched launching workspaces, failed handoff, and a fresh target selection after handoff.
+The lab cleanup checks confirmed the default session was unchanged.
+
 ### Presentation version floor
 
 Default-on presentation projection is floored at Herdr 0.8.0.
