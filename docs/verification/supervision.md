@@ -9,6 +9,7 @@ Task-specific chronology, temporary paths, run identifiers, and delivery transcr
 
 ## Finished GitHub PR follow-up
 
+The verification entry point below was exercised on 2026-10-09 with Bash 3.2.57 and jq 1.7.1.
 The portable regression exercises the real outcome writer, pending registration, static poll, watcher and durable wake queue with fixture forge responses and a controlled clock.
 It proves an unmonitored finished PR cannot be recorded as routine, a PR with no checks wakes after the settle window, and a pending advisory check delays the wake until completion.
 It also checks duplicate suppression, review lookup failures, terminal failures, pending registration's parent and ledger silence, continued merge detection, and cleanup.
@@ -18,7 +19,9 @@ bash bin/fm-test-run.sh tests/fm-pr-check-security.test.sh tests/fm-pr-state.tes
 ```
 
 The PR poll and outcome writer do not depend on worker harness or endpoint transport.
-Inspection covered the primary protocols for Claude, Codex, Pi/pi-signed, Grok, Kimi, Cursor, omp and agy, plus the tmux, Herdr, zellij, Orca and cmux adapters: each uses the shared watcher, while Pi and the supervision host also use the shared outcome writer.
+Inspection covered the primary protocols for Claude, Codex, Pi/pi-signed, Grok, Cursor, omp and agy, the generic fallback used by Kimi, and the tmux, Herdr, zellij, Orca and cmux adapter boundaries.
+The shared watcher owns the PR check before endpoint-specific processing; Pi and the supervision host also use the shared outcome writer.
+This change does not add a verified wake adapter for the generic fallback.
 No harness output classifier, lifecycle operation or backend API changed.
 GitLab and Gerrit retain their merge-only polls; pending readiness registration explicitly refuses them.
 
