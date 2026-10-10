@@ -1836,6 +1836,7 @@ run_lane code out err "$HISTORY_BRIEF" --lane missing
 expect_code 2 "$code" "logging failure preserves the configuration-error exit"
 rm "$HOME_DIR/state"
 mv "$HOME_DIR/saved-state" "$HOME_DIR/state"
+good_out='' good_err=''
 run_lane code good_out good_err "$HISTORY_BRIEF" --lane missing
 expect_code 2 "$code" "working history preserves the configuration-error exit"
 assert_equals "$good_out" "$out" "logging cannot alter error stdout"

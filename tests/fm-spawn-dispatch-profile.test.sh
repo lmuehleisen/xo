@@ -212,7 +212,7 @@ test_dispatch_spawn_history() {
     assert_equals "$expected" "$(printf '%s\n' "$out" | tail -n 1)" "history leaves the success output unchanged"
   done
 
-  id=history-write-failure-z1
+  id="history-write-failure-z1"
   rec=$(make_spawn_case history-write-failure claude "$id")
   read_case_record "$rec"
   mkdir "$HOME_DIR/state/dispatch-history.jsonl"
