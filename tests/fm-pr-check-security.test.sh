@@ -144,6 +144,11 @@ SH
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
   "api graphql")
+    if [ "${FM_TEST_READINESS:-0}" = 1 ]; then
+      [ "${FM_TEST_THREAD_FAIL:-0}" = 0 ] || exit 1
+      printf '%s' "${FM_TEST_THREAD_BLOCKERS:-}"
+      exit 0
+    fi
     printf '%s\n' \
       "state=${FM_TEST_GH_GRAPHQL_STATE:-MERGED}" \
       "merged=${FM_TEST_GH_GRAPHQL_MERGED:-true}" \
@@ -153,6 +158,18 @@ case "${1:-} ${2:-}" in
     ;;
   "pr view")
     case " $* " in
+      *" --json headRefOid,updatedAt "*)
+        [ "${FM_TEST_READINESS:-0}" = 1 ] || exit 1
+        printf '%s\t%s\n' "$FM_TEST_GH_HEAD" "$FM_TEST_UPDATED_AT"
+        exit 0
+        ;;
+      *" --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt "*)
+        [ "${FM_TEST_READINESS:-0}" = 1 ] || exit 1
+        printf '%s\n' 'state=open' 'merged_at=' 'draft=false' \
+          "head=$FM_TEST_GH_HEAD" 'author=example' 'mergeability=mergeable' \
+          'review_decision=APPROVED' "updated_at=$FM_TEST_UPDATED_AT"
+        exit 0
+        ;;
       *statusCheckRollup*)
         printf '%s\n' "{\"state\":\"OPEN\",\"isDraft\":false,\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"baseRefName\":\"main\",\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"name\":\"ci\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}]}"
         exit 0
@@ -169,6 +186,26 @@ case "${1:-} ${2:-}" in
     ;;
   "pr merge")
     [ -z "${FM_TEST_GH_MERGE_HOOK:-}" ] || "$FM_TEST_GH_MERGE_HOOK"
+    exit 0
+    ;;
+  "pr checks")
+    [ "${FM_TEST_READINESS:-0}" = 1 ] || exit 1
+    if [ "${FM_TEST_CHECK_BUCKET:-none}" = none ]; then
+      printf "no checks reported on the 'fm/example' branch\n" >&2
+      exit 1
+    fi
+    case " $* " in
+      *" --required "*)
+        case "${FM_TEST_REQUIRED_BUCKET:-$FM_TEST_CHECK_BUCKET}" in
+          pending) printf 'REQUIRED CHECK: build (IN_PROGRESS)\n' ;;
+          fail) printf 'REQUIRED CHECK: build (FAILURE)\n' ;;
+        esac
+        ;;
+      *)
+        printf '[{"name":"build","state":"%s","bucket":"%s"}]\n' \
+          "$FM_TEST_CHECK_BUCKET" "$FM_TEST_CHECK_BUCKET"
+        ;;
+    esac
     exit 0
     ;;
 esac
@@ -1449,6 +1486,8 @@ test_teardown_removes_poll_artifacts() {
   printf 'data\n' > "$dir/home/state/task-a.pr-poll"
   printf 'registration\n' > "$dir/home/state/task-a.pr-poll-registration"
   printf 'trust\n' > "$dir/home/state/task-a.check-trust"
+  printf 'recheck\n' > "$dir/home/state/task-a.pr-poll-recheck"
+  chmod 0600 "$dir/home/state/task-a.pr-poll-recheck"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 exit 0
@@ -1463,6 +1502,7 @@ SH
   [ ! -e "$dir/home/state/task-a.pr-poll" ] || fail "teardown left the sidecar"
   [ ! -e "$dir/home/state/task-a.pr-poll-registration" ] || fail "teardown left the PR poll registration"
   [ ! -e "$dir/home/state/task-a.check-trust" ] || fail "teardown left the custom check registration"
+  [ ! -e "$dir/home/state/task-a.pr-poll-recheck" ] || fail "teardown left the readiness duplicate marker"
 
   dir=$(make_case teardown-retirement-receipt)
   fakebin="$dir/fakebin"
@@ -3660,6 +3700,108 @@ SH
   pass "device re-record publication waits without rewriting its registration"
 }
 
+
+readiness_cycle() {
+  local dir=$1
+  FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_READINESS=1 FM_TEST_CLOCK_FILE="$dir/clock" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err" \
+    || fail "readiness watcher failed: $(cat "$dir/watch.err")"
+}
+
+test_finished_pr_readiness_followup() {
+  local dir bucket now real_date state url fingerprint rc
+  url=https://github.com/o/r/pull/1
+  real_date=$(command -v date)
+  for bucket in none pending; do
+    dir=$(make_case "readiness-$bucket")
+    state="$dir/home/state"
+    ln -s "$REAL_JQ" "$dir/fakebin/jq"
+    write_task_meta "$dir"
+    printf 'mode=direct-PR\n' >> "$state/task-a.meta"
+    printf 'done: PR %s\n' "$url" > "$state/task-a.status"
+    now=$(date +%s)
+    printf '%s\n' "$now" > "$dir/clock"
+    export FM_TEST_UPDATED_AT FM_TEST_GH_HEAD FM_TEST_CHECK_BUCKET
+    FM_TEST_UPDATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    FM_TEST_GH_HEAD=$(git -C "$dir/wt" rev-parse HEAD)
+    FM_TEST_CHECK_BUCKET=$bucket
+    cat > "$dir/fakebin/date" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = +%s ] && [ -n "\${FM_TEST_CLOCK_FILE:-}" ]; then
+  cat "\$FM_TEST_CLOCK_FILE"
+else
+  exec "$real_date" "\$@"
+fi
+SH
+    chmod +x "$dir/fakebin/date"
+
+    # This is the lost handoff: a routine outcome would consume the done
+    # status with neither a main turn nor anything scheduled to read it again.
+    rc=0
+    FM_HOME="$dir/home" "$ROOT/bin/fm-branch-outcome.sh" append --task task-a \
+      --verdict routine --summary 'Waiting for readiness' > "$dir/outcome.out" 2> "$dir/outcome.err" || rc=$?
+    [ "$rc" != 0 ] || fail "unmonitored finished PR was accepted as routine"
+    assert_grep 'no readiness follow-up' "$dir/outcome.err" "refusal did not explain the missing follow-up"
+    [ ! -s "$state/branch-outcomes.jsonl" ] || fail "refused outcome consumed the finished status"
+
+    # Pending registration retains the ordinary head/draft gate, but emits no
+    # review-ready ledger or parent-channel result.
+    touch "$dir/home/config/fleet-ledger"
+    seed_secondmate_home "$dir"
+    FM_TEST_READINESS=1 run_check_entry "$dir" --pending task-a "$url" >/dev/null 2> "$dir/arm.err" \
+      || fail "pending registration failed: $(cat "$dir/arm.err")"
+    [ ! -s "$state/fleet-ledger.jsonl" ] || fail "pending PR was announced as review-ready"
+    [ ! -s "$state/parent-replies.status" ] || fail "pending registration announced readiness to the parent"
+    rm "$dir/home/.fm-secondmate-home" "$dir/home/.fm-secondmate-parent"
+    FM_HOME="$dir/home" "$ROOT/bin/fm-check-unregister.sh" contributions >/dev/null \
+      || fail "could not isolate PR poll from contribution observer"
+    FM_HOME="$dir/home" "$ROOT/bin/fm-branch-outcome.sh" append --task task-a \
+      --verdict routine --summary 'Waiting with follow-up armed' >/dev/null \
+      || fail "armed readiness wait was refused"
+    add_stop_custom_check "$dir"
+    readiness_cycle "$dir"
+    assert_grep 'stop-cycle' "$dir/watch.out" "settle wait did not remain silent"
+    assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "PR woke before settle elapsed"
+    ack_watcher_cycle "$state" || fail "could not acknowledge pending cycle"
+
+    printf '%s\n' "$((now + 601))" > "$dir/clock"
+    if [ "$bucket" = pending ]; then
+      export FM_TEST_REQUIRED_BUCKET=pass
+      readiness_cycle "$dir"
+      assert_grep 'stop-cycle' "$dir/watch.out" "pending check did not remain silent after settle"
+      assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "PR woke with a check still pending"
+      ack_watcher_cycle "$state" || fail "could not acknowledge check wait"
+      FM_TEST_CHECK_BUCKET=pass
+    fi
+    readiness_cycle "$dir"
+    assert_grep "PR readiness recheck: $url" "$dir/watch.out" "cleared wait did not wake firstmate"
+    assert_grep "PR readiness recheck: $url" "$state/.wake-queue" "readiness wake was not durable"
+    [ -f "$state/task-a.check.sh" ] || fail "readiness wake retired merge monitoring"
+    fingerprint=$(cat "$state/task-a.pr-poll-recheck")
+    [ "${#fingerprint}" = 64 ] || fail "readiness fingerprint was not recorded"
+    ack_watcher_cycle "$state" || fail "could not acknowledge readiness wake"
+    readiness_cycle "$dir"
+    assert_grep 'stop-cycle' "$dir/watch.out" "unchanged readiness was reported again"
+    assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "unchanged PR repeated its wake"
+    ack_watcher_cycle "$state" || fail "could not acknowledge duplicate check cycle"
+    if [ "$bucket" = pending ]; then
+      FM_TEST_THREAD_FAIL=1 readiness_cycle "$dir"
+      assert_grep 'stop-cycle' "$dir/watch.out" "review lookup failure declared readiness"
+      ack_watcher_cycle "$state" || fail "could not acknowledge failed lookup cycle"
+      FM_TEST_CHECK_BUCKET=fail
+      FM_TEST_THREAD_BLOCKERS='BOT REVIEW THREAD: https://github.com/o/r/pull/1#discussion_r1' readiness_cycle "$dir"
+      assert_grep "PR readiness recheck: $url" "$dir/watch.out" "terminal failure did not reach triage"
+      assert_no_grep 'PR ready' "$dir/watch.out" "recheck claimed a failed PR was ready"
+      ack_watcher_cycle "$state" || fail "could not acknowledge triage wake"
+    fi
+    FM_TEST_GH_STATE=MERGED readiness_cycle "$dir"
+    assert_grep ': merged' "$dir/watch.out" "readiness follow-up broke merged detection"
+    pass "finished PR with $bucket checks gets one durable readiness recheck after its wait"
+  done
+  unset FM_TEST_UPDATED_AT FM_TEST_GH_HEAD FM_TEST_CHECK_BUCKET FM_TEST_REQUIRED_BUCKET
+}
+
+test_finished_pr_readiness_followup
 test_parser_matrix
 test_gitlab_merge_watch
 test_gerrit_merge_watch

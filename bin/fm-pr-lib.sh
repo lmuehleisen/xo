@@ -1431,3 +1431,35 @@ fm_pr_poll_merge_notified_remove() {  # <state> <id>
   [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
   rm -f -- "$marker"
 }
+
+# Called under the watcher's task control lock, after validating the captured
+# registration again. Store the wake before its private duplicate marker: a
+# crash may replay a recheck, but can never suppress one that was not queued.
+# The fingerprint includes canonical PR identity, activity, checks and review
+# blockers. Re-arming the same unchanged PR therefore does not spam rechecks.
+fm_pr_poll_recheck_report() {  # <state> <id> <fingerprint> <reason>
+  local state=$1 id=$2 fingerprint=$3 reason=$4 marker device tmp
+  # shellcheck disable=SC2034 # Output global consumed by fm-watch.sh.
+  FM_PR_RECHECK_NEW=0
+  fm_pr_task_id_valid "$id" || return 1
+  [ -d "$state" ] && [ ! -L "$state" ] || return 1
+  case "$fingerprint" in ''|*[!a-f0-9]*) return 1 ;; esac
+  [ "${#fingerprint}" = 64 ] || return 1
+  device=$(fm_pr_file_device "$state") || return 1
+  marker="$state/$id.pr-poll-recheck"
+  fm_pr_regular_destination_on_device_or_absent "$marker" "$device" || return 1
+  if [ -e "$marker" ]; then
+    fm_pr_private_file_valid "$marker" 600 "$device" || return 1
+    [ "$(cat "$marker")" != "$fingerprint" ] || return 0
+  fi
+  tmp=$(mktemp "$state/.fm-pr-poll-recheck.XXXXXX") || return 1
+  if ! printf '%s\n' "$fingerprint" > "$tmp" || ! chmod 0600 "$tmp" \
+    || ! fm_wake_append check "$state/$id.check.sh" "$reason" \
+    || ! fm_pr_regular_destination_on_device_or_absent "$marker" "$device" \
+    || ! mv -f -- "$tmp" "$marker"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  # shellcheck disable=SC2034 # Output global consumed by fm-watch.sh.
+  FM_PR_RECHECK_NEW=1
+}

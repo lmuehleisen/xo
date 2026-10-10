@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Record a PR-ready task: store one validated canonical pr=<url> and the forge's
-# exact pr_head=<sha> when available, then atomically arm a static merge poll.
+# Record a published PR task: store one validated canonical pr=<url> and the
+# forge's exact pr_head=<sha> when available, then atomically arm a static poll.
 # Refuses when bin/fm-dod-lib.sh will not accept the named head as reachable
 # outside the worker's disposable copy; in no-mistakes mode a forge-reported
 # head is that named head and is already stored on the forge.
@@ -17,7 +17,10 @@
 # draft state does not refuse, matching how the head read below is optional.
 # bin/fm-pr-merge.sh records through this script with FM_PR_CHECK_MERGE=1 and
 # skips this refusal, because its own merge-time draft refusal is authoritative.
-# Usage: fm-pr-check.sh <task-id> <pr-url>
+# --pending arms GitHub follow-up before checks or the review settle window
+# finish, without publishing a review-ready ledger entry or parent report.
+# The existing slow-check cadence owns the retry; lookup errors remain silent.
+# Usage: fm-pr-check.sh [--pending] <task-id> <pr-url>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +37,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 
+PENDING=0
+if [ "${1:-}" = --pending ]; then
+  PENDING=1
+  shift
+fi
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
   exit 2
@@ -49,6 +57,16 @@ PROVIDER=$FM_PR_PROVIDER
 HOST=$FM_PR_HOST
 PROJECT_PATH=$FM_PR_PATH
 NUMBER=$FM_PR_NUMBER
+if [ "$PENDING" = 1 ]; then
+  if [ "$PROVIDER" != github ]; then
+    echo "error: pending readiness follow-up currently requires a GitHub pull request" >&2
+    exit 1
+  fi
+  if ! command -v gh >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    echo "error: pending readiness follow-up requires gh and jq on PATH" >&2
+    exit 1
+  fi
+fi
 
 # Task-derived paths are constructed only after the canonical ID validation.
 META="$STATE/$ID.meta"
@@ -220,7 +238,7 @@ else
 fi
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 # The merge-time re-record is not a new review-ready PR, so it writes nothing.
-[ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || [ "${FM_PR_CHECK_MERGE:-}" = 1 ] \
+[ "$PENDING" = 1 ] || [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || [ "${FM_PR_CHECK_MERGE:-}" = 1 ] \
   || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" pr_ready "$ID" "$URL" || true
 # The contribution observer uses the same authenticated check mechanism and
 # owns verdict freshness, required actors and external feedback separately from
@@ -230,6 +248,10 @@ if command -v jq >/dev/null 2>&1; then
     || printf 'contributions: observation not armed; coverage is unconfirmed\n' >&2
 else
   printf 'contributions: jq unavailable; coverage is unconfirmed\n' >&2
+fi
+if [ "$PENDING" = 1 ]; then
+  printf 'armed pending: state/%s.check.sh\n' "$ID"
+  exit 0
 fi
 # In a secondmate home the registration itself is a captain-facing fact:
 # publish the child's PR-ready line with the canonical URL just recorded, so it
