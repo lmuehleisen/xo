@@ -529,7 +529,7 @@ case "$CMD" in
       # A routine outcome opens no main turn. Do not consume a finished PR's
       # status coverage unless the watcher owns its next readiness check.
       CURRENT=$(status_current_line "$STATE/$TASK.status" ship)
-      if [ "$(status_line_verb "$CURRENT")" = done ]; then
+      if [ "$(status_line_verb "$CURRENT")" = 'done' ]; then
         # shellcheck source=bin/fm-dod-lib.sh
         . "$SCRIPT_DIR/fm-dod-lib.sh"
         # shellcheck source=bin/fm-pr-lib.sh

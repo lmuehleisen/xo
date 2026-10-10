@@ -2826,7 +2826,7 @@ EOF
         reason="check: $c: $out"
         if [ "$is_pr_poll" -eq 1 ]; then
           case "$out" in
-            recheck\ *)
+            recheck\ *|closed)
               # A recheck is an obligation to read readiness again, never
               # permission to merge or an assertion that blockers are clear.
               if [ "$(fm_meta_get "$STATE/$id.meta" kind)" = secondmate ]; then
@@ -2835,8 +2835,17 @@ EOF
               fi
               fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
                 || { pr_poll_control_release; continue; }
-              reason="check: $c: PR readiness recheck: $url"
-              fm_pr_poll_recheck_report "$STATE" "$id" "${out#recheck }" "$reason" || exit 1
+              if [ "$out" = closed ]; then
+                # Keep the poll for a possible reopen, but report closure once
+                # as a delivery failure, never as a landed merge.
+                reason="check: $c: PR closed without merging: $url; delivery requires follow-up"
+                fingerprint=$(printf '%s\n' "$url" closed | fm_pr_sha256 /dev/stdin) || exit 1
+              else
+                reason="check: $c: PR readiness recheck: $url"
+                fingerprint=${out#recheck }
+              fi
+              fm_pr_poll_recheck_report "$STATE" "$id" "$fingerprint" "$reason" \
+                || [ "$FM_PR_RECHECK_NEW" = 1 ] || exit 1
               pr_poll_control_release || exit 1
               if [ "$FM_PR_RECHECK_NEW" = 1 ]; then
                 touch "$STATE/.last-check"

@@ -13,6 +13,8 @@
 # recheck after the settle window and all reported checks stop pending.
 # It never declares readiness: fm-pr-state.sh's blockers and the full check
 # result remain for firstmate to assess, including repositories with no checks.
+# A closed GitHub PR emits closed immediately in readiness mode, so delivery
+# failure reaches supervision even before a readiness wait clears.
 set -u
 LC_ALL=C
 export LC_ALL
@@ -74,12 +76,16 @@ case "$provider" in
     state=$(gh pr view "$url" --json state -q .state 2>/dev/null) || exit 0
     if [ "$state" = MERGED ]; then
       printf '%s\n' merged
+    elif [ "$state" = CLOSED ] && [ "$readiness" = 1 ]; then
+      printf '%s\n' closed
     elif [ "$state" = OPEN ] && [ "$readiness" = 1 ]; then
       script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 0
       activity=$(gh pr view "$url" --json headRefOid,updatedAt --jq '[.headRefOid,.updatedAt] | @tsv' 2>/dev/null) || exit 0
       [ -n "$activity" ] || exit 0
       blockers=$("$script_dir/fm-pr-state.sh" "$url" 2>/dev/null) || exit 0
-      case "$blockers" in *'BOT REVIEW SETTLE:'*) exit 0 ;; esac
+      if printf '%s\n' "$blockers" | grep -Eq '^BOT REVIEW SETTLE: wait [0-9]+s after latest PR activity before readiness$'; then
+        exit 0
+      fi
       command -v jq >/dev/null 2>&1 || exit 0
       checks=$(gh pr checks "$url" --json name,state,bucket 2>/dev/null) || true
       if [ -z "$checks" ] && printf '%s\n' "$blockers" | grep -Fxq 'CHECKS: none reported yet'; then
@@ -116,20 +122,20 @@ case "$provider" in
     # A GitLab project sits under at least one group at no fixed depth, and
     # GitLab reserves the "-" segment as its route separator.
     rest=$path
-    segments=0
+    segment_count=0
     while [ -n "$rest" ]; do
       case "$rest" in
         */*) segment=${rest%%/*}; rest=${rest#*/} ;;
         *) segment=$rest; rest= ;;
       esac
-      segments=$((segments + 1))
-      [ "$segments" -le 20 ] || exit 0
+      segment_count=$((segment_count + 1))
+      [ "$segment_count" -le 20 ] || exit 0
       [ "${#segment}" -ge 1 ] && [ "${#segment}" -le 255 ] || exit 0
       case "$segment" in
         .|..|-*|*.git|*.atom|*[!A-Za-z0-9._-]*) exit 0 ;;
       esac
     done
-    [ "$segments" -ge 2 ] || exit 0
+    [ "$segment_count" -ge 2 ] || exit 0
     [ "$url" = "https://$host/$path/-/merge_requests/$number" ] || exit 0
     # glab resolves the instance from the project URL passed to -R, so the host
     # comes from the validated record rather than glab's configured default.
@@ -157,20 +163,20 @@ case "$provider" in
     # group, so one segment is canonical here where GitLab needs two, and Gerrit
     # reserves no route segment inside it.
     rest=$path
-    segments=0
+    segment_count=0
     while [ -n "$rest" ]; do
       case "$rest" in
         */*) segment=${rest%%/*}; rest=${rest#*/} ;;
         *) segment=$rest; rest= ;;
       esac
-      segments=$((segments + 1))
-      [ "$segments" -le 20 ] || exit 0
+      segment_count=$((segment_count + 1))
+      [ "$segment_count" -le 20 ] || exit 0
       [ "${#segment}" -ge 1 ] && [ "${#segment}" -le 255 ] || exit 0
       case "$segment" in
         .|..|-*|*.git|*[!A-Za-z0-9._-]*) exit 0 ;;
       esac
     done
-    [ "$segments" -ge 1 ] || exit 0
+    [ "$segment_count" -ge 1 ] || exit 0
     [ "$url" = "https://$host/c/$path/+/$number" ] || exit 0
     # gerrit-axi resolves its server from the current directory's origin remote
     # first, and the watcher runs in no repository, so the host must be passed

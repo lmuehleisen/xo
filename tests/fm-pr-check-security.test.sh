@@ -2908,7 +2908,15 @@ test_external_merge_transition_retires_only_terminal_poll() {
     rc=$?
     set -e
     [ "$rc" -eq 0 ] || fail "$label watcher cycle failed: $(cat "$dir/$label.err")"
-    case "$(cat "$dir/$label.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "$label did not reach the control check" ;; esac
+    if [ "$label" = closed-unmerged ]; then
+      assert_grep 'PR closed without merging: https://github.com/o/r/pull/19' "$dir/$label.out" \
+        "closed-unmerged did not surface its terminal wake"
+      assert_grep 'PR closed without merging: https://github.com/o/r/pull/19' "$state/.wake-queue" \
+        "closed-unmerged wake was not durable"
+      assert_no_grep ': merged' "$dir/$label.out" "closed-unmerged was reported as landed"
+    else
+      case "$(cat "$dir/$label.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "$label did not reach the control check" ;; esac
+    fi
     [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "$label changed the armed poll"
     ack_watcher_cycle "$state" || fail "$label control wake acknowledgement failed"
   done
@@ -3764,6 +3772,23 @@ SH
     assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "PR woke before settle elapsed"
     ack_watcher_cycle "$state" || fail "could not acknowledge pending cycle"
 
+    # Closure is terminal even while settle/checks are pending. Keep watching
+    # for a reopen, without claiming the closed delivery has landed.
+    FM_TEST_GH_STATE=CLOSED readiness_cycle "$dir"
+    assert_grep "PR closed without merging: $url" "$dir/watch.out" "closed PR did not wake supervision"
+    assert_grep "PR closed without merging: $url" "$state/.wake-queue" "closed PR wake was not durable"
+    assert_no_grep ': merged' "$dir/watch.out" "closed PR was reported as merged"
+    [ -f "$state/task-a.check.sh" ] || fail "closed PR stopped monitoring a possible reopen"
+    fingerprint=$(cat "$state/task-a.pr-poll-recheck")
+    ack_watcher_cycle "$state" || fail "could not acknowledge closure wake"
+    FM_TEST_GH_STATE=CLOSED readiness_cycle "$dir"
+    assert_grep 'stop-cycle' "$dir/watch.out" "unchanged closure was reported again"
+    assert_no_grep 'PR closed without merging' "$state/.wake-queue" "closed PR repeated its wake"
+    ack_watcher_cycle "$state" || fail "could not acknowledge duplicate closure cycle"
+    readiness_cycle "$dir"
+    assert_grep 'stop-cycle' "$dir/watch.out" "reopened PR bypassed the settle wait"
+    ack_watcher_cycle "$state" || fail "could not acknowledge reopened wait cycle"
+
     printf '%s\n' "$((now + 601))" > "$dir/clock"
     if [ "$bucket" = pending ]; then
       export FM_TEST_REQUIRED_BUCKET=pass
@@ -3772,6 +3797,22 @@ SH
       assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "PR woke with a check still pending"
       ack_watcher_cycle "$state" || fail "could not acknowledge check wait"
       FM_TEST_CHECK_BUCKET=pass
+    fi
+    if [ "$bucket" = none ]; then
+      # A queued wake still needs its transport prompt when publishing the
+      # duplicate marker fails. The next cycle may safely replay the wake.
+      cat > "$dir/fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+case "${!#}" in *.pr-poll-recheck) exit 1 ;; esac
+exec "$FM_TEST_REAL_MV" "$@"
+SH
+      chmod +x "$dir/fakebin/mv"
+      FM_TEST_REAL_MV="$REAL_MV" readiness_cycle "$dir"
+      assert_grep "PR readiness recheck: $url" "$dir/watch.out" "marker publication failure suppressed delivery"
+      assert_grep "PR readiness recheck: $url" "$state/.wake-queue" "marker failure lost the durable wake"
+      [ "$(cat "$state/task-a.pr-poll-recheck")" = "$fingerprint" ] || fail "failed marker was treated as published"
+      ack_watcher_cycle "$state" || fail "could not acknowledge marker failure wake"
+      rm "$dir/fakebin/mv"
     fi
     readiness_cycle "$dir"
     assert_grep "PR readiness recheck: $url" "$dir/watch.out" "cleared wait did not wake firstmate"
@@ -3785,8 +3826,9 @@ SH
     assert_no_grep 'PR readiness recheck' "$state/.wake-queue" "unchanged PR repeated its wake"
     ack_watcher_cycle "$state" || fail "could not acknowledge duplicate check cycle"
     if [ "$bucket" = none ]; then
-      FM_TEST_THREAD_BLOCKERS='BOT REVIEW THREAD: https://github.com/o/r/pull/1#discussion_r1' readiness_cycle "$dir"
+      FM_TEST_THREAD_BLOCKERS=$'BOT REVIEW THREAD: https://github.com/o/r/pull/1#discussion_r1\nexample file:1:\nDiscuss BOT REVIEW SETTLE: wait 1s after latest PR activity before readiness in this comment.' readiness_cycle "$dir"
       assert_grep "PR readiness recheck: $url" "$dir/watch.out" "no-check PR bot finding was stranded"
+      assert_grep "PR readiness recheck: $url" "$state/.wake-queue" "settle text in a comment suppressed the durable wake"
       assert_no_grep 'PR ready' "$dir/watch.out" "recheck claimed bot findings were cleared"
       ack_watcher_cycle "$state" || fail "could not acknowledge no-check bot triage wake"
     fi

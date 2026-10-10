@@ -11,7 +11,7 @@ Task-specific chronology, temporary paths, run identifiers, and delivery transcr
 The verification entry point below was exercised on 2026-10-09 with Bash 3.2.57 and jq 1.7.1.
 The portable regression exercises the real outcome writer, pending registration, static poll, watcher and durable wake queue with fixture forge responses and a controlled clock.
 It proves an unmonitored finished PR cannot be recorded as routine, a PR with no checks wakes after the settle window, and a pending advisory check delays the wake until completion.
-It also checks duplicate suppression, review lookup failures, terminal failures, pending registration's parent and ledger silence, continued merge detection, and cleanup.
+It also checks duplicate suppression, closure during pending waits, reopened PR waits, marker-publication failure delivery, settle text inside review comments, review lookup failures, terminal failures, pending registration's parent and ledger silence, continued merge detection, and cleanup.
 
 ```sh
 bash bin/fm-test-run.sh --jobs 1 tests/fm-pr-check-security.test.sh tests/fm-pr-state.test.sh
