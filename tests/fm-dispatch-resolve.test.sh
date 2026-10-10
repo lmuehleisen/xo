@@ -24,7 +24,7 @@ RULES="$HOME_DIR/config/crew-dispatch.json"
 QUOTA="$TMP_ROOT/quota.json"
 BASE_PATH=$PATH
 mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN"
-for command_name in bash chmod cp dirname jq mktemp rm; do
+for command_name in bash chmod cp date dirname jq mkdir mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
 done
 
@@ -225,6 +225,46 @@ assert_contains "$err" 'OPENROUTER_API_KEY absent from' "off line names the seco
 assert_absent "$LOG/argv" "absent key never calls curl"
 assert_absent "$LOG/quota-axi.calls" "absent key never reads quota-axi"
 pass "absent key is off: one stderr line, exit 0, no network call"
+
+# Early exits must not treat caller-exported paths as resolver-owned temporaries.
+CALLER_TEMPS="$TMP_ROOT/caller-temps"
+mkdir "$CALLER_TEMPS"
+for temp_name in RULES RESP_FILE QUOTA TASK_TEXT SEND_TEXT; do
+  printf 'caller-owned %s\n' "$temp_name" > "$CALLER_TEMPS/$temp_name"
+done
+for early_path in off usage no-rules; do
+  case "$early_path" in
+    off)
+      early_args=("$BRIEF")
+      early_key=''
+      early_code=0
+      ;;
+    usage)
+      early_args=("$BRIEF" --unknown)
+      early_key=$KEY
+      early_code=2
+      ;;
+    no-rules)
+      early_args=("$BRIEF")
+      early_key=$KEY
+      mv "$RULES" "$TMP_ROOT/saved-rules.json"
+      early_code=0
+      ;;
+  esac
+  TYPESAFE_API_KEY=$early_key RULES="$CALLER_TEMPS/RULES" \
+    RESP_FILE="$CALLER_TEMPS/RESP_FILE" QUOTA="$CALLER_TEMPS/QUOTA" \
+    TASK_TEXT="$CALLER_TEMPS/TASK_TEXT" SEND_TEXT="$CALLER_TEMPS/SEND_TEXT" \
+    run code out err "${early_args[@]}"
+  expect_code "$early_code" "$code" "inherited cleanup paths preserve $early_path exit status"
+  for temp_name in RULES RESP_FILE QUOTA TASK_TEXT SEND_TEXT; do
+    assert_equals "caller-owned $temp_name" "$(cat "$CALLER_TEMPS/$temp_name")" \
+      "$early_path must preserve caller-exported $temp_name"
+  done
+  if [ "$early_path" = no-rules ]; then
+    mv "$TMP_ROOT/saved-rules.json" "$RULES"
+  fi
+done
+pass "off, usage and no-rules exits preserve every caller-exported temporary path"
 
 # --- .env key, and the environment wins over it ------------------------------
 printf '%s\n' '# local secrets' 'FMX_PAIRING_TOKEN=abc' "export TYPESAFE_API_KEY=\"$KEY\"" > "$HOME_DIR/.env"
@@ -1317,7 +1357,7 @@ cp "$TEMPLATE" "$RULES"
 reset_log
 lane_quota claude=-0.3 codex=0.2 grok=-0.5 agy=0.4 devin=-0.1 kiro=-0.6
 run_lane code out err "$BRIEF" --lane standard --project xo
-expect_code 0 "$code" "--lane exits 0 without a key"
+expect_code 0 "$code" "--lane exits 0 without a key: $err"
 assert_contains "$out" 'status: clear' "--lane resolves the template's standard lane"
 assert_contains "$out" 'selected: by --lane' "--lane names how the rule was chosen"
 assert_not_contains "$out" 'probabilities:' "--lane prints no Choice probabilities"
@@ -1556,7 +1596,8 @@ for bad_definition in null 1 '[]' '{}' '{"max_live":1,"extra":true}'; do
   assert_contains "$err" 'live cap group' "the group definition error is explicit"
 done
 pass "shared caps validate group maps, definitions, names, caps, and references"
-rm -rf "$LIVE_STATE"
+# Clear only the live-count fixtures; preserve the append-only call history.
+rm -f "$LIVE_STATE"/*.meta
 cp "$TEMPLATE" "$RULES"
 lane_quota claude=-0.3 codex=0 grok=-0.5 agy=-0.1 devin=-0.4 kiro=-0.6
 run_lane code out err "$BRIEF" --lane standard --project xo
@@ -1810,5 +1851,80 @@ run_lane code out err "$BRIEF" --lane standard
 expect_code 2 "$code" "--lane without a rules file is a usage error"
 pass "lane usage and configuration errors exit 2 with an actionable reason"
 cp "$BASE_RULES" "$RULES"
+
+# --- private call history, including early outcomes and write failures -------
+HISTORY="$HOME_DIR/state/dispatch-history.jsonl"
+# Every completed resolution above should have produced one parseable line;
+# all outcome classes and both early error/off paths are already exercised.
+jq -se 'all(.[]; .kind == "router" and (.time | type) == "number") and
+  ([.[].status] | unique | sort) == ["ambiguous", "clear", "error", "escalate", "off"]' \
+  "$HISTORY" >/dev/null || fail "history does not cover all router outcomes: $(jq -sc 'map(.status) | unique' "$HISTORY")"
+assert_not_contains "$(cat "$HISTORY")" "$KEY" "history never stores the API key"
+assert_not_contains "$(cat "$HISTORY")" 'SECRET-WHY-TEXT' "history omits config commentary"
+assert_not_contains "$(cat "$HISTORY")" 'off-by-one in the pager' "history omits brief text"
+
+# Use the standard brief layout and a path needing JSON escaping.
+HISTORY_BRIEF="$HOME_DIR/data/history-task/brief \"quoted\".md"
+mkdir -p "${HISTORY_BRIEF%/*}"
+cp "$BRIEF" "$HISTORY_BRIEF"
+write_response "$RESPONSE" rule_4 0.9
+before=$(wc -l < "$HISTORY")
+TYPESAFE_API_KEY=$KEY run code out err "$HISTORY_BRIEF"
+expect_code 0 "$code" "logged clear resolution succeeds"
+assert_equals "$((before + 1))" "$(wc -l < "$HISTORY" | tr -d ' ')" "one entry per call"
+tail -n 1 "$HISTORY" | jq -e --arg brief "$HISTORY_BRIEF" '
+  .task_id == "history-task" and .brief_path == $brief and .status == "clear" and
+  .model == "jev-1.13.0" and (.latency_ms | type) == "number" and
+  .tokens == {input_tokens: 812, output_tokens: 60} and
+  .rule == "rule_4" and .confidence == 0.9 and .probabilities.rule_4 == 0.96 and
+  .suggested_profile.harness == "cursor" and
+  any(.candidates[]; .route == "cursor:cursor-grok-4.6-medium" and
+    .eligibility == "eligible" and .spendPriority == 0.7597)
+' >/dev/null || fail "clear history lost score, input pointer or candidates"
+
+# Errors after a valid answer still retain that answer's scores and counts.
+TYPESAFE_API_KEY=$KEY FAKE_QUOTA_FAIL=1 run code out err "$HISTORY_BRIEF"
+tail -n 1 "$HISTORY" | jq -e '.status == "error" and .rule == "rule_4" and
+  .tokens.input_tokens == 812 and .reason == "quota-axi --json failed"' >/dev/null \
+  || fail "post-answer errors lost available telemetry"
+
+# A server error body is not trusted history content, even when it echoes a key.
+printf '%s' "$KEY" > "$RESPONSE"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_HTTP=500 run code out err "$HISTORY_BRIEF"
+assert_not_contains "$(tail -n 1 "$HISTORY")" "$KEY" "HTTP body cannot leak keys into history"
+
+# Explicit lane output is deterministic, so compare complete stdout and stderr
+# with a working log, an unwritable log destination, and a non-directory state.
+printf '%s\n' '{"classes":{"local":{"family":"local","unmetered":true,"routes":[{"harness":"claude","model":"sonnet"}]}},"rules":[{"when":"Routine","lane":"routine","order":"ordered","classes":["local"]}]}' > "$RULES"
+run_lane code out err "$HISTORY_BRIEF" --lane routine
+expect_code 0 "$code" "baseline named lane succeeds"
+baseline_out=$out baseline_err=$err
+tail -n 1 "$HISTORY" | jq -e '.lane == "routine" and .candidates[0].class == "local" and
+  .candidates[0].spendPriority == 0' >/dev/null || fail "lane history lost the class"
+mv "$HISTORY" "$TMP_ROOT/saved-history"
+mkdir "$HISTORY"
+run_lane code out err "$HISTORY_BRIEF" --lane routine
+expect_code 0 "$code" "unwritable history does not fail routing"
+assert_equals "$baseline_out" "$out" "failed history write leaves stdout byte-for-byte unchanged"
+assert_equals "$baseline_err" "$err" "failed history write stays silent"
+rmdir "$HISTORY"
+mv "$TMP_ROOT/saved-history" "$HISTORY"
+mv "$HOME_DIR/state" "$HOME_DIR/saved-state"
+printf 'not a directory\n' > "$HOME_DIR/state"
+run_lane code out err "$HISTORY_BRIEF" --lane routine
+expect_code 0 "$code" "unusable state directory does not fail routing"
+assert_equals "$baseline_out" "$out" "unusable state leaves stdout unchanged"
+assert_equals "$baseline_err" "$err" "unusable state leaves stderr unchanged"
+# Nonzero configuration exits also survive a logging failure unchanged.
+run_lane code out err "$HISTORY_BRIEF" --lane missing
+expect_code 2 "$code" "logging failure preserves the configuration-error exit"
+rm "$HOME_DIR/state"
+mv "$HOME_DIR/saved-state" "$HOME_DIR/state"
+good_out='' good_err=''
+run_lane code good_out good_err "$HISTORY_BRIEF" --lane missing
+expect_code 2 "$code" "working history preserves the configuration-error exit"
+assert_equals "$good_out" "$out" "logging cannot alter error stdout"
+assert_equals "$good_err" "$err" "logging cannot alter error stderr"
+pass "private router history covers every outcome and silently tolerates write failures"
 
 printf '# all fm-dispatch-resolve tests passed\n'

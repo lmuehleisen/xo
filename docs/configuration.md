@@ -84,6 +84,7 @@ Each effective `FM_HOME` contains private operational directories.
 `state/` holds runtime records:
 
 - Task metadata, append-only status events, and endpoint signals.
+- Private dispatch call history in `state/dispatch-history.jsonl` (`bin/fm-dispatch-history-lib.sh` owns its format and best-effort writes).
 - Watcher and wake-queue coordination, away-mode state, and generated Relay artifacts.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
 - Enabled extension working namespaces under `state/extensions/`.
