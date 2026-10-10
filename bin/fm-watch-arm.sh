@@ -78,8 +78,8 @@
 # arm would, and otherwise this arm owns a fresh cycle as a plain arm does.
 # Recovery restoration follows docs/watcher-continuity.md "Generation reuse";
 # an unconfirmed stop leaves downtime for the fresh cycle's recovery check.
-# Stop completion is awaited up to fm_watcher_stall_bound seconds, so a slow
-# EXIT cleanup keeps its handover snapshot instead of becoming a plain attach.
+# Stop completion gets the full fm_watcher_stall_bound seconds after TERM,
+# counted in 0.1-second waits, so slow EXIT cleanup keeps its handover snapshot.
 # Any other watcher, or one that outlives the stop,
 # is attached to exactly as a plain arm attaches.
 #
@@ -628,18 +628,20 @@ fi
 # 1 when it was not stopped (its handover state was unreadable, or it outlived
 # the stop), which leaves it to the plain attach below.
 take_over_cycle() {  # <watcher-pid> <identity>
-  local pid=$1 i owner_signal deadline
+  local pid=$1 i owner_signal stop_ticks=0
   cycle_begin "$pid" attached "$2"
   fm_recovery_marker_handover_snapshot "$STATE/.watcher-down" || return 1
-  deadline=$(( $(date +%s) + STALL_BOUND ))
   if attached_holder_live "$pid"; then
     kill -TERM "$pid" 2>/dev/null || true
   fi
   # Retain the handover through slow EXIT cleanup. Falling into ordinary attach
   # after five seconds lost the snapshot, so our own TERM became fresh downtime
   # on every subsequent park even after main acknowledged its empty recovery.
-  while fm_pid_alive "$pid" && [ "$(date +%s)" -lt "$deadline" ]; do
+  # Count only after TERM; compare whole seconds as decimal without using the
+  # configured bound in shell arithmetic (which treats leading zeroes as octal).
+  while fm_pid_alive "$pid" && [ "$((stop_ticks / 10))" -lt "$STALL_BOUND" ]; do
     sleep 0.1
+    stop_ticks=$((stop_ticks + 1))
   done
   if fm_pid_alive "$pid"; then
     return 1
@@ -662,7 +664,8 @@ take_over_cycle() {  # <watcher-pid> <identity>
     sleep 0.02
     i=$((i + 1))
   done
-  if [ "$owner_signal" = TERM ]; then
+  # kill -l may include the SIG prefix for the same termination signal.
+  if [ "${owner_signal#SIG}" = TERM ]; then
     fm_recovery_marker_handover_restore "$STATE/.watcher-down" \
       "$FM_RECOVERY_HANDOVER_TOKEN" "$FM_RECOVERY_HANDOVER_SEQ" || true
     cycle_log_append unknown unknown taken-over none

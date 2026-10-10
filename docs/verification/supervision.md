@@ -674,20 +674,24 @@ tests/fm-turnend-guard.test.sh
 
 ### Slow takeover cleanup
 
-On 2026-10-09, GNU Bash 3.2.57 passed the isolated delayed-cleanup and genuine-downtime host regressions:
+On 2026-10-10, GNU Bash 3.2.57 passed the isolated host recovery regressions for delayed cleanup, the full post-TERM stop allowance, decimal bounds, signal-name variants, and genuine downtime:
 
 ```sh
-bash -c '. tests/supervision-host-helpers.sh; test_acknowledged_host_recovery_settles; test_host_recovery_after_real_successor_downtime'
+bash -c '. tests/supervision-host-helpers.sh; test_acknowledged_host_recovery_settles; test_host_takeover_waits_full_stop_bound; test_host_takeover_accepts_decimal_stop_bound; test_host_takeover_accepts_prefixed_term_receipt; test_host_recovery_after_real_successor_downtime'
 ```
 
 ```text
 ok - host+hook: an acknowledged empty recovery hand-back settles despite a delayed takeover stop
+ok - host+hook: takeover grants the full cleanup bound after TERM delivery
+ok - host+hook: takeover accepts a leading-zero decimal stop bound
+ok - host+hook: takeover recognizes a SIGTERM receipt from kill -l
 ok - host+hook: real successor downtime still resurfaces for main
 ```
 
 The delayed-cleanup case failed before the fix with `the acknowledged empty close woke main again`, carrying `check: rearm-resurface`.
-It runs the real host, watcher, arm, drain, and Stop-hook script with a stub session and engine; it does not claim live Claude delivery verification.
-Refresh both cases with `bin/fm-test-run.sh tests/fm-supervision-host-attended.test.sh`.
+The timing, decimal-bound, and prefixed-receipt cases each failed when their corresponding fix was removed.
+These cases run the real host, watcher, arm, drain, and Stop-hook script with a stub session and engine; they do not claim live Claude delivery verification.
+Refresh all five cases with `bin/fm-test-run.sh tests/fm-supervision-host-attended.test.sh`.
 The change is in the common arm takeover used by the host; Claude, Cursor, Codex, Grok, OpenCode, and omp arm-owner integration surfaces and runtime-backend dispatch remain unchanged.
 
 ### Engine and primary delivery

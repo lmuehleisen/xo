@@ -1204,12 +1204,12 @@ test_claude_stop_hook_delivers_a_main_only_pass_through() {
 
 # A recovery close is main-only too. Once main acknowledges its empty drain,
 # taking over the successor must not manufacture another recovery episode.
-test_acknowledged_host_recovery_settles() {
-  local home acknowledged real_mktemp
-  home=$(make_primary_home hook-recovery-settles)
+test_acknowledged_host_recovery_settles() {  # [variant] [cleanup-seconds]
+  local variant=${1:-slow-cleanup} cleanup_seconds=${2:-8} home acknowledged real_mktemp
+  home=$(make_primary_home "hook-recovery-settles-$variant")
   real_mktemp=$(command -v mktemp)
-  # Hold the watcher's EXIT cleanup beyond the old five-second takeover stop
-  # window, after TERM lands but before downtime is published and it exits.
+  # Hold actual EXIT cleanup before downtime is published. The default delay
+  # exceeds the old five-second takeover stop window.
   cat > "$home/fakebin/mktemp" <<SH
 #!/usr/bin/env bash
 case "\$*" in
@@ -1217,7 +1217,7 @@ case "\$*" in
     if [ -e "\$FM_HOME/hold-cleanup" ]; then
       rm -f "\$FM_HOME/hold-cleanup"
       : > "\$FM_HOME/cleanup-held"
-      sleep 8
+      sleep "$cleanup_seconds"
     fi ;;
 esac
 exec "$real_mktemp" "\$@"
@@ -1225,7 +1225,29 @@ SH
   chmod +x "$home/fakebin/mktemp"
   FM_HOME="$home" bash -c '. "$1"; fm_recovery_marker_publish "$2" downtime' _ \
     "$ROOT/bin/fm-wake-lib.sh" "$home/state/.watcher-down" || fail "fixture: could not publish downtime"
-  start_hook_session "$home"
+  if [ "$variant" = late-term ] || [ "$variant" = prefixed-term ]; then
+    # Control TERM delivery and signal-name formatting independently. Time
+    # before TERM must not consume the cleanup allowance.
+    cat > "$home/delayed-term.sh" <<'SH'
+kill() {
+  if [ "${1:-}" = -l ] && [ "${2:-}" = 15 ] && [ -e "$FM_HOME/prefixed-term" ]; then
+    printf 'SIGTERM\n'
+    return 0
+  fi
+  case "$0" in */fm-watch-arm.sh)
+    if [ "${1:-}" = -TERM ] && [ -e "$FM_HOME/delay-term" ]; then
+      rm -f "$FM_HOME/delay-term"
+      : > "$FM_HOME/term-delayed"
+      sleep 11
+    fi ;;
+  esac
+  command kill "$@"
+}
+SH
+    BASH_ENV="$home/delayed-term.sh" start_hook_session "$home"
+  else
+    start_hook_session "$home"
+  fi
   turn_end "$home"
   wait_until 250 hook_exited "$home" || fail "recovery: the first close did not reach main"
   assert_rewoke_main "$home" recovery
@@ -1238,21 +1260,47 @@ SH
   acknowledged=$(cat "$home/state/.watcher-down")
   assert_re '^acked:' "$home/state/.watcher-down" "recovery: main did not retire the episode"
   : > "$home/hold-cleanup"
+  [ "$variant" != late-term ] || : > "$home/delay-term"
+  [ "$variant" != prefixed-term ] || : > "$home/prefixed-term"
   turn_end "$home"
-  wait_until 150 test -e "$home/cleanup-held" || fail "fixture: the successor did not enter its slow cleanup"
+  wait_until 300 test -e "$home/cleanup-held" || fail "fixture: the successor did not enter its slow cleanup"
+  [ "$variant" != late-term ] || [ -e "$home/term-delayed" ] \
+    || fail "fixture: takeover did not delay TERM delivery"
   wait_until 600 host_owns_the_only_cycle "$home" \
     || fail "recovery: the next park did not take over its successor: $(cat "$home/state/.supervision-host.log")"
   sleep 3
-  ! hook_exited "$home" || fail "recovery: the acknowledged empty close woke main again: $(cat "$home/hook.err")"
+  ! hook_exited "$home" || fail "recovery: the acknowledged empty close woke main again: $(cat "$home/hook.err" "$home/state/.watch-cycle-exits.log")"
   [ "$(cat "$home/state/.watcher-down")" = "$acknowledged" ] \
     || fail "recovery: taking over the successor reopened acknowledged downtime"
   [ "$(grep -c 'main-only.*check: rearm-resurface' "$home/state/.supervision-host.log")" -eq 1 ] \
     || fail "recovery: the host regenerated its own recovery close"
   : > "$home/session.stop"
   stop_home_processes "$home"
-  assert_re 'signal=TERM.*reason=signal-exit' "$home/state/.watch-cycle-exits.log" \
-    "fixture: the old watcher must actually end from the takeover's TERM"
-  pass "host+hook: an acknowledged empty recovery hand-back settles despite a delayed takeover stop"
+  if [ "$variant" = prefixed-term ]; then
+    assert_re 'signal=SIGTERM.*reason=signal-exit' "$home/state/.watch-cycle-exits.log" \
+      "fixture: the old watcher's actual TERM must be recorded with the SIG prefix"
+  else
+    assert_re 'signal=TERM.*reason=signal-exit' "$home/state/.watch-cycle-exits.log" \
+      "fixture: the old watcher must actually end from the takeover's TERM"
+  fi
+  case "$variant" in
+    late-term) pass "host+hook: takeover grants the full cleanup bound after TERM delivery" ;;
+    decimal-bound) pass "host+hook: takeover accepts a leading-zero decimal stop bound" ;;
+    prefixed-term) pass "host+hook: takeover recognizes a SIGTERM receipt from kill -l" ;;
+    *) pass "host+hook: an acknowledged empty recovery hand-back settles despite a delayed takeover stop" ;;
+  esac
+}
+
+test_host_takeover_waits_full_stop_bound() {
+  FM_WATCHER_STALL_BOUND=10 test_acknowledged_host_recovery_settles late-term 1
+}
+
+test_host_takeover_accepts_decimal_stop_bound() {
+  FM_WATCHER_STALL_BOUND=08 test_acknowledged_host_recovery_settles decimal-bound 1
+}
+
+test_host_takeover_accepts_prefixed_term_receipt() {
+  test_acknowledged_host_recovery_settles prefixed-term 1
 }
 
 test_host_recovery_after_real_successor_downtime() {
