@@ -937,6 +937,7 @@ The gate always reads the owning home's directory, including from a worker's own
 | `poison-commits` | Old commit ids that must never reach a public destination |
 | `contribution-poison-commits` | Optional publisher-local forbidden ancestry scoped to exact destinations |
 | `no-mistakes-submissions` | Optional publisher-local approval scopes for the generated upstream attestation body exception |
+| `no-mistakes-test-exceptions` | Optional separate, manually listed approvals for test overrides within an approved submission scope |
 | `upstream` | Optional: public repositories, such as the one this project merges from, whose branches and tags a public push treats as already published, read live at push time; without it their commits are scanned like new ones |
 | `gh` | Optional: the gh binary that answers the live privacy check, instead of a fixed install location; never looked up on `PATH` |
 | `git` | Optional: the git binary that reads what a public destination and each `upstream` entry advertise at push time, instead of a fixed install location; never looked up on `PATH` |
@@ -950,7 +951,7 @@ Each spawned worker's hooks run the gate on commit (a staged-change check, then 
 A push to a network destination that is neither allowlisted nor a confirmed-private repository of an owner is refused, and a push to a public destination is refused while `identity`, `denylist`, `poison-commits`, or `gitleaks` (`bin/fm-install-gitleaks.sh`) is missing, so a missing file never lets a public push through.
 Every refusal names the one command or edit that fixes it.
 Isolated publisher subprocesses use [`bin/fm-gh-publish-exec.mjs`](../bin/fm-gh-publish-exec.mjs) for checked generated stdin bodies and [`bin/fm-git-publish-exec.mjs`](../bin/fm-git-publish-exec.mjs) for outgoing commits, including orphan evidence created without commit hooks; their headers own invocation and setup publication blocks.
-[`bin/fm-no-mistakes-body.mjs`](../bin/fm-no-mistakes-body.mjs) owns live head and attestation eligibility and compact publication formatting for the bounded generated-body exception.
+[`bin/fm-no-mistakes-body.mjs`](../bin/fm-no-mistakes-body.mjs) owns row validation, opt-in test exceptions, live-head eligibility including guarded pre-push refreshes, and compact formatting for the bounded generated-body exception.
 Publisher-local contribution scopes do not flow into secondmate homes.
 The `gh` guard refuses every command that changes a repository's visibility (`gh repo edit --visibility`, an API write of `private` or `visibility`, a template generate, or a Pages write), whatever the destination's class, because it publishes everything the repository holds and no text check covers that.
 Making a repository public is a manual change the captain makes in the repository's settings, after reviewing everything it holds: every branch and tag (`bin/fm-publish-gate.sh ci-commits` over the history), releases, issues, and pull requests.

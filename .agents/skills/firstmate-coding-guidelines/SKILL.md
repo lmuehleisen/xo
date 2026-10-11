@@ -118,7 +118,8 @@ This guidance applies only when preparing a contribution to an upstream reposito
 This fork's own `direct-PR` and `local-only` work runs relevant tests and lint directly and never starts a no-mistakes pipeline.
 Use a `contrib/<name>` branch for an upstream submission; the publisher's generated-body exception is limited to that branch namespace.
 Before the pipeline publishes, add the exact upstream/fork/branch approval row to the isolated publisher's private `no-mistakes-submissions` file, and remove that row after publication or abandonment.
-[`bin/fm-no-mistakes-body.mjs`](../../../bin/fm-no-mistakes-body.mjs) owns row syntax, live-head eligibility, and generated-body normalization.
+A test override also requires the operator to list that submission by hand in the separate private `no-mistakes-test-exceptions` file; remove its approval row after publication or abandonment.
+[`bin/fm-no-mistakes-body.mjs`](../../../bin/fm-no-mistakes-body.mjs) owns row validation, test-exception eligibility, guarded pre-push refreshes, and generated-body normalization.
 An evidence-branch publish-judge refusal is expected and non-fatal; it does not authorize bypassing the contribution branch's publish checks.
 Keep publication blocks enabled while capturing or previewing a generated body; use the publisher's checked dry/probe paths instead of a live `pr` step with blocks lifted.
 Let the pipeline generate its `## Pipeline` attestation and open the PR; never hand-write or repair its attestation marker.

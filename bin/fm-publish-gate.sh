@@ -103,10 +103,14 @@
 #   contribution-poison-commits  optional rows "<owner/repo> <full commit id>";
 #                   additional forbidden ancestry only for that destination.
 #   no-mistakes-submissions  optional approved "<upstream> <fork> <contrib/branch>"
-#                   rows; fm-no-mistakes-body.mjs owns eligibility validation.
-#                   Live fork/head facts and completed review/test/document
-#                   assertions permit 300 lines/24000 bytes, with all content
-#                   checks, gitleaks and semantic review retained.
+#                   rows; fm-no-mistakes-body.mjs owns live-head eligibility,
+#                   guarded pre-push refreshes and approved test exceptions.
+#                   Completed review/test/document assertions permit
+#                   300 lines/24000 bytes, with all content checks, gitleaks
+#                   and semantic review retained.
+#   no-mistakes-test-exceptions  optional separate, manually listed test-override
+#                   approvals using the same rows as no-mistakes-submissions;
+#                   the body helper owns validation and exact-scope matching.
 #   upstream        optional; one exact GitHub owner/repo or absolute local
 #                   path per line: public repositories whose advertised
 #                   branches and tags a public push treats as already
@@ -1739,8 +1743,11 @@ incident evidence: a process id with its number (pid 4242), a tmux pane id
 (%12), or a clock time (14:05). Everyday words such as pid, pane, timeline, or
 incident are fine on their own.
 Approved no-mistakes upstream submissions may use 300 lines and 24000 bytes
-only with an exact private upstream/fork/contribution-branch scope, live final
-head verification and complete v1 review/test/document assertions.
+only with an exact private upstream/fork/contribution-branch scope and the live
+eligibility checks owned by fm-no-mistakes-body.mjs, including guarded pre-push
+refreshes. Complete v1 review/test/document assertions remain required.
+Test overrides require separate manual no-mistakes-test-exceptions approval;
+sanitized output labels them approved exceptions, never a test pass.
 The assertions are author-editable, not cryptographic proof.
 These bodies still pass the full literal, email, gitleaks and semantic checks.
 Integration descriptions stay a technical record: no machine names, runner
