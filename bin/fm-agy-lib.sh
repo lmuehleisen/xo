@@ -26,9 +26,10 @@
 # 1. When closure cannot be confirmed (the backend still finds the target), the
 # task record, busy generation, and hooks are kept for teardown instead, and
 # the failure says the worker may still be running.
-#   --agy-bypass is the reviewed path onto agy's
-#   --dangerously-skip-permissions, available to agy crewmate and scout spawns
-#   on the wired launch path. It installs bin/fm-agy-permission-policy.sh
+#   agy crewmate and scout launches use the reviewed policy layer by default
+#   when config/crew-permissions is auto or absent. --no-agy-bypass selects
+#   accept-edits explicitly; manual keeps agy's prompt posture. The policy
+#   layer installs bin/fm-agy-permission-policy.sh
 #   beside the worker hooks - an armed heartbeat on PreInvocation and Stop,
 #   and a hard-deny/judge decision on PreToolUse after the log-only observer
 #   - so the bypass is policed rather than bare. The
@@ -48,8 +49,8 @@
 #   hard refusals that hold under bypass, a judge for the residue, and
 #   durable escalation records firstmate can resolve.
 #   --agy-judge <tier>[:<model>] selects WHICH judge answers that residue,
-#   from the tiers bin/fm-judge-tier-lib.sh knows. It requires --agy-bypass,
-#   and its default needs no flag at all: agy judges agy, on that tier's own
+#   from the tiers bin/fm-judge-tier-lib.sh knows. It requires the policy
+#   layer, whose default judge needs no flag: agy judges agy, on that tier's own
 #   model. Selecting another tier refuses rather than falls back when the tier
 #   is unknown or its executable is not installed. The resolved tier is printed
 #   before the launch, repeated on the spawned line, and recorded as agy_judge=
@@ -57,11 +58,13 @@
 #   log can tell which judge adjudicated this task's calls.
 #
 #   fm_agy_permission_flags <crew-permission-mode>
-#       prints the launch permission flags for auto or manual
+#       prints permission flags for the selected agy posture
+#   fm_agy_default_posture <harness> <kind>
+#       selects the policy-layer default for an agy worker launch
 #   fm_agy_relaunch_inherit
 #       a relaunch's inheritance of the recorded bypass posture and judge tier
 #   fm_agy_bypass_validate
-#       the --agy-bypass and --agy-judge argument gates, resolving the tier
+#       the agy policy-layer and judge gates, resolving the selected tier
 #   fm_agy_permission_dirs
 #       prints the physically resolved --add-dir grants for the launch
 #   fm_agy_spawn_wire
@@ -86,7 +89,8 @@
 #       an archive failure stops cleanup without deleting the task records.
 #
 # The spawn-side functions read bin/fm-spawn.sh's globals rather than taking
-# them as arguments: AGY_BYPASS, AGY_JUDGE_ARG,
+# them as arguments: AGY_BYPASS, AGY_BYPASS_POSTURE_SET, AGY_BYPASS_OPT_OUT,
+# AGY_JUDGE_ARG,
 # AGY_JUDGE_SET, AGY_JUDGE_TIER, AGY_JUDGE_MODEL, AGY_JUDGE_BIN, AGY_BIN,
 # ARG3, RELAUNCH_META, HARNESS, KIND, RAW_LAUNCH, RELAUNCH,
 # CREW_PERMISSION_MODE, WT, STATE, STATE_REAL, ID, BUSY_GEN, TASK_TMP, BRIEF,
@@ -113,22 +117,16 @@ agy_effort_level() {  # <effort> <model>
 }
 
 # agy has no reviewed-auto mode. Its only blanket option is
-# --dangerously-skip-permissions, which auto stays deliberately clear
-# of: auto selects --mode accept-edits, verified on agy 1.2.0 to
-# auto-approve file edits inside the granted directories while STILL
-# prompting for every shell command (a `date` call was denied under
-# accept-edits). manual omits --mode entirely, leaving agy's default
-# review mode where edits prompt too. Neither path can reach
-# --dangerously-skip-permissions, and there is no fallback onto it when
-# an approval prompt parks the worker; the pane stall is the visible,
-# supervisable outcome. .agents/skills/harness-adapters/references/harness/agy.md
-# owns the operating consequences.
-# The --agy-bypass opt-in is the single reviewed path onto
-# --dangerously-skip-permissions: it launches only with the
+# --dangerously-skip-permissions. For agy crewmate and scout launches, auto
+# selects the policy layer below by default; --no-agy-bypass selects
+# --mode accept-edits, verified on agy 1.2.0 to auto-approve file edits inside
+# the granted directories while STILL prompting for every shell command (a
+# `date` call was denied under accept-edits). manual omits --mode entirely,
+# leaving agy's default review mode where edits prompt too.
+# The policy layer is the reviewed path onto --dangerously-skip-permissions: it launches only with the
 # bin/fm-agy-permission-policy.sh hook layer installed beside the
-# worker hooks, so the bypass is policed rather than bare. The flag's
-# gates are in fm_agy_bypass_validate; without it this branch is
-# byte-identical to the accept-edits posture above.
+# worker hooks, so the bypass is policed rather than bare. Its gates are in
+# fm_agy_bypass_validate; secondmates and raw launch commands stay outside it.
 fm_agy_permission_flags() {  # <crew-permission-mode>
   case "${1-}" in
   auto)
@@ -143,6 +141,16 @@ fm_agy_permission_flags() {  # <crew-permission-mode>
   esac
 }
 
+# Select the policy-layer default only on wired agy task launches. Explicit
+# opt-out, manual review, and secondmates keep their selected prompt posture.
+fm_agy_default_posture() {  # <harness> <kind>
+  [ "$1" = agy ] && [ "$2" != secondmate ] || return 0
+  [ "$AGY_BYPASS_POSTURE_SET" = 0 ] || return 0
+  [ "$CREW_PERMISSION_MODE" = auto ] || return 0
+  AGY_BYPASS=1
+  AGY_BYPASS_POSTURE_SET=1
+}
+
 # The recorded bypass posture binds to agy worker spawns: a relaunch onto a
 # different harness, or onto a secondmate, drops it rather than carrying an
 # agy worker layer's name forward into a posture it does not police.
@@ -151,20 +159,32 @@ fm_agy_permission_flags() {  # <crew-permission-mode>
 # record names. A record written before the tier was selectable carries no
 # field, which resolves to this adapter's own tier in fm_agy_bypass_validate.
 fm_agy_relaunch_inherit() {
-  [ "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" = on ] && [ "$ARG3" = agy ] && [ "$KIND" != secondmate ] && AGY_BYPASS=1
+  [ "$ARG3" = agy ] && [ "$KIND" != secondmate ] || return 0
+  case "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" in
+    on)
+      AGY_BYPASS=1
+      AGY_BYPASS_POSTURE_SET=1
+      ;;
+    off)
+      AGY_BYPASS=0
+      AGY_BYPASS_POSTURE_SET=1
+      AGY_BYPASS_OPT_OUT=1
+      ;;
+  esac
   if [ "$AGY_BYPASS" -eq 1 ]; then
     AGY_JUDGE_ARG=$(fm_meta_get "$RELAUNCH_META" agy_judge || true)
   fi
 }
 
-# --agy-bypass is the reviewed path onto agy's
+# The policy layer is the reviewed path onto agy's
 # --dangerously-skip-permissions: firstmate's permission layer
 # (bin/fm-agy-permission-policy.sh) rides the worker hook file it installs, so
-# the bypass is policed rather than bare. It applies to agy crewmate and scout
-# spawns on the wired launch path - a raw launch command installs no hooks at
-# all - and refuses to combine with config/crew-permissions=manual, which is
-# itself an explicit prompt posture. A secondmate is a firstmate instance
-# rather than a worker this layer polices, so it stays refused.
+# the bypass is policed rather than bare. It applies by default to agy
+# crewmate and scout spawns on the wired launch path - a raw launch command
+# installs no hooks at all - when config/crew-permissions is auto or absent.
+# --no-agy-bypass selects accept-edits, while manual is itself an explicit
+# prompt posture. A secondmate is a firstmate instance rather than a worker
+# this layer polices, so it stays excluded.
 # A relaunch inherits the recorded posture through fm_agy_relaunch_inherit, so
 # every check below and at install time applies to it unchanged.
 # The posture first covered scouts only and now covers ships too. On a
@@ -181,6 +201,20 @@ fm_agy_bypass_validate() {
   if [ "$HARNESS" = agy ] && ! python3 -c 'import datetime, hashlib, json, pathlib, re, sys' >/dev/null 2>&1; then
     echo "error: cannot spawn agy task: Python 3 is required for its cleanup audit; install python3 before launching" >&2
     exit 1
+  fi
+  if [ "$AGY_BYPASS_OPT_OUT" -eq 1 ]; then
+    [ "$HARNESS" = agy ] || {
+      echo "error: --no-agy-bypass applies only to agy spawns" >&2
+      exit 1
+    }
+    [ "$RAW_LAUNCH" -eq 0 ] || {
+      echo "error: --no-agy-bypass requires the wired agy launch template" >&2
+      exit 1
+    }
+    [ "$KIND" != secondmate ] || {
+      echo "error: --no-agy-bypass applies only to agy crewmate and scout spawns" >&2
+      exit 1
+    }
   fi
   if [ "$AGY_BYPASS" -eq 1 ]; then
     [ "$HARNESS" = agy ] || {
@@ -207,8 +241,7 @@ fm_agy_bypass_validate() {
     # back after the per-task policy file is gone.
     AGY_JUDGE_TIER=${AGY_JUDGE_ARG%%:*}
     case "$AGY_JUDGE_ARG" in *:*) AGY_JUDGE_MODEL=${AGY_JUDGE_ARG#*:} ;; *) AGY_JUDGE_MODEL= ;; esac
-    # Absent means this adapter's own tier: agy judges agy, automatically, as
-    # the default rather than an opt-in.
+    # Absent means this adapter's own tier: agy judges agy automatically.
     [ -n "$AGY_JUDGE_TIER" ] || AGY_JUDGE_TIER=agy
     fm_judge_tier_known "$AGY_JUDGE_TIER" || {
       echo "error: --agy-judge names an unknown judge tier '$AGY_JUDGE_TIER'; known tiers: $(fm_judge_tiers)" >&2
@@ -220,7 +253,7 @@ fm_agy_bypass_validate() {
     # the agy binary itself has been resolved.
   fi
   [ "$AGY_JUDGE_SET" -eq 0 ] || [ "$AGY_BYPASS" -eq 1 ] || {
-    echo "error: --agy-judge selects the judge for the --agy-bypass permission layer; without that posture no judge is installed" >&2
+    echo "error: --agy-judge selects the judge for the agy policy layer; --no-agy-bypass disables that layer" >&2
     exit 1
   }
 }
@@ -263,7 +296,7 @@ fm_agy_spawn_wire() {
     # - and the policy file itself, which install-worker then verifies
     #   exists before merging the adapter into the hooks.
     command -v jq >/dev/null 2>&1 || {
-      echo "error: cannot spawn agy bypass worker: jq is required by the permission policy hook; install jq or drop --agy-bypass" >&2
+      echo "error: cannot spawn agy policy-layer worker: jq is required by the permission policy hook; install jq or select --no-agy-bypass" >&2
       exit 1
     }
     agy_version=$("$AGY_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
@@ -271,7 +304,7 @@ fm_agy_spawn_wire() {
     case " $agy_verified " in
       *" ${agy_version:-none} "*) ;;
       *)
-        echo "error: cannot spawn agy bypass worker: agy ${agy_version:-unreadable} is outside the live-verified set ($agy_verified); the hook contract this layer depends on is unproven there; manual review is a separate explicit choice: config/crew-permissions=manual without --agy-bypass (not judge coverage)" >&2
+        echo "error: cannot spawn agy policy-layer worker: agy ${agy_version:-unreadable} is outside the live-verified set ($agy_verified); the hook contract this layer depends on is unproven there; manual review is a separate explicit choice: config/crew-permissions=manual or --no-agy-bypass (not judge coverage)" >&2
         exit 1
         ;;
     esac
@@ -282,7 +315,7 @@ fm_agy_spawn_wire() {
       AGY_JUDGE_BIN=$(command -v "$(fm_judge_tier_command "$AGY_JUDGE_TIER")" 2>/dev/null || true)
     fi
     [ -n "$AGY_JUDGE_BIN" ] && [ -x "$AGY_JUDGE_BIN" ] || {
-      echo "error: cannot spawn agy bypass worker: the $AGY_JUDGE_TIER judge tier needs the '$(fm_judge_tier_command "$AGY_JUDGE_TIER")' executable, which is not installed; install it or select a tier that is" >&2
+      echo "error: cannot spawn agy policy-layer worker: the $AGY_JUDGE_TIER judge tier needs the '$(fm_judge_tier_command "$AGY_JUDGE_TIER")' executable, which is not installed; install it or select a tier that is" >&2
       exit 1
     }
     # Say the judge out loud before the launch: which judge adjudicated a
@@ -293,7 +326,7 @@ fm_agy_spawn_wire() {
     agy_git_root=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$agy_wt_real")
     while :; do
       [ ! -e "$agy_check_dir/.agents/hooks.json" ] && [ ! -L "$agy_check_dir/.agents/hooks.json" ] || {
-        echo "error: cannot spawn agy bypass worker: $agy_check_dir/.agents/hooks.json exists; the bypass posture needs firstmate's worker hooks to be the only hooks in force; choose manual review explicitly with config/crew-permissions=manual and omit --agy-bypass; manual workers are not judge coverage" >&2
+        echo "error: cannot spawn agy policy-layer worker: $agy_check_dir/.agents/hooks.json exists; the bypass posture needs firstmate's worker hooks to be the only hooks in force; choose manual review explicitly with config/crew-permissions=manual or --no-agy-bypass; manual workers are not judge coverage" >&2
         exit 1
       }
       [ "$agy_check_dir" != "$agy_git_root" ] || break
@@ -428,8 +461,9 @@ fm_agy_spawn_ready_gate() {
   fi
 }
 
-# Recorded only when the opt-in bypass posture is armed, so an absent
-# field is the accept-edits/manual default every other agy task carries.
+# The bypass posture records on; an explicit --no-agy-bypass records off so a
+# relaunch preserves that choice. Auto/manual prompt modes without an explicit
+# opt-out leave the field absent.
 # The judge tier rides the recorded posture so a relaunch re-judges on the
 # same tier, and so the task's own record answers which judge decided its
 # held and approved calls.
@@ -442,7 +476,11 @@ fm_agy_meta_lines() {
   fi
   echo "agy_version=$version"
   echo "agy_permission_mode=$CREW_PERMISSION_MODE"
-  [ "$AGY_BYPASS" -eq 0 ] || echo "agy_bypass=on"
+  if [ "$AGY_BYPASS" -eq 1 ]; then
+    echo "agy_bypass=on"
+  elif [ "$AGY_BYPASS_OPT_OUT" -eq 1 ]; then
+    echo "agy_bypass=off"
+  fi
   [ "$AGY_BYPASS" -eq 0 ] || echo "agy_judge=$AGY_JUDGE_TIER:$AGY_JUDGE_MODEL"
 }
 

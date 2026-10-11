@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>] [--agy-bypass [--agy-judge <tier>[:<model>]]]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>] [--agy-bypass|--no-agy-bypass] [--agy-judge <tier>[:<model>]]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>] [--agy-bypass|--no-agy-bypass] [--agy-judge <tier>[:<model>]]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -425,12 +425,12 @@
 #   uses Claude's --permission-mode auto / Codex's --approve-for-me
 #   (workspace-write with automatic review); manual uses Claude manual / Codex
 #   on-request with human review. agy has no reviewed-auto mode of its own, so
-#   auto selects --mode accept-edits, which auto-approves file edits inside the
-#   granted directories but STILL prompts for every shell command, and manual
-#   leaves agy's default review mode where edits prompt too. agy's blanket
-#   --dangerously-skip-permissions is emitted by neither setting and is never a
-#   fallback, so an agy worker parks at a visible in-pane approval prompt rather
-#   than widening its own permissions.
+#   auto selects its policy-layered --dangerously-skip-permissions posture for
+#   crewmates and scouts; --no-agy-bypass selects --mode accept-edits, which
+#   auto-approves file edits inside the granted directories but STILL prompts
+#   for every shell command, and manual leaves agy's default review mode where
+#   edits prompt too. The bypass is never bare: the worker hooks, permission
+#   policy, judge, and startup canary must all pass their gates.
 #   The file is resolved once, before any mutation, on every spawn: surrounding
 #   whitespace (including a CRLF ending) is trimmed, proven absence means auto,
 #   and an uninspectable path, a non-file, an unreadable file, or any value other
@@ -503,8 +503,8 @@
 # it writes state/<id>.muse-session to bind the pane to muse's own session event
 # log; muse and gemini are crewmate/scout only and are refused for --secondmate.
 # agy installs native hooks through fm-agy-hook.sh; bin/fm-agy-lib.sh's header
-# owns its launch grants, readiness gate, and the --agy-bypass and --agy-judge
-# posture.
+# owns its launch grants, readiness gate, default policy posture, and the
+# --agy-bypass, --no-agy-bypass, and --agy-judge options.
 # rovo installs no hook either - its eventHooks fire at tool granularity only,
 # never turn-end - so it carries no busy-source wiring at all and no turn-end
 # hook. A positional brief is dead-on-arrival (rovo loads, never works, and drops
@@ -803,6 +803,8 @@ BRANCH_PREFIX_SET=0
 TRACEPARENT_SET=0
 AGY_BYPASS=0
 AGY_BYPASS_SET=0
+AGY_BYPASS_POSTURE_SET=0
+AGY_BYPASS_OPT_OUT=0
 AGY_JUDGE_ARG=
 AGY_JUDGE_SET=0
 AGY_JUDGE_TIER=
@@ -918,7 +920,20 @@ for a in "$@"; do
     TRACEPARENT_ARG=${a#--traceparent=}
     TRACEPARENT_SET=1
     ;;
-  --agy-bypass) AGY_BYPASS=1 AGY_BYPASS_SET=1 ;;
+  --agy-bypass)
+    [ "$AGY_BYPASS_OPT_OUT" -eq 0 ] || {
+      echo "error: --agy-bypass and --no-agy-bypass select conflicting agy postures" >&2
+      exit 1
+    }
+    AGY_BYPASS=1 AGY_BYPASS_SET=1 AGY_BYPASS_POSTURE_SET=1
+    ;;
+  --no-agy-bypass)
+    [ "$AGY_BYPASS_SET" -eq 0 ] || {
+      echo "error: --agy-bypass and --no-agy-bypass select conflicting agy postures" >&2
+      exit 1
+    }
+    AGY_BYPASS=0 AGY_BYPASS_SET=1 AGY_BYPASS_POSTURE_SET=1 AGY_BYPASS_OPT_OUT=1
+    ;;
   --agy-judge) want_value=agy-judge ;;
   --agy-judge=*)
     AGY_JUDGE_ARG=${a#--agy-judge=}
@@ -1030,7 +1045,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   }
   [ "$AGY_BYPASS_SET" -eq 0 ] || {
-    echo "error: --relaunch reuses the task's recorded agy permission posture; --agy-bypass cannot override it" >&2
+    echo "error: --relaunch reuses the task's recorded agy permission posture; --agy-bypass and --no-agy-bypass cannot override it" >&2
     exit 1
   }
   [ "$AGY_JUDGE_SET" -eq 0 ] || {
@@ -2776,6 +2791,7 @@ case "$ARG3" in
     HARNESS=$("$FM_ROOT/bin/fm-harness.sh" crew)
     harness_src='config/crew-harness'
   fi
+  fm_agy_default_posture "$HARNESS" "$KIND"
   LAUNCH=$(launch_template "$HARNESS" "$KIND") || {
     echo "error: no launch template for harness '$HARNESS' (from $harness_src or detection); pass a raw launch command to use an unverified adapter" >&2
     exit 1
@@ -2783,6 +2799,7 @@ case "$ARG3" in
   ;;
 *)
   HARNESS=$ARG3
+  fm_agy_default_posture "$HARNESS" "$KIND"
   LAUNCH=$(launch_template "$HARNESS" "$KIND") || {
     echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2
     exit 1
@@ -2798,7 +2815,7 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   fi
 fi
 
-# The --agy-bypass and --agy-judge gates (bin/fm-agy-lib.sh).
+# The agy policy posture and judge gates (bin/fm-agy-lib.sh).
 fm_agy_bypass_validate
 
 # muse, gemini, and devin are verified as CREWMATE/SCOUT adapters only. A
