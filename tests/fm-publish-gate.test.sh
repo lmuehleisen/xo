@@ -2027,7 +2027,23 @@ SH
   assert_contains "$(cat "$received")" 'not a claim that every scenario passed' 'exception completion is not a pass claim'
   assert_contains "$(cat "$received")" 'Live validation: inconclusive; 0 of 4' 'exception keeps the inconclusive live verdict'
   rm -f "$received"
-  for scenario in override-path escaped-override-path override-timing override-extra review-override override-type; do
+  local delimiter_rc runtime_diagnostic=0 gate_diagnostic=0
+  local diagnostic='malformed no-mistakes-submissions or no-mistakes-test-exceptions config'
+  sed 's/Live validation was inconclusive./-->/' "$body.exception" >"$body.comment"
+  out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.comment" --sanitize 2>&1)
+  delimiter_rc=$?
+  if [ "$delimiter_rc" -eq 0 ]; then
+    assert_contains "$out" '"override_reason":"-->"' 'comment-terminator counterexample reaches the retained marker'
+  fi
+  printf 'bad row\n' >"$CFG/no-mistakes-test-exceptions"
+  out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.exception" 2>&1)
+  case "$out" in *"fm-gh-publish-exec: REFUSED: $diagnostic"*) runtime_diagnostic=1 ;; esac
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1)
+  case "$out" in *"fm-publish-gate: REFUSED: $diagnostic"*) gate_diagnostic=1 ;; esac
+  printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-test-exceptions"
+  [ ! -e "$received" ] || fail "malformed approval reached gh"
+  assert_equals '3 1 1' "$delimiter_rc $runtime_diagnostic $gate_diagnostic" 'comment terminators refuse and both consumers identify the approval files independently'
+  for scenario in override-path escaped-override-path override-timing override-extra review-override override-type override-comment-start override-comment-end override-comment-bang escaped-override-comment; do
     FM_TEST_OVERRIDE_CASE="$scenario" node --input-type=module - "$body.exception" "$body.unsafe" <<'JS'
 import { readFileSync, writeFileSync } from "node:fs";
 const [source, target] = process.argv.slice(2);
@@ -2041,15 +2057,26 @@ switch (process.env.FM_TEST_OVERRIDE_CASE) {
   case "override-extra": test.execution_id = "fixture-execution"; break;
   case "review-override": a.steps[0].override_reason = "Fixture exception."; break;
   case "override-type": test.override_reason = { verdict: "inconclusive" }; break;
+  case "override-comment-start": test.override_reason = "<!--"; break;
+  case "override-comment-end": case "escaped-override-comment": test.override_reason = "-->"; break;
+  case "override-comment-bang": test.override_reason = "--!>"; break;
 }
 let json = JSON.stringify(a);
 if (process.env.FM_TEST_OVERRIDE_CASE === "escaped-override-path") json = json.replaceAll("/", "\\u002f");
+if (process.env.FM_TEST_OVERRIDE_CASE === "escaped-override-comment") json = json.replaceAll(">", "\\u003e");
 writeFileSync(target, body.replace(match[1], () => json));
 JS
     out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.unsafe" --sanitize 2>&1)
     rc=$?
     assert_equals 3 "$rc" "approved exception retains private-display and public-schema checks: $scenario"
     assert_equals '' "$out" 'unsafe exception emits no retained private bytes'
+    case "$scenario" in
+    override-comment-* | escaped-override-comment)
+      out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.unsafe" 2>&1) && fail "comment delimiter must refuse without falling back to raw publication"
+      assert_contains "$out" 'generated body has unsafe evidence' 'comment delimiter refuses through the stdin adapter'
+      [ ! -e "$received" ] || fail "comment delimiter reached gh"
+      ;;
+    esac
   done
   sed "s/Live validation was inconclusive./$PRIVATE_TERM/" "$body.exception" >"$body.private"
   out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.private" 2>&1) && fail "approved exception reason must still pass the denylist"
@@ -2066,6 +2093,19 @@ JS
   done
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1) && fail "malformed test exception must refuse through the full gate"
   assert_contains "$out" 'malformed no-mistakes-test-exceptions config' 'malformed exception propagates through the gate'
+  local scope
+  for scope in no-mistakes-submissions no-mistakes-test-exceptions; do
+    printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-submissions"
+    printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-test-exceptions"
+    printf 'bad row\n' >"$CFG/$scope"
+    out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1) && fail "malformed approval must refuse through the full gate"
+    assert_contains "$out" "fm-publish-gate: REFUSED: $diagnostic" 'gate remediation names both possible approval files'
+    out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.exception" 2>&1) && fail "malformed approval must refuse through the stdin adapter"
+    assert_contains "$out" "fm-gh-publish-exec: REFUSED: $diagnostic" 'stdin adapter remediation names both possible approval files'
+    assert_not_contains "$out" 'bad row' 'consumer diagnostics do not echo private approval rows'
+    [ ! -e "$received" ] || fail "malformed approval reached gh"
+  done
+  printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-submissions"
   rm -f "$CFG/no-mistakes-test-exceptions"
   pass "test exceptions require exact private approval, completed required steps, honest sanitized output and unchanged content checks"
 

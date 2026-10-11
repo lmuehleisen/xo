@@ -7,8 +7,8 @@
 // session evidence, and reports step completion without claiming tests passed.
 // It never creates or edits an attestation; all output still needs the full gate.
 // Retained v1 JSON allows only head_sha, steps (step/status plus an approved
-// test override_reason string), and optional live_validation (verdict/live/total),
-// with decoded enum, count and private-display validation.
+// test override_reason string without HTML comment delimiters), and optional
+// live_validation (verdict/live/total), with decoded enum/count/private-display checks.
 // Private no-mistakes-submissions rows are: <upstream> <fork> <contrib/branch>.
 // Optional no-mistakes-test-exceptions uses the same validation and row format;
 // a test override_reason requires an identical row in both private files.
@@ -112,7 +112,7 @@ try {
         || !a.steps.every((s) => publicFields(s, s.step === "test" && approvedException
           ? ["step", "status", "override_reason"] : ["step", "status"]))
         || (testOverride && (typeof test.override_reason !== "string" || !test.override_reason.trim()
-          || privateDisplay.test(test.override_reason)))
+          || /<!--|--!?>/.test(test.override_reason) || privateDisplay.test(test.override_reason)))
         || privateDisplay.test(changed) || privateDisplay.test(match[0])) process.exit(3);
       const names = ["intent", "rebase", "review", "test", "document", "lint", "push", "pr", "ci"];
       const statuses = ["completed", "skipped", "running", "pending", "failed"];

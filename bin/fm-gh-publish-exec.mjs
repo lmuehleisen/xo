@@ -65,7 +65,7 @@ try {
           || (prepared.status === 1 && (prepared.stdout || prepared.stderr))) {
           throw new Error("no-mistakes body preparation failed; refresh the publisher toolbelt");
         }
-        if (prepared.status === 2) throw new Error("malformed no-mistakes-submissions config");
+        if (prepared.status === 2) throw new Error("malformed no-mistakes-submissions or no-mistakes-test-exceptions config");
         if (prepared.status === 3) throw new Error("generated body has unsafe evidence or an unsupported layout; rewrite its change summary or refresh the pipeline format");
         if (prepared.status === 0) {
           const publication = prepared.stdout;

@@ -1043,7 +1043,7 @@ check_shape() {
       rc=$?
       case "$rc" in
       0) body_lines=300 body_chars=24000; chars=$(wc -c <"$file" | tr -d ' '); lines=$(awk 'END { print NR + 0 }' "$file"); EXTENDED_TEXT=1 ;;
-      2) refuse "malformed no-mistakes-submissions config" "correct the approved upstream, fork and contribution branch rows" ;;
+      2) refuse "malformed no-mistakes-submissions or no-mistakes-test-exceptions config" "correct the approved upstream, fork and contribution branch rows in those files" ;;
       esac
     fi
     [ "$lines" -le "$body_lines" ] || finding "shape: a description longer than $body_lines lines" "text $n"
