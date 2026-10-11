@@ -766,8 +766,8 @@ agy has no reviewed-auto mode of its own, so an agy crewmate or scout in Auto us
 The per-spawn `--no-agy-bypass` option selects `--mode accept-edits`, which approves file edits inside granted directories while still prompting for shell commands.
 Manual leaves agy's default review mode in place, where edits and shell commands prompt; agy secondmates also stay outside the worker policy layer.
 The policy layer's version, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.
-Availability depends on the installed CLI, account, and managed policy; a denied or unsupported launch must be reported rather than retried without the policy layer.
-Manual keeps approval prompts available for human review, so an unattended task may wait for intervention.
+For a policy-layer launch, availability depends on the installed CLI, account, and managed policy; a denied or unsupported launch must be reported rather than retried without the policy layer.
+Manual approval prompts can leave an unattended task waiting for intervention; with agy, Manual keeps its full review prompts and `--no-agy-bypass` selects `accept-edits`, which still prompts for shell commands.
 Both modes preserve the separate project delivery and merge-approval rules.
 Workers receive additional access to the owning home's shared state directory and their brief/report directory, not the entire home; the shared state layout is not a per-task security boundary.
 Every Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.

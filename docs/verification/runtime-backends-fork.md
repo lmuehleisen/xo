@@ -304,7 +304,7 @@ agy updates itself, so re-run the live guard after any upgrade before trusting t
 
 ### accept-edits covers file edits, not shell commands
 
-This is the decision `config/crew-permissions=auto` rests on.
+This probe characterizes the `accept-edits` mode selected by `--no-agy-bypass`; agy Auto uses the separate policy layer described below.
 The same mode, same granted directory, two tool classes:
 
 ```sh
@@ -443,7 +443,7 @@ The launch therefore stays on `--dangerously-skip-permissions` alone, with the p
 #### 1.3.1 refresh (2026-10-07)
 
 Refreshed on 2026-10-07 with agy 1.3.1 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-`bin/fm-spawn.sh` refuses any version outside the allowlist, so 1.3.1 required this refresh before it could launch.
+Agy policy-layer launches refuse versions outside the allowlist, so 1.3.1 required this refresh before it could launch on that path.
 Nothing in the version-sensitive hook contract changed: the same six live checks and the observer live check passed unchanged, and the `agy models` catalog still lists `gemini-3.6-flash-low`, so no part of the layer needed adapting beyond adding 1.3.1 to the allowlist.
 1.3.0 has no live evidence and stays outside the set.
 

@@ -1875,6 +1875,14 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ "$ULTRACODE" = 0 ] || shared_args+=(--ultracode)
   [ "$GOAL_SET" = 0 ] || shared_args+=(--goal "$GOAL")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  if [ "$AGY_BYPASS_SET" = 1 ]; then
+    if [ "$AGY_BYPASS_OPT_OUT" = 1 ]; then
+      shared_args+=(--no-agy-bypass)
+    else
+      shared_args+=(--agy-bypass)
+    fi
+  fi
+  [ "$AGY_JUDGE_SET" = 0 ] || shared_args+=(--agy-judge "$AGY_JUDGE_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
   # harness. Each pair still re-validates it against its own brief, so a batch
   # spanning several modes is two invocations rather than a silent mixed dispatch.
@@ -5209,6 +5217,15 @@ if [ -n "$HERDR_RECLAIM_WT" ]; then
   # Endpoint recovery is complete. From here reuse the existing relaunch
   # wiring/publication path: retain prior metadata on failure, preserve its
   # non-owned fields, and never freshen/reset the task's existing work.
+  if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = agy ] && [ "$KIND" != secondmate ]; then
+    # Presentation recovery starts as a fresh spawn, so its earlier default
+    # posture was selected before the existing task record could be trusted.
+    # The record is now validated and locked; restore its explicit agy posture
+    # before wiring, metadata publication, or launch delivery.
+    fm_agy_relaunch_inherit
+    fm_agy_bypass_validate
+    LAUNCH=$(launch_template "$HARNESS" "$KIND") || exit 1
+  fi
   RELAUNCH=1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then

@@ -33,8 +33,9 @@
 #   beside the worker hooks - an armed heartbeat on PreInvocation and Stop,
 #   and a hard-deny/judge decision on PreToolUse after the log-only observer
 #   - so the bypass is policed rather than bare. The
-#   launch refuses rather than falls back when any gate fails: jq missing, an
-#   agy version outside the adapter's live-verified set, a project-supplied
+#   launch refuses rather than falls back when any gate fails: jq missing, a
+#   policy-layer launch whose agy version is outside the adapter's live-verified
+#   set, a project-supplied
 #   .agents/hooks.json in the task worktree or its ancestors up to the git
 #   root, an unwritable policy file, or a failed hook install. After the
 #   session starts, a canary (FM_AGY_ARMED_POLLS, default 40) refuses and

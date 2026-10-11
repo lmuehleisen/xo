@@ -6,10 +6,9 @@
 #
 # The facts pinned here are the ones an Antigravity release could silently
 # change and the ones a wrong guess would make dangerous:
-#   1. --dangerously-skip-permissions must be unreachable from every
-#      config/crew-permissions value. It is agy's only blanket approval switch,
-#      routine work stays reviewed rather than routed through it, and a parked
-#      worker must never be unblocked by adding it.
+#   1. --dangerously-skip-permissions must always carry the firstmate-owned
+#      policy layer. Auto enables it for agy workers, while Manual and an
+#      explicit --no-agy-bypass keep their prompt posture.
 #   2. --add-dir for the task worktree is load-bearing, not cosmetic. Verified
 #      on agy 1.2.0: with the pane cwd already inside the worktree but no
 #      --add-dir, a file write landed in agy's own scratch directory while the
@@ -613,6 +612,80 @@ EOF
   [ ! -e "$home/state/$id.agy-permission.json" ] \
     || fail "an opted-out launch must not install the bypass policy"
   pass "fm-spawn.sh: --no-agy-bypass restores accept-edits and persists the opt-out"
+}
+
+prepare_agy_batch_slots() {  # <case-dir> <project> <worktree> <fakebin>
+  local case_dir=$1 proj=$2 first_wt=$3 fakebin=$4 second_wt="$1/wt-second"
+  git -C "$proj" worktree add --quiet --detach "$second_wt" \
+    || fail "could not prepare the second batch worktree"
+  printf '%s\n' "$first_wt" "$second_wt" > "$fakebin/lease-queue"
+  mv "$fakebin/tmux" "$fakebin/tmux-base"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+dir=$(dirname "$0")
+if [ -s "$dir/lease-current" ]; then
+  FM_FAKE_PANE_PATH=$(cat "$dir/lease-current")
+  export FM_FAKE_PANE_PATH
+fi
+exec "$dir/tmux-base" "$@"
+SH
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = get ]; then
+  dir=$(dirname "$0")
+  head -n 1 "$dir/lease-queue" > "$dir/lease-current"
+  tail -n +2 "$dir/lease-queue" > "$dir/lease-next"
+  mv "$dir/lease-next" "$dir/lease-queue"
+  cat "$dir/lease-current"
+fi
+SH
+  chmod +x "$fakebin/tmux" "$fakebin/treehouse"
+}
+
+test_agy_batch_forwards_explicit_opt_out() {
+  local fields case_dir home proj wt fakebin id id2 second_wt out launch task
+  fields=$(make_spawn_case batch-opt-out)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  : "$case_dir"
+  id2=agy-batch-opt-out-x2
+  second_wt="$case_dir/wt-second"
+  mkdir -p "$home/data/$id2"
+  cat > "$home/data/$id2/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Exercise agy batch posture forwarding.
+
+## Firstmate spec
+Verify the explicit agy opt-out reaches every batch child.
+EOF
+  rm -f "$fakebin/agy"
+  fakebin=$(make_bypass_fakebin "$case_dir/fake2")
+  prepare_agy_batch_slots "$case_dir" "$proj" "$wt" "$fakebin"
+  printf 'auto\n' > "$home/config/crew-permissions"
+
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$home/launch.log" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id=$proj" "$id2=$proj" --harness agy --scout --no-agy-bypass 2>&1) \
+    || fail "an agy batch with explicit opt-out must launch: $out"
+  for task in "$id" "$id2"; do
+    grep -q "^spawned $task harness=agy kind=scout" <<<"$out" \
+      || fail "the agy batch did not launch $task: $out"
+    grep -q '^agy_bypass=off$' "$home/state/$task.meta" \
+      || fail "the batch child $task lost its explicit opt-out: $(cat "$home/state/$task.meta")"
+    [ ! -e "$home/state/$task.agy-permission.json" ] \
+      || fail "the opted-out batch child $task installed the bypass policy"
+  done
+  launch=$(cat "$home/launch.log")
+  [ "$(grep -cF -- '--mode accept-edits' "$home/launch.log")" = 2 ] \
+    || fail "every agy batch child must use accept-edits: $launch"
+  ! grep -Fq -- '--dangerously-skip-permissions' "$home/launch.log" \
+    || fail "an explicit batch opt-out must not reach the bypass: $launch"
+  pass "fm-spawn.sh: batch dispatch forwards --no-agy-bypass to every agy child"
 }
 
 test_agy_invalid_setting_refuses_without_bypass() {
@@ -2018,6 +2091,7 @@ test_agy_auto_defaults_to_the_policy_layer
 test_agy_manual_reviews_everything_and_never_bypass
 test_agy_absent_setting_defaults_to_the_policy_layer
 test_agy_no_bypass_selects_accept_edits_and_records_opt_out
+test_agy_batch_forwards_explicit_opt_out
 test_agy_invalid_setting_refuses_without_bypass
 test_agy_launch_grants_the_task_worktree
 test_agy_grants_resolve_a_symlinked_worktree

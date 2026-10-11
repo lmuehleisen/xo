@@ -2572,6 +2572,10 @@ if [ -f "$D/herdr-stopped" ]; then
   exit 1
 fi
 case "${1:-} ${2:-}" in
+  'session list')
+    printf '{"sessions":[{"name":"%s","running":true,"socket_path":"%s/herdr.sock"}]}\n' \
+      "${HERDR_SESSION:-fmlab}" "$D"
+    exit 0 ;;
   'pane read')
     [ ! -f "$D/opencode-screen" ] || cat "$D/opencode-screen"
     exit 0 ;;
@@ -2927,6 +2931,51 @@ test_herdr_rebind_stays_in_the_recorded_session() {
   pass "reclaim: a herdr rebind is created in the session the record names, never the ambient one"
 }
 
+test_herdr_presentation_recovery_preserves_recorded_agy_opt_out() {
+  local dir id token out rc=0 launch
+  herdr_case_or_skip herdr-agy-opt-out herdr-agy-opt-out || {
+    echo "skip - herdr presentation recovery needs jq"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  id=herdr-agy-opt-out
+  printf 'agy_bypass=off\n' >> "$dir/home/state/$id.meta"
+  mkdir -p "$dir/home/config"
+  printf 'on\n' > "$dir/home/config/herdr-presentation-spaces"
+  printf '{"error":{"code":"agent_not_found"}}\n' > "$dir/fake/herdr-agent-registration"
+  cat > "$dir/fakebin/agy" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'agy 1.2.5\n'; fi
+exit 0
+SH
+  chmod +x "$dir/fakebin/agy"
+  token=$(bash -c '
+    . "$0/bin/backends/herdr.sh"
+    journal=$(fm_backend_herdr_projection_journal_path "$1" "$2") || exit 1
+    token=$(fm_backend_herdr_projection_journal_create "$1" "$2") || exit 1
+    label=$(fm_backend_herdr_projection_workspace_label "$2" "$token") || exit 1
+    home=$(cd "$3" && pwd -P) || exit 1
+    fm_backend_herdr_projection_journal_bind \
+      "$journal" "$2" "$home" fmlab ws1 tab1 %7 parent-ws firstmate "$label" "fm-$2" || exit 1
+    printf '%s' "$token"
+  ' "$ROOT" "$dir/home/state" "$id" "$dir/home") || fail "could not create the Herdr recovery journal"
+  [ -n "$token" ] || fail "Herdr recovery journal has no token"
+
+  out=$(FM_AGY_READY_POLLS=0 run_spawn "$dir" "$id" "$dir/proj" \
+    --mode no-mistakes --yolo off --backend herdr --harness agy) || rc=$?
+  [ "$rc" -eq 1 ] || fail "the fake agy worker should fail its intentionally unfulfilled start canary: $out"
+  launch=$(cat "$dir/fake/launched-command")
+  assert_contains "$launch" '--mode accept-edits' \
+    "Herdr presentation recovery must restore the recorded agy opt-out before delivering the launch"
+  assert_not_contains "$launch" '--dangerously-skip-permissions' \
+    "Herdr presentation recovery must not replace an opted-out record with Auto's default"
+  grep -q '^agy_bypass=off$' "$dir/home/state/$id.meta" \
+    || fail "Herdr presentation recovery did not keep agy_bypass=off in metadata"
+  [ ! -e "$dir/home/state/$id.agy-permission.json" ] \
+    || fail "an opted-out Herdr recovery installed the bypass policy file"
+  pass "Herdr presentation recovery preserves the recorded agy opt-out"
+}
+
 test_herdr_reclaim_refuses_an_agent_that_came_back() {
   local dir out rc log
   herdr_case_or_skip gone-herdr-alive rl74 || {
@@ -3170,6 +3219,7 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
 test_herdr_rebind_stays_in_the_recorded_session
+test_herdr_presentation_recovery_preserves_recorded_agy_opt_out
 test_herdr_reclaim_refuses_an_agent_that_came_back
 test_herdr_reclaim_keeps_the_task_whole
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner
