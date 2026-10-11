@@ -649,7 +649,7 @@ test_agy_batch_forwards_explicit_opt_out() {
 $fields
 EOF
   : "$case_dir"
-  id2=agy-batch-opt-out-x2
+  id2='agy-batch-opt-out-x2'
   second_wt="$case_dir/wt-second"
   mkdir -p "$home/data/$id2"
   cat > "$home/data/$id2/brief.md" <<'EOF'
