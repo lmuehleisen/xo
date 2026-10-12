@@ -705,6 +705,28 @@ test_matrix_pi_dollar_status_footer_is_empty() {
   pass "matrix: a dollar-first pi status footer reads empty; dead shells still refuse"
 }
 
+# Sanitized real 2.0.27 fresh home frame, its geometry kept: centered logo
+# and composer, no sidebar, and the MCP status row at the viewport bottom.
+opencode_v27_home_frame() {
+  local pad frame row
+  pad=$(printf '%36s' '')
+  row=$(printf '%17s' '')
+  frame=${row// /$'\n'}
+  frame+=$'\n'"$(printf '%87s' '')▄"
+  frame+=$'\n'"$(printf '%54s' '')█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█"
+  frame+=$'\n'"$(printf '%54s' '')█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀"
+  frame+=$'\n'"$(printf '%54s' '')▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"$'\n\n'
+  frame+=$'\n'"${pad}┃"$'\n'"${pad}┃  Ask anything… \"Fix a TODO in the codebase\""$'\n'"${pad}┃"
+  frame+=$'\n'"${pad}┃  Build auto · Big Pickle OpenCode · high"
+  row=$(printf '%74s' '')
+  frame+=$'\n'"${pad}╹${row// /▀}"
+  frame+=$'\n'"${pad}…/long-project…/worktree  shift+tab agents  ctrl+p commands"
+  row=$(printf '%14s' '')
+  frame+=${row// /$'\n'}
+  frame+=$'\n'"  ⊙ 1 MCP /mcps$(printf '%126s' '')2.0.27"
+  printf '%s' "$frame"
+}
+
 test_matrix_opencode_leftbar_signals() {
   # Real idle opencode: `┃`-prefixed rows holding an "Ask anything" hint,
   # blanks, and a Build-mode footer. Two independent idle signals: the shared
@@ -780,6 +802,29 @@ test_matrix_opencode_leftbar_signals() {
   assert_screen "V2 notification cannot hide later output" unknown "$CAPS_PLAIN" "$alert"$'\nnew output'
   assert_screen "V2 notification popup refuses" unknown "$CAPS_PLAIN" "${alert/plugins failed/plugins require consent}"
   assert_screen "V2 notification without separate version refuses" unknown "$CAPS_PLAIN" "${alert/                        2.0.18/ 2.0.18}"
+  # From 2.0.27 a configured MCP server leads the version row with its count,
+  # and below 64 columns V2 keeps only the notices.
+  local mcp both narrow
+  mcp=${shortened/                        2.0.18/  ⊙ 1 MCP \/mcps                        2.0.27}
+  assert_screen "V2 MCP count and version furniture" empty "$CAPS_PLAIN" "$mcp"
+  assert_screen "V2 MCP count styled furniture" empty "$CAPS_STYLED_NOID" "$mcp"
+  assert_screen "V2 failed MCP count furniture" empty "$CAPS_PLAIN" "${mcp/1 MCP/2 MCP failed}"
+  both=${mcp/ \/mcps/ \/mcps  ⊙ 3 plugins failed \/plugins}
+  assert_screen "V2 MCP count beside plugin notification" empty "$CAPS_PLAIN" "$both"
+  narrow=${mcp/ \/mcps                        2.0.27/}
+  assert_screen "V2 narrow MCP count without version" empty "$CAPS_PLAIN" "$narrow"
+  assert_screen "V2 MCP count cannot hide a draft" pending "$CAPS_STYLED_NOID" "${mcp/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}"
+  assert_screen "V2 MCP count without model proof refuses" unknown "$CAPS_PLAIN" "${mcp/Build auto/Review auto}"
+  assert_screen "V2 MCP count cannot hide later output" unknown "$CAPS_PLAIN" "$mcp"$'\nnew output'
+  assert_screen "V2 MCP popup text refuses" unknown "$CAPS_PLAIN" "${mcp/MCP \/mcps/MCP needs authentication}"
+  assert_screen "V2 MCP count without separate version refuses" unknown "$CAPS_PLAIN" "${mcp/                        2.0.27/ 2.0.27}"
+  assert_screen "V2 narrow MCP count beside output refuses" unknown "$CAPS_PLAIN" "${narrow/1 MCP/1 MCP new output}"
+  local v27
+  v27=$(opencode_v27_home_frame)
+  assert_screen "OpenCode 2.0.27 captured home frame on plain capture" empty "$CAPS_PLAIN" "$v27"
+  assert_screen "OpenCode 2.0.27 captured home frame on styled capture" empty "$CAPS_STYLED" "$v27"
+  assert_screen "OpenCode 2.0.27 captured home frame draft refuses" pending "$CAPS_STYLED" \
+    "${v27/Ask anything… \"Fix a TODO in the codebase\"/DRAFT}"
   assert_screen "V2 arbitrary shortened footer refuses" unknown "$CAPS_PLAIN" "${shortened/…\/long-project…\/worktree/…unclaimed output}"
   local running
   running=${sidebar/\/tmp\/project                    9.7K (1%)  ctrl+p commands/⬝⬝⬝⬝ esc interrupt                    9.6K (1%)  ctrl+p commands}
@@ -816,6 +861,57 @@ test_matrix_opencode_leftbar_signals() {
   typed=$'┃  refactor the parser please\n┃\n┃  Build · GPT-5.5 Fast OpenAI · high'
   assert_screen "opencode multiline draft above blank cursor row" pending "$CAPS_TMUX" "$typed" 1
   pass "matrix: opencode's left-bar composer reads empty everywhere and scans the full active run"
+}
+
+# assert_idle_evidence <label> <idle|refuse> <screen>, under the ambient locale
+# AND LC_ALL=C.
+assert_idle_evidence() {
+  local label=$1 want=$2 got
+  got=refuse
+  ! fm_composer_leftbar_idle_evidence "$3" || got=idle
+  [ "$got" = "$want" ] || fail "$label: expected $want, got $got"
+  got=refuse
+  ! LC_ALL=C fm_composer_leftbar_idle_evidence "$3" || got=idle
+  [ "$got" = "$want" ] || fail "$label under LC_ALL=C: expected $want, got $got"
+}
+
+test_opencode_leftbar_idle_evidence() {
+  local v27 novel perm nl=$'\n'
+  v27=$(opencode_v27_home_frame)
+  assert_idle_evidence "classified 2.0.27 home" idle "$v27"
+  # An unfamiliar status row below the composer leaves the verdict unknown
+  # but cannot withhold the idle proof.
+  novel=${v27/⊙ 1 MCP \/mcps/⊙ 2 LSP ready  ◇ 3 skills}
+  assert_screen "unfamiliar V2 status row stays unknown" unknown "$CAPS_PLAIN" "$novel"
+  assert_idle_evidence "unfamiliar V2 status row under an idle composer" idle "$novel"
+  assert_idle_evidence "draft in place of the placeholder" refuse \
+    "${novel/Ask anything… \"Fix a TODO in the codebase\"/DRAFT}"
+  assert_idle_evidence "draft starting with the placeholder text" refuse \
+    "${novel/Ask anything… \"Fix a TODO in the codebase\"/Ask anything… \"Fix a TODO in the codebase\" and more}"
+  assert_idle_evidence "draft starting with the bare placeholder" refuse \
+    "${novel/Ask anything… \"Fix a TODO in the codebase\"/Ask anything… draft}"
+  assert_idle_evidence "placeholder without its example" idle \
+    "${novel/Ask anything… \"Fix a TODO in the codebase\"/Ask anything…}"
+  assert_idle_evidence "draft above the placeholder" refuse \
+    "${novel/┃$nl/┃  DRAFT$nl}"
+  assert_idle_evidence "blank composer without the placeholder" refuse \
+    "${novel/  Ask anything… \"Fix a TODO in the codebase\"/}"
+  assert_idle_evidence "composer without the mode footer" refuse \
+    "${novel/Build auto · Big Pickle OpenCode · high/}"
+  assert_idle_evidence "composer without the half-block floor" refuse "${novel//▀/ }"
+  assert_idle_evidence "dialog title over an idle composer" refuse \
+    "${novel/$nl$nl$nl/$nl          Select model                              esc$nl$nl}"
+  # Sanitized real 2.0.27 shell permission prompt: it replaces the composer.
+  perm=$'\n'"   ┃  Run pwd in the shell tool, then stop."$'\n'"   ┃"$'\n\n'"      Running pwd, then stopping."
+  perm+=$'\n\n'"   ┃"$'\n'"   ┃  ⠏ pwd"$'\n'"   ┃"$'\n\n'"   ┃"$'\n'"   ┃  △ Permission required"$'\n'"   ┃"
+  perm+=$'\n'"   ┃  \$ pwd"$'\n'"   ┃"$'\n'"   ┃"
+  perm+=$'\n'"   ┃   Allow once   Always allow   Reject                     ctrl+f fullscreen  ⇆ select  enter confirm"
+  perm+=$'\n'"   ┃"
+  assert_idle_evidence "permission prompt" refuse "$perm"
+  perm=${perm/Permission required/Approval needed}
+  assert_idle_evidence "permission prompt without its known words" refuse \
+    "${perm/Allow once   Always allow   Reject/Yes   Always   No}"
+  pass "OpenCode idle-composer evidence needs the placeholder, footer and floor, and no dialog"
 }
 
 test_matrix_grok_titled_bottom_border() {
@@ -1150,6 +1246,7 @@ test_matrix_braille_only_draft_outside_animation
 test_matrix_pi_separated_needs_identity
 test_matrix_pi_dollar_status_footer_is_empty
 test_matrix_opencode_leftbar_signals
+test_opencode_leftbar_idle_evidence
 test_matrix_grok_titled_bottom_border
 test_matrix_claude_titled_top_rule
 test_matrix_kimi_bordered_shell_glyph_box

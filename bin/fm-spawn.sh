@@ -149,6 +149,11 @@
 #   OpenCode requires V2 >= 2.0.18 and starts bare with --standalone --auto,
 #   then waits FM_OPENCODE_READY_POLLS (default 60) at FM_OPENCODE_POLL_INTERVAL
 #   (default 0.5 seconds) for an empty composer before guarded brief submission.
+#   If the screen is still unrecognized (never pending) while the agent is
+#   alive, the screen is settled, and it positively shows an idle composer with
+#   no permission prompt or dialog, it prints a notice, captures the screen to
+#   the startup diagnostics, and submits anyway; the submission's confirmation
+#   still decides delivery.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -4917,19 +4922,40 @@ spawn_delivery_endpoint_cleanup() {
   fm_backend_kill "$BACKEND" "$T" "$tab_id" "fm-$ID" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
 }
 
+# Writes the startup screen and launch facts to the generation's diagnostic
+# log, prints its path, and leaves the path in OPENCODE_DIAGNOSTIC.
+opencode_capture_diagnostic() { # <key> <detail>
+  OPENCODE_DIAGNOSTIC="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
+  if ! {
+    printf '%s=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
+      "$1" "$2" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
+    fm_backend_capture "$BACKEND" "$T" 100 "$W"
+  } >"$OPENCODE_DIAGNOSTIC"; then
+    echo "warning: OpenCode diagnostic capture was incomplete: $OPENCODE_DIAGNOSTIC" >&2
+  fi
+  echo "spawn: OpenCode startup diagnostics=$OPENCODE_DIAGNOSTIC" >&2
+}
+
+# A screen whose composer verdict stays unknown is typed into at launch only
+# when the agent is proven alive, two captures one poll apart match, and the
+# settled screen positively shows an idle V2 composer with no permission prompt
+# or dialog (fm_composer_leftbar_idle_evidence). The guarded submission's own
+# confirmation still decides delivery.
+opencode_unrecognized_screen_idle() {
+  local before after
+  [ "$(fm_backend_agent_state "$BACKEND" "$T")" = alive ] || return 1
+  before=$(fm_backend_capture "$BACKEND" "$T" 100 "$W" 2>/dev/null) || return 1
+  sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
+  after=$(fm_backend_capture "$BACKEND" "$T" 100 "$W" 2>/dev/null) || return 1
+  [ "$before" = "$after" ] && fm_composer_leftbar_idle_evidence "$after"
+}
+
 opencode_spawn_fail() { # <detail>
   local failure_state=${2:-idle} failure_event
   failure_event=$(status_stamp_line "failed: $1")
   echo "error: $1; inspect window $T" >&2
-  local diagnostic="$TASK_TMP/opencode-startup-$SPAWN_GEN.log"
-  if ! {
-    printf 'failure=%s\nbackend=%s\nendpoint=%s\nmodel=%s\neffort=%s\n' \
-      "$1" "$BACKEND" "$T" "${MODEL:-default}" "${EFFORT:-default}"
-    fm_backend_capture "$BACKEND" "$T" 100 "$W"
-  } >"$diagnostic"; then
-    echo "warning: OpenCode diagnostic capture was incomplete: $diagnostic" >&2
-  fi
-  echo "spawn: OpenCode startup diagnostics=$diagnostic" >&2
+  opencode_capture_diagnostic failure "$1"
+  local diagnostic=$OPENCODE_DIAGNOSTIC
   if [ "$RELAUNCH" -eq 1 ]; then
     printf '%s\n' "$failure_event" >>"$STATE/$ID.status"
     # Readiness failure settles an unchanged launch seed; submission ambiguity
@@ -6504,14 +6530,26 @@ fi
 if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   opencode_ready=0
   opencode_poll=0
+  opencode_state=
   while [ "$opencode_poll" -lt "${FM_OPENCODE_READY_POLLS:-60}" ]; do
-    if [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)" = empty ]; then
+    opencode_state=$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)
+    if [ "$opencode_state" = empty ]; then
       opencode_ready=1
       break
     fi
     opencode_poll=$((opencode_poll + 1))
     sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
   done
+  # An OpenCode release can add furniture the classifier does not know yet.
+  # Fail open only from `unknown` with positive idle-composer evidence: a
+  # pending composer, a draft, a permission prompt or a dialog is never typed
+  # into.
+  if [ "$opencode_ready" -ne 1 ] && [ "$opencode_state" = unknown ] &&
+    opencode_unrecognized_screen_idle; then
+    opencode_capture_diagnostic notice "OpenCode V2 screen shape unrecognized in window $T"
+    echo "notice: OpenCode V2 screen shape is unrecognized in window $T, but its composer is visibly idle; submitting the brief through the guarded path - file a todo to teach bin/fm-composer-lib.sh the captured screen" >&2
+    opencode_ready=1
+  fi
   if [ "$opencode_ready" -ne 1 ]; then
     opencode_spawn_fail "OpenCode V2 composer did not become ready in window $T"
     exit $?
