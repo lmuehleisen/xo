@@ -97,9 +97,14 @@ esac
 case "${1:-}" in display-message) printf 'firstmate\n' ;; esac
 exit 0
 SH
+  # This fork leases its slot with `treehouse get --lease`, which prints the
+  # leased worktree; answer with the path the pane reports.
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 printf 'treehouse %s\n' "$*" >> "$FM_FAKE_CALL_LOG"
+if [ "${1:-}" = get ] && [ "${2:-}" = --lease ]; then
+  printf '%s\n' "${FM_FAKE_PANE_PATH:-}"
+fi
 exit 0
 SH
   chmod +x "$fakebin/tmux" "$fakebin/treehouse"

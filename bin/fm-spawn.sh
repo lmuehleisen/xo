@@ -1653,7 +1653,7 @@ spawn_slot_holds_only_spawn_wiring() {
     return 1
   }
   harness=$(fm_control_harness_family "$HARNESS") || harness=
-  allowed=$(fm_control_harness_wiring_paths "$harness" "$WT" "$STATE_REAL" "$ID" "$KIND" 2>/dev/null || true)
+  allowed=$(fm_control_harness_wiring_paths "$harness" "$WT" "$STATE_REAL" "$ID" 2>/dev/null || true)
   status_out=$(spawn_slot_status) || return 1
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue

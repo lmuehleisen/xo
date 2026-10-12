@@ -842,25 +842,22 @@ EOF
   pass "an omp secondmate names only the out-of-home busy extension and does not emit a parent turn-end"
 }
 
-test_secondmate_opencode_plugin_closes_without_a_parent_turnend() {
-  local case_dir id=sm-oc primary sm state plugin out
+# This fork refuses an OpenCode secondmate before launch (OpenCode V2 runs
+# crewmates and scouts only), so the refusal must leave no busy wiring behind.
+test_secondmate_opencode_is_refused_without_busy_wiring() {
+  local case_dir id=sm-oc sm state out
   case_dir="$TMP_ROOT/sm-oc"
-  primary="$case_dir/primary"
   sm="$case_dir/sm"
-  out=$(spawn_secondmate_harness "$case_dir" "$id" opencode) \
-    || fail "opencode secondmate spawn failed: $out"
-  state="$primary/state"
-  plugin="$sm/.opencode/plugins/fm-busy-state.js"
-  assert_present "$plugin" "opencode secondmate spawn did not write the busy plugin"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "opencode secondmate seed must be busy fm-spawn, got '$out'"
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_oc_plugin "$plugin" "$(oc_status ses_main busy)" "$(oc_idle ses_main)") \
-    || fail "opencode secondmate idle drive failed: $out"
-  [ ! -e "$state/$id.turn-ended" ] || fail "opencode secondmate session.idle touched the parent's turn-ended marker"
-  out=$(classify opencode "$id" "$state")
-  [ "$out" = "idle opencode-plugin" ] || fail "opencode secondmate idle must classify idle, got '$out'"
-  pass "an opencode secondmate plugin closes the parent busy record without a parent turn-end"
+  if out=$(spawn_secondmate_harness "$case_dir" "$id" opencode 2>&1); then
+    fail "an opencode secondmate spawn must be refused: $out"
+  fi
+  assert_contains "$out" 'primary and secondmate support is deferred' "opencode secondmate refusal must name the unsupported role"
+  state="$case_dir/primary/state"
+  assert_absent "$sm/.opencode/plugins/fm-busy-state.js" "a refused opencode secondmate wrote the busy plugin"
+  assert_absent "$state/$id.busy-gen" "a refused opencode secondmate armed a busy generation"
+  assert_absent "$state/$id.busy-state" "a refused opencode secondmate seeded a busy record"
+  [ ! -s "$case_dir/launch.log" ] || fail "a refused opencode secondmate launched: $(cat "$case_dir/launch.log")"
+  pass "an opencode secondmate is refused before launch and writes no busy wiring"
 }
 
 # A raw launch command carries none of the launch-template flags (--settings,
@@ -945,7 +942,7 @@ test_secondmate_claude_older_home_guard_keeps_the_stop_idle_hook
 test_secondmate_claude_spawn_leaves_local_settings_untouched
 test_secondmate_pi_extension_reports_busy_without_a_parent_turnend
 test_secondmate_omp_extension_reports_busy_without_a_parent_turnend
-test_secondmate_opencode_plugin_closes_without_a_parent_turnend
+test_secondmate_opencode_is_refused_without_busy_wiring
 test_secondmate_codex_and_grok_do_not_arm_a_parent_turnend
 test_pi_extension_semantic_lifecycle
 test_pi_extension_serializes_settle_before_next_start

@@ -334,7 +334,7 @@ test_inherited_git_location_isolation() (
   mkdir -p "$dir/runner/bin" "$dir/runner/tests"
   fm_git_init_commit "$dir/ambient"
   git -C "$dir/ambient" worktree add -q --detach "$dir/linked" main
-  cp "$ROOT/bin/fm-test-run.sh" "$ROOT/bin/fm-timeout-lib.sh" "$dir/runner/bin/"
+  cp "$ROOT/bin/fm-test-run.sh" "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-private-tmux-lib.sh" "$dir/runner/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$dir/runner/tests/"
   cat > "$dir/setup.sh" <<'SH'
 case_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-git-location.XXXXXX")
