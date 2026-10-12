@@ -284,7 +284,7 @@ test_spawn_maps_effort_and_model() {
     "medium|--reasoning-effort 'medium'"
     "high|--reasoning-effort 'high'"
     "xhigh|--reasoning-effort 'xhigh'"
-    "max|--reasoning-effort 'ultra'"
+    "max|--reasoning-effort 'max'"
   )
   local entry effort expect
   for entry in "${cases[@]}"; do
@@ -301,8 +301,8 @@ EOF
     assert_contains "$launch" "$expect" "muse effort $effort did not map to '$expect'"
     assert_contains "$launch" "--model 'muse-spark-1.2'" "muse spawn dropped the model axis"
   done
-  # ultra is muse's max-class level and must be reachable ONLY through an
-  # explicit max, never as the fallback when no effort was chosen.
+  # An omitted effort leaves Muse on its native default; Firstmate does not
+  # synthesize an effort level when no effort was chosen.
   rec=$(make_spawn_case effort-default)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $rec
@@ -311,7 +311,20 @@ EOF
     || fail "muse spawn without an effort axis failed"
   launch=$(cat "$home/launch.log")
   assert_not_contains "$launch" '--reasoning-effort' "muse spawn invented an effort when none was chosen"
-  pass "muse maps the shared effort vocabulary and reaches ultra only via explicit max"
+
+  rec=$(make_spawn_case effort-ultra)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  local out status
+  out=$(run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.2 --effort ultra)
+  status=$?
+  [ "$status" -ne 0 ] || fail "muse spawn accepted an explicit ultra effort"
+  assert_contains "$out" 'ultra effort requires pi or pi-signed with codex-native/<model>' \
+    "muse ultra refusal did not come from native effort validation"
+  assert_absent "$home/launch.log" "muse ultra refusal created a worker endpoint"
+  pass "muse maps shared efforts natively, omits an unspecified effort, and refuses explicit ultra"
 }
 
 # An unauthenticated muse pane does not exit: it sits on an OAuth device-code

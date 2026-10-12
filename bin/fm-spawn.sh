@@ -3248,17 +3248,11 @@ effort_flag_for_harness() {
     esac
     ;;
   muse)
-    # muse 0.1.0-R708.1 --reasoning-effort accepts none|minimal|low|medium|
-    # high|xhigh|ultra and defaults to high, so low..xhigh map straight across.
-    # ultra is muse's max-CLASS level, so firstmate's max maps onto it - but
-    # only ever as an EXPLICIT captain choice, never as a fallback, because
-    # AGENTS.md section 4 forbids selecting max without captain preference and
-    # the omitted effort here leaves muse on its own high default. muse's extra
-    # none/minimal levels sit below firstmate's shared vocabulary and are
-    # deliberately unreachable rather than remapped onto low.
+    # Muse Code 1.4.6 accepts none|minimal|low|medium|high|xhigh|max|ultra.
+    # Firstmate's shared low..max levels map directly; none/minimal sit below
+    # that vocabulary, while explicit ultra remains refused by native validation.
     case "$effort" in
-    low | medium | high | xhigh) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
-    max) printf -- '--reasoning-effort %s ' "$(shell_quote ultra)" ;;
+    low | medium | high | xhigh | max) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
     esac
     ;;
   agy)
