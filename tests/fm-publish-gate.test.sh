@@ -1784,23 +1784,24 @@ SH
   pass "runtime gh snapshots and checks exact stdin, preserves reads, and refuses unsupported or blocked writes"
 }
 
-test_no_mistakes_body_scope() {
-  local body="$TMP_ROOT/attestation.md" out head
-  head=$(printf '%040d' 7)
+no_mistakes_body_fixture() {
+  local body=$1 head=$2
   printf 'public acme/upstream\n' >>"$CFG/allowlist"
   printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-submissions"
   export FM_TEST_ATTESTED_HEAD="$head"
   cat >"$FAKEBIN/gh" <<'SH'
 #!/usr/bin/env bash
+if [ "$*" = 'pr view contrib/fixture --repo acme/upstream --json number --jq .number' ]; then printf '3\n'; exit 0; fi
 [ "$1 $2 $3" = 'api --hostname github.com' ] || exit 1
 case "$4" in
 repos/acme/widgets) printf '{"fork":true,"private":false,"full_name":"acme/widgets","parent":{"full_name":"acme/upstream"}}\n' ;;
-repos/acme/widgets/git/ref/heads/contrib/fixture) printf '{"object":{"type":"commit","sha":"%s"}}\n' "$FM_TEST_ATTESTED_HEAD" ;;
-repos/acme/upstream/pulls/3) printf '{"base":{"ref":"main"},"head":{"repo":{"full_name":"acme/widgets"},"ref":"contrib/fixture","sha":"%s"}}\n' "$FM_TEST_ATTESTED_HEAD" ;;
+repos/acme/widgets/git/ref/heads/contrib/fixture) printf '{"object":{"type":"commit","sha":"%s"}}\n' "${FM_TEST_FORK_HEAD:-$FM_TEST_ATTESTED_HEAD}" ;;
+repos/acme/upstream/pulls/3) printf '{"base":{"ref":"main"},"head":{"repo":{"full_name":"acme/widgets"},"ref":"contrib/fixture","sha":"%s"},"body":%s}\n' "${FM_TEST_PR_HEAD:-$FM_TEST_ATTESTED_HEAD}" "${FM_TEST_PR_BODY:-null}" ;;
 *) exit 1 ;;
 esac
 SH
   chmod +x "$FAKEBIN/gh"
+  printf '%s\n' "$FAKEBIN/gh" >"$CFG/gh"
   {
     printf 'Technical test results.\n\n## Pipeline\n'
     printf 'Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n'
@@ -1808,6 +1809,12 @@ SH
     local i=0
     while [ "$i" -lt 100 ]; do printf 'Targeted fixture test passed with expected output.\n'; i=$((i + 1)); done
   } >"$body"
+}
+
+test_no_mistakes_body_scope() {
+  local body="$TMP_ROOT/attestation.md" out head
+  head=$(printf '%040d' 7)
+  no_mistakes_body_fixture "$body" "$head"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body" 2>&1) || fail "scoped generated body should pass: $out"
   out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body" 2>&1) || fail "live PR edit should qualify: $out"
   local generated="$TMP_ROOT/generated-body.md" received="$TMP_ROOT/generated-received.md"
@@ -1960,6 +1967,193 @@ JS
   rm -f "$CFG/no-mistakes-submissions"
   reset_trusted_gh
   pass "generated body exception binds destination, fork, branch, head and required steps while retaining literal and secret checks"
+}
+
+test_no_mistakes_followup_body() {
+  local body="$TMP_ROOT/followup-body.md" helper="$ROOT/bin/fm-no-mistakes-body.mjs"
+  local out head next prior exception_rc refresh_rc rc row step scenario current
+  head=$(printf '%040d' 7)
+  next=$(printf '%040d' 8)
+  no_mistakes_body_fixture "$body" "$head"
+  { printf '## What Changed\n\nThe retry condition preserves the expected exit code.\n'; sed '1d' "$body"; } >"$body.generated"
+  body="$body.generated"
+  sed -e 's/{"step":"test","status":"completed"}/{"step":"test","status":"completed","override_reason":"Live validation was inconclusive."}/' \
+    -e 's/]} -->/],"live_validation":{"verdict":"inconclusive","live":0,"total":4}} -->/' "$body" >"$body.exception"
+  printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-test-exceptions"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1)
+  exception_rc=$?
+  prior=$(node --input-type=module - "$body" <<'JS'
+import { readFileSync } from "node:fs";
+process.stdout.write(JSON.stringify(readFileSync(process.argv[2], "utf8")));
+JS
+  )
+  sed "s/$head/$next/" "$body" >"$body.next"
+  out=$(FM_TEST_PR_BODY="$prior" "$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.next" 2>&1)
+  refresh_rc=$?
+  assert_equals '0 0' "$exception_rc $refresh_rc" 'approved test exception and prior-attested pre-push refresh independently qualify'
+  pass "approved test exceptions and synchronized pre-push refreshes qualify independently"
+
+  rm -f "$CFG/no-mistakes-test-exceptions"
+  out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.exception" 2>&1)
+  assert_equals 1 "$?" 'test override without a private exception row retains ordinary limits'
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1) && fail "unapproved test override must retain ordinary limits"
+  assert_contains "$out" 'longer than 20 lines' 'unapproved test exception body cap'
+  for row in 'acme/other acme/widgets contrib/fixture' 'acme/upstream acme/other contrib/fixture' 'acme/upstream acme/widgets contrib/other'; do
+    printf '%s\n' "$row" >"$CFG/no-mistakes-test-exceptions"
+    out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.exception" 2>&1)
+    assert_equals 1 "$?" 'test exception requires an identical upstream, fork and branch row'
+  done
+  printf '# Approved fixture exception\r\n\r\nacme/upstream acme/widgets contrib/fixture\r\n' >"$CFG/no-mistakes-test-exceptions"
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body.exception" 2>&1) || fail "approved test exception must also qualify at the exact head for creation: $out"
+  for step in review test document; do
+    sed "s/\"step\":\"$step\",\"status\":\"completed\"/\"step\":\"$step\",\"status\":\"skipped\"/" "$body.exception" >"$body.incomplete"
+    out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.incomplete" 2>&1)
+    assert_equals 1 "$?" "approved exception still requires completed $step"
+  done
+
+  local received="$TMP_ROOT/followup-received.md" marker
+  cat >"$FAKEBIN/followup-gh" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = api ] || [ "$1 $2" = 'pr view' ]; then exec "$(dirname "$0")/gh" "$@"; fi
+cat >"$FM_TEST_FOLLOWUP_RECEIVED"
+SH
+  chmod +x "$FAKEBIN/followup-gh"
+  sed "s/$head/$next/" "$body.exception" >"$body.exception-next"
+  marker=$(grep '^<!-- no-mistakes-pipeline-attestation:' "$body.exception-next")
+  out=$(FM_TEST_PR_BODY="$prior" FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.exception-next" 2>&1) || fail "approved pre-push exception must sanitize and pass the full gate: $out"
+  assert_equals "$marker" "$(grep '^<!-- no-mistakes-pipeline-attestation:' "$received")" 'approved exception preserves the original attestation bytes'
+  assert_contains "$(cat "$received")" '| test | completed (approved exception) |' 'test exception is rendered honestly'
+  assert_not_contains "$(cat "$received")" '| test | completed |' 'test exception is not rendered as ordinary completion'
+  assert_contains "$(cat "$received")" 'not a claim that every scenario passed' 'exception completion is not a pass claim'
+  assert_contains "$(cat "$received")" 'Live validation: inconclusive; 0 of 4' 'exception keeps the inconclusive live verdict'
+  rm -f "$received"
+  local delimiter_rc runtime_diagnostic=0 gate_diagnostic=0
+  local diagnostic='malformed no-mistakes-submissions or no-mistakes-test-exceptions config'
+  sed 's/Live validation was inconclusive./-->/' "$body.exception" >"$body.comment"
+  out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.comment" --sanitize 2>&1)
+  delimiter_rc=$?
+  if [ "$delimiter_rc" -eq 0 ]; then
+    assert_contains "$out" '"override_reason":"-->"' 'comment-terminator counterexample reaches the retained marker'
+  fi
+  local raw_rc shape_rc
+  out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.comment" 2>&1)
+  raw_rc=$?
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.comment" 2>&1)
+  shape_rc=$?
+  assert_equals '1 1 3' "$raw_rc $shape_rc $delimiter_rc" 'unsafe override refuses raw eligibility and expanded limits while sanitize remains a hard refusal'
+  assert_contains "$out" 'longer than 20 lines' 'unsafe raw override keeps the ordinary body limit'
+  printf 'bad row\n' >"$CFG/no-mistakes-test-exceptions"
+  out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.exception" 2>&1)
+  case "$out" in *"fm-gh-publish-exec: REFUSED: $diagnostic"*) runtime_diagnostic=1 ;; esac
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1)
+  case "$out" in *"fm-publish-gate: REFUSED: $diagnostic"*) gate_diagnostic=1 ;; esac
+  printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-test-exceptions"
+  [ ! -e "$received" ] || fail "malformed approval reached gh"
+  assert_equals '3 1 1' "$delimiter_rc $runtime_diagnostic $gate_diagnostic" 'comment terminators refuse and both consumers identify the approval files independently'
+  for scenario in override-path escaped-override-path override-timing override-extra review-override override-type override-empty override-blank override-comment-start override-comment-end override-comment-bang escaped-override-comment; do
+    FM_TEST_OVERRIDE_CASE="$scenario" node --input-type=module - "$body.exception" "$body.unsafe" <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [source, target] = process.argv.slice(2);
+const body = readFileSync(source, "utf8");
+const match = /<!-- no-mistakes-pipeline-attestation:v1 ([\s\S]*?) -->/.exec(body);
+const a = JSON.parse(match[1]);
+const test = a.steps.find((s) => s.step === "test");
+switch (process.env.FM_TEST_OVERRIDE_CASE) {
+  case "override-path": case "escaped-override-path": test.override_reason = "/home/example/private-fixture"; break;
+  case "override-timing": test.override_reason = "Live validation elapsed 2m50s."; break;
+  case "override-extra": test.execution_id = "fixture-execution"; break;
+  case "review-override": a.steps[0].override_reason = "Fixture exception."; break;
+  case "override-type": test.override_reason = { verdict: "inconclusive" }; break;
+  case "override-empty": test.override_reason = ""; break;
+  case "override-blank": test.override_reason = "   "; break;
+  case "override-comment-start": test.override_reason = "<!--"; break;
+  case "override-comment-end": case "escaped-override-comment": test.override_reason = "-->"; break;
+  case "override-comment-bang": test.override_reason = "--!>"; break;
+}
+let json = JSON.stringify(a);
+if (process.env.FM_TEST_OVERRIDE_CASE === "escaped-override-path") json = json.replaceAll("/", "\\u002f");
+if (process.env.FM_TEST_OVERRIDE_CASE === "escaped-override-comment") json = json.replaceAll(">", "\\u003e");
+writeFileSync(target, body.replace(match[1], () => json));
+JS
+    case "$scenario" in
+    override-extra | review-override) ;;
+    *)
+      out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.unsafe" 2>&1)
+      assert_equals 1 "$?" "unsafe override reason cannot qualify in raw mode: $scenario"
+      assert_equals '' "$out" 'raw eligibility refusal emits no private reason bytes'
+      out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.unsafe" 2>&1) && fail "unsafe override reason must retain ordinary limits: $scenario"
+      assert_contains "$out" 'longer than 20 lines' 'unsafe reason cannot raise the description cap'
+      ;;
+    esac
+    out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.unsafe" --sanitize 2>&1)
+    rc=$?
+    assert_equals 3 "$rc" "approved exception retains private-display and public-schema checks: $scenario"
+    assert_equals '' "$out" 'unsafe exception emits no retained private bytes'
+    case "$scenario" in
+    override-comment-* | escaped-override-comment)
+      out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.unsafe" 2>&1) && fail "comment delimiter must refuse without falling back to raw publication"
+      assert_contains "$out" 'generated body has unsafe evidence' 'comment delimiter refuses through the stdin adapter'
+      [ ! -e "$received" ] || fail "comment delimiter reached gh"
+      ;;
+    esac
+  done
+  sed "s/Live validation was inconclusive./$PRIVATE_TERM/" "$body.exception" >"$body.private"
+  out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.private" 2>&1) && fail "approved exception reason must still pass the denylist"
+  assert_contains "$out" denylist 'approved exception reason remains scanned'
+  assert_no_secret_echo "$out" 'approved exception reason refusal'
+  [ ! -e "$received" ] || fail "private approved exception reached gh"
+  for row in 'bad row' 'acme/upstream acme/upstream contrib/fixture' 'acme/upstream acme/widgets topic/fixture' 'acme/upstream acme/widgets contrib/../fixture' 'acme/upstream invalid contrib/fixture'; do
+    printf '%s\n' "$row" >"$CFG/no-mistakes-test-exceptions"
+    out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.exception" 2>&1)
+    rc=$?
+    assert_equals 2 "$rc" 'malformed private test exception rows refuse configuration'
+    assert_contains "$out" 'malformed no-mistakes-test-exceptions config' 'malformed test exception identifies its file'
+    assert_not_contains "$out" "$row" 'malformed test exception does not echo private rows'
+  done
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1) && fail "malformed test exception must refuse through the full gate"
+  assert_contains "$out" 'malformed no-mistakes-test-exceptions config' 'malformed exception propagates through the gate'
+  local scope
+  for scope in no-mistakes-submissions no-mistakes-test-exceptions; do
+    printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-submissions"
+    printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-test-exceptions"
+    printf 'bad row\n' >"$CFG/$scope"
+    out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.exception" 2>&1) && fail "malformed approval must refuse through the full gate"
+    assert_contains "$out" "fm-publish-gate: REFUSED: $diagnostic" 'gate remediation names both possible approval files'
+    out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.exception" 2>&1) && fail "malformed approval must refuse through the stdin adapter"
+    assert_contains "$out" "fm-gh-publish-exec: REFUSED: $diagnostic" 'stdin adapter remediation names both possible approval files'
+    assert_not_contains "$out" 'bad row' 'consumer diagnostics do not echo private approval rows'
+    [ ! -e "$received" ] || fail "malformed approval reached gh"
+  done
+  printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-submissions"
+  rm -f "$CFG/no-mistakes-test-exceptions"
+  pass "test exceptions require exact private approval, completed required steps, honest sanitized output and unchanged content checks"
+
+  out=$(FM_TEST_PR_BODY="$prior" "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-branch contrib/fixture "body:$body.next" 2>&1) || fail "branch-resolved existing PR must qualify for an attested refresh: $out"
+  out=$(FM_TEST_PR_BODY="$prior" FM_TEST_FORK_HEAD="$next" "$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.next" 2>&1) && fail "pre-push refresh must refuse divergent fork and PR heads"
+  out=$(FM_TEST_PR_BODY="$prior" FM_TEST_PR_HEAD="$next" "$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.next" 2>&1) && fail "pre-push refresh must refuse divergent PR and fork heads"
+  for scenario in no-attestation wrong-head duplicate invalid-json wrong-version missing-body; do
+    current=$(FM_TEST_LIVE_BODY_CASE="$scenario" node --input-type=module - "$body" "$next" <<'JS'
+import { readFileSync } from "node:fs";
+let body = readFileSync(process.argv[2], "utf8");
+switch (process.env.FM_TEST_LIVE_BODY_CASE) {
+  case "no-attestation": body = "Ordinary technical description."; break;
+  case "wrong-head": body = body.replace(/"head_sha":"[0-9a-f]{40}"/, `"head_sha":"${process.argv[3]}"`); break;
+  case "duplicate": body += body; break;
+  case "invalid-json": body = body.replace(/v1 [\s\S]*? -->/, "v1 { -->"); break;
+  case "wrong-version": body = body.replace("attestation:v1", "attestation:v2"); break;
+  case "missing-body": body = null; break;
+}
+process.stdout.write(JSON.stringify(body));
+JS
+    )
+    out=$(FM_TEST_PR_BODY="$current" "$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.next" 2>&1) && fail "pre-push refresh requires a unique current attestation for the live head: $scenario"
+    assert_contains "$out" 'longer than 20 lines' 'unattested refresh retains ordinary limits'
+  done
+  out=$(FM_TEST_PR_BODY="$prior" "$GATE" check-text --config "$CFG" --dest acme/upstream --pr-base main --pr-head acme:contrib/fixture "body:$body.next" 2>&1) && fail "new PR creation must still require the exact live head"
+  out=$(FM_TEST_PR_BODY=null "$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body" 2>&1) || fail "exact-head existing PR must not require a prior live attestation: $out"
+  rm -f "$CFG/no-mistakes-submissions"
+  reset_trusted_gh
+  pass "pre-push refresh binds only synchronized existing heads to their current live attestation; exact-head and creation checks stay unchanged"
 }
 
 # Execute the adapter against independently copied publisher toolbelt versions.
@@ -2421,6 +2615,7 @@ test_permission_fixtures_pass_the_secret_scan
 test_policy_text
 test_runtime_stdin_adapter
 test_no_mistakes_body_scope
+test_no_mistakes_followup_body
 test_runtime_sanitizer_protocol
 test_contribution_poison_and_evidence_adapter
 test_local_gate_transport_preserves_hooks
