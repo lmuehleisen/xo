@@ -117,6 +117,34 @@ SH
   cat > "$fakebin/muse" <<'SH'
 #!/usr/bin/env bash
 set -u
+if [ "${1:-}" = --version ]; then
+  printf 'Muse Code %s\n' "${FM_FAKE_MUSE_VERSION:-1.4.6-R6000.1}"
+  exit 0
+fi
+effort=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --reasoning-effort)
+      shift
+      effort=${1:-}
+      ;;
+  esac
+  shift || true
+done
+if [ -n "${FM_FAKE_MUSE_ARGS_RESULT:-}" ]; then
+  case "$effort" in
+    none | minimal | low | medium | high | xhigh | ultra) ;;
+    max)
+      case "${FM_FAKE_MUSE_VERSION:-1.4.6-R6000.1}" in
+        1.4.[0-5]* | 0.*) printf 'rejected:%s\n' "$effort" > "$FM_FAKE_MUSE_ARGS_RESULT"; exit 2 ;;
+      esac
+      ;;
+    '') ;;
+    *) printf 'rejected:%s\n' "$effort" > "$FM_FAKE_MUSE_ARGS_RESULT"; exit 2 ;;
+  esac
+  printf 'accepted:%s\n' "${effort:-default}" > "$FM_FAKE_MUSE_ARGS_RESULT"
+  exit 0
+fi
 [ -n "${FM_FAKE_HARNESS_RESULT:-}" ] || exit 0
 exec "$FM_FAKE_MUSE_VERSIONED" -c 'result=$($FM_FAKE_HARNESS_PROBE); printf "%s" "$result" > "$FM_FAKE_HARNESS_RESULT"'
 SH
@@ -162,6 +190,8 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
     FM_FAKE_HARNESS_PROBE="$HARNESS" \
     FM_FAKE_EXECUTE_MUSE_LAUNCH="${FM_FAKE_EXECUTE_MUSE_LAUNCH:-}" \
     FM_FAKE_HARNESS_RESULT="${FM_FAKE_HARNESS_RESULT:-}" \
+    FM_FAKE_MUSE_VERSION="${FM_TEST_MUSE_VERSION:-1.4.6-R6000.1}" \
+    FM_FAKE_MUSE_ARGS_RESULT="${FM_TEST_MUSE_ARGS_RESULT:-}" \
     FM_FAKE_WORKER_META_KEY="${FM_TEST_MUSE_WORKER_KEY-present}" \
     META_API_KEY="${FM_TEST_MUSE_KEY-test-key}" \
     XDG_CONFIG_HOME="${FM_TEST_MUSE_CONFIG_HOME-$home/xdgconfig}" \
@@ -301,6 +331,34 @@ EOF
     assert_contains "$launch" "$expect" "muse effort $effort did not map to '$expect'"
     assert_contains "$launch" "--model 'muse-spark-1.2'" "muse spawn dropped the model axis"
   done
+  # Execute the captured launch through a fake Muse CLI that validates its
+  # argument vocabulary, so max is proven against the advertised CLI version.
+  rec=$(make_spawn_case effort-max-current-cli)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  FM_FAKE_EXECUTE_MUSE_LAUNCH=1 FM_TEST_MUSE_ARGS_RESULT="$home/muse-args-result" \
+    run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.3 --effort max >/dev/null \
+    || fail "muse spawn with max on Muse 1.4.6 failed"
+  [ "$(cat "$home/muse-args-result")" = accepted:max ] \
+    || fail "Muse 1.4.6 fake CLI rejected the max effort flag"
+
+  # A supported old pinned install cannot accept max and is refused before
+  # creating a worker endpoint.
+  rec=$(make_spawn_case effort-max-old-cli)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  local out status
+  out=$(FM_TEST_MUSE_VERSION=0.1.0-R708.1 run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.3 --effort max)
+  status=$?
+  [ "$status" -ne 0 ] || fail "muse spawn accepted max on Muse 0.1.0"
+  assert_contains "$out" 'requires Muse Code 1.4.6 or newer (found 0.1.0)' \
+    "muse max version gate did not explain the minimum supported version"
+  assert_absent "$home/launch.log" "old Muse max refusal created a worker endpoint"
+
   # An omitted effort leaves Muse on its native default; Firstmate does not
   # synthesize an effort level when no effort was chosen.
   rec=$(make_spawn_case effort-default)
@@ -316,7 +374,6 @@ EOF
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $rec
 EOF
-  local out status
   out=$(run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
     --mode no-mistakes --yolo off --model muse-spark-1.2 --effort ultra)
   status=$?
@@ -324,7 +381,7 @@ EOF
   assert_contains "$out" 'ultra effort requires pi or pi-signed with codex-native/<model>' \
     "muse ultra refusal did not come from native effort validation"
   assert_absent "$home/launch.log" "muse ultra refusal created a worker endpoint"
-  pass "muse maps shared efforts natively, omits an unspecified effort, and refuses explicit ultra"
+  pass "muse gates native max by version, validates emitted efforts, omits defaults, and refuses explicit ultra"
 }
 
 # An unauthenticated muse pane does not exit: it sits on an OAuth device-code

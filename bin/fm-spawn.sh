@@ -3069,6 +3069,41 @@ resolve_muse_binary() {
   return 1
 }
 
+# Muse Code 1.4.6 added `max` to --reasoning-effort. Older pinned installs
+# still accept `ultra`, but the adapter deliberately refuses max rather than
+# substituting a different reasoning level. Probe only launches that request
+# max; detach stdin and bound the CLI call so a prompt or hung updater cannot
+# hold the spawn indefinitely.
+muse_require_native_max_effort() { # <muse-bin>
+  local muse_bin=$1 output version
+  output=$(fm_run_timed 15 "$muse_bin" --version </dev/null 2>/dev/null) || {
+    echo "error: Muse max reasoning effort requires a verified Muse Code 1.4.6 or newer; unable to read the installed version" >&2
+    return 1
+  }
+  version=$(printf '%s\n' "$output" | awk '
+    match($0, /[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/) {
+      print substr($0, RSTART, RLENGTH)
+      exit
+    }
+  ')
+  if [ -z "$version" ]; then
+    echo "error: Muse max reasoning effort requires a verified Muse Code 1.4.6 or newer; unable to parse the installed version" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$version" | awk -F. '
+    NF == 3 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+      if ($1 + 0 > 1 || ($1 + 0 == 1 && ($2 + 0 > 4 || ($2 + 0 == 4 && $3 + 0 >= 6)))) {
+        supported=1
+      }
+    }
+    END { exit !supported }
+  '; then
+    echo "error: Muse max reasoning effort requires Muse Code 1.4.6 or newer (found $version); upgrade Muse or choose a lower effort" >&2
+    return 1
+  fi
+  return 0
+}
+
 resolve_rovo_binary() {
   local candidate dir fallback
   candidate=$(command -v rovo 2>/dev/null || true)
@@ -3249,10 +3284,12 @@ effort_flag_for_harness() {
     ;;
   muse)
     # Muse Code 1.4.6 accepts none|minimal|low|medium|high|xhigh|max|ultra.
-    # Firstmate's shared low..max levels map directly; none/minimal sit below
-    # that vocabulary, while explicit ultra remains refused by native validation.
+    # Firstmate's shared low..max levels map directly after max's version gate;
+    # none/minimal sit below that vocabulary, while explicit ultra remains
+    # refused by native validation.
     case "$effort" in
-    low | medium | high | xhigh | max) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+    low | medium | high | xhigh) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+    max) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
     esac
     ;;
   agy)
@@ -3313,6 +3350,9 @@ esac
 [ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__MUSEBIN__*)
   MUSE_BIN=$(resolve_muse_binary) || exit 1
+  if [ "$EFFORT" = max ]; then
+    muse_require_native_max_effort "$MUSE_BIN" || exit 1
+  fi
   MUSE_CONFIG_HOME=$(resolve_directory_input XDG_CONFIG_HOME "${XDG_CONFIG_HOME:-${HOME:-}/.config}") || exit 1
   MUSE_DATA_HOME=$(resolve_directory_input XDG_DATA_HOME "${XDG_DATA_HOME:-${HOME:-}/.local/share}") || exit 1
   MUSE_AUTH_FILE="$MUSE_CONFIG_HOME/muse/auth.json"
