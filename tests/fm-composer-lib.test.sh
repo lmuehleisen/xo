@@ -886,6 +886,12 @@ test_opencode_leftbar_idle_evidence() {
   assert_idle_evidence "unfamiliar V2 status row under an idle composer" idle "$novel"
   assert_idle_evidence "draft in place of the placeholder" refuse \
     "${novel/Ask anything… \"Fix a TODO in the codebase\"/DRAFT}"
+  assert_idle_evidence "draft starting with the placeholder text" refuse \
+    "${novel/Ask anything… \"Fix a TODO in the codebase\"/Ask anything… \"Fix a TODO in the codebase\" and more}"
+  assert_idle_evidence "draft starting with the bare placeholder" refuse \
+    "${novel/Ask anything… \"Fix a TODO in the codebase\"/Ask anything… draft}"
+  assert_idle_evidence "placeholder without its example" idle \
+    "${novel/Ask anything… \"Fix a TODO in the codebase\"/Ask anything…}"
   assert_idle_evidence "draft above the placeholder" refuse \
     "${novel/┃$nl/┃  DRAFT$nl}"
   assert_idle_evidence "blank composer without the placeholder" refuse \

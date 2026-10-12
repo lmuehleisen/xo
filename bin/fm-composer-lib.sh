@@ -1574,13 +1574,16 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 
 # fm_composer_leftbar_idle_evidence: positive proof that the bottom-most V2
 # left-bar composer is idle, for a caller deciding what an unknown verdict
-# allows; it never changes a verdict. The composer must show the idle
-# placeholder, which V2 draws only while the input is empty, between blank
-# rows, end in the mode/model footer and sit on the half-block floor. Rows
+# allows; it never changes a verdict. The composer must show V2's complete
+# idle placeholder line, drawn only while the input is empty, between blank
+# rows, end in the mode/model footer and sit on the half-block floor. The
+# whole line must match, so a draft that merely starts with the placeholder
+# text refuses; a placeholder cut short by a narrow pane refuses too. Rows
 # below the floor stay unread, so an unfamiliar status row there cannot
 # withhold proof, but a permission prompt or a dialog title (`... esc`)
 # anywhere on the screen refuses.
 FM_COMPOSER_DIALOG_RE_DEFAULT='Permission required|Allow once|Always allow|[[:space:]]esc$'
+FM_COMPOSER_LEFTBAR_PLACEHOLDER_RE_DEFAULT='^Ask anything…( "[^"]+")?$'
 fm_composer_leftbar_idle_evidence() {  # <screen>
   local plain first last row content placeholder=0
   plain=$(printf '%s\n' "$1" | fm_composer_strip_ansi)
@@ -1600,7 +1603,7 @@ fm_composer_leftbar_idle_evidence() {  # <screen>
     fm_composer_normalize_trim_var content
     if [ "$row" -eq "$last" ]; then
       fm_composer_idle_matches "$content" "${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}" sensitive || return 1
-    elif fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive; then
+    elif fm_composer_idle_matches "$content" "$FM_COMPOSER_LEFTBAR_PLACEHOLDER_RE_DEFAULT" sensitive; then
       placeholder=1
     fi
     row=$((row + 1))
