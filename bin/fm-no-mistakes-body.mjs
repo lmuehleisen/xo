@@ -12,6 +12,7 @@
 // Private no-mistakes-submissions rows are: <upstream> <fork> <contrib/branch>.
 // Optional no-mistakes-test-exceptions uses the same validation and row format;
 // a test override_reason requires an identical row in both private files.
+// Test override reasons pass the same decoded safety checks in both modes.
 // Review, test and document must still all be completed, including an exception.
 // Only live GitHub facts bind the body to the approved fork branch and head.
 // Exact-head checks are unchanged; new PR creation still requires that head.
@@ -100,19 +101,21 @@ try {
       if (!number || ref.object.sha !== actualHead || !/^[0-9a-f]{40}$/.test(actualHead)
         || !current || JSON.parse(current[1])?.head_sha !== actualHead) continue;
     }
+    const privateDisplay = /(?:```|~~~|<\/?(?:details|pre)\b|~[/\\]|\/(?:Users|home|tmp|private|var)\/|[A-Z]:\\Users\\|WATCHER DOWN|SUPERVISION IS OFF|^=== |\b[0-9A-HJKMNP-TV-Z]{26}\b|\b\d+(?:\.\d+)?(?:ms|[smh])(?:\d+(?:\.\d+)?[smh])*\b|\b\d{1,2}:\d{2}(?::\d{2})?\b)/im;
+    if (testOverride && (typeof test.override_reason !== "string" || !test.override_reason.trim()
+      || /<!--|--!?>/.test(test.override_reason) || privateDisplay.test(test.override_reason))) {
+      process.exit(mode === "--sanitize" ? 3 : 1);
+    }
     if (mode === "--sanitize") {
       const changed = /^## What Changed\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im.exec(body)?.[1]?.trim();
       if (!changed) process.exit(3);
       // Never fall back to publishing raw evidence from an eligible body.
       // The original marker stays immutable, so private marker metadata refuses.
-      const privateDisplay = /(?:```|~~~|<\/?(?:details|pre)\b|~[/\\]|\/(?:Users|home|tmp|private|var)\/|[A-Z]:\\Users\\|WATCHER DOWN|SUPERVISION IS OFF|^=== |\b[0-9A-HJKMNP-TV-Z]{26}\b|\b\d+(?:\.\d+)?(?:ms|[smh])(?:\d+(?:\.\d+)?[smh])*\b|\b\d{1,2}:\d{2}(?::\d{2})?\b)/im;
       const publicFields = (value, keys) => value && typeof value === "object"
         && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
       if (!publicFields(a, ["head_sha", "steps", "live_validation"])
         || !a.steps.every((s) => publicFields(s, s.step === "test" && approvedException
           ? ["step", "status", "override_reason"] : ["step", "status"]))
-        || (testOverride && (typeof test.override_reason !== "string" || !test.override_reason.trim()
-          || /<!--|--!?>/.test(test.override_reason) || privateDisplay.test(test.override_reason)))
         || privateDisplay.test(changed) || privateDisplay.test(match[0])) process.exit(3);
       const names = ["intent", "rebase", "review", "test", "document", "lint", "push", "pr", "ci"];
       const statuses = ["completed", "skipped", "running", "pending", "failed"];

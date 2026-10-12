@@ -2035,6 +2035,13 @@ SH
   if [ "$delimiter_rc" -eq 0 ]; then
     assert_contains "$out" '"override_reason":"-->"' 'comment-terminator counterexample reaches the retained marker'
   fi
+  local raw_rc shape_rc
+  out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.comment" 2>&1)
+  raw_rc=$?
+  out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.comment" 2>&1)
+  shape_rc=$?
+  assert_equals '1 1 3' "$raw_rc $shape_rc $delimiter_rc" 'unsafe override refuses raw eligibility and expanded limits while sanitize remains a hard refusal'
+  assert_contains "$out" 'longer than 20 lines' 'unsafe raw override keeps the ordinary body limit'
   printf 'bad row\n' >"$CFG/no-mistakes-test-exceptions"
   out=$(FM_TEST_FOLLOWUP_RECEIVED="$received" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-gh-publish-exec.mjs" "$FAKEBIN/followup-gh" pr edit 3 --repo acme/upstream --body-file - <"$body.exception" 2>&1)
   case "$out" in *"fm-gh-publish-exec: REFUSED: $diagnostic"*) runtime_diagnostic=1 ;; esac
@@ -2043,7 +2050,7 @@ SH
   printf 'acme/upstream acme/widgets contrib/fixture\n' >"$CFG/no-mistakes-test-exceptions"
   [ ! -e "$received" ] || fail "malformed approval reached gh"
   assert_equals '3 1 1' "$delimiter_rc $runtime_diagnostic $gate_diagnostic" 'comment terminators refuse and both consumers identify the approval files independently'
-  for scenario in override-path escaped-override-path override-timing override-extra review-override override-type override-comment-start override-comment-end override-comment-bang escaped-override-comment; do
+  for scenario in override-path escaped-override-path override-timing override-extra review-override override-type override-empty override-blank override-comment-start override-comment-end override-comment-bang escaped-override-comment; do
     FM_TEST_OVERRIDE_CASE="$scenario" node --input-type=module - "$body.exception" "$body.unsafe" <<'JS'
 import { readFileSync, writeFileSync } from "node:fs";
 const [source, target] = process.argv.slice(2);
@@ -2057,6 +2064,8 @@ switch (process.env.FM_TEST_OVERRIDE_CASE) {
   case "override-extra": test.execution_id = "fixture-execution"; break;
   case "review-override": a.steps[0].override_reason = "Fixture exception."; break;
   case "override-type": test.override_reason = { verdict: "inconclusive" }; break;
+  case "override-empty": test.override_reason = ""; break;
+  case "override-blank": test.override_reason = "   "; break;
   case "override-comment-start": test.override_reason = "<!--"; break;
   case "override-comment-end": case "escaped-override-comment": test.override_reason = "-->"; break;
   case "override-comment-bang": test.override_reason = "--!>"; break;
@@ -2066,6 +2075,16 @@ if (process.env.FM_TEST_OVERRIDE_CASE === "escaped-override-path") json = json.r
 if (process.env.FM_TEST_OVERRIDE_CASE === "escaped-override-comment") json = json.replaceAll(">", "\\u003e");
 writeFileSync(target, body.replace(match[1], () => json));
 JS
+    case "$scenario" in
+    override-extra | review-override) ;;
+    *)
+      out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.unsafe" 2>&1)
+      assert_equals 1 "$?" "unsafe override reason cannot qualify in raw mode: $scenario"
+      assert_equals '' "$out" 'raw eligibility refusal emits no private reason bytes'
+      out=$("$GATE" check-text --config "$CFG" --dest acme/upstream --pr 3 "body:$body.unsafe" 2>&1) && fail "unsafe override reason must retain ordinary limits: $scenario"
+      assert_contains "$out" 'longer than 20 lines' 'unsafe reason cannot raise the description cap'
+      ;;
+    esac
     out=$(node "$helper" "$CFG" "$FAKEBIN/gh" acme/upstream '' '' 3 '' "$body.unsafe" --sanitize 2>&1)
     rc=$?
     assert_equals 3 "$rc" "approved exception retains private-display and public-schema checks: $scenario"
