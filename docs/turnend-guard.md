@@ -273,6 +273,10 @@ The registrations in detail:
   Beside them it registers one `StopFailure` hook, `bin/fm-claude-stop-autoarm.sh --stop-failure`, with the same `asyncRewake` and timeout, because Claude Code fires `StopFailure` instead of `Stop` when a turn ends on an API error, so neither `Stop` hook runs for that turn.
   After a usage limit it waits for the reset, after another transient error it waits a bounded backoff, and then it starts one recovery turn whose normal `Stop` re-arms; it stands down in away mode, and the script header owns the full contract.
   A manual Escape interrupt fires neither `Stop` nor `StopFailure`, so an interrupted turn remains unguarded; a person is present by definition there.
+  In a Claude secondmate home, `bin/fm-spawn.sh` writes a `.fm-busy-stop` pointer and gives the mate no `Stop` busy hook, so `--claude` is the only Stop writer of the parent home's busy record for that generation.
+  It records idle when it allows the Stop and busy when its exit 2 blocks it into a continuation, because Claude runs Stop hooks in parallel and that continuation fires no `UserPromptSubmit`.
+  A home whose guard predates `.fm-busy-stop` cannot close the turn, so that launch keeps the ordinary `Stop` idle hook instead.
+  [Runtime backend verification](verification/runtime-backends.md#secondmate-busy-contract) owns the live evidence.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
 - OpenCode V1 listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
 - Pi listens for `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts`, runs once per logical agent run, and calls `pi.sendUserMessage(..., { deliverAs: "followUp" })` once when the guard returns 2.
