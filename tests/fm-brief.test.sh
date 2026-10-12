@@ -228,10 +228,10 @@ test_ship_modes_generate_clean_briefs() {
 
 # --forge forgejo is the Forgejo value of the project's registered forge binding
 # (bin/fm-project-mode.sh --forge), passed at intake exactly like --mode. It
-# names tea instead of gh-axi in the ship brief's forge-CLI rule and in the
+# names tea instead of gh in the ship brief's forge-CLI rule and in the
 # direct-PR Definition of done's own open-a-PR line, and it marks the delivery
 # contract line so bin/fm-spawn.sh can check it against the registry. A brief
-# with no --forge renders the unchanged gh-axi wording. The forge is a ship
+# with no --forge renders the unchanged gh wording. The forge is a ship
 # input only, and the closed set refuses anything else.
 test_forge_selection_renders_correct_cli() {
   local home brief out rc
@@ -241,18 +241,18 @@ test_forge_selection_renders_correct_cli() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-default some-proj --mode direct-PR >/dev/null 2>&1 \
     || fail "a ship brief with no --forge should still scaffold"
   brief="$home/data/brief-forge-default/brief.md"
-  assert_grep "3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations." "$brief" \
-    "a brief with no --forge must render the exact pre-existing gh-axi Rule 3 line"
+  assert_grep "3. Use gh for GitHub operations. For browser work, use the harness browser tools or Playwright." "$brief" \
+    "a brief with no --forge must render the exact pre-existing gh Rule 3 line"
   # shellcheck disable=SC2016 # Backticks are literal generated brief text.
-  assert_grep 'open a PR with `gh-axi`' "$brief" \
-    "a direct-PR brief with no --forge must still tell the worker to open the PR with gh-axi"
+  assert_grep 'open a PR with `gh`' "$brief" \
+    "a direct-PR brief with no --forge must still tell the worker to open the PR with gh"
   grep -qx "Delivery contract: mode=direct-PR" "$brief" \
     || fail "a brief with no --forge must keep the bare delivery contract line"
 
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-forgejo some-proj --mode direct-PR --forge forgejo >/dev/null 2>&1 \
     || fail "--forge forgejo should scaffold a direct-PR ship brief"
   brief="$home/data/brief-forge-forgejo/brief.md"
-  assert_grep "3. Use tea for Forgejo operations and chrome-devtools-axi for browser operations." "$brief" \
+  assert_grep "3. Use tea for Forgejo operations. For browser work, use the harness browser tools or Playwright." "$brief" \
     "--forge forgejo must render the tea Rule 3 line"
   # shellcheck disable=SC2016 # Backticks are literal generated brief text.
   assert_grep 'open a PR with `tea`' "$brief" \
@@ -265,25 +265,29 @@ test_forge_selection_renders_correct_cli() {
   # shellcheck disable=SC2016 # Backticks are literal generated brief text.
   assert_grep 'remove that prefix with `tea pulls edit <number>' "$brief" \
     "--forge forgejo's direct-PR DOD must clear a draft with tea"
-  assert_no_grep 'gh-axi pr view' "$brief" \
-    "--forge forgejo's direct-PR DOD must not send the worker to gh-axi for the draft read-back"
-  assert_no_grep 'gh-axi pr ready' "$brief" \
-    "--forge forgejo's direct-PR DOD must not send the worker to gh-axi to clear a draft"
+  assert_no_grep 'gh pr view' "$brief" \
+    "--forge forgejo's direct-PR DOD must not send the worker to gh for the draft read-back"
+  assert_no_grep 'gh pr ready' "$brief" \
+    "--forge forgejo's direct-PR DOD must not send the worker to gh to clear a draft"
 
+  # Only a home opted in through config/no-mistakes renders the pipeline contract.
+  mkdir -p "$home/config"
+  : > "$home/config/no-mistakes"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-nm some-proj --mode no-mistakes --forge forgejo >/dev/null 2>&1 \
     || fail "--forge forgejo should scaffold a no-mistakes ship brief"
   brief="$home/data/brief-forge-nm/brief.md"
-  assert_grep "3. Use tea for Forgejo operations and chrome-devtools-axi for browser operations." "$brief" \
+  assert_grep "3. Use tea for Forgejo operations. For browser work, use the harness browser tools or Playwright." "$brief" \
     "a no-mistakes --forge forgejo brief must render the tea Rule 3 line"
   grep -qx "Delivery contract: mode=no-mistakes forge=forgejo" "$brief" \
     || fail "a no-mistakes --forge forgejo brief must mark the delivery contract line"
   # shellcheck disable=SC2016 # Backticks and braces are literal generated brief text.
   assert_grep 'confirm it is not a draft (`tea api --repo <owner>/<repo> /repos/{owner}/{repo}/pulls/<number>` must show `draft` as false' "$brief" \
     "a no-mistakes --forge forgejo DOD must read the draft state back with tea"
-  assert_no_grep 'gh-axi pr view' "$brief" \
-    "a no-mistakes --forge forgejo DOD must not send the worker to gh-axi for the draft read-back"
-  assert_no_grep 'gh-axi pr ready' "$brief" \
-    "a no-mistakes --forge forgejo DOD must not send the worker to gh-axi to clear a draft"
+  assert_no_grep 'gh pr view' "$brief" \
+    "a no-mistakes --forge forgejo DOD must not send the worker to gh for the draft read-back"
+  assert_no_grep 'gh pr ready' "$brief" \
+    "a no-mistakes --forge forgejo DOD must not send the worker to gh to clear a draft"
+  rm -f "$home/config/no-mistakes"
 
   while IFS='|' read -r label args expect; do
     [ -n "$label" ] || continue
@@ -1341,12 +1345,15 @@ test_base_branch_is_rendered_and_bounded() {
   base=$(fm_brief_base_branches "$brief")
   [ "$base" = feature/hub ] || fail "the direct-PR brief recorded base '$base', not feature/hub"
   # shellcheck disable=SC2016  # literal backticks in rendered prose must stay unexpanded
-  assert_grep 'open a PR with `gh-axi` that is ready for review, not a draft, against the base branch `feature/hub` (`--base feature/hub`)' "$brief" \
+  assert_grep 'open a PR with `gh` that is ready for review, not a draft, against the base branch `feature/hub` (`--base feature/hub`)' "$brief" \
     "the direct-PR definition of done does not target the base branch"
   # shellcheck disable=SC2016
   assert_grep 'Never push to the base branch `feature/hub` or the default branch' "$brief" \
     "the direct-PR safety rule does not protect the base branch"
 
+  # Only a home opted in through config/no-mistakes renders the pipeline commands.
+  mkdir -p "$home/config"
+  : > "$home/config/no-mistakes"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-nm-b2 some-proj --mode no-mistakes --base-branch release/1.2 >/dev/null 2>&1 \
     || fail "no-mistakes --base-branch should scaffold"
   brief="$home/data/brief-base-nm-b2/brief.md"
@@ -1365,6 +1372,7 @@ test_base_branch_is_rendered_and_bounded() {
   # shellcheck disable=SC2016
   assert_grep 'pass `--base-branch release/\$HOTFIX` on every' "$brief" \
     "the no-mistakes command did not shell-quote the base branch"
+  rm -f "$home/config/no-mistakes"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-meta-b9 some-proj --mode direct-PR --base-branch "$meta_base" >/dev/null 2>&1 \
     || fail "direct-PR --base-branch with a shell metacharacter should scaffold"
   # shellcheck disable=SC2016
