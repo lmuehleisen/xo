@@ -6,10 +6,9 @@
 #
 # The facts pinned here are the ones an Antigravity release could silently
 # change and the ones a wrong guess would make dangerous:
-#   1. --dangerously-skip-permissions must be unreachable from every
-#      config/crew-permissions value. It is agy's only blanket approval switch,
-#      routine work stays reviewed rather than routed through it, and a parked
-#      worker must never be unblocked by adding it.
+#   1. --dangerously-skip-permissions must always carry the firstmate-owned
+#      policy layer. Auto enables it for agy workers, while Manual and an
+#      explicit --no-agy-bypass keep their prompt posture.
 #   2. --add-dir for the task worktree is load-bearing, not cosmetic. Verified
 #      on agy 1.2.0: with the pane cwd already inside the worktree but no
 #      --add-dir, a file write landed in agy's own scratch directory while the
@@ -518,25 +517,30 @@ run_agy_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
 
 # --- approvals --------------------------------------------------------------
 
-test_agy_auto_uses_accept_edits_and_never_bypass() {
-  local fields case_dir home proj wt fakebin id launch
+test_agy_auto_defaults_to_the_policy_layer() {
+  local fields case_dir home proj wt fakebin id launch out
   fields=$(make_spawn_case auto)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $fields
 EOF
   : "$case_dir"
+  rm -f "$fakebin/agy"
+  fakebin=$(make_bypass_fakebin "$case_dir/fake2")
   printf 'auto\n' > "$home/config/crew-permissions"
-  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout >/dev/null
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) \
+    || fail "auto must launch with the policy layer: $out"
   launch=$(cat "$home/launch.log")
   case "$launch" in
-    *'--mode accept-edits'*) ;;
-    *) fail "auto must launch agy with --mode accept-edits, got: $launch" ;;
+    *--dangerously-skip-permissions*) ;;
+    *) fail "auto must select agy's policy-layered bypass by default, got: $launch" ;;
   esac
-  case "$launch" in
-    *--dangerously-skip-permissions*)
-      fail "auto must never reach agy's blanket approval bypass: $launch" ;;
-  esac
-  pass "fm-spawn.sh: agy auto selects accept-edits, never the approval bypass"
+  [ -f "$home/state/$id.agy-permission.json" ] \
+    || fail "the automatic bypass must install the permission policy"
+  grep -q '^agy_bypass=on$' "$home/state/$id.meta" \
+    || fail "the automatic bypass posture must be recorded: $(cat "$home/state/$id.meta")"
+  grep -q '^agy_judge=agy:' "$home/state/$id.meta" \
+    || fail "the default judge must be recorded: $(cat "$home/state/$id.meta")"
+  pass "fm-spawn.sh: agy auto selects the policy layer and default agy judge"
 }
 
 test_agy_manual_reviews_everything_and_never_bypass() {
@@ -546,6 +550,8 @@ test_agy_manual_reviews_everything_and_never_bypass() {
 $fields
 EOF
   : "$case_dir"
+  rm -f "$fakebin/agy"
+  fakebin=$(make_bypass_fakebin "$case_dir/fake2")
   printf 'manual\n' > "$home/config/crew-permissions"
   run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout >/dev/null
   launch=$(cat "$home/launch.log")
@@ -556,30 +562,130 @@ EOF
     *--dangerously-skip-permissions*)
       fail "manual must never reach agy's blanket approval bypass: $launch" ;;
   esac
+  ! grep -q '^agy_bypass=' "$home/state/$id.meta" \
+    || fail "manual review must not record an active bypass posture"
   pass "fm-spawn.sh: agy manual keeps every action under review"
 }
 
-test_agy_absent_setting_defaults_to_accept_edits() {
-  local fields case_dir home proj wt fakebin id launch
+test_agy_absent_setting_defaults_to_the_policy_layer() {
+  local fields case_dir home proj wt fakebin id launch out
   fields=$(make_spawn_case absent)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $fields
 EOF
   : "$case_dir"
-  # No config/crew-permissions at all: the documented default is auto, matching
-  # claude and codex, so the file's absence must not silently disable approvals
-  # OR silently reach the bypass.
-  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout >/dev/null
+  rm -f "$fakebin/agy"
+  fakebin=$(make_bypass_fakebin "$case_dir/fake2")
+  # No config/crew-permissions at all resolves to auto and uses the same
+  # policy-layered posture as an explicit auto setting.
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) \
+    || fail "the absent permission setting must launch with the policy layer: $out"
+  launch=$(cat "$home/launch.log")
+  case "$launch" in
+    *--dangerously-skip-permissions*) ;;
+    *) fail "an absent setting must select the policy layer by default, got: $launch" ;;
+  esac
+  [ -f "$home/state/$id.agy-permission.json" ] \
+    || fail "the default posture must install the permission policy"
+  pass "fm-spawn.sh: an absent permission setting defaults agy to the policy layer"
+}
+
+test_agy_no_bypass_selects_accept_edits_and_records_opt_out() {
+  local fields case_dir home proj wt fakebin id launch
+  fields=$(make_spawn_case no-bypass-opt-out)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  : "$case_dir"
+  printf 'auto\n' > "$home/config/crew-permissions"
+  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass >/dev/null
   launch=$(cat "$home/launch.log")
   case "$launch" in
     *'--mode accept-edits'*) ;;
-    *) fail "an absent setting must default to accept-edits, got: $launch" ;;
+    *) fail "--no-agy-bypass must restore accept-edits, got: $launch" ;;
   esac
   case "$launch" in
-    *--dangerously-skip-permissions*)
-      fail "an absent setting must never reach the approval bypass: $launch" ;;
+    *--dangerously-skip-permissions*) fail "an opted-out launch must not use the bypass: $launch" ;;
   esac
-  pass "fm-spawn.sh: an absent permission setting defaults agy to accept-edits"
+  grep -q '^agy_bypass=off$' "$home/state/$id.meta" \
+    || fail "an explicit opt-out must be recorded for relaunch: $(cat "$home/state/$id.meta")"
+  [ ! -e "$home/state/$id.agy-permission.json" ] \
+    || fail "an opted-out launch must not install the bypass policy"
+  pass "fm-spawn.sh: --no-agy-bypass restores accept-edits and persists the opt-out"
+}
+
+prepare_agy_batch_slots() {  # <case-dir> <project> <worktree> <fakebin>
+  local case_dir=$1 proj=$2 first_wt=$3 fakebin=$4 second_wt="$1/wt-second"
+  git -C "$proj" worktree add --quiet --detach "$second_wt" \
+    || fail "could not prepare the second batch worktree"
+  printf '%s\n' "$first_wt" "$second_wt" > "$fakebin/lease-queue"
+  mv "$fakebin/tmux" "$fakebin/tmux-base"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+dir=$(dirname "$0")
+if [ -s "$dir/lease-current" ]; then
+  FM_FAKE_PANE_PATH=$(cat "$dir/lease-current")
+  export FM_FAKE_PANE_PATH
+fi
+exec "$dir/tmux-base" "$@"
+SH
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = get ]; then
+  dir=$(dirname "$0")
+  head -n 1 "$dir/lease-queue" > "$dir/lease-current"
+  tail -n +2 "$dir/lease-queue" > "$dir/lease-next"
+  mv "$dir/lease-next" "$dir/lease-queue"
+  cat "$dir/lease-current"
+fi
+SH
+  chmod +x "$fakebin/tmux" "$fakebin/treehouse"
+}
+
+test_agy_batch_forwards_explicit_opt_out() {
+  local fields case_dir home proj wt fakebin id id2 second_wt out launch task
+  fields=$(make_spawn_case batch-opt-out)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  : "$case_dir"
+  id2='agy-batch-opt-out-x2'
+  second_wt="$case_dir/wt-second"
+  mkdir -p "$home/data/$id2"
+  cat > "$home/data/$id2/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Exercise agy batch posture forwarding.
+
+## Firstmate spec
+Verify the explicit agy opt-out reaches every batch child.
+EOF
+  rm -f "$fakebin/agy"
+  fakebin=$(make_bypass_fakebin "$case_dir/fake2")
+  prepare_agy_batch_slots "$case_dir" "$proj" "$wt" "$fakebin"
+  printf 'auto\n' > "$home/config/crew-permissions"
+
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$home/launch.log" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id=$proj" "$id2=$proj" --harness agy --scout --no-agy-bypass 2>&1) \
+    || fail "an agy batch with explicit opt-out must launch: $out"
+  for task in "$id" "$id2"; do
+    grep -q "^spawned $task harness=agy kind=scout" <<<"$out" \
+      || fail "the agy batch did not launch $task: $out"
+    grep -q '^agy_bypass=off$' "$home/state/$task.meta" \
+      || fail "the batch child $task lost its explicit opt-out: $(cat "$home/state/$task.meta")"
+    [ ! -e "$home/state/$task.agy-permission.json" ] \
+      || fail "the opted-out batch child $task installed the bypass policy"
+  done
+  launch=$(cat "$home/launch.log")
+  [ "$(grep -cF -- '--mode accept-edits' "$home/launch.log")" = 2 ] \
+    || fail "every agy batch child must use accept-edits: $launch"
+  ! grep -Fq -- '--dangerously-skip-permissions' "$home/launch.log" \
+    || fail "an explicit batch opt-out must not reach the bypass: $launch"
+  pass "fm-spawn.sh: batch dispatch forwards --no-agy-bypass to every agy child"
 }
 
 test_agy_invalid_setting_refuses_without_bypass() {
@@ -614,7 +720,7 @@ test_agy_launch_grants_the_task_worktree() {
 $fields
 EOF
   : "$case_dir"
-  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout >/dev/null
+  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass >/dev/null
   launch=$(cat "$home/launch.log")
   # Without the worktree grant agy writes into its own scratch directory and
   # reports success, so its absence is a silent no-op rather than a visible
@@ -664,7 +770,7 @@ EOF
   wt_real=$(cd "$wt" && pwd -P)
   [ "$link" != "$wt_real" ] \
     || fail "the symlink case needs a path that differs from the resolved worktree"
-  run_agy_spawn "$home" "$proj" "$link" "$fakebin" "$id" --scout >/dev/null
+  run_agy_spawn "$home" "$proj" "$link" "$fakebin" "$id" --scout --no-agy-bypass >/dev/null
   launch=$(cat "$home/launch.log")
   case "$launch" in
     *"--add-dir '$wt_real'"*) ;;
@@ -687,7 +793,7 @@ test_agy_effort_caps_at_high() {
 $fields
 EOF
     : "$case_dir"
-    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout \
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass \
       --model gemini-3.8-flash --effort "$level" >/dev/null
     launch=$(cat "$home/launch.log")
     # agy refuses anything above high, so the intent is capped rather than
@@ -711,7 +817,7 @@ test_agy_effort_passes_supported_levels_through() {
 $fields
 EOF
     : "$case_dir"
-    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout \
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass \
       --model gemini-3.8-flash --effort "$level" >/dev/null
     launch=$(cat "$home/launch.log")
     case "$launch" in
@@ -732,7 +838,7 @@ test_agy_suffixed_model_id_suppresses_the_effort_flag() {
 $fields
 EOF
     : "$case_dir"
-    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout \
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass \
       --model "$model" --effort low >/dev/null
     launch=$(cat "$home/launch.log")
     case "$launch" in
@@ -750,7 +856,7 @@ EOF
 $fields
 EOF
   : "$case_dir"
-  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout \
+  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass \
     --model gemini-3.8-flash --effort low >/dev/null
   launch=$(cat "$home/launch.log")
   case "$launch" in
@@ -779,7 +885,7 @@ agy_catalog_spawn() {  # <case-name> [spawn args...]
 $fields
 EOF
   : "$case_dir"
-  run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout "$@" \
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass "$@" \
     > "$home/spawn.out" || rc=$?
   printf '%s|%s\n' "$rc" "$home"
 }
@@ -920,6 +1026,10 @@ EOF
     *) fail "secondmate launch did not complete: $out" ;;
   esac
   [ ! -e "$home/state/$id.agy-hooks" ] || fail "secondmate must use primary hooks, never worker hooks"
+  ! grep -Fq -- '--dangerously-skip-permissions' "$home/launch.log" \
+    || fail "agy secondmates stay outside the worker bypass policy layer"
+  ! grep -q '^agy_bypass=' "$home/state/$id.meta" \
+    || fail "agy secondmates must not record a worker bypass posture"
   pass "fm-spawn.sh: agy secondmate launches without worker wiring"
 }
 
@@ -932,7 +1042,7 @@ test_agy_spawn_confirms_the_brief_started() {
 $fields
 EOF
   : "$case_dir"
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) \
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass) \
     || fail "agy spawn whose worker hook reported the brief failed: $out"
   case "$out" in
     *"spawned $id harness=agy kind=scout"*) ;;
@@ -960,7 +1070,7 @@ EOF
   # whole time, but agy never invokes the model (an auth prompt, a trust dialog,
   # a refused model id). The seed must not pass for a started brief.
   out=$(FM_FAKE_AGY_START=0 FM_AGY_READY_POLLS=4 FM_AGY_POLL_INTERVAL=0.1 \
-    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout)
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass)
   status=$?
   [ "$status" -ne 0 ] || fail "agy spawn reported success though its brief never started: $out"
   grep -Fq '.agy-hooks' "$home/launch.log" || fail "the case never delivered the agy launch: $out"
@@ -992,7 +1102,7 @@ EOF
   # for teardown rather than being rolled back underneath a live worker.
   out=$(FM_FAKE_AGY_START=0 FM_FAKE_KILL_FAILS=1 FM_AGY_READY_POLLS=4 \
     FM_AGY_CLOSE_POLLS=3 FM_AGY_POLL_INTERVAL=0.1 \
-    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout)
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass)
   status=$?
   [ "$status" -ne 0 ] || fail "agy spawn reported success though its brief never started: $out"
   grep -Fq "fm-$id" "$home/launch.log.kills" 2>/dev/null \
@@ -1026,7 +1136,7 @@ SH
   printf '%s\n' "$fakebin"
 }
 
-test_agy_bypass_launch_installs_the_adapter_and_skips_permissions() {
+test_agy_default_launch_installs_the_adapter_and_skips_permissions() {
   local fields case_dir home proj wt fakebin id out
   fields=$(make_spawn_case bypass-armed)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
@@ -1035,8 +1145,8 @@ EOF
   : "$case_dir"
   rm -f "$fakebin/agy"
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass) \
-    || fail "an armed agy bypass spawn failed: $out"
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) \
+    || fail "an automatic agy policy-layer spawn failed: $out"
   grep -Fq -- '--dangerously-skip-permissions' "$home/launch.log" \
     || fail "the bypass launch must carry --dangerously-skip-permissions: $(cat "$home/launch.log")"
   [ -f "$home/state/$id.agy-permission.json" ] \
@@ -1048,7 +1158,7 @@ EOF
     || fail "the adapter's armed line must reach the observer log: $(cat "$home/state/agy-permission-log.jsonl" 2>/dev/null)"
   grep -q '^agy_bypass=on$' "$home/state/$id.meta" \
     || fail "the bypass posture must be recorded in task metadata: $(cat "$home/state/$id.meta")"
-  pass "fm-spawn.sh: --agy-bypass launches a policed bypass once the adapter is armed"
+  pass "fm-spawn.sh: the default agy policy layer launches once the adapter is armed"
 }
 
 # agy_hook <policy> <event> <tool> <arg> [step]: drive the permission adapter
@@ -1064,7 +1174,7 @@ agy_hook() {
   OUT=$(printf '%s' "$payload" | "$ROOT/bin/fm-agy-permission-policy.sh" "$event" "$policy" 2>/dev/null)
 }
 
-test_agy_bypass_ship_keeps_every_write_guard() {
+test_agy_default_ship_keeps_every_write_guard() {
   local fields case_dir home proj wt fakebin id out policy outside
   # The bypass gate covers ships as well as scouts.
   # On a read-only scout the write guards were belt-and-braces; on a ship they
@@ -1078,12 +1188,12 @@ EOF
   rm -f "$fakebin/agy"
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
   out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
-    --mode local-only --yolo off --agy-bypass) \
-    || fail "a ship bypass spawn must launch: $out"
+    --mode local-only --yolo off) \
+    || fail "a default policy-layer ship spawn must launch: $out"
   grep -Fq -- '--dangerously-skip-permissions' "$home/launch.log" \
-    || fail "the ship bypass launch must carry the bypass flag: $(cat "$home/launch.log")"
+    || fail "the default ship policy layer must carry the bypass flag: $(cat "$home/launch.log")"
   policy="$home/state/$id.agy-permission.json"
-  [ -f "$policy" ] || fail "a ship bypass spawn must write the per-task policy file"
+  [ -f "$policy" ] || fail "a default policy-layer ship must write the per-task policy file"
   grep -q '^agy_bypass=on$' "$home/state/$id.meta" \
     || fail "a ship's bypass posture must be recorded: $(cat "$home/state/$id.meta")"
   grep -q '^agy_judge=agy:' "$home/state/$id.meta" \
@@ -1134,7 +1244,7 @@ EOF
   # everything the ship tried to do.
   agy_hook "$policy" pre-tool-use write_to_file "$wt/in-scope.txt" 6
   [ -z "$OUT" ] || fail "a task-local ship write must still abstain, got: $OUT"
-  pass "fm-spawn.sh: a ship under bypass keeps every refusal, write-root, symlink, and judge guard"
+  pass "fm-spawn.sh: the default agy ship policy layer keeps every refusal, write-root, symlink, and judge guard"
 }
 
 test_agy_bypass_records_and_prints_the_judge_tier() {
@@ -1146,7 +1256,7 @@ EOF
   : "$case_dir"
   rm -f "$fakebin/agy"
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass) \
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) \
     || fail "an armed agy bypass spawn failed: $out"
   policy="$home/state/$id.agy-permission.json"
   # With no flag the judge stays on this adapter's own tier, and says so.
@@ -1166,7 +1276,7 @@ EOF
     *"judge=agy:gemini-3.6-flash-low"*) ;;
     *) fail "the spawned line must name the judge tier, got: $out" ;;
   esac
-  pass "fm-spawn.sh: a bypass spawn records and prints the judge tier it armed"
+  pass "fm-spawn.sh: the default agy policy layer records and prints its judge tier"
 }
 
 test_agy_judge_selects_another_tier() {
@@ -1179,7 +1289,7 @@ EOF
   rm -f "$fakebin/agy"
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
   fm_fake_exit0 "$fakebin" devin
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass \
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout \
     --agy-judge devin) || fail "selecting an installed judge tier failed: $out"
   policy="$home/state/$id.agy-permission.json"
   [ "$(jq -r .judge_tier "$policy")" = devin ] \
@@ -1195,7 +1305,7 @@ EOF
     *) fail "the spawn must name the selected tier before launching, got: $out" ;;
   esac
 
-  # An explicit model rides the same flag.
+  # An explicit model rides the same default posture.
   fields=$(make_spawn_case bypass-judge-model)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $fields
@@ -1204,7 +1314,7 @@ EOF
   rm -f "$fakebin/agy"
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
   fm_fake_exit0 "$fakebin" devin
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass \
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout \
     --agy-judge devin:swe-2-medium) || fail "selecting a tier and model failed: $out"
   [ "$(jq -r .judge_model "$home/state/$id.agy-permission.json")" = swe-2-medium ] \
     || fail "an explicit judge model must be recorded: $(cat "$home/state/$id.agy-permission.json")"
@@ -1265,12 +1375,13 @@ EOF
 $fields
 EOF
   : "$case_dir"
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-judge devin)
+  printf 'auto\n' > "$home/config/crew-permissions"
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass --agy-judge devin)
   status=$?
-  [ "$status" -ne 0 ] || fail "--agy-judge without --agy-bypass must refuse: $out"
+  [ "$status" -ne 0 ] || fail "--agy-judge with --no-agy-bypass must refuse: $out"
   case "$out" in
-    *"without that posture no judge is installed"*) ;;
-    *) fail "the refusal must explain that no judge is installed, got: $out" ;;
+    *"--no-agy-bypass disables that layer"*) ;;
+    *) fail "the refusal must explain that opt-out disables the judge, got: $out" ;;
   esac
   pass "fm-spawn.sh: --agy-judge refuses an unknown or uninstalled tier instead of falling back"
 }
@@ -1288,9 +1399,9 @@ case "${1:-}" in --version) printf 'agy 9.9.9\n' ;; esac
 exit 0
 SH
   chmod +x "$fakebin/agy"
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass)
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout)
   status=$?
-  [ "$status" -ne 0 ] || fail "a bypass launch on an unverified agy must refuse: $out"
+  [ "$status" -ne 0 ] || fail "the default agy policy layer on an unverified version must refuse: $out"
   case "$out" in
     *'outside the live-verified set'*) ;;
     *) fail "the refusal must name the unverified version, got: $out" ;;
@@ -1319,7 +1430,7 @@ EOF
     || fail "the fixture's project hook file did not commit"
   git -C "$proj" push -q origin HEAD:main >/dev/null 2>&1 \
     || fail "the fixture's project hook file did not reach origin"
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass)
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout)
   status=$?
   [ "$status" -ne 0 ] || fail "a bypass launch with a project hooks.json must refuse: $out"
   case "$out" in
@@ -1394,9 +1505,9 @@ EOF
   : "$case_dir"
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
   # The session starts - the busy hook reports - but the adapter's armed line
-  # never reaches the log, so the bypassed session's denies cannot be trusted.
+  # never reaches the log, so the policy-layer session's denies cannot be trusted.
   out=$(FM_FAKE_AGY_SKIP_ADAPTER=1 FM_AGY_ARMED_POLLS=4 FM_AGY_POLL_INTERVAL=0.1 \
-    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass)
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout)
   status=$?
   [ "$status" -ne 0 ] || fail "a bypass spawn whose adapter never arms must refuse: $out"
   case "$out" in
@@ -1429,7 +1540,7 @@ EOF
       tool:"fm-agy-permission-policy",gen:"stale-generation"}' \
     >> "$home/state/agy-permission-log.jsonl"
   out=$(FM_FAKE_AGY_SKIP_ADAPTER=1 FM_AGY_ARMED_POLLS=4 FM_AGY_POLL_INTERVAL=0.1 \
-    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass)
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout)
   status=$?
   [ "$status" -ne 0 ] || fail "a stale armed line must not satisfy the canary: $out"
   case "$out" in
@@ -1448,7 +1559,7 @@ EOF
     '{ts:"2020-01-01T00:00:00Z",task:$id,event:"armed",
       tool:"fm-agy-permission-policy",gen:"stale-generation"}' \
     >> "$home/state/agy-permission-log.jsonl"
-  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --agy-bypass) \
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) \
     || fail "an armed bypass spawn beside a stale record must succeed: $out"
   [ "$(jq -s --arg id "$id" \
       'map(select(.task == $id and .event == "armed")) | length' \
@@ -1548,7 +1659,101 @@ EOF
     || fail "a ship relaunch must keep the recorded posture: $(cat "$home/state/$id.meta")"
   [ -f "$home/state/$id.agy-permission.json" ] \
     || fail "a ship relaunch must keep the permission layer wired"
-  pass "fm-spawn.sh: a relaunch inherits agy_bypass whenever it resolves onto an agy worker"
+  pass "fm-spawn.sh: a relaunch preserves the recorded policy posture on agy"
+}
+
+test_agy_relaunch_from_another_harness_defaults_to_the_policy_layer() {
+  local fields case_dir home proj wt fakebin id out
+  fields=$(make_spawn_case relaunch-from-claude)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  : "$case_dir"
+  fm_fake_exit0 "$fakebin" claude
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --harness claude --scout) \
+    || fail "the initial claude worker must spawn: $out"
+  grep -q '^harness=claude$' "$home/state/$id.meta" \
+    || fail "the initial worker record must name claude: $(cat "$home/state/$id.meta")"
+  ! grep -q '^agy_bypass=' "$home/state/$id.meta" \
+    || fail "a non-agy worker must not record an agy posture"
+
+  rm -f "$home/launch.log.command" # Model the previous agent exiting to its shell.
+  fakebin=$(make_bypass_fakebin "$case_dir/fake2")
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$home/launch.log" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id" --relaunch --harness agy 2>&1) \
+    || fail "moving the task onto agy must apply the default policy layer: $out"
+  tail -1 "$home/launch.log" | grep -Fq -- '--dangerously-skip-permissions' \
+    || fail "a relaunch from another harness must select agy's policy layer: $(tail -1 "$home/launch.log")"
+  grep -q '^agy_bypass=on$' "$home/state/$id.meta" \
+    || fail "the moved task must record its new agy posture: $(cat "$home/state/$id.meta")"
+  grep -q '^agy_judge=agy:' "$home/state/$id.meta" \
+    || fail "the moved task must record the default judge: $(cat "$home/state/$id.meta")"
+  [ -f "$home/state/$id.agy-permission.json" ] \
+    || fail "the relaunch must install the agy permission policy"
+  pass "fm-spawn.sh: relaunching a non-agy task onto agy applies and records the default policy layer"
+}
+
+test_agy_relaunch_preserves_an_explicit_opt_out() {
+  local fields case_dir home proj wt fakebin id out
+  fields=$(make_spawn_case relaunch-opt-out)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  : "$case_dir"
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass) \
+    || fail "an opted-out agy worker must spawn: $out"
+  grep -q '^agy_bypass=off$' "$home/state/$id.meta" \
+    || fail "the opt-out must be recorded before relaunch: $(cat "$home/state/$id.meta")"
+  rm -f "$home/launch.log.command" # Model the previous agent exiting to its shell.
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$home/launch.log" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id" --relaunch 2>&1) \
+    || fail "an opted-out agy relaunch must keep its prompt posture: $out"
+  tail -1 "$home/launch.log" | grep -Fq -- '--mode accept-edits' \
+    || fail "an opted-out relaunch must stay on accept-edits: $(tail -1 "$home/launch.log")"
+  tail -1 "$home/launch.log" | grep -Fq -- '--dangerously-skip-permissions' \
+    && fail "an opted-out relaunch must not restore the bypass: $(tail -1 "$home/launch.log")"
+  grep -q '^agy_bypass=off$' "$home/state/$id.meta" \
+    || fail "the relaunch must keep the opted-out record: $(cat "$home/state/$id.meta")"
+  [ ! -e "$home/state/$id.agy-permission.json" ] \
+    || fail "an opted-out relaunch must not install the bypass policy"
+  pass "fm-spawn.sh: an explicitly opted-out agy record stays opted out on relaunch"
+}
+
+test_agy_relaunch_old_record_without_posture_gets_the_default() {
+  local fields case_dir home proj wt fakebin id out
+  fields=$(make_spawn_case relaunch-old-agy-record)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  : "$case_dir"
+  out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout --no-agy-bypass) \
+    || fail "the legacy agy worker fixture must spawn: $out"
+  sed -i '' '/^agy_bypass=/d; /^agy_judge=/d' "$home/state/$id.meta" 2>/dev/null \
+    || sed -i '/^agy_bypass=/d; /^agy_judge=/d' "$home/state/$id.meta"
+  rm -f "$home/launch.log.command" # Model the previous agent exiting to its shell.
+  fakebin=$(make_bypass_fakebin "$case_dir/fake2")
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$home/launch.log" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id" --relaunch 2>&1) \
+    || fail "an old agy record without a posture must get today's default: $out"
+  tail -1 "$home/launch.log" | grep -Fq -- '--dangerously-skip-permissions' \
+    || fail "an old agy record without agy_bypass must select the policy layer: $(tail -1 "$home/launch.log")"
+  grep -q '^agy_bypass=on$' "$home/state/$id.meta" \
+    || fail "the relaunch must record its new default posture: $(cat "$home/state/$id.meta")"
+  [ -f "$home/state/$id.agy-permission.json" ] \
+    || fail "the relaunch must install the policy for a legacy agy record"
+  pass "fm-spawn.sh: an old agy record without agy_bypass receives the default policy layer"
 }
 
 # --- control mechanics ------------------------------------------------------
@@ -1882,9 +2087,11 @@ test_herdr_registered_status_over_a_shell_only_pane_is_stale_not_live
 test_herdr_shell_first_with_live_registry_stays_live
 test_herdr_lone_unregistered_pane_is_agent_free
 test_herdr_malformed_and_failed_reads_stay_unknown
-test_agy_auto_uses_accept_edits_and_never_bypass
+test_agy_auto_defaults_to_the_policy_layer
 test_agy_manual_reviews_everything_and_never_bypass
-test_agy_absent_setting_defaults_to_accept_edits
+test_agy_absent_setting_defaults_to_the_policy_layer
+test_agy_no_bypass_selects_accept_edits_and_records_opt_out
+test_agy_batch_forwards_explicit_opt_out
 test_agy_invalid_setting_refuses_without_bypass
 test_agy_launch_grants_the_task_worktree
 test_agy_grants_resolve_a_symlinked_worktree
@@ -1900,8 +2107,8 @@ test_agy_secondmate_launch_is_supported
 test_agy_spawn_confirms_the_brief_started
 test_agy_spawn_fails_and_closes_when_the_brief_never_starts
 test_agy_spawn_keeps_its_record_when_the_endpoint_will_not_close
-test_agy_bypass_launch_installs_the_adapter_and_skips_permissions
-test_agy_bypass_ship_keeps_every_write_guard
+test_agy_default_launch_installs_the_adapter_and_skips_permissions
+test_agy_default_ship_keeps_every_write_guard
 test_agy_bypass_records_and_prints_the_judge_tier
 test_agy_judge_selects_another_tier
 test_agy_judge_refuses_rather_than_falling_back
@@ -1911,6 +2118,9 @@ test_agy_bypass_refuses_the_wrong_posture
 test_agy_bypass_canary_refuses_a_dead_adapter
 test_agy_bypass_canary_ignores_a_stale_generation
 test_agy_bypass_relaunch_inherits_only_for_an_agy_worker
+test_agy_relaunch_from_another_harness_defaults_to_the_policy_layer
+test_agy_relaunch_preserves_an_explicit_opt_out
+test_agy_relaunch_old_record_without_posture_gets_the_default
 test_agy_control_mechanics_are_the_verified_ones
 test_agy_supports_all_task_kinds
 test_agy_wiring_has_a_cleanup_owner

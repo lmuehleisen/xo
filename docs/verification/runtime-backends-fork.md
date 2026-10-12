@@ -304,7 +304,7 @@ agy updates itself, so re-run the live guard after any upgrade before trusting t
 
 ### accept-edits covers file edits, not shell commands
 
-This is the decision `config/crew-permissions=auto` rests on.
+This probe characterizes the `accept-edits` mode selected by `--no-agy-bypass`; agy Auto uses the separate policy layer described below.
 The same mode, same granted directory, two tool classes:
 
 ```sh
@@ -387,7 +387,7 @@ Ordinary typed input, wrapped text, and a shell below a stale composer remain pr
 
 Verified on 2026-09-17 with agy 1.2.5 on macOS on Apple silicon: the worker hook file `bin/fm-agy-hook.sh install-worker` writes now carries `PreToolUse` and `PostToolUse` matcher groups that append one JSONL line per tool call to `state/agy-permission-log.jsonl` and abstain.
 A real headless run (`-p`, `gemini-3.6-flash-low`, cheapest tier) with the installed hook directory granted emitted both lines while the observed `run_command` executed unchanged - the abstain contract holds against the real emitter.
-The bypass flag below is lab-scoped so the headless tool actually runs; it is never a worker launch flag.
+The direct bypass in this lab command lets the headless tool run; worker launches use the same flag only with Firstmate's permission policy after the spawn gates pass.
 
 ```sh
 FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
@@ -398,9 +398,9 @@ ok - agy 1.2.5: installed worker hooks emit a PreToolUse and PostToolUse line wh
 # agy observer live checks passed (agy 1.2.5)
 ```
 
-The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the field caps, the never-log-contents rule, every inert failure path, concurrent appends, and the install-time refusal of a malformed merged `hooks.json`.
+The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the field caps, the never-log-contents rule, every inert failure path, concurrent appends, the default-on Auto posture, Manual and explicit opt-out, relaunch posture selection, and the install-time refusal of a malformed merged `hooks.json`.
 
-### Bypass permission layer (opt-in)
+### Bypass permission layer
 
 Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
 The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the same six checks then passed on 1.3.1 on 2026-10-07 (see the 1.3.1 refresh below), so the layer's live-verified set is `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1`.
@@ -443,7 +443,7 @@ The launch therefore stays on `--dangerously-skip-permissions` alone, with the p
 #### 1.3.1 refresh (2026-10-07)
 
 Refreshed on 2026-10-07 with agy 1.3.1 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-`bin/fm-spawn.sh --agy-bypass` refuses any version outside the allowlist, so 1.3.1 required this refresh before it could launch.
+Agy policy-layer launches refuse versions outside the allowlist, so 1.3.1 required this refresh before it could launch on that path.
 Nothing in the version-sensitive hook contract changed: the same six live checks and the observer live check passed unchanged, and the `agy models` catalog still lists `gemini-3.6-flash-low`, so no part of the layer needed adapting beyond adding 1.3.1 to the allowlist.
 1.3.0 has no live evidence and stays outside the set.
 
@@ -810,4 +810,3 @@ bash bin/fm-test-run.sh tests/fm-quota-devin-catalog-live-e2e.test.sh
 ```text
 ok - devin 3000.11.3: catalog-backed included_quota binding verified without model tokens
 ```
-

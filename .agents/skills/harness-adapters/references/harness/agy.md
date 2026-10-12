@@ -54,23 +54,23 @@ Trust is not inherited from a parent directory, so every fresh worktree would ra
 agy has no equivalent of Claude's reviewed `--permission-mode auto` or Codex's `--approve-for-me`.
 Its three options are the default review mode, `--mode accept-edits`, and the blanket `--dangerously-skip-permissions`.
 
-`config/crew-permissions` therefore maps onto the middle option and never onto the blanket one:
+`config/crew-permissions` selects a policy-layered bypass for agy crewmate and scout launches in Auto, while Manual keeps the default review mode:
 
 | Setting | agy launch | Effect |
 |---|---|---|
-| `auto` (or absent) | `--mode accept-edits` | File edits auto-approved inside the granted directories. Shell commands still prompt. |
+| `auto` (or absent) | `--dangerously-skip-permissions` with Firstmate's permission policy and judge | The policy layer checks writes, refuses unsafe calls, judges residue, and holds decisions for Firstmate. |
 | `manual` | no `--mode` flag | agy's default review mode; edits prompt too. |
 | anything else | refused | The launch stops; there is no fallback onto the bypass. |
 
-`--dangerously-skip-permissions` is emitted by neither setting and is never a fallback when a worker parks.
-That is deliberate: the default keeps permissions reviewed rather than unconditionally bypassed, and a test pins it so a blocked worker is never unblocked by adding the bypass.
+The default bypass is never bare: the launch refuses unless the policy hooks, verified agy version, judge, and startup canary pass their gates.
+`--no-agy-bypass` selects `--mode accept-edits` for a single agy crewmate or scout launch; agy secondmates remain outside the worker policy layer.
 
 **`accept-edits` covers file edits, not shell commands.**
 Verified: under `--mode accept-edits` a write through the file tool completed with no prompt, while `date` was still denied headless and still prompted interactively.
 
-### Expect an agy worker to block
+### Prompted approval mode
 
-This is the adapter's defining operating characteristic, not a defect to route around.
+Manual review and the explicit `--no-agy-bypass` option retain agy's answerable approval prompts.
 
 The prompt is a rendered, answerable choice, so the stall is visible to a supervisor rather than silent:
 
@@ -101,11 +101,12 @@ An operator who wants a quieter agy worker can add their own allow rules there d
 
 Headless `-p` runs behave differently and are not the worker path: a tool needing approval is auto-denied with a stderr notice naming the missing rule, and the run still exits 0.
 
-### Opt-in bypass permission layer
+### Policy layer for bypass launches
 
-`../../../../../bin/fm-spawn.sh --agy-bypass` is a separate, per-spawn opt-in path that pairs `--dangerously-skip-permissions` with a firstmate-owned policing adapter, `../../../../../bin/fm-agy-permission-policy.sh`, wired beside the observer hooks by `install-worker`'s optional policy argument.
-It applies to agy crewmate and scout spawns and is never a fallback: an unmet gate refuses the launch rather than emitting a bare bypass, and a relaunch inherits the recorded posture while it still resolves onto an agy worker.
-A secondmate is a firstmate instance rather than a worker this layer polices, so it stays refused.
+`../../../../../bin/fm-spawn.sh` uses `--dangerously-skip-permissions` with the firstmate-owned policing adapter, `../../../../../bin/fm-agy-permission-policy.sh`, by default for agy crewmate and scout launches in Auto.
+`--no-agy-bypass` selects the prompted `accept-edits` mode for one launch, while `--agy-judge <tier>[:<model>]` selects a different judge for the policy layer.
+An unmet gate refuses the launch rather than emitting a bare bypass, and a relaunch carries its recorded posture while it still resolves onto an agy worker.
+A secondmate is a firstmate instance rather than a worker this layer polices, so it stays excluded.
 The posture first covered scouts only and now covers ships too.
 That matters for how the write guards below are read: on a read-only scout they were belt-and-braces, and on a ship they are the only write restriction firstmate relies on for a bypassed worker.
 None of them reads the task kind - every write target is resolved physically against the policy file's own worktree and scratch roots - so the widening changed who they protect rather than what they check.
@@ -122,7 +123,7 @@ Under bypass a statically visible exec write or removal outside the task write r
 Static analysis cannot classify every command a worker can compose, so a command it cannot see into goes to the judge; this layer reduces risk and is not a security boundary.
 Under a brief's read exclusions, a file-tool read of the worker's own brain directory (`~/.gemini/antigravity-cli/brain/<conversationId>`, where agy stores fetched pages) or of a firstmate skill file the brief says to read and follow still runs without a judge call, and the judge is told both; the adapter's header owns the rule.
 
-Defences that gate the launch: `jq` present, the agy version inside the adapter's live-verified set (`verified-versions`, currently `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1`), no project-supplied `.agents/hooks.json` in the worktree or ancestors up to the git root, so firstmate's worker hooks are the only hook definitions in force, and a startup canary that closes the endpoint when the adapter's armed line for this launch's busy generation never reaches the observer log.
+Defences that gate policy-layer launches: `jq` present, the agy version inside the adapter's live-verified set (`verified-versions`, currently `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1`), no project-supplied `.agents/hooks.json` in the worktree or ancestors up to the git root, so firstmate's worker hooks are the only hook definitions in force, and a startup canary that closes the endpoint when the adapter's armed line for this launch's busy generation never reaches the observer log.
 The judge is selected per task from the tiers `../../../../../bin/fm-judge-tier-lib.sh` owns, and agy judges agy by default: without `--agy-judge` the tier calls `agy -p` under its own sandbox on `gemini-3.6-flash-low`, with a 100-second budget pinned beside the Devin adapter's, and its prompt rides on the process argument list, so a call under review is visible in `ps` while the judge runs.
 `--agy-judge <tier>[:<model>]` selects another tier - a Devin SWE-2 judge for an agy worker, for instance - and refuses the launch when the tier is unknown or its executable is not installed, rather than falling back onto the default.
 The resolved tier is printed before the launch, repeated on the spawned line, recorded as `agy_judge=` in the task's metadata, and named in every judge-decided log record, so which judge adjudicated a call stays readable after teardown removes the per-task policy file.

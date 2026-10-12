@@ -753,7 +753,7 @@ A local standalone-clone home cannot receive a primary-local commit through that
 
 ## Worker permission mode (config/crew-permissions)
 
-Claude, Codex, and agy workers use reviewed execution rather than permission bypass by default.
+Claude and Codex workers use reviewed execution by default; agy and Devin use their adapter-specific permission behavior described below and in their harness references.
 An optional home-local `config/crew-permissions` selects `auto` (the default) or `manual`; `bin/fm-spawn.sh --help` owns exact launch flags, validation, directory grants, and exclusions.
 The setting is read for each new launch or relaunch, including a secondmate agent launched by this home; it does not change already-running agents or the primary's permission mode.
 The primary's file is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), so a secondmate's own workers use the same review posture, and removing the primary's file restores the default there too.
@@ -762,11 +762,12 @@ Other harness adapters and explicit raw launch commands retain their existing pe
 This is the only worker permission setting: no value selects Claude's `--dangerously-skip-permissions`, and the upstream-only `config/claude-permission-mode` file is not read.
 
 Auto requests Claude's classifier-backed permission mode and Codex's automatic approval reviewer with workspace-write sandboxing.
-agy has no reviewed-auto mode of its own, so Auto selects its accept-edits mode, which approves file edits inside the granted directories while still asking for every shell command; its blanket bypass is never selected by either setting.
-An agy worker therefore pauses for approval more often than a Claude or Codex worker, including for the shell command that appends its own status lines, and that pause is a visible prompt in its window rather than a silent stop.
-A separate per-spawn `bin/fm-spawn.sh --agy-bypass` flag exists that pairs agy's bypass flag with firstmate's own hook permission layer, and it stays unselected unless a launch names it; [`docs/verification/runtime-backends.md`](verification/runtime-backends.md) and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) own its gates and decision surface.
-Availability depends on the installed CLI, account, and managed policy; an unsupported or denied request must be reported, never retried with bypass permissions.
-Manual keeps approval prompts available for human review, so an unattended task may wait for intervention.
+agy has no reviewed-auto mode of its own, so an agy crewmate or scout in Auto uses `--dangerously-skip-permissions` with Firstmate's permission policy and judge by default.
+The per-spawn `--no-agy-bypass` option selects `--mode accept-edits`, which approves file edits inside granted directories while still prompting for shell commands.
+Manual leaves agy's default review mode in place, where edits and shell commands prompt; agy secondmates also stay outside the worker policy layer.
+The policy layer's version, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.
+For a policy-layer launch, availability depends on the installed CLI, account, and managed policy; a denied or unsupported launch must be reported rather than retried without the policy layer.
+Manual approval prompts can leave an unattended task waiting for intervention; with agy, Manual keeps its full review prompts and `--no-agy-bypass` selects `accept-edits`, which still prompts for shell commands.
 Both modes preserve the separate project delivery and merge-approval rules.
 Workers receive additional access to the owning home's shared state directory and their brief/report directory, not the entire home; the shared state layout is not a per-task security boundary.
 Every Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.
