@@ -60,7 +60,7 @@
 #   drives, `gerrit` means a Gerrit server: no pull requests, so the worker
 #   publishes a change with gerrit-axi instead, and `forgejo` means a Forgejo or
 #   Gitea server, whose pull requests the worker handles with tea rather than
-#   gh-axi (bin/fm-dod-lib.sh owns what each changes for a worker in each
+#   gh (bin/fm-dod-lib.sh owns what each changes for a worker in each
 #   publishing mode; docs/forgejo-tea-integration.md holds the tea evidence).
 #   The binding is EXPLICIT because a provider family must never be guessed;
 #   bin/fm-forge-detect.sh proposes gerrit from a protocol fact at project-add

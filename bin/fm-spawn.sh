@@ -3958,7 +3958,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
         # so a Gerrit brief is told to publish its change rather than open a PR.
         OVERLAY_FORGE=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]forge=\([^ ]*\).*$/\1/p' "$SOURCE_BRIEF" | head -n 1)
         printf '\n# Current delivery instructions\nThese instructions supersede earlier no-mistakes pipeline and --intent instructions.\n' &&
-          fm_dod_block direct-PR "$ID" "$BRANCH" "${OVERLAY_FORGE:-none}"
+          fm_dod_block direct-PR "$ID" "$BRANCH" "${OVERLAY_FORGE:-none}" "$BASE_BRANCH"
       fi
   } >"$BRIEF_TMP" || {
     rm -f -- "$BRIEF_TMP"
@@ -6152,7 +6152,7 @@ if [ "$GOAL_SET" = 1 ]; then
     # would let the repository's supervisor contract select the wrong role.
     # Native /goal stores its argument as the objective, so carry the current
     # role through the same typed launch-brief owner as ordinary Codex launches.
-    GOAL_ROLE=$(fm_brief_worker_role "$STATE" "$ID") || exit 1
+    GOAL_ROLE=$(fm_brief_worker_role "$STATE" "$ID" "$FM_ROOT") || exit 1
     GOAL_ROLE=${GOAL_ROLE//$'\n'/ }
     GOAL_DIRECTIVE=$(printf '%s' "$GOAL_ROLE $GOAL_DIRECTIVE" | "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || exit 1
   fi
