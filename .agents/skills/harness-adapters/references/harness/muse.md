@@ -20,7 +20,7 @@ The router owns Muse's task-kind boundary.
 | Trust | Dialog `Do you trust this workspace?`, choice `1 Trust and continue` preselected for Enter; `--yolo` suppresses it, which fresh task paths require. |
 | Marker | None; identity comes from anchored `muse-bin-*` ancestry, which `../../../bin/fm-harness.sh` keeps a retained foreign marker from overriding, while `MUSE_CURRENT_SESSION_LOG` is a path rather than identity and its export to tools is unverified. |
 | Composer | Bordered `⟩`, truecolor `38;2;90;160;255`, luminance about 149.9 and narrowly above ghost threshold 128; typed text is `38;2;204;211;219`, about 209.8, with no observed placeholder or ghost. |
-| Effort | Muse Code 1.4.6 accepts `none\|minimal\|low\|medium\|high\|xhigh\|max\|ultra`; Firstmate maps low through max directly after verifying 1.4.6 or newer for max, refuses max on older or unverified versions, refuses an explicit ultra request, and leaves none or minimal unreachable. |
+| Effort | Muse Code 1.4.6 accepts `none\|minimal\|low\|medium\|high\|xhigh\|max\|ultra`; Firstmate maps low through max directly, and gates max on Muse 1.4.6 or newer plus the local Meta model catalog advertising max for the selected model (or catalog default). An unsupported, missing, invalid, or ambiguous catalog entry refuses max before endpoint creation. Explicit ultra remains refused, and none or minimal stay unreachable. |
 
 ## Credential preflight
 

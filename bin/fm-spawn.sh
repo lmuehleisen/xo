@@ -3104,6 +3104,80 @@ muse_require_native_max_effort() { # <muse-bin>
   return 0
 }
 
+# Muse's local Meta model catalog is the provider-owned source for per-model
+# reasoning variants. A CLI accepting `--reasoning-effort max` does not prove
+# that its selected model accepts max; refuse before creating the endpoint
+# unless the catalog confirms the model (or the catalog default) advertises it.
+muse_model_max_support() { # <data-home> <model|default>
+  local catalog_dir="${1%/}/muse/model-catalog" model=$2 catalog result
+  local saw_true=0 saw_false=0 saw_unknown=0
+  command -v jq >/dev/null 2>&1 || {
+    printf 'unknown\n'
+    return 0
+  }
+  for catalog in "$catalog_dir"/*.json; do
+    [ -f "$catalog" ] || continue
+    result=$(jq -r --arg model "$model" '
+      if (.provider_id | type) != "string" then "unknown"
+      elif .provider_id != "meta" then "other"
+      elif (.rows | type) != "array" then "unknown"
+      else
+        [.rows[] | select(
+          if $model == "" or $model == "default"
+          then .is_default == true
+          else .model_id == $model
+          end
+        )] as $matches
+        | if ($matches | length) == 0 then "missing"
+          elif all($matches[];
+            has("reasoning_effort_variants")
+            and (
+              .reasoning_effort_variants == null
+              or (.reasoning_effort_variants | type) == "array"
+            )
+          ) then
+            if all($matches[];
+              (.reasoning_effort_variants | type) == "array"
+              and any(.reasoning_effort_variants[]; .tier == "max")
+            ) then "true" else "false" end
+          else "unknown"
+          end
+      end
+    ' "$catalog" 2>/dev/null) || result=unknown
+    case "$result" in
+    true) saw_true=1 ;;
+    false) saw_false=1 ;;
+    unknown) saw_unknown=1 ;;
+    other | missing) ;;
+    esac
+  done
+  if [ "$saw_unknown" -eq 1 ] || { [ "$saw_true" -eq 1 ] && [ "$saw_false" -eq 1 ]; }; then
+    printf 'unknown\n'
+  elif [ "$saw_true" -eq 1 ]; then
+    printf 'true\n'
+  elif [ "$saw_false" -eq 1 ]; then
+    printf 'false\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+muse_require_model_max_effort() { # <data-home> <model|default>
+  local data_home=$1 model=$2 support
+  support=$(muse_model_max_support "$data_home" "$model")
+  case "$support" in
+  true) return 0 ;;
+  false)
+    echo "error: Muse model '$model' does not advertise max reasoning effort in the local Meta model catalog; choose a model that does or use a lower effort" >&2
+    return 1
+    ;;
+  *)
+    echo "error: unable to verify that Muse model '$model' supports max; the local Meta model catalog is unavailable, invalid, or ambiguous" >&2
+    return 1
+    ;;
+  esac
+}
+
 resolve_rovo_binary() {
   local candidate dir fallback
   candidate=$(command -v rovo 2>/dev/null || true)
@@ -3350,11 +3424,12 @@ esac
 [ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__MUSEBIN__*)
   MUSE_BIN=$(resolve_muse_binary) || exit 1
-  if [ "$EFFORT" = max ]; then
-    muse_require_native_max_effort "$MUSE_BIN" || exit 1
-  fi
   MUSE_CONFIG_HOME=$(resolve_directory_input XDG_CONFIG_HOME "${XDG_CONFIG_HOME:-${HOME:-}/.config}") || exit 1
   MUSE_DATA_HOME=$(resolve_directory_input XDG_DATA_HOME "${XDG_DATA_HOME:-${HOME:-}/.local/share}") || exit 1
+  if [ "$EFFORT" = max ]; then
+    muse_require_native_max_effort "$MUSE_BIN" || exit 1
+    muse_require_model_max_effort "$MUSE_DATA_HOME" "$MODEL" || exit 1
+  fi
   MUSE_AUTH_FILE="$MUSE_CONFIG_HOME/muse/auth.json"
   if ! muse_credential_present "$MUSE_AUTH_FILE"; then
     if [ -n "${META_API_KEY:-}" ]; then
