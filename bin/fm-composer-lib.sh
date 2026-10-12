@@ -1573,10 +1573,13 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 }
 
 # V2 home-screen tail after the proven location strip: blanks, optionally
-# ending in one version row, optionally with V2's plugin-load notification.
+# ending in one status row. That row is a right-aligned version label, led by
+# V2's MCP count (`⊙ 1 MCP /mcps`, or `⊙ 2 MCP failed`, from 2.0.27 whenever
+# an MCP server is configured) and/or its plugin-load notification. Below 64
+# columns V2 drops the version and the command hints, leaving only a notice.
 # A contiguous row is never furniture.
 _fm_composer_leftbar_tail_is_furniture() {  # <tail>
-  local tail=$1 trimmed nonblank first
+  local tail=$1 trimmed nonblank first notice version
   trimmed=$tail
   fm_composer_normalize_trim_var trimmed
   [ -n "$trimmed" ] || return 0
@@ -1585,7 +1588,9 @@ _fm_composer_leftbar_tail_is_furniture() {  # <tail>
   [ -z "$first" ] || return 1
   nonblank=$(printf '%s\n' "$tail" | LC_ALL=C grep -vE '^[[:space:]]*$')
   case "$nonblank" in *$'\n'*) return 1 ;; esac
-  printf '%s\n' "$nonblank" | LC_ALL=C grep -qE '^([[:space:]]{8,}|[[:space:]]*⊙ [1-9][0-9]* plugins? failed /plugins[[:space:]]{8,})[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$'
+  notice='(⊙ [0-9]+ MCP( failed)?( /mcps)?|⊙ [1-9][0-9]* plugins? failed( /plugins)?)'
+  version='[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+'
+  printf '%s\n' "$nonblank" | LC_ALL=C grep -qE "^($version|[[:space:]]*$notice([[:space:]]{2,}$notice)?($version)?)[[:space:]]*\$"
 }
 
 # _fm_composer_row_is_composer_furniture: 0 when <trimmed-row> is DEMONSTRABLY

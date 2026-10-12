@@ -103,7 +103,10 @@ fm_test_fake_gh_axi() {
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
 # suites that do not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
 # FM_FAKE_TMUX_BRIEF_STATE names a marker created only when a brief is typed;
-# FM_FAKE_TMUX_BRIEF_VERDICT can then leave that draft pending or unreadable.
+# FM_FAKE_TMUX_BRIEF_VERDICT can then leave that draft pending or unreadable,
+# or show an empty composer. FM_FAKE_TMUX_COMPOSER=unrecognized renders a
+# settled screen no composer shape matches, and =changing one that differs on
+# every capture. FM_FAKE_TMUX_PANE_COMMAND answers #{pane_current_command}.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'
@@ -113,6 +116,8 @@ case "$*" in
   *"#{cursor_y}"*) printf '1\n'; exit 0 ;;
   *"#{pane_width}"*) printf '140\n'; exit 0 ;;
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{pane_current_command}"*)
+    [ -z "${FM_FAKE_TMUX_PANE_COMMAND:-}" ] || { printf '%s\n' "$FM_FAKE_TMUX_PANE_COMMAND"; exit 0; } ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
@@ -121,9 +126,14 @@ case "${1:-}" in
       case "${FM_FAKE_TMUX_BRIEF_VERDICT:-pending}" in
         pending) printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n' ;;
         unknown) echo 'composer unavailable' >&2; exit 1 ;;
+        empty) printf '╭────╮\n│    │\n╰────╯\n' ;;
       esac
     elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = unrecognized ]; then
+      printf 'OpenCode next home\n  type here\n'
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = changing ]; then
+      printf 'OpenCode next home %s\n  type here\n' "$$"
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi

@@ -13,7 +13,8 @@
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
-#        fm-harness.sh validate-opencode      require a supported OpenCode V2 release
+#        fm-harness.sh validate-opencode      require OpenCode >= 2.0.18; a release newer
+#                                        than the verified one passes with a notice
 #        fm-harness.sh validate-native-effort <harness> <model> <effort> [kind] [codex-bin]
 #                                        Refuse ultra unless Pi/Pi-signed names
 #                                        codex-native/<id>, or direct Codex's
@@ -612,19 +613,45 @@ validate_native_effort() {
   return 1
 }
 
-# V2 launch and plugin contracts are verified from 2.0.18 onward. Older
-# releases must fail before a worker endpoint or config is created.
+# V2 launch and plugin contracts hold from 2.0.18 onward. Older releases must
+# fail before a worker endpoint or config is created. There is no upper bound:
+# a release newer than OPENCODE_VERIFIED_VERSION, the newest one live-verified
+# (docs/verification/runtime-backends.md "OpenCode V2"), still launches, with a
+# one-line notice so the supervisor files a todo to verify it.
+OPENCODE_MIN_VERSION=2.0.18
+OPENCODE_VERIFIED_VERSION=2.0.27
+
+# 0 when dotted <a> sorts before dotted <b>.
+opencode_version_before() { # <a> <b>
+  local -a a b
+  local i
+  IFS=. read -r -a a <<<"$1"
+  IFS=. read -r -a b <<<"$2"
+  for i in 0 1 2; do
+    [ "$((10#${a[i]}))" -eq "$((10#${b[i]}))" ] && continue
+    [ "$((10#${a[i]}))" -lt "$((10#${b[i]}))" ]
+    return
+  done
+  return 1
+}
+
 validate_opencode() {
-  local version
+  local version found
   version=$(opencode --version 2>&1) || {
     printf 'error: cannot read OpenCode version: %s\n' "$version" >&2
     return 1
   }
-  if [[ "$version" =~ ^opencode[[:space:]]v2\.([0-9]+)\.([0-9]+)$ ]] &&
-    { [ "${BASH_REMATCH[1]}" -gt 0 ] || [ "${BASH_REMATCH[2]}" -ge 18 ]; }; then
-    return 0
+  if [[ "$version" =~ ^opencode[[:space:]]v([0-9]+\.[0-9]+\.[0-9]+)([-+][0-9A-Za-z.-]+)?$ ]]; then
+    found=${BASH_REMATCH[1]}
+    if ! opencode_version_before "$found" "$OPENCODE_MIN_VERSION"; then
+      if opencode_version_before "$OPENCODE_VERIFIED_VERSION" "$found"; then
+        printf 'notice: OpenCode %s is newer than the newest verified version %s; launching anyway - file a todo to verify it with FM_OPENCODE_LIVE_E2E=1 tests/fm-opencode-primary-live-e2e.test.sh\n' \
+          "${version#opencode v}" "$OPENCODE_VERIFIED_VERSION" >&2
+      fi
+      return 0
+    fi
   fi
-  printf 'error: OpenCode adapter requires V2 >= 2.0.18; found %s\n' "$version" >&2
+  printf 'error: OpenCode adapter requires V2 >= %s; found %s\n' "$OPENCODE_MIN_VERSION" "$version" >&2
   return 1
 }
 

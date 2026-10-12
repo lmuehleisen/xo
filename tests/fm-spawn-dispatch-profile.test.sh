@@ -1026,6 +1026,28 @@ test_opencode_rejects_v1_before_launch() {
   pass "OpenCode V1 is refused before launch"
 }
 
+test_opencode_newer_than_verified_launches_with_notice() {
+  local rec id version out status
+  for version in 2.0.27 2.0.99; do
+    id="profile-opencode-v$version"
+    FM_TEST_CLEANUP_DIRS+=("/tmp/fm-$id")
+    rec=$(make_spawn_case "$id" opencode "$id")
+    read_case_record "$rec"
+    out=$(FM_FAKE_OPENCODE_VERSION="opencode v$version" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+    status=$?
+    expect_code 0 "$status" "OpenCode $version must launch: $out"
+    assert_contains "$(cat "$LAUNCH_LOG")" "Read the brief at" "OpenCode $version did not receive its brief"
+    if [ "$version" = 2.0.27 ]; then
+      assert_not_contains "$out" "newer than the newest verified version" "the verified version must launch silently"
+    else
+      assert_contains "$out" "notice: OpenCode 2.0.99 is newer than the newest verified version 2.0.27" \
+        "a newer release must name itself and the verified version"
+    fi
+  done
+  pass "OpenCode newer than the verified release launches with a one-line notice"
+}
+
 test_opencode_rejects_v2_secondmate_before_launch() {
   local rec id=profile-opencode-secondmate out status sm
   rec=$(make_spawn_case profile-opencode-secondmate opencode "$id")
@@ -1054,6 +1076,37 @@ test_opencode_refuses_pending_startup_composer() {
   launch=$(cat "$LAUNCH_LOG")
   assert_not_contains "$launch" "Read the brief at" "no brief may be typed into a pending composer"
   pass "OpenCode refuses brief submission into a pending startup composer"
+}
+
+test_opencode_unrecognized_settled_startup_fails_open() {
+  local rec id screen out status launch
+  # Each refusal case keeps the agent alive, so only its own signal decides.
+  for screen in unrecognized changing pending; do
+    id="profile-opencode-unrecognized-$screen"
+    fm_test_remove_tree "/tmp/fm-$id"
+    FM_TEST_CLEANUP_DIRS+=("/tmp/fm-$id")
+    rec=$(make_spawn_case "$id" opencode "$id")
+    read_case_record "$rec"
+    out=$(FM_FAKE_TMUX_COMPOSER="$screen" FM_FAKE_TMUX_PANE_COMMAND=opencode \
+      FM_FAKE_TMUX_ENDPOINT_STATE="$CASE_DIR/endpoint" \
+      FM_FAKE_TMUX_BRIEF_STATE="$CASE_DIR/brief-typed" FM_FAKE_TMUX_BRIEF_VERDICT=empty \
+      FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+    status=$?
+    launch=$(cat "$LAUNCH_LOG")
+    if [ "$screen" = unrecognized ]; then
+      expect_code 0 "$status" "a settled unrecognized startup screen must fail open: $out"
+      assert_contains "$out" "notice: OpenCode V2 composer shape is unrecognized" "fail-open must say why it typed"
+      assert_contains "$launch" "Read the brief at" "fail-open did not submit the brief"
+      assert_grep 'OpenCode next home' "/tmp/fm-$id"/opencode-startup-*.log "fail-open must capture the unrecognized screen"
+    else
+      expect_code 1 "$status" "OpenCode $screen startup screen must still refuse: $out"
+      assert_contains "$out" "composer did not become ready" "$screen refusal must identify the failed gate"
+      assert_not_contains "$out" "shape is unrecognized" "$screen screen must not fail open"
+      assert_not_contains "$launch" "Read the brief at" "no brief may be typed into a $screen startup screen"
+    fi
+  done
+  pass "OpenCode fails open only on a settled unrecognized startup screen with a live agent"
 }
 
 test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {
@@ -3278,8 +3331,10 @@ test_cursor_threads_model_workspace_and_omits_effort_axis
 test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_rejects_v1_before_launch
+test_opencode_newer_than_verified_launches_with_notice
 test_opencode_rejects_v2_secondmate_before_launch
 test_opencode_refuses_pending_startup_composer
+test_opencode_unrecognized_settled_startup_fails_open
 test_opencode_failed_startup_keeps_only_unconfirmed_endpoints
 test_opencode_threads_model_and_effort_variant
 test_opencode_without_effort_keeps_launch_config_unchanged

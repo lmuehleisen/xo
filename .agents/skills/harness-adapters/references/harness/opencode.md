@@ -1,6 +1,7 @@
 # OpenCode
 
-The launch adapter requires OpenCode V2 >= 2.0.18.
+The launch adapter requires OpenCode V2 >= 2.0.18 and sets no upper version bound.
+A spawn on a release newer than the newest live-verified one still launches and prints a `notice:` line naming both versions; file a todo to run the live guard that line names and refresh the evidence below.
 Current live evidence and its refresh command are in [runtime verification](../../../../../docs/verification/runtime-backends.md#opencode-v2).
 
 ## Operating facts
@@ -20,6 +21,7 @@ Current live evidence and its refresh command are in [runtime verification](../.
 
 `../../../bin/fm-spawn.sh` owns the bare-launch readiness gate and guarded brief submission.
 V2 `--prompt` was observed leaving a startup draft pending, so worker launch submits only after the shared composer classifier proves readiness.
+When a release redraws its idle screen in a shape the classifier does not recognize, the spawn still submits once the agent is alive and its screen is settled, never over a pending draft, and prints a `notice:` line; file a todo to teach `../../../bin/fm-composer-lib.sh` the screen captured in the startup diagnostics it names.
 The worker plugin is a package in the task temp directory, named by launch config; no global config or project file is written for model selection or hook installation.
 
 ## Busy-queued Enter

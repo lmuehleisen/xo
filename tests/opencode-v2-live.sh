@@ -140,35 +140,43 @@ assert_local_skill_loaded() {
 # A tmux cursor can prove readiness while cursorless backends reject the same
 # fresh home screen. Exercise it before submitting a prompt or opening a session.
 . "$ROOT/bin/fm-tmux-lib.sh"
+# Launches a fresh home in <window> with <config>, requires its bottom status row
+# to match <row-regex> so the case is never vacuous, then requires empty with and
+# without a cursor and a typed draft to stay pending.
+probe_fresh_home() {  # <window> <config> <row-regex> <label>
+  local window=$1 config=$2 row=$3 label=$4 i=0 screen plain
+  tmux new-window -d -t probe: -n "$window" -c "$LAB/wt" \
+    "OPENCODE_CONFIG_CONTENT='$config' opencode --standalone --auto"
+  # The mode/model footer can land after the cursor first reads empty.
+  while [ "$i" -lt 120 ]; do
+    screen=$(tmux capture-pane -p -e -t "probe:$window")
+    plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+    [ "$(fm_tmux_composer_state "probe:$window")" != empty ] ||
+      [ "$(fm_composer_classify_screen styled=1 "$screen")" != empty ] ||
+      [ "$(fm_composer_classify_screen styled=0 "$plain")" != empty ] || break
+    i=$((i + 1)); sleep 0.5
+  done
+  printf '%s\n' "$plain" | grep -Eq "$row" || fail "$VERSION: fresh home $label row absent"
+  [ "$i" -lt 120 ] || fail "$VERSION: fresh home $label composer not ready with and without a cursor"
+  tmux send-keys -t "probe:$window" -l 'DRAFT_PROOF'
+  i=0
+  while [ "$i" -lt 30 ]; do
+    screen=$(tmux capture-pane -p -e -t "probe:$window")
+    [ "$(fm_composer_classify_screen styled=1 "$screen")" != pending ] || break
+    i=$((i + 1)); sleep 0.1
+  done
+  [ "$i" -lt 30 ] || fail "$VERSION: fresh home $label draft classified empty"
+  [ "$(fm_composer_extract_selected_content styled=1 "$screen")" = DRAFT_PROOF ] \
+    || fail "$VERSION: fresh home $label draft extraction drift"
+  tmux kill-window -t "probe:$window"
+}
 HOME_CONFIG=$(jq -nc --arg model "$MODEL" '{model:$model,agents:{build:{model:$model}}}')
-tmux new-window -d -t probe: -n home -c "$LAB/wt" \
-  "OPENCODE_CONFIG_CONTENT='$HOME_CONFIG' opencode --standalone --auto"
-i=0
-while [ "$i" -lt 120 ]; do
-  [ "$(fm_tmux_composer_state probe:home)" != empty ] || break
-  i=$((i + 1)); sleep 0.5
-done
-[ "$i" -lt 120 ] || fail "$VERSION: fresh home composer not ready"
-SCREEN=$(tmux capture-pane -p -e -t probe:home)
-PLAIN=$(printf '%s\n' "$SCREEN" | fm_composer_strip_ansi)
-printf '%s\n' "$PLAIN" | grep -Eq '^[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' \
-  || fail "$VERSION: fresh home version-label case absent"
-[ "$(fm_composer_classify_screen styled=1 "$SCREEN")" = empty ] \
-  || fail "$VERSION: fresh home cursorless styled composer unreadable"
-[ "$(fm_composer_classify_screen styled=0 "$PLAIN")" = empty ] \
-  || fail "$VERSION: fresh home cursorless plain composer unreadable"
-tmux send-keys -t probe:home -l 'DRAFT_PROOF'
-i=0
-while [ "$i" -lt 30 ]; do
-  SCREEN=$(tmux capture-pane -p -e -t probe:home)
-  [ "$(fm_composer_classify_screen styled=1 "$SCREEN")" != pending ] || break
-  i=$((i + 1)); sleep 0.1
-done
-[ "$i" -lt 30 ] || fail "$VERSION: fresh home draft classified empty"
-[ "$(fm_composer_extract_selected_content styled=1 "$SCREEN")" = DRAFT_PROOF ] \
-  || fail "$VERSION: fresh home draft extraction drift"
-tmux kill-window -t probe:home
-pass "$VERSION: fresh home version label, cursorless styled/plain readiness and draft refusal"
+probe_fresh_home home "$HOME_CONFIG" '^[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' 'version label'
+# A configured MCP server leads that row with its count; this one never starts.
+MCP_CONFIG=$(jq -c '.mcp = {"fm-probe": {type: "local", command: ["false"]}}' <<<"$HOME_CONFIG")
+probe_fresh_home mcp "$MCP_CONFIG" \
+  '^[[:space:]]*⊙ [0-9]+ MCP( failed)? /mcps[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' 'MCP status'
+pass "$VERSION: fresh home version label and MCP status, cursorless styled/plain readiness and draft refusal"
 bash "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB/project" --scout --harness opencode --model "$MODEL"
 wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
 wait_idle
@@ -182,7 +190,7 @@ PLUGIN="/tmp/fm-$ID/opencode-plugin-$(cat "$FM_HOME/state/$ID.busy-gen")/index.m
 # The config and public execution event paths must retain the exact model ID.
 tmux capture-pane -p -t "$TARGET" -S -100 > "$LAB/idle.txt"
 if [ "$MODEL" = opencode/muse-spark-1.3-contributor-free ]; then
-  grep -Fq 'Muse Spark 1.3 Free OpenCode Zen' "$LAB/idle.txt" || fail "$VERSION: wrong displayed model"
+  grep -Fq 'Muse Spark 1.3 Free OpenCode' "$LAB/idle.txt" || fail "$VERSION: wrong displayed model"
 fi
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source tmux
@@ -230,7 +238,7 @@ assert_local_skill_loaded
 SCREEN=$(tmux capture-pane -p -t "$TARGET")
 [ "$(fm_composer_classify_screen styled=0 "$SCREEN")" = empty ] || fail "$VERSION: restarted cursorless idle unreadable"
 if [ "$MODEL" = opencode/muse-spark-1.3-contributor-free ]; then
-  printf '%s\n' "$SCREEN" | grep -Fq 'Muse Spark 1.3 Free OpenCode Zen' || fail "$VERSION: relaunch displayed wrong model"
+  printf '%s\n' "$SCREEN" | grep -Fq 'Muse Spark 1.3 Free OpenCode' || fail "$VERSION: relaunch displayed wrong model"
 fi
 HANDLED_BEFORE=$(find "$FM_HOME/state/$ID.inbox/handled" -name '*.msg' | wc -l)
 bash "$ROOT/bin/fm-send.sh" "$ID" "Append 'working: restarted steer processed' to $FM_HOME/state/$ID.status and acknowledge this inbox message. Then stop."

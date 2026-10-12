@@ -780,6 +780,45 @@ test_matrix_opencode_leftbar_signals() {
   assert_screen "V2 notification cannot hide later output" unknown "$CAPS_PLAIN" "$alert"$'\nnew output'
   assert_screen "V2 notification popup refuses" unknown "$CAPS_PLAIN" "${alert/plugins failed/plugins require consent}"
   assert_screen "V2 notification without separate version refuses" unknown "$CAPS_PLAIN" "${alert/                        2.0.18/ 2.0.18}"
+  # From 2.0.27 a configured MCP server leads the version row with its count,
+  # and below 64 columns V2 keeps only the notices.
+  local mcp both narrow
+  mcp=${shortened/                        2.0.18/  ⊙ 1 MCP \/mcps                        2.0.27}
+  assert_screen "V2 MCP count and version furniture" empty "$CAPS_PLAIN" "$mcp"
+  assert_screen "V2 MCP count styled furniture" empty "$CAPS_STYLED_NOID" "$mcp"
+  assert_screen "V2 failed MCP count furniture" empty "$CAPS_PLAIN" "${mcp/1 MCP/2 MCP failed}"
+  both=${mcp/ \/mcps/ \/mcps  ⊙ 3 plugins failed \/plugins}
+  assert_screen "V2 MCP count beside plugin notification" empty "$CAPS_PLAIN" "$both"
+  narrow=${mcp/ \/mcps                        2.0.27/}
+  assert_screen "V2 narrow MCP count without version" empty "$CAPS_PLAIN" "$narrow"
+  assert_screen "V2 MCP count cannot hide a draft" pending "$CAPS_STYLED_NOID" "${mcp/┃                                                                                                     Connect/┃  DRAFT                                                                                              Connect}"
+  assert_screen "V2 MCP count without model proof refuses" unknown "$CAPS_PLAIN" "${mcp/Build auto/Review auto}"
+  assert_screen "V2 MCP count cannot hide later output" unknown "$CAPS_PLAIN" "$mcp"$'\nnew output'
+  assert_screen "V2 MCP popup text refuses" unknown "$CAPS_PLAIN" "${mcp/MCP \/mcps/MCP needs authentication}"
+  assert_screen "V2 MCP count without separate version refuses" unknown "$CAPS_PLAIN" "${mcp/                        2.0.27/ 2.0.27}"
+  assert_screen "V2 narrow MCP count beside output refuses" unknown "$CAPS_PLAIN" "${narrow/1 MCP/1 MCP new output}"
+  # Sanitized real 2.0.27 fresh home frame, its geometry kept: centered logo
+  # and composer, no sidebar, and the MCP status row at the viewport bottom.
+  local pad v27 row
+  pad=$(printf '%36s' '')
+  row=$(printf '%17s' '')
+  v27=${row// /$'\n'}
+  v27+=$'\n'"$(printf '%87s' '')▄"
+  v27+=$'\n'"$(printf '%54s' '')█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█"
+  v27+=$'\n'"$(printf '%54s' '')█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀"
+  v27+=$'\n'"$(printf '%54s' '')▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"$'\n\n'
+  v27+=$'\n'"${pad}┃"$'\n'"${pad}┃  Ask anything… \"Fix a TODO in the codebase\""$'\n'"${pad}┃"
+  v27+=$'\n'"${pad}┃  Build auto · Big Pickle OpenCode · high"
+  row=$(printf '%74s' '')
+  v27+=$'\n'"${pad}╹${row// /▀}"
+  v27+=$'\n'"${pad}…/long-project…/worktree  shift+tab agents  ctrl+p commands"
+  row=$(printf '%14s' '')
+  v27+=${row// /$'\n'}
+  v27+=$'\n'"  ⊙ 1 MCP /mcps$(printf '%126s' '')2.0.27"
+  assert_screen "OpenCode 2.0.27 captured home frame on plain capture" empty "$CAPS_PLAIN" "$v27"
+  assert_screen "OpenCode 2.0.27 captured home frame on styled capture" empty "$CAPS_STYLED" "$v27"
+  assert_screen "OpenCode 2.0.27 captured home frame draft refuses" pending "$CAPS_STYLED" \
+    "${v27/Ask anything… \"Fix a TODO in the codebase\"/DRAFT}"
   assert_screen "V2 arbitrary shortened footer refuses" unknown "$CAPS_PLAIN" "${shortened/…\/long-project…\/worktree/…unclaimed output}"
   local running
   running=${sidebar/\/tmp\/project                    9.7K (1%)  ctrl+p commands/⬝⬝⬝⬝ esc interrupt                    9.6K (1%)  ctrl+p commands}
