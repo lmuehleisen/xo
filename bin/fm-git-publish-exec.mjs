@@ -2,7 +2,13 @@
 // Outgoing Git adapter for isolated publishers, including commit-tree evidence.
 // Usage: fm-git-publish-exec.mjs <absolute-real-git> <git-args>...
 // Known ordinary commands preserve argv; aliases and publishing plumbing
-// are refused. Pushes accept -C plus an explicit remote and branch refspecs.
+// are refused. The no-mistakes local correction helper may additionally use
+// -c core.hooksPath=<temp>/no-mistakes-correction-hooks-<digits>
+// commit --no-verify -m <message>, with no extra globals except -C.
+// The hooks directory must be an existing, empty, non-symlink direct child
+// of TMPDIR (or /tmp), matching Go's os.MkdirTemp. This avoids commit hooks
+// that need unavailable runtime files in fresh pipeline worktrees.
+// Pushes accept -C plus an explicit remote and branch refspecs.
 // Sources must be commit objects; pushes forward explicit checked branch refs.
 // Local branch sources retain tracking; other sources use checked commit SHAs
 // and require an explicit branch destination.
@@ -24,17 +30,34 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
 
 const [real, ...argv] = process.argv.slice(2);
+const isCorrectionHooks = (setting) => {
+  const prefix = "core.hooksPath=";
+  if (!setting?.startsWith(prefix)) return false;
+  const dir = setting.slice(prefix.length), name = path.basename(dir);
+  try {
+    return path.isAbsolute(dir) &&
+      /^no-mistakes-correction-hooks-[0-9]+/.exec(name)?.[0] === name &&
+      dir === path.join(path.dirname(dir), name) &&
+      realpathSync(path.dirname(dir)) === realpathSync(process.env.TMPDIR || "/tmp") &&
+      lstatSync(dir).isDirectory() && readdirSync(dir).length === 0;
+  } catch {
+    return false;
+  }
+};
 try {
   if (!real || !path.isAbsolute(real)) throw new Error("absolute real git required");
-  let cwd = process.cwd(), i = 0, otherGlobals = false;
+  let cwd = process.cwd(), i = 0, otherGlobals = false, correctionHooks = false;
   while (argv[i]?.startsWith("-")) {
     const flag = argv[i];
     if (flag === "-C") {
       if (!argv[i + 1]) throw new Error("missing -C directory");
       cwd = path.resolve(cwd, argv[i + 1]); i += 2; continue;
+    }
+    if (flag === "-c" && !correctionHooks && isCorrectionHooks(argv[i + 1])) {
+      correctionHooks = true; i += 2; continue;
     }
     // The trusted scanner needs literal path names; this exact formatting
     // setting cannot select aliases, identity, hooks or a publishing target.
@@ -52,6 +75,10 @@ try {
       otherGlobals = true; i += 1; continue;
     }
     if (["--version", "--help"].includes(flag) && argv.length === 1) break;
+    throw new Error("unsupported global options for git");
+  }
+  if (correctionHooks && (otherGlobals || argv[i] !== "commit" || argv.length !== i + 4 ||
+      argv[i + 1] !== "--no-verify" || argv[i + 2] !== "-m" || !argv[i + 3])) {
     throw new Error("unsupported global options for git");
   }
   const ordinary = new Set(("add apply branch cat-file check-attr check-ignore check-ref-format checkout checkout-index cherry-pick clean clone commit commit-tree config describe diff diff-index diff-tree fetch for-each-ref fsck gc hash-object init log ls-files ls-remote ls-tree merge merge-base mktree mv notes patch-id pull rebase read-tree reflog remote reset restore rev-list rev-parse revert rm show show-ref stash status switch symbolic-ref tag update-index update-ref version worktree write-tree --version --help").split(" "));

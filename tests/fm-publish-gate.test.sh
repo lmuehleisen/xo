@@ -2250,6 +2250,99 @@ test_local_gate_transport_preserves_hooks() {
   pass "pinned local gate intake removes hook bypass, preserves client and receive hooks, and refuses gate options elsewhere"
 }
 
+test_git_adapter_allows_document_correction_commit() {
+  local repo real_git out message='no-mistakes(document): Clarify fixture documentation'
+  local tmp="$TMP_ROOT/correction-tmp" hooks marker="$TMP_ROOT/correction-repo-hook"
+  repo=$(fresh_repo document-correction)
+  real_git=$(command -v git)
+  # no-mistakes v1.79.0 common_fix.go uses os.MkdirTemp with this prefix,
+  # then commit --no-verify -m <message> against the fresh empty directory.
+  hooks="$tmp/no-mistakes-correction-hooks-1234567890"
+  mkdir -p "$hooks"
+  printf '#!/bin/sh\nprintf ran >"%s"\nexit 1\n' "$marker" >"$TMP_ROOT/document-correction.hooks/prepare-commit-msg"
+  chmod +x "$TMP_ROOT/document-correction.hooks/prepare-commit-msg"
+  printf 'Corrected documentation.\n' >"$repo/README.md"
+  git -C "$repo" add README.md
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" commit --no-verify -m "$message" 2>&1) || fail "local document correction should pass: $out"
+  assert_equals "$message" "$(git -C "$repo" log -1 --format=%s)" 'correction message forwarded unchanged'
+  assert_equals 'Corrected documentation.' "$(git -C "$repo" show HEAD:README.md)" 'staged correction committed'
+  assert_equals "$TMP_ROOT/document-correction.hooks" "$(git -C "$repo" config core.hooksPath)" 'temporary override is not persisted'
+  [ ! -e "$marker" ] || fail "repository prepare-commit-msg hook ran during correction"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "local correction published a branch"
+  # A later ordinary push must scan even when this checkout has no pre-push
+  # hook, as happens in the pipeline's isolated worktree.
+  rm "$TMP_ROOT/document-correction.hooks/pre-push"
+  printf '%s\n' "$PRIVATE_TERM" >"$repo/README.md"
+  git -C "$repo" add README.md
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" commit --no-verify -m "$message" 2>&1) || fail "local correction is checked at publication: $out"
+  out=$(TMPDIR="$tmp" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" push origin main 2>&1) && fail "correction content must still pass the outgoing gate"
+  assert_contains "$out" denylist 'later push scans correction content'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "refused correction reached remote"
+  pass "exact local document corrections bypass commit hooks without persisting the override or bypassing outgoing checks"
+}
+
+test_git_adapter_refuses_correction_near_misses() {
+  local repo real_git out setting command before
+  local tmp="$TMP_ROOT/correction-near-tmp" hooks elsewhere="$TMP_ROOT/no-mistakes-correction-hooks-1234"
+  repo=$(fresh_repo correction-near-misses)
+  real_git=$(command -v git)
+  hooks="$tmp/no-mistakes-correction-hooks-1234"
+  mkdir -p "$hooks" "$elsewhere" "$tmp/other-hooks" "$tmp/no-mistakes-correction-hooks-letters"
+  ln -s "$elsewhere" "$tmp/no-mistakes-correction-hooks-5678"
+  printf 'not a directory\n' >"$tmp/no-mistakes-correction-hooks-9012"
+  printf 'Corrected documentation.\n' >"$repo/README.md"
+  git -C "$repo" add README.md
+  before=$(git -C "$repo" rev-parse HEAD)
+  for setting in "core.bare=false" "alias.publish=push" \
+    "core.hooksPath=$elsewhere" "core.hooksPath=$tmp/other-hooks" \
+    "core.hooksPath=$tmp/no-mistakes-correction-hooks-letters" \
+    "core.hooksPath=$tmp/no-mistakes-correction-hooks-5678" \
+    "core.hooksPath=$tmp/no-mistakes-correction-hooks-5678/" \
+    "core.hooksPath=$tmp/no-mistakes-correction-hooks-9012" \
+    "core.hooksPath=$tmp/no-mistakes-correction-hooks-3456" "core.hooksPath=/dev/null"; do
+    out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "$setting" commit --no-verify -m Correction 2>&1) && fail "unrelated global setting or hooks directory must refuse: $setting"
+    assert_contains "$out" 'unsupported global options' 'correction setting refusal'
+  done
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" "-ccore.hooksPath=$hooks" commit --no-verify -m Correction 2>&1) && fail "combined hooks setting is not the correction helper's form"
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" -c core.quotePath=false commit --no-verify -m Correction 2>&1) && fail "correction must not admit extra global settings"
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" commit -m Correction 2>&1) && fail "correction requires the helper's explicit no-verify"
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" commit -m --no-verify 2>&1) && fail "no-verify as message text must not qualify"
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" commit --no-verify -m Correction --amend 2>&1) && fail "correction must not admit extra commit options"
+  for command in push send-pack status commit-tree; do
+    out=$(TMPDIR="$tmp" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" "$command" origin main 2>&1) && fail "correction globals must refuse non-commit commands: $command"
+    assert_contains "$out" 'fm-git-publish-exec: REFUSED' 'non-commit refusal comes from adapter'
+  done
+  out=$(TMPDIR="$tmp" FM_CONFIG_OVERRIDE="$TMP_ROOT/config" node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" push --no-verify origin main 2>&1) && fail "correction globals cannot skip push hooks"
+  assert_equals "$before" "$(git -C "$repo" rev-parse HEAD)" 'refused forms did not commit'
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/main >/dev/null 2>&1 && fail "refused forms published a branch"
+  pass "correction near-misses, other config keys, extra options and publishing commands remain refused"
+}
+
+test_git_adapter_refuses_correction_push_hook() {
+  local repo real_git out before message='no-mistakes(document): Clarify fixture documentation'
+  local tmp="$TMP_ROOT/correction-push-tmp" hooks marker="$TMP_ROOT/correction-push-hook.ran"
+  repo=$(fresh_repo correction-push-hook)
+  real_git=$(command -v git)
+  hooks="$tmp/no-mistakes-correction-hooks-1234"
+  mkdir -p "$hooks"
+  # --no-verify does not suppress post-commit. A matching directory that
+  # contains this hook would publish if the adapter checked only its name.
+  printf '#!/bin/sh\nprintf ran >"%s"\ngit push -q origin HEAD:refs/heads/from-hook\n' "$marker" >"$hooks/post-commit"
+  chmod +x "$hooks/post-commit"
+  printf 'Corrected documentation.\n' >"$repo/README.md"
+  git -C "$repo" add README.md
+  before=$(git -C "$repo" rev-parse HEAD)
+  out=$(TMPDIR="$tmp" pinned node "$ROOT/bin/fm-git-publish-exec.mjs" "$real_git" -C "$repo" -c "core.hooksPath=$hooks" commit --no-verify -m "$message" 2>&1) && fail "a correction commit that would push must refuse"
+  assert_contains "$out" 'unsupported global options' 'nonempty correction directory refusal'
+  assert_equals "$before" "$(git -C "$repo" rev-parse HEAD)" 'publishing commit was not executed'
+  [ ! -e "$marker" ] || fail "refused post-commit hook executed"
+  git --git-dir="$TMP_ROOT/public.git" show-ref --verify refs/heads/from-hook >/dev/null 2>&1 && fail "refused post-commit hook pushed"
+  pinned git -C "$repo" -c "core.hooksPath=$hooks" commit --no-verify -m "$message" >/dev/null 2>&1 || fail "native control commit failed"
+  [ -e "$marker" ] || fail "native control did not run the post-commit hook"
+  assert_equals "$(git -C "$repo" rev-parse HEAD)" "$(git --git-dir="$TMP_ROOT/public.git" rev-parse refs/heads/from-hook)" 'native control proves this commit would push'
+  pass "a matching temporary directory with a publishing commit hook is refused before Git executes"
+}
+
 test_git_adapter_refuses_indirect_publication() {
   local repo out command marker="$TMP_ROOT/git-bypass" real_git
   repo=$(fresh_repo indirect-publication)
@@ -2555,6 +2648,10 @@ JS
   pass "single issue edits qualify by number and multi-target edits send unqualified gate context"
 }
 
+# Check the correction forms first so a local-commit regression fails promptly.
+test_git_adapter_allows_document_correction_commit
+test_git_adapter_refuses_correction_near_misses
+test_git_adapter_refuses_correction_push_hook
 test_identity_file_contract
 test_pin_neutralizes_git_c_user_email
 test_clean_push_passes
