@@ -223,10 +223,10 @@ fi
 case "$forge" in
   none|forge=gerrit|forge=forgejo) forge=${forge#forge=} ;;
   forge=)
-    echo "refused: empty forge binding \"forge=\" registered for $NAME in $REG; the accepted values are forge=gerrit and forge=forgejo, or no forge token at all for a forge whose pull requests no-mistakes already drives; correct the registry entry" >&2
+    echo "refused: empty forge binding \"forge=\" registered for $NAME in $REG; the accepted values are forge=gerrit and forge=forgejo, or no forge token at all for GitHub; correct the registry entry" >&2
     exit 3 ;;
   *)
-    echo "refused: unknown forge \"${forge#forge=}\" registered for $NAME in $REG; the accepted values are forge=gerrit and forge=forgejo, or no forge token at all for a forge whose pull requests no-mistakes already drives; correct the registry entry" >&2
+    echo "refused: unknown forge \"${forge#forge=}\" registered for $NAME in $REG; the accepted values are forge=gerrit and forge=forgejo, or no forge token at all for GitHub; correct the registry entry" >&2
     exit 3 ;;
 esac
 if [ "$forge" != none ] && [ "$mode" = local-only ]; then

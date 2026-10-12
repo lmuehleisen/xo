@@ -7,7 +7,8 @@
 # local-only like every forge, and the plain (no --forge/--raw) output stays
 # exactly two words, because tests/fm-secondmate-safety.test.sh and
 # tests/fm-secondmate-lifecycle-e2e.test.sh assert that shape with strict
-# string equality.
+# string equality. This home resolves the registry default and the no-mistakes
+# token to direct-PR (bin/fm-project-mode.sh), so those rows read direct-PR.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -36,13 +37,13 @@ run_forge() {
   FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --forge "$1" 2>/dev/null
 }
 
-[ "$(run_mode legacy)" = "no-mistakes off" ] || fail "legacy entry's default output changed: $(run_mode legacy)"
+[ "$(run_mode legacy)" = "direct-PR off" ] || fail "legacy entry's default output changed: $(run_mode legacy)"
 [ "$(run_forge legacy)" = "none" ] || fail "an entry with no forge token must report forge none: $(run_forge legacy)"
 [ "$(run_mode flagged)" = "direct-PR on" ] || fail "flagged entry's mode/yolo output changed: $(run_mode flagged)"
 [ "$(run_forge flagged)" = "none" ] || fail "mode and +yolo with no forge token must report forge none: $(run_forge flagged)"
 pass "fm-project-mode: an entry with no forge token reports forge none and keeps its two-word default output"
 
-[ "$(run_mode lab)" = "no-mistakes off" ] || fail "lab entry's mode output changed: $(run_mode lab)"
+[ "$(run_mode lab)" = "direct-PR off" ] || fail "lab entry's mode output changed: $(run_mode lab)"
 [ "$(run_forge lab)" = "forgejo" ] || fail "forge=forgejo after the mode token did not resolve: $(run_forge lab)"
 err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" lab 2>&1 >/dev/null)
 [ -z "$err" ] || fail "a registered forge=forgejo warned: $err"
@@ -63,7 +64,7 @@ for flag in "" --forge; do
 done
 pass "fm-project-mode: forge=forgejo on local-only is refused like every forge"
 
-[ "$(run_mode colon)" = "no-mistakes off" ] || fail "a colon-spelled token changed the posture: $(run_mode colon)"
+[ "$(run_mode colon)" = "direct-PR off" ] || fail "a colon-spelled token changed the posture: $(run_mode colon)"
 [ "$(run_forge colon)" = "none" ] || fail "forge:forgejo must not bind a forge; only forge=forgejo does: $(run_forge colon)"
 pass "fm-project-mode: the colon spelling forge:forgejo is not a forge binding"
 
