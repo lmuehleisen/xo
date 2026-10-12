@@ -105,13 +105,18 @@ fm_test_fake_gh_axi() {
 # FM_FAKE_TMUX_BRIEF_STATE names a marker created only when a brief is typed;
 # FM_FAKE_TMUX_BRIEF_VERDICT can then leave that draft pending or unreadable,
 # or show an empty composer. FM_FAKE_TMUX_COMPOSER=unrecognized renders a
-# settled screen no composer shape matches, and =changing one that differs on
-# every capture. FM_FAKE_TMUX_PANE_COMMAND answers #{pane_current_command}.
+# settled idle OpenCode V2 home whose unfamiliar status row leaves the verdict
+# unknown, =changing one that differs on every capture, =draft the same home
+# holding typed text, and =permission a settled permission prompt.
+# FM_FAKE_TMUX_PANE_COMMAND answers #{pane_current_command}.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+oc_home() { # <composer-text> <status-row>
+  printf 'OpenCode next home\n\n  ┃\n  ┃  %s\n  ┃\n  ┃  Build · Model OpenCode\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n  …/worktree  shift+tab agents  ctrl+p commands\n\n  %s\n' "$1" "$2"
+}
 case "$*" in
   *"#{cursor_y}"*) printf '1\n'; exit 0 ;;
   *"#{pane_width}"*) printf '140\n'; exit 0 ;;
@@ -131,9 +136,13 @@ case "${1:-}" in
     elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
     elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = unrecognized ]; then
-      printf 'OpenCode next home\n  type here\n'
+      oc_home 'Ask anything…' '⊙ 2 LSP ready'
     elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = changing ]; then
-      printf 'OpenCode next home %s\n  type here\n' "$$"
+      oc_home 'Ask anything…' "⊙ $$ LSP ready"
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = draft ]; then
+      oc_home 'leftover draft' '⊙ 2 LSP ready'
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = permission ]; then
+      printf 'OpenCode next home\n\n  ┃  △ Permission required\n  ┃\n  ┃  $ pwd\n  ┃\n  ┃   Allow once   Always allow   Reject      ⇆ select  enter confirm\n  ┃\n'
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi

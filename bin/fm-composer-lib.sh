@@ -1572,6 +1572,42 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
   [ -z "${blocks//▀/}" ]
 }
 
+# fm_composer_leftbar_idle_evidence: positive proof that the bottom-most V2
+# left-bar composer is idle, for a caller deciding what an unknown verdict
+# allows; it never changes a verdict. The composer must show the idle
+# placeholder, which V2 draws only while the input is empty, between blank
+# rows, end in the mode/model footer and sit on the half-block floor. Rows
+# below the floor stay unread, so an unfamiliar status row there cannot
+# withhold proof, but a permission prompt or a dialog title (`... esc`)
+# anywhere on the screen refuses.
+FM_COMPOSER_DIALOG_RE_DEFAULT='Permission required|Allow once|Always allow|[[:space:]]esc$'
+fm_composer_leftbar_idle_evidence() {  # <screen>
+  local plain first last row content placeholder=0
+  plain=$(printf '%s\n' "$1" | fm_composer_strip_ansi)
+  ! printf '%s\n' "$plain" | LC_ALL=C sed 's/[[:space:]]*$//' |
+    LC_ALL=C grep -qE "$FM_COMPOSER_DIALOG_RE_DEFAULT" || return 1
+  _fm_composer_scan_screen "$plain" ''
+  first=$FM_COMPOSER_SCAN_LEFTBAR_START
+  last=$FM_COMPOSER_SCAN_LEFTBAR_END
+  [ "$first" -ge 0 ] || return 1
+  content=$(_fm_composer_screen_row "$((last + 1))" "$plain")
+  fm_composer_normalize_trim_var content
+  _fm_composer_leftbar_floor_row "$content" || return 1
+  row=$first
+  while [ "$row" -le "$last" ]; do
+    content=$(_fm_composer_row_content "$(_fm_composer_screen_row "$row" "$plain")" 0)
+    content=${content#┃}
+    fm_composer_normalize_trim_var content
+    if [ "$row" -eq "$last" ]; then
+      fm_composer_idle_matches "$content" "${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}" sensitive || return 1
+    elif fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive; then
+      placeholder=1
+    fi
+    row=$((row + 1))
+  done
+  [ "$placeholder" = 1 ] && [ "$(_fm_composer_classify_leftbar "$plain" 0 "$first" "$last")" = empty ]
+}
+
 # V2 home-screen tail after the proven location strip: blanks, optionally
 # ending in one status row. That row is a right-aligned version label, led by
 # V2's MCP count (`⊙ 1 MCP /mcps`, or `⊙ 2 MCP failed`, from 2.0.27 whenever

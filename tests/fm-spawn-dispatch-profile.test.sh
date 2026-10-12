@@ -1015,21 +1015,25 @@ test_cursor_failed_catalog_probe_does_not_block_spawn() {
 }
 
 test_opencode_rejects_v1_before_launch() {
-  local rec id=profile-opencode-v1 out status
-  rec=$(make_spawn_case profile-opencode-v1 opencode "$id")
-  read_case_record "$rec"
-  out=$(FM_FAKE_OPENCODE_VERSION='opencode v1.18.33' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
-  status=$?
-  expect_code 1 "$status" "OpenCode V1 must fail before allocation"
-  assert_contains "$out" "requires V2 >= 2.0.18" "version refusal must name the supported floor"
-  [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "unsupported OpenCode must not publish a worker record"
-  pass "OpenCode V1 is refused before launch"
+  local rec id out status version
+  # A prerelease sorts below its release, so it cannot satisfy the floor.
+  for version in 1.18.33 2.0.18-rc.1; do
+    id="profile-opencode-v${version//[^0-9A-Za-z]/-}"
+    rec=$(make_spawn_case "$id" opencode "$id")
+    read_case_record "$rec"
+    out=$(FM_FAKE_OPENCODE_VERSION="opencode v$version" run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+    status=$?
+    expect_code 1 "$status" "OpenCode $version must fail before allocation"
+    assert_contains "$out" "requires V2 >= 2.0.18" "version refusal must name the supported floor"
+    [ ! -f "$HOME_DIR/state/$id.meta" ] || fail "unsupported OpenCode $version must not publish a worker record"
+  done
+  pass "OpenCode V1 and a prerelease of the floor are refused before launch"
 }
 
 test_opencode_newer_than_verified_launches_with_notice() {
   local rec id version out status
-  for version in 2.0.27 2.0.99; do
-    id="profile-opencode-v$version"
+  for version in 2.0.27 2.0.27+build.5 2.0.27-rc.1 2.0.99; do
+    id="profile-opencode-v${version//[^0-9A-Za-z]/-}"
     FM_TEST_CLEANUP_DIRS+=("/tmp/fm-$id")
     rec=$(make_spawn_case "$id" opencode "$id")
     read_case_record "$rec"
@@ -1038,14 +1042,18 @@ test_opencode_newer_than_verified_launches_with_notice() {
     status=$?
     expect_code 0 "$status" "OpenCode $version must launch: $out"
     assert_contains "$(cat "$LAUNCH_LOG")" "Read the brief at" "OpenCode $version did not receive its brief"
-    if [ "$version" = 2.0.27 ]; then
-      assert_not_contains "$out" "newer than the newest verified version" "the verified version must launch silently"
-    else
-      assert_contains "$out" "notice: OpenCode 2.0.99 is newer than the newest verified version 2.0.27" \
-        "a newer release must name itself and the verified version"
-    fi
+    case "$version" in
+      2.0.27 | 2.0.27+*)
+        assert_not_contains "$out" "notice: OpenCode" "the verified version must launch silently, build metadata included" ;;
+      2.0.27-rc.1)
+        assert_contains "$out" "notice: OpenCode 2.0.27-rc.1 is a prerelease; the newest verified version is 2.0.27" \
+          "a prerelease of the verified release must not count as verified" ;;
+      *)
+        assert_contains "$out" "notice: OpenCode 2.0.99 is newer than the newest verified version 2.0.27" \
+          "a newer release must name itself and the verified version" ;;
+    esac
   done
-  pass "OpenCode newer than the verified release launches with a one-line notice"
+  pass "OpenCode newer than the verified release, or a prerelease, launches with a one-line notice"
 }
 
 test_opencode_rejects_v2_secondmate_before_launch() {
@@ -1081,7 +1089,7 @@ test_opencode_refuses_pending_startup_composer() {
 test_opencode_unrecognized_settled_startup_fails_open() {
   local rec id screen out status launch
   # Each refusal case keeps the agent alive, so only its own signal decides.
-  for screen in unrecognized changing pending; do
+  for screen in unrecognized changing pending draft permission; do
     id="profile-opencode-unrecognized-$screen"
     fm_test_remove_tree "/tmp/fm-$id"
     FM_TEST_CLEANUP_DIRS+=("/tmp/fm-$id")
@@ -1095,8 +1103,8 @@ test_opencode_unrecognized_settled_startup_fails_open() {
     status=$?
     launch=$(cat "$LAUNCH_LOG")
     if [ "$screen" = unrecognized ]; then
-      expect_code 0 "$status" "a settled unrecognized startup screen must fail open: $out"
-      assert_contains "$out" "notice: OpenCode V2 composer shape is unrecognized" "fail-open must say why it typed"
+      expect_code 0 "$status" "a settled idle composer under an unfamiliar row must fail open: $out"
+      assert_contains "$out" "notice: OpenCode V2 screen shape is unrecognized" "fail-open must say why it typed"
       assert_contains "$launch" "Read the brief at" "fail-open did not submit the brief"
       assert_grep 'OpenCode next home' "/tmp/fm-$id"/opencode-startup-*.log "fail-open must capture the unrecognized screen"
     else
@@ -1106,7 +1114,7 @@ test_opencode_unrecognized_settled_startup_fails_open() {
       assert_not_contains "$launch" "Read the brief at" "no brief may be typed into a $screen startup screen"
     fi
   done
-  pass "OpenCode fails open only on a settled unrecognized startup screen with a live agent"
+  pass "OpenCode fails open only on a settled, visibly idle composer with a live agent"
 }
 
 test_opencode_failed_startup_keeps_only_unconfirmed_endpoints() {

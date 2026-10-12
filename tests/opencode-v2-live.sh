@@ -142,7 +142,8 @@ assert_local_skill_loaded() {
 . "$ROOT/bin/fm-tmux-lib.sh"
 # Launches a fresh home in <window> with <config>, requires its bottom status row
 # to match <row-regex> so the case is never vacuous, then requires empty with and
-# without a cursor and a typed draft to stay pending.
+# without a cursor plus idle-composer evidence, and a typed draft to stay
+# pending without that evidence.
 probe_fresh_home() {  # <window> <config> <row-regex> <label>
   local window=$1 config=$2 row=$3 label=$4 i=0 screen plain
   tmux new-window -d -t probe: -n "$window" -c "$LAB/wt" \
@@ -158,6 +159,7 @@ probe_fresh_home() {  # <window> <config> <row-regex> <label>
   done
   printf '%s\n' "$plain" | grep -Eq "$row" || fail "$VERSION: fresh home $label row absent"
   [ "$i" -lt 120 ] || fail "$VERSION: fresh home $label composer not ready with and without a cursor"
+  fm_composer_leftbar_idle_evidence "$plain" || fail "$VERSION: fresh home $label lacks idle-composer evidence"
   tmux send-keys -t "probe:$window" -l 'DRAFT_PROOF'
   i=0
   while [ "$i" -lt 30 ]; do
@@ -166,6 +168,7 @@ probe_fresh_home() {  # <window> <config> <row-regex> <label>
     i=$((i + 1)); sleep 0.1
   done
   [ "$i" -lt 30 ] || fail "$VERSION: fresh home $label draft classified empty"
+  ! fm_composer_leftbar_idle_evidence "$screen" || fail "$VERSION: fresh home $label draft read as idle"
   [ "$(fm_composer_extract_selected_content styled=1 "$screen")" = DRAFT_PROOF ] \
     || fail "$VERSION: fresh home $label draft extraction drift"
   tmux kill-window -t "probe:$window"
@@ -177,6 +180,30 @@ MCP_CONFIG=$(jq -c '.mcp = {"fm-probe": {type: "local", command: ["false"]}}' <<
 probe_fresh_home mcp "$MCP_CONFIG" \
   '^[[:space:]]*⊙ [0-9]+ MCP( failed)? /mcps[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' 'MCP status'
 pass "$VERSION: fresh home version label and MCP status, cursorless styled/plain readiness and draft refusal"
+# Without --auto, a shell call stops at a permission prompt that neither the
+# classifier nor the idle-composer evidence may treat as typeable.
+PERM_CONFIG=$(jq -c '.agents.build.permissions = [{action: "shell", resource: "*", effect: "ask"}]' <<<"$HOME_CONFIG")
+tmux new-window -d -t probe: -n permission -c "$LAB/wt" "OPENCODE_CONFIG_CONTENT='$PERM_CONFIG' opencode --standalone"
+i=0
+while [ "$i" -lt 120 ] && [ "$(fm_tmux_composer_state probe:permission)" != empty ]; do
+  i=$((i + 1)); sleep 0.5
+done
+[ "$i" -lt 120 ] || fail "$VERSION: permission probe composer not ready"
+tmux send-keys -t probe:permission -l 'Run pwd in the shell tool, then stop.'
+tmux send-keys -t probe:permission Enter
+i=0
+while [ "$i" -lt 120 ]; do
+  screen=$(tmux capture-pane -p -t probe:permission)
+  grep -q 'Permission required' <<<"$screen" && break
+  i=$((i + 1)); sleep 0.5
+done
+[ "$i" -lt 120 ] || fail "$VERSION: manual permission prompt absent"
+[ "$(fm_tmux_composer_state probe:permission)" != empty ] || fail "$VERSION: permission prompt falsely allows typed input"
+! fm_composer_leftbar_idle_evidence "$screen" || fail "$VERSION: permission prompt read as an idle composer"
+# Escape never selects Allow once or Always allow.
+tmux send-keys -t probe:permission Escape
+tmux kill-window -t probe:permission
+pass "$VERSION: manual permission prompt refuses typed delivery; no permission accepted"
 bash "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB/project" --scout --harness opencode --model "$MODEL"
 wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
 wait_idle

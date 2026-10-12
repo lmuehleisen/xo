@@ -149,8 +149,9 @@
 #   OpenCode requires V2 >= 2.0.18 and starts bare with --standalone --auto,
 #   then waits FM_OPENCODE_READY_POLLS (default 60) at FM_OPENCODE_POLL_INTERVAL
 #   (default 0.5 seconds) for an empty composer before guarded brief submission.
-#   If the composer is still unrecognized (never pending) while the agent is
-#   alive and its screen is settled, it prints a notice, captures the screen to
+#   If the screen is still unrecognized (never pending) while the agent is
+#   alive, the screen is settled, and it positively shows an idle composer with
+#   no permission prompt or dialog, it prints a notice, captures the screen to
 #   the startup diagnostics, and submits anyway; the submission's confirmation
 #   still decides delivery.
 #   --backend <name> is the explicit runtime session-provider backend for this
@@ -4935,18 +4936,18 @@ opencode_capture_diagnostic() { # <key> <detail>
   echo "spawn: OpenCode startup diagnostics=$OPENCODE_DIAGNOSTIC" >&2
 }
 
-# A composer the classifier cannot read is still safe to type into at launch
-# when the launched agent is proven alive and two non-blank captures one poll
-# apart match: the fresh process holds nobody's draft, and the guarded
-# submission's own confirmation still decides delivery.
-opencode_unrecognized_screen_settled() {
+# A screen whose composer verdict stays unknown is typed into at launch only
+# when the agent is proven alive, two captures one poll apart match, and the
+# settled screen positively shows an idle V2 composer with no permission prompt
+# or dialog (fm_composer_leftbar_idle_evidence). The guarded submission's own
+# confirmation still decides delivery.
+opencode_unrecognized_screen_idle() {
   local before after
   [ "$(fm_backend_agent_state "$BACKEND" "$T")" = alive ] || return 1
   before=$(fm_backend_capture "$BACKEND" "$T" 100 "$W" 2>/dev/null) || return 1
-  [ -n "${before//[[:space:]]/}" ] || return 1
   sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
   after=$(fm_backend_capture "$BACKEND" "$T" 100 "$W" 2>/dev/null) || return 1
-  [ "$before" = "$after" ]
+  [ "$before" = "$after" ] && fm_composer_leftbar_idle_evidence "$after"
 }
 
 opencode_spawn_fail() { # <detail>
@@ -6539,13 +6540,14 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     opencode_poll=$((opencode_poll + 1))
     sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
   done
-  # An OpenCode release can redraw its idle screen in a shape the classifier
-  # does not know yet. Fail open only from `unknown`: a pending composer is
-  # never typed over.
+  # An OpenCode release can add furniture the classifier does not know yet.
+  # Fail open only from `unknown` with positive idle-composer evidence: a
+  # pending composer, a draft, a permission prompt or a dialog is never typed
+  # into.
   if [ "$opencode_ready" -ne 1 ] && [ "$opencode_state" = unknown ] &&
-    opencode_unrecognized_screen_settled; then
-    opencode_capture_diagnostic notice "OpenCode V2 composer shape unrecognized in window $T"
-    echo "notice: OpenCode V2 composer shape is unrecognized in window $T, but the agent is alive and its screen is settled; submitting the brief through the guarded path - file a todo to teach bin/fm-composer-lib.sh the captured screen" >&2
+    opencode_unrecognized_screen_idle; then
+    opencode_capture_diagnostic notice "OpenCode V2 screen shape unrecognized in window $T"
+    echo "notice: OpenCode V2 screen shape is unrecognized in window $T, but its composer is visibly idle; submitting the brief through the guarded path - file a todo to teach bin/fm-composer-lib.sh the captured screen" >&2
     opencode_ready=1
   fi
   if [ "$opencode_ready" -ne 1 ]; then
