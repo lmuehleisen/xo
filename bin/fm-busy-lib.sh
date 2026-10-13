@@ -991,7 +991,7 @@ fm_busy_launch_prompt_parked() {  # <harness>
 # optional: without a proven binding the classifier keeps the hook verdict.
 fm_busy_kiro_bind_turn() {  # <state-dir> <id> <gen> <hook-parent-pid>
   local state=$1 id=$2 gen=$3 pid=$4 dir=${KIRO_TURN_MARKER_DIR:-}
-  local record seq marker selected= born tmp current
+  local record seq marker selected='' born tmp current
   command -v jq >/dev/null 2>&1 || return 1
   [ -d "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ] || return 1
   current=$(fm_busy_current_gen "$state" "$id") || return 1
