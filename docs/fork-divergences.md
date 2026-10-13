@@ -396,6 +396,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` catalog-supported, unsupported and unavailable-catalog cases.
 - Upstream: permits maximum effort only for its fixed model name; drop when equivalent catalog capability checks land.
 
+### muse-native-max-effort
+
+- Intent: Firstmate's `max` effort launches Muse Code's native `max`, only on Muse 1.4.6 or newer whose local model catalog advertises max for the selected or default model, and refuses before endpoint creation otherwise; explicit `ultra` stays refused.
+- Class: carried.
+- Seam: the Muse effort mapping, version gate, and catalog gate in `effort_flag_for_harness` and its Muse helpers in `bin/fm-spawn.sh`, and the effort row in `.agents/skills/harness-adapters/references/harness/muse.md` (shared).
+- Guard: `tests/fm-muse-harness.test.sh` `test_spawn_maps_effort_and_model`.
+- Upstream: maps `max` onto Muse `ultra` from the 0.1.0 vocabulary with no version or catalog gate; drop when upstream adopts the native `max` mapping with equivalent gates.
+
 ### raw-launch-verbatim
 
 - Intent: an explicit raw command avoids adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
