@@ -525,7 +525,7 @@
 # into the worktree's own .kiro/, so - mirroring gemini - the spawn writes a
 # firstmate-owned per-task agent config under state/<id>.kiro-home/agents/ and
 # reaches it by relocating KIRO_HOME onto that dir on the launch command; the
-# captain's real ~/.kiro is never touched, and auth is unaffected on AL2 where
+# operator's real ~/.kiro is never touched, and auth is unaffected on AL2 where
 # it lives in the XDG data dir; macOS keeps auth in Library/Application Support
 # outside KIRO_HOME too (docs/verification/kiro.md). --agent is name-only (a path is rejected), and --trust-all-tools
 # would otherwise block on a modal, so the spawn seeds
@@ -3082,11 +3082,9 @@ fi
 if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" || exit 1
 fi
-if [ "$HARNESS" = kiro ]; then
+if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = kiro ]; then
   kiro_model_validate "$KIRO_BIN" "$MODEL" || exit 1
-  if [ "$RAW_LAUNCH" -eq 0 ]; then
-    kiro_hook_path_validate "$STATE" "$ID" || exit 1
-  fi
+  kiro_hook_path_validate "$STATE" "$ID" || exit 1
 fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
 # record exists. An absent pin selects nothing and leaves every later launch
@@ -6467,8 +6465,10 @@ devin)
   fm_devin_launch_assert "$LAUNCH" "$CREW_PERMISSION_MODE" "$STATE_REAL/$ID.devin-config.json" || exit 1
   ;;
 kiro)
-  LAUNCH=${LAUNCH//__KIROBIN__/"$(shell_quote "$KIRO_BIN")"}
-  LAUNCH=${LAUNCH//__KIROHOME__/"$(shell_quote "$STATE_REAL/$ID.kiro-home")"}
+  if [ "$RAW_LAUNCH" -eq 0 ]; then
+    LAUNCH=${LAUNCH//__KIROBIN__/"$(shell_quote "$KIRO_BIN")"}
+    LAUNCH=${LAUNCH//__KIROHOME__/"$(shell_quote "$STATE_REAL/$ID.kiro-home")"}
+  fi
   ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}

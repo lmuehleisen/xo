@@ -1866,7 +1866,7 @@ done
 printf '{"rules":[{"when":"Kiro work","use":{"harness":"kiro","model":"auto","effort":"ultra"}}]}\n' > "$RULES"
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 expect_code 2 "$code" "native Kiro refuses ultra effort"
-assert_contains "$err" 'invalid effort: kiro:ultra' "Kiro refusal names the unsupported effort"
+assert_contains "$err" 'each use profile effort must be supported by its harness and model' "Kiro refusal identifies an unsupported profile effort"
 cp "$BASE_RULES" "$RULES"
 pass "native Kiro provider inference and effort validation agree with bootstrap"
 

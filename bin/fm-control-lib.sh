@@ -454,7 +454,7 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
     # gen, so all three are retired; the sibling settings/sessions carry no gen
     # and are cleared wholesale by teardown's rm -rf of <id>.kiro-home. Nothing
     # is written into the worktree, whose own .kiro/ belongs to the project, and
-    # nothing in the captain's real ~/.kiro is touched.
+    # nothing in the operator's real ~/.kiro is touched.
     kiro)
       printf '%s\n' "$state/$id.kiro-home/agents/firstmate.json"
       printf '%s\n' "$state/$id.kiro-home/hooks/user-prompt-submit"

@@ -3,10 +3,8 @@
 #
 # The facts pinned here are the ones a kiro release could silently change and
 # the ones a wrong guess would make dangerous:
-#   1. kiro publishes no harness-identity marker of its own (a live 2.21.4 tool
-#      subprocess carries no KIRO_* identity; KIRO_HOME is a firstmate-set
-#      config-relocation path), so detection is ancestry alone on the anchored
-#      process name `kiro-cli`. As a markerless harness, kiro's comm-strength
+#   1. Kiro's upstream Linux build is markerless; macOS exports KIRO_* values.
+#      Detection stays structural on anchored kiro-cli and kiro-cli-chat names. As a markerless harness, kiro's comm-strength
 #      ancestry outranks an inherited foreign CLAUDECODE (the marker-vs-ancestry
 #      boundary fm-harness-precedence.test.sh owns), so a kiro crewmate is never
 #      silently renamed to claude; the spawn still clears the marker as defense
@@ -230,8 +228,8 @@ test_kiro_turn_marker_fallback() {
   gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$id")
   "$ROOT/bin/fm-busy-event.sh" apply "$state" "$id" busy --gen "$gen" --source kiro-hook --event user-prompt-submit
   seq=$(fm_busy_record_read "$state" "$id"); seq=${seq##* }
-  marker="$dir/$$-1791853198359.json"
-  printf '{"pid":%s,"engine":"v2","session_interface":"interactive_cli","turn_started_at_ms":1791853198359,"last_alive_at_ms":1791853198359,"owner_started_at_s":1791853195}\n' "$$" > "$marker"
+  marker="$dir/$$-2000000000000.json"
+  printf '{"pid":%s,"engine":"v2","session_interface":"interactive_cli","turn_started_at_ms":2000000000000,"last_alive_at_ms":2000000000000,"owner_started_at_s":1999999999}\n' "$$" > "$marker"
   KIRO_TURN_MARKER_DIR="$dir" fm_busy_kiro_bind_turn "$state" "$id" "$gen" "$$" || fail "could not bind the current process's native marker"
   binding="$state/$id.kiro-home/turn-marker.$gen.json"
   out=$(fm_busy_classify tmux target kiro "$id" "$state")
@@ -242,11 +240,11 @@ test_kiro_turn_marker_fallback() {
   out=$(fm_busy_classify tmux target kiro "$id" "$state" 'Kiro is working')
   assert_equals 'idle kiro-turn-marker' "$out" 'manual cancellation clears the native turn despite the stale busy hook and footer'
   # A newer turn on the same owner wins even before its submit hook runs.
-  printf '{"pid":%s,"engine":"v2","session_interface":"interactive_cli","turn_started_at_ms":1791853298359,"owner_started_at_s":1791853195}\n' "$$" > "$dir/$$-1791853298359.json"
+  printf '{"pid":%s,"engine":"v2","session_interface":"interactive_cli","turn_started_at_ms":2000000100000,"owner_started_at_s":1999999999}\n' "$$" > "$dir/$$-2000000100000.json"
   assert_equals busy "$(fm_busy_kiro_turn_state "$state" "$id" "$seq")" 'a newer native turn prevents idle'
-  printf '{broken\n' > "$dir/$$-1791853298359.json"
+  printf '{broken\n' > "$dir/$$-2000000100000.json"
   assert_equals unknown "$(fm_busy_kiro_turn_state "$state" "$id" "$seq")" 'a malformed native marker cannot prove idle'
-  rm "$dir/$$-1791853298359.json"
+  rm "$dir/$$-2000000100000.json"
   mv "$dir" "$dir.moved"
   assert_equals unknown "$(fm_busy_kiro_turn_state "$state" "$id" "$seq")" 'a missing native directory cannot prove idle'
   mv "$dir.moved" "$dir"
