@@ -20,8 +20,8 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--forge <none|gerrit> [--shape squash]] [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--lavish <off|view|answers>] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo> [--shape squash]] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--lavish <off|view|answers>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -74,14 +74,23 @@
 # standing per-project preference, and firstmate resolves it per task at intake
 # and passes the explicit flag. Refused on --scout and --secondmate: a scout
 # makes no branch and a charter is not a delivery contract.
+# --base-branch <branch> starts the task from origin's <branch> instead of the
+# repository default, for work that belongs on a named integration, feature, or
+# release branch. It writes a "Base branch: <branch>" line under `# Setup`, which
+# bin/fm-spawn.sh requires to agree with the same --base-branch it is passed to
+# choose the copy's starting point, and a ship's
+# Definition of done then targets that branch with its pull request.
+# bin/fm-dod-lib.sh's fm_base_branch_valid owns which deliveries accept one.
+# Refused on --secondmate.
 # --forge names the project's forge, defaults to none, and is orthogonal to --mode
 # exactly as the registry's `forge=` token is. It is the captain's confirmed
 # registry binding, read from data/projects.md at intake and passed here; this
 # script never infers a forge and never looks the binding up, and bin/fm-spawn.sh
 # refuses a brief whose forge disagrees with the registry. bin/fm-project-mode.sh's
 # header owns what the binding means, and bin/fm-dod-lib.sh owns what `gerrit`
-# changes for the worker. A forge on --mode local-only is refused, because that
-# mode publishes nothing.
+# and `forgejo` change in the Definition of done. On `forgejo` this script also
+# names tea instead of gh in the ship brief's forge-CLI rule. A forge on
+# --mode local-only is refused, because that mode publishes nothing.
 # --shape names how a forge=gerrit task is published, and only `squash` - one
 # change - is accepted: `stack` is refused until a stack can be watched by its
 # membership pinned when its watch is armed, because the merge watch follows one
@@ -89,9 +98,10 @@
 # It defaults to squash on gerrit and is refused without it.
 # The generated ship brief records the chosen mode as a fixed machine-readable
 # "Delivery contract: mode=<mode>" line, followed by " forge=gerrit shape=squash"
-# on that forge. bin/fm-spawn.sh reads that line and refuses to launch a ship task
-# whose explicit --mode or registered forge disagrees, so an adjusted brief and the
-# recorded task metadata cannot drift apart.
+# on Gerrit or " forge=forgejo" on Forgejo. bin/fm-spawn.sh reads that line and
+# refuses to launch a ship task whose explicit --mode or registered forge
+# disagrees, so an adjusted brief and the recorded task metadata cannot drift
+# apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Both crewmate scaffolds carry one shared rule against administering the
 # infrastructure every lane shares - the worktree pool their own slot came from,
@@ -205,6 +215,8 @@ MODE=
 MODE_SET=0
 BRANCH_PREFIX=fm/
 BRANCH_PREFIX_SET=0
+BASE_BRANCH=
+BASE_BRANCH_SET=0
 FORGE=none
 FORGE_SET=0
 SHAPE=
@@ -221,6 +233,7 @@ for a in "$@"; do
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
       branch-prefix) BRANCH_PREFIX=$a; BRANCH_PREFIX_SET=1 ;;
+      base-branch) BASE_BRANCH=$a; BASE_BRANCH_SET=1 ;;
       forge) FORGE=$a; FORGE_SET=1 ;;
       shape) SHAPE=$a; SHAPE_SET=1 ;;
       lavish) LAVISH_REQUEST=$a; LAVISH_SET=1 ;;
@@ -238,6 +251,8 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --branch-prefix) want_value="branch-prefix" ;;
     --branch-prefix=*) BRANCH_PREFIX=${a#--branch-prefix=}; BRANCH_PREFIX_SET=1 ;;
+    --base-branch) want_value="base-branch" ;;
+    --base-branch=*) BASE_BRANCH=${a#--base-branch=}; BASE_BRANCH_SET=1 ;;
     --forge) want_value=forge ;;
     --forge=*) FORGE=${a#--forge=}; FORGE_SET=1 ;;
     --shape) want_value=shape ;;
@@ -299,6 +314,13 @@ if [ "$KIND" = ship ]; then
     echo "error: --shape applies only with --forge gerrit, where the worker publishes the change itself" >&2
     exit 1
   fi
+  # A Forgejo project's pull requests are handled with tea, so the ship brief's
+  # forge-CLI rule names it instead of gh; every other forge keeps gh.
+  if [ "$FORGE" = forgejo ]; then
+    FORGE_RULE_LINE="Use tea for Forgejo operations. For browser work, use the harness browser tools or Playwright."
+  else
+    FORGE_RULE_LINE="Use gh for GitHub operations. For browser work, use the harness browser tools or Playwright."
+  fi
 elif [ "$FORGE_SET" -eq 1 ] || [ "$SHAPE_SET" -eq 1 ]; then
   echo "error: --forge and --shape apply only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
   exit 1
@@ -310,6 +332,13 @@ fi
 if [ "$LAVISH_SET" -eq 1 ] && [ -z "$LAVISH_REQUEST" ]; then
   echo "error: --lavish must be off, view, or answers (got an empty value)" >&2
   exit 1
+fi
+if [ "$BASE_BRANCH_SET" -eq 1 ]; then
+  if [ "$KIND" = secondmate ] || [ -z "$BASE_BRANCH" ]; then
+    echo "error: --base-branch takes a branch name and applies only to ship and scout briefs" >&2
+    exit 1
+  fi
+  fm_base_branch_valid "$BASE_BRANCH" "$MODE" "$FORGE" "fm-brief.sh --base-branch" || exit 1
 fi
 ID=${POS[0]}
 BRANCH="$BRANCH_PREFIX$ID"
@@ -653,6 +682,13 @@ ${POOL_INFRA_BULLET}   If you genuinely need a second checkout, another slot, or
 EOF
 PIPELINE_INFRA_RULE=${PIPELINE_INFRA_RULE%$'\n'}
 
+if [ -n "$BASE_BRANCH" ]; then
+  SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean copy of its base branch.
+Base branch: $BASE_BRANCH"
+else
+  SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch."
+fi
+
 if [ "$KIND" = scout ]; then
 fm_lavish_resolve "$CONFIG" "$LAVISH_REQUEST" || exit 1
 SCOUT_INFRA_RULE=$SHARED_INFRA_RULE
@@ -671,7 +707,7 @@ $TASK_SECTION
 $HERDR_SECTION
 
 # Setup
-You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
+$SETUP_BASE
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
 The report is the only thing that survives, so anything worth keeping must be in it.
@@ -734,8 +770,8 @@ case "$EFFECTIVE_MODE" in
     RULE7=$PIPELINE_INFRA_RULE
     ;;
 esac
-RULE1=$(fm_ship_rule_one "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
-DOD=$(fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
+RULE1=$(fm_ship_rule_one "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
+DOD=$(fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
 [ "$EFFECTIVE_MODE" = "$MODE" ] || DOD=$DOD$'\n'$(fm_no_mistakes_remap_note)
 
 cat > "$BRIEF" <<EOF
@@ -746,7 +782,7 @@ $TASK_SECTION
 $HERDR_SECTION
 
 # Setup
-You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
+$SETUP_BASE
 
 **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
@@ -756,9 +792,11 @@ If the top-level path is the primary checkout or not the worktree you were launc
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+2. Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$DATA/$ID/\` or a temporary directory.
+   Outside the worktree, write only that task material and the status and steering-inbox records authorized below.
+   Leave the worktree clean before reporting done.
 $WORKER_TMUX_RULE
-3. Use gh for GitHub operations. For browser work, use the harness browser tools or Playwright.
+3. $FORGE_RULE_LINE
 ${LOCAL_SKILLS_NOTE}   Never write sensitive information into a public repository, where it stays permanently: nothing public may tell a stranger about the captain's private life or work.
    Commit messages, PR and issue text, and review replies follow the public-text policy that \`$FM_ROOT/bin/fm-publish-gate.sh policy\` prints (short neutral PR text, short review replies, and no sensitive evidence), and git takes its commit identity from the launch or git config only: never pass identity to git (\`-c user.*\`, \`-c author.*\`, \`-c committer.*\`, \`--author\`, or \`GIT_AUTHOR_*\`/\`GIT_COMMITTER_*\`) and never copy an author from \`git log\`.
 4. Report status by appending one line:
@@ -794,6 +832,8 @@ EOF
 append_brief_include
 if [ "$FORGE" = none ]; then
   echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
-else
+elif [ "$FORGE" = gerrit ]; then
   echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE shape=$SHAPE; replace {TASK} and {FIRSTMATE_SPEC})"
+else
+  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE; replace {TASK} and {FIRSTMATE_SPEC})"
 fi

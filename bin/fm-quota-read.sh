@@ -5,6 +5,8 @@
 # or auth --json for credential-source evidence. Compatibility/version calls
 # use quota-axi directly. Configured Kiro requires its feature compatibility
 # floor from bin/fm-quota-axi-lib.sh, checked with a five-second version bound.
+# Exit 78 means the configured scope refused the read before quota-axi ran (a
+# malformed file or an unmet Kiro floor); any other status is quota-axi's own.
 # docs/configuration.md owns config/quota-providers.
 set -u
 
@@ -20,7 +22,7 @@ FILE="$CONFIG/quota-providers"
 
 invalid() {
   printf 'error: malformed config/quota-providers: %s\n' "$1" >&2
-  exit 1
+  exit 78
 }
 
 args=()
@@ -54,7 +56,7 @@ if [ -e "$FILE" ] || [ -L "$FILE" ]; then
     *,kiro,*)
       if ! fm_quota_axi_compatible 5 "$FM_QUOTA_AXI_KIRO_MIN"; then
         printf 'error: quota-axi %s or newer required when kiro is configured\n' "$FM_QUOTA_AXI_KIRO_MIN" >&2
-        exit 1
+        exit 78
       fi
       ;;
   esac

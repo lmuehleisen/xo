@@ -26,7 +26,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: restrained operational identity and preferred report commands; README "XO identity".
 - Class: intended.
-- Seam: identity and voice wording in `AGENTS.md`, `README.md`, `GROK_BOT.md`, `VISION.md`, the ahoy, bearings, afk, captain-hold-lifecycle, quiet, and fmx-respond skills, the Ops board labels, captain-facing startup, inbox, and report-hint wording, and their related documentation (shared); `.agents/skills/report/` and `.agents/skills/ops/` plus their documentation inventory rows (fork-only).
+- Seam: identity and voice wording in `AGENTS.md`, `README.md`, `GROK_BOT.md`, `VISION.md`, the ahoy, bearings, afk, captain-hold-lifecycle, quiet, and fmx-respond skills, the Ops board labels, captain-facing startup, inbox, and report-hint wording, and their related documentation (shared); `.agents/skills/report/`, `.agents/skills/ops/`, and `assets/xo-banner.png` plus their documentation inventory rows (fork-only).
 - Guard: `bin/fm-doc-audience-check.sh` checks skill entry links; `tests/fm-pi-branch-extension.test.sh` preserves the no-op reply boundary; semantic voice and alias equivalence remain instruction-driven.
 - Upstream: Firstmate identity with `/ahoy` and `/bearings`; keep technical identifiers and existing command implementations so integrations need only reconcile wording and the two entry points.
 
@@ -50,7 +50,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: Lavish is optional, off by default, hook-free, version-pinned, and loopback-only unless the home names one address such as its tailnet address; chat stays the primary answer path, and an answers board carries decision cards only; README "Optional `lavish-axi`".
 - Class: intended.
-- Seam: `bin/fm-lavish-lib.sh` and `bin/fm-lavish.sh` (fork-only), `bin/fm-bearings-board.sh`, `.agents/skills/bearings/assets/board-template.html`, the scout-brief Lavish line and `--lavish` in `bin/fm-brief.sh`, the Lavish install hint and toggle line in `bin/fm-bootstrap.sh` (plus the `lavish-reply-compatible` probe that `bin/fm-procevent-lavish.sh` calls), `bin/fm-config-inherit-lib.sh`, the pinned environment in `bin/fm-procevent-lavish.sh`, fork-only `docs/lavish.md` and `docs/verification/lavish-remote-forward.md`, the live test's family entry in `bin/fm-test-run.sh`, and the Lavish wording in the bearings, bootstrap-diagnostics, captain-hold-lifecycle, operational-home-layout, and process-event-sources skills (shared).
+- Seam: `bin/fm-lavish-lib.sh` and `bin/fm-lavish.sh` (fork-only), `bin/fm-bearings-board.sh`, `.agents/skills/bearings/assets/board-template.html`, the scout-brief Lavish line and `--lavish` in `bin/fm-brief.sh`, the Lavish install hint and toggle line in `bin/fm-bootstrap.sh` (plus the `lavish-reply-compatible` probe that `bin/fm-procevent-lavish.sh` calls), `bin/fm-config-inherit-lib.sh`, the pinned environment in `bin/fm-procevent-lavish.sh`, fork-only `docs/lavish.md`, `docs/verification/lavish-remote-forward.md`, and `docs/verification/lavish-tailnet.md`, the live test's family entry in `bin/fm-test-run.sh`, and the Lavish wording in the bearings, bootstrap-diagnostics, captain-hold-lifecycle, operational-home-layout, and process-event-sources skills (shared).
 - Guard: `tests/fm-lavish.test.sh`; `tests/fm-bearings-board.test.sh` `test_build_does_not_invoke_lavish` and the Lavish mode tests; `tests/fm-brief.test.sh` `test_scout_lavish_follows_toggle_and_override`; `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required` and `test_lavish_opt_in_reports_unavailable_cli`; `tests/fm-procevent.test.sh`, whose upstream legacy-reply stand-ins report the pin, with "an off-pin older Lavish is refused before any reply is posted"; live, `tests/fm-bearings-board-lavish-live-e2e.test.sh`.
 - Upstream: requires `lavish-axi`, installs it with `setup hooks`, reports its version floors at bootstrap, always drives an interactive board with merge and dispatch controls, and lets Lavish bind a Tailscale address by default.
 
@@ -75,7 +75,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: Codex workers launch with `--approve-for-me`, or with manual review when `config/crew-permissions` is `manual`, never with approvals and sandbox bypassed; README "Reviewed worker permissions".
 - Class: intended.
 - Seam: the Codex arms of `launch_template` in `bin/fm-spawn.sh` (shared) print the selected permission flags in place of upstream's `--dangerously-bypass-approvals-and-sandbox`; an alternative would keep the template lines byte-identical to upstream and substitute the flags at launch time instead.
-- Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes` and `test_codex_secondmate_launch_keeps_the_hook_layer`.
+  The automatic-review brief also carries sandbox retry guidance from `fm_brief_codex_reviewed_sandbox` in `bin/fm-dod-lib.sh`, added by `bin/fm-spawn.sh` and described in the Codex harness reference (shared).
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_codex_secondmate_launch_keeps_the_hook_layer`, and the sandbox-guidance cases.
 - Upstream: launches Codex with `--dangerously-bypass-approvals-and-sandbox` and has no Codex permission option; an equivalent upstream option would reduce this entry to a default value.
 
 ### agy-permission-posture
@@ -124,7 +125,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: intended.
 - Seam: pool-base handling in `bin/fm-spawn.sh` and its `local_default_branch` helper in `bin/fm-ff-lib.sh` (shared).
 - Guard: `tests/fm-spawn-pool-base-freshen.test.sh` `test_originless_pool_launches_without_a_freshness_fetch` and `test_originless_dirty_pool_refuses_without_discarding_work`.
-- Upstream: requires a remote to freshen the pool base.
+- Upstream: launches an originless pooled slot on whatever commit it holds, without starting from local `main` or `master` or refusing a divergent base; its refusal of `--base-branch` on an originless slot is taken.
 
 ### durable-approval-waits
 
@@ -162,7 +163,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: pushes, commit messages, and public PR text pass a configurable publish gate, with a larger body cap only for verified upstream integration records; `docs/configuration.md` "Publish guard".
 - Class: intended.
-- Seam: fork-only `bin/fm-publish-gate.sh`, `bin/fm-publish-judge.sh`, `bin/fm-gh-publish-policy.mjs`, `bin/fm-install-gitleaks.sh`, and `.github/workflows/pr-text.yml`, plus the `publish-identity` job in `.github/workflows/ci.yml`, the publish-policy hunks in `bin/fm-arm-pretool-check.sh` (shared), where a command the publish policy must see fails closed, the nested publish-guard inheritance in `bin/fm-config-inherit-lib.sh` and `bin/fm-remote-inherit.sh`, and the gate hunks in `bin/fm-git-strip-ai-trailers.sh` and `bin/fm-spawn.sh` (shared), where `config/keep-ai-trailers` skips only the trailer strip and the per-task hooks stay installed so the gate still runs.
+- Seam: fork-only `bin/fm-publish-gate.sh`, `bin/fm-publish-judge.sh`, `bin/fm-gh-publish-policy.mjs`, `bin/fm-gh-publish-exec.mjs`, `bin/fm-git-publish-exec.mjs`, `bin/fm-no-mistakes-body.mjs`, `bin/fm-install-gitleaks.sh`, and `.github/workflows/pr-text.yml`, plus the `publish-identity` job in `.github/workflows/ci.yml`, the publish-policy hunks in `bin/fm-arm-pretool-check.sh` (shared), where a command the publish policy must see fails closed, the nested publish-guard inheritance in `bin/fm-config-inherit-lib.sh` and `bin/fm-remote-inherit.sh`, and the gate hunks in `bin/fm-git-strip-ai-trailers.sh` and `bin/fm-spawn.sh` (shared), where `config/keep-ai-trailers` skips only the trailer strip and the per-task hooks stay installed so the gate still runs.
 - Guard: fork-only `tests/fm-publish-gate.test.sh`, `tests/fm-publish-judge.test.sh`, and `tests/fm-spawn-identity-pin.test.sh`; the keep-ai-trailers cases in `tests/fm-spawn-dispatch-profile.test.sh`; the publish fail-closed cases in `tests/fm-arm-pretool-check.test.sh`; fork-only `tests/fm-pi-worker-publish-policy-live-e2e.test.sh`.
 - Upstream: has no publish gate, and `config/keep-ai-trailers` removes the per-task hooks entirely.
 
@@ -192,11 +193,51 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### dispatch-lanes
 
-- Intent: crew dispatch configuration chooses each lane's model classes while code chooses the provider route by quota; `docs/configuration.md` "Lanes and model classes".
+- Intent: crew dispatch configuration chooses each lane's model classes, live worker caps, shared cap groups, and unmetered ranking priority while code chooses the provider route by quota; the resolver can use an OpenRouter transport and records private call history; `docs/configuration.md` "Lanes and model classes".
 - Class: intended.
-- Seam: fork-only `bin/fm-dispatch-lanes-lib.sh` and `docs/examples/crew-dispatch-lanes.json`, plus the lane hunks in `bin/fm-dispatch-resolve.sh` (`--lane`, `--exclude-family`, `--data-tag`, and lane evaluation), `bin/fm-bootstrap.sh` (lane validation and verbose facts), and `bin/fm-spawn.sh` (`model_family=` meta), the lane prose in `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`, the lane procedure and trigger in `.agents/skills/quota-array-dispatch/SKILL.md` and `.agents/skills/agent-skill-trigger-index/SKILL.md`, the template row in `docs/documentation-audiences.json`, and the library's guard selection in `bin/fm-test-run.sh` (shared).
-- Guard: `tests/fm-dispatch-resolve.test.sh` lane cases; `tests/fm-bootstrap.test.sh` lane validation rows, lane verbose facts, and `test_crew_dispatch_lanes_template_is_valid`; `tests/fm-spawn-dispatch-profile.test.sh` `test_lane_route_records_model_family`.
+- Seam: fork-only `bin/fm-dispatch-lanes-lib.sh`, `bin/fm-dispatch-history-lib.sh`, and `docs/examples/crew-dispatch-lanes.json`, plus the lane hunks in `bin/fm-dispatch-resolve.sh` (`--lane`, `--exclude-family`, `--data-tag`, lane evaluation, live caps, unmetered ranking, the OpenRouter transport, and call history), the transport evidence in `docs/verification/dispatch-resolve.md`, the history write in `bin/fm-spawn.sh`, `bin/fm-bootstrap.sh` (lane validation and verbose facts), and `bin/fm-spawn.sh` (`model_family=` meta), the lane prose in `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`, the lane procedure and trigger in `.agents/skills/quota-array-dispatch/SKILL.md` and `.agents/skills/agent-skill-trigger-index/SKILL.md`, the template row in `docs/documentation-audiences.json`, and the library's guard selection in `bin/fm-test-run.sh` (shared).
+- Guard: `tests/fm-dispatch-resolve.test.sh` lane, cap, unmetered-ranking, OpenRouter, and history cases; `tests/fm-bootstrap.test.sh` lane validation rows, lane verbose facts, and `test_crew_dispatch_lanes_template_is_valid`; `tests/fm-spawn-dispatch-profile.test.sh` `test_lane_route_records_model_family` and the history cases.
 - Upstream: rules name concrete profiles or profile arrays only, with no model classes, lanes, experiments, data policies, or second-opinion family exclusion.
+
+### opencode-v2-workers
+
+- Intent: OpenCode crewmates and scouts run on OpenCode V2 through a Firstmate-owned plugin and per-spawn private config, the primary stays on the legacy OpenCode V1 path, and OpenCode secondmates are refused before launch; README prerequisites and the OpenCode harness reference.
+- Class: intended.
+- Seam: fork-only `.opencode/plugins/lib/fm-process.js`, `.opencode/plugins/lib/fm-v2-plugin.js`, `tests/opencode-v2-live.sh`, and `tests/opencode-v2-herdr-live.sh`, plus the OpenCode hunks in `bin/fm-spawn.sh`, `bin/fm-composer-lib.sh`, `bin/fm-control.sh`, `bin/fm-control-lib.sh`, `bin/fm-harness.sh`, `bin/fm-busy-event.sh` (`--if-seq`), `bin/fm-busy-lib.sh`, `bin/fm-remote-doctor.sh`, `bin/fm-remote-entrypoint.sh`, `bin/fm-remote-secondmate-control.sh`, and `.opencode/plugins/fm-primary-turnend-guard.js`, the OpenCode harness reference, its evidence in `docs/verification/runtime-backends.md` and `docs/verification/supervision.md`, and the "OpenCode V1" primary wording in shared docs (shared).
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_opencode_*` cases; `tests/fm-control-relaunch.test.sh` `test_opencode_*` cases; `tests/fm-spawn-prelaunch-rollback.test.sh` `test_opencode_*` cases; `tests/fm-composer-lib.test.sh` `test_matrix_opencode_leftbar_signals`; `tests/fm-busy-adapter-wiring.test.sh` `test_opencode_plugin_semantic_lifecycle` and `test_secondmate_opencode_is_refused_without_busy_wiring`; `tests/fm-busy-state.test.sh` sequence cases; `tests/fm-remote-doctor.test.sh`; live, `tests/fm-opencode-primary-live-e2e.test.sh`, which drives `tests/opencode-v2-live.sh`.
+- Upstream: supports OpenCode 1.x only; an upstream V2 adapter would let the fork converge on it.
+
+### native-launch-optins
+
+- Intent: per-task native launch options select Codex Ultra, Claude ultracode, or a native goal for crewmates and scouts, and a secondmate refuses Ultra before it stops or routes; the Claude and Codex harness references.
+- Class: intended.
+- Seam: the opt-in hunks in `bin/fm-spawn.sh`, `bin/fm-harness.sh`, `bin/fm-control.sh`, `bin/fm-control-lib.sh`, `bin/fm-secondmate-restart.sh`, `bin/fm-remote-secondmate-control.sh`, and `bin/fm-composer-lib.sh`, their rows in `docs/configuration.md` and the model-and-effort, Claude, and Codex harness references, their evidence in `docs/verification/runtime-backends.md`, and the live test's family entry in `bin/fm-test-run.sh` (shared).
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` ultra, ultracode, and goal cases; `tests/fm-control-relaunch.test.sh` `test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop` and `test_secondmate_codex_ultra_refuses_before_stop`; `tests/fm-secondmate-restart.test.sh` ultra cases; `tests/fm-worker-account.test.sh` `test_ultracode_probe_uses_the_worker_account_environment`; the opt-in live guard fork-only `tests/fm-worker-launch-optins-live-e2e.test.sh`.
+- Upstream: accepts Ultra only for Pi with an explicit `codex-native/<model>` model, and has no Claude ultracode or native goal option.
+
+### quota-routing-eligibility
+
+- Intent: a quota-ranked route is eligible only with a known in-range spendPriority, a runway that covers the task's completion horizon, and a quota row whose account membership matches the route, with Devin and agy routes ranked from their plan and catalog quota; `docs/configuration.md` dispatch profiles.
+- Class: intended.
+- Seam: the eligibility hunks in `bin/fm-quota-axi-lib.sh` (including its optional minimum-version argument), `bin/fm-quota-choose.sh`, `bin/fm-dispatch-resolve.sh`, `bin/fm-procevent-quota.sh` (an unknown reading is an error), and `bin/fm-agy-lib.sh`, the quota-array-dispatch skill and agy harness reference, `docs/configuration.md`, and the catalog evidence in fork-only `docs/verification/runtime-backends-fork.md` (shared).
+- Guard: `tests/fm-quota-choose.test.sh`; `tests/fm-dispatch-resolve.test.sh` runway, membership, and plan-allowance cases; `tests/fm-procevent-quota.test.sh`; the opt-in live guards fork-only `tests/fm-quota-agy-catalog-live-e2e.test.sh` and `tests/fm-quota-devin-catalog-live-e2e.test.sh`.
+- Upstream: excludes only a route whose runway is already exhausted, without the completion-horizon gate or account-membership matching, and has no Devin or agy plan quota.
+
+### pr-readiness-gate
+
+- Intent: a pull request is presented as ready only when every check is green, the review settle window has passed, and unresolved bot review threads have been read, and a finished task whose PR was still pending is rechecked; `AGENTS.md` section 9 and the ship-landing skill.
+- Class: intended.
+- Seam: the readiness hunks in `bin/fm-pr-state.sh`, `bin/fm-pr-check.sh` (`--pending`), `bin/fm-pr-poll.sh` (`--validated-readiness`), `bin/fm-pr-lib.sh`, `bin/fm-branch-prompt.sh`, `bin/fm-branch-outcome.sh`, `bin/fm-teardown.sh`, and the watcher, the readiness line in `AGENTS.md`, the ship-landing skill, and the evidence in `docs/verification/supervision.md` (shared).
+- Guard: `tests/fm-pr-state.test.sh` `test_bot_threads_and_settle`; `tests/fm-pr-check-security.test.sh` `test_finished_pr_readiness_followup`; `tests/fm-branch-supervision.test.sh`.
+- Upstream: treats green checks as ready without the bot-thread settle window or the pending recheck.
+
+### away-spend-default
+
+- Intent: an away posture with no stated spend cap allows 20 concurrent workers.
+- Class: intended.
+- Seam: `FM_AFK_CONTRACT_SPEND_DEFAULT` in `bin/fm-afk-contract.sh` (shared).
+- Guard: `tests/fm-afk-contract.test.sh` default announcement case.
+- Upstream: defaults to 4 concurrent workers.
 
 ## Carried
 
@@ -325,10 +366,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### devin-rate-limit-retry
 
-- Intent: preserve supervised Devin progress across a recoverable rate limit.
+- Intent: preserve supervised worker progress across a recoverable provider limit, first for Devin and then for any worker through a generic bounded retry.
 - Class: carried.
-- Seam: fork-only `bin/fm-devin-rate-limit-retry.sh` and its calls in `bin/fm-devin-lib.sh`, with runner registration in `bin/fm-test-run.sh`.
-- Guard: `tests/fm-devin-rate-limit-retry.test.sh`; `tests/fm-devin-rate-limit-retry-live-e2e.test.sh`.
+- Seam: fork-only `bin/fm-devin-rate-limit-retry.sh` and its calls in `bin/fm-devin-lib.sh`, fork-only `bin/fm-rate-limit-retry.sh`, the fire-and-forget retry send for ships and scouts in `bin/fm-send.sh`, the provider-limit step in the stuck-crewmate-recovery skill, and runner registration in `bin/fm-test-run.sh` (shared).
+- Guard: `tests/fm-devin-rate-limit-retry.test.sh`; fork-only `tests/fm-rate-limit-retry.test.sh`; the retry cases in `tests/fm-send-inbox.test.sh`; `tests/fm-devin-rate-limit-retry-live-e2e.test.sh`.
 - Upstream: no equivalent retry owner; drop when the same bounded recovery is available.
 
 ### quota-provider-scope
@@ -351,9 +392,25 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: derive Codex maximum-effort support from the installed model catalog while preserving the fallback for unavailable catalogs.
 - Class: carried.
-- Seam: `effort_flag_for_harness` in `bin/fm-spawn.sh` and the effort row in `.agents/skills/harness-adapters/references/harness/codex.md`.
+- Seam: fork-only `bin/fm-codex-catalog-lib.sh`, plus `effort_flag_for_harness` in `bin/fm-spawn.sh`, the Codex maximum-effort validation in `bin/fm-bootstrap.sh` and `bin/fm-dispatch-resolve.sh`, its row in `docs/scripts.md`, and the effort row in `.agents/skills/harness-adapters/references/harness/codex.md` (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` catalog-supported, unsupported and unavailable-catalog cases.
 - Upstream: permits maximum effort only for its fixed model name; drop when equivalent catalog capability checks land.
+
+### muse-native-max-effort
+
+- Intent: Firstmate's `max` effort launches Muse Code's native `max`, only on Muse 1.4.6 or newer whose local model catalog advertises max for the selected or default model, and refuses before endpoint creation otherwise; explicit `ultra` stays refused.
+- Class: carried.
+- Seam: the Muse effort mapping, version gate, and catalog gate in `effort_flag_for_harness` and its Muse helpers in `bin/fm-spawn.sh`, and the effort row in `.agents/skills/harness-adapters/references/harness/muse.md` (shared).
+- Guard: `tests/fm-muse-harness.test.sh` `test_spawn_maps_effort_and_model`.
+- Upstream: maps `max` onto Muse `ultra` from the 0.1.0 vocabulary with no version or catalog gate; drop when upstream adopts the native `max` mapping with equivalent gates.
+
+### pi-custom-run-events
+
+- Intent: Pi 1.2.0 custom-triggered runs still mark the processing turn for away-mode cancellation but never enter captain dialog mirroring or consume a user wake, while Pi 1.1.0 user events without a message type keep working.
+- Class: carried.
+- Seam: the `before_agent_start` handlers in `.pi/extensions/fm-branch-supervision.ts` and `.pi/extensions/fm-primary-pi-watch.ts` (shared); the queued processing content stays queued there for upstream's later `message_start` match.
+- Guard: `tests/fm-pi-branch-extension.test.sh` custom-triggered mirror and processing-abort cases, and `tests/fm-pi-watch-extension.test.sh` custom-run wake case.
+- Upstream: reads `event.prompt` on every run; drop when upstream handles custom-triggered run events equivalently.
 
 ### raw-launch-verbatim
 
@@ -395,14 +452,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-backend-herdr.test.sh`.
 - Upstream: launches through a background shell function; drop once its launch closes the same descriptors.
 
-### bash32-timeout-owner
-
-- Intent: timeout ownership works when stock Bash has no `BASHPID`.
-- Class: carried.
-- Seam: the fallback process identity in `fm_exec_timed` in `bin/fm-timeout-lib.sh`.
-- Guard: `tests/fm-timeout-lib.test.sh`.
-- Upstream: reads `BASHPID` unconditionally; drop once it supports the same shell.
-
 ### pr-poll-metadata
 
 - Intent: unrelated well-formed task metadata does not invalidate a PR poll, and poll mismatch diagnostics identify registration drift.
@@ -411,10 +460,65 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-pr-check-security.test.sh`.
 - Upstream: accepts a fixed list of trailing metadata keys and groups mismatched polls with unauthenticated checks; drop once equivalent.
 
+### remote-job-ownership
+
+- Intent: a remote job lane verifies its serving owner before claiming, while running, and before publishing a result, so a superseded worker stops its own work, and the start path reuses a verified live owner that is still initializing.
+- Class: carried.
+- Seam: lane ownership checks and the guarded state commit in `bin/fm-remote-job-worker.sh` and `bin/fm-remote-job-lib.sh` (shared).
+- Guard: `tests/fm-remote-job.test.sh` delayed-lane, active-lane, and result-publication ownership cases.
+- Upstream: checks serving ownership at heartbeat (upstream #6431) but its lanes do not verify their serving owner; drop once lanes stop on ownership loss equivalently.
+
+### herdr-submit-diagnostics
+
+- Intent: a Herdr exit or submit that fails reports which stage failed, without logging the typed input, through the control error, its journal, and a remote restart.
+- Class: carried.
+- Seam: the submit-diagnostic hunks in `bin/backends/herdr.sh` and `bin/fm-control.sh`, and their line in `docs/herdr-backend.md` and evidence in `docs/verification/runtime-backends.md` (shared).
+- Guard: `tests/fm-backend-herdr.test.sh` `test_send_text_submit_failure_diagnostics` and `test_send_text_submit_diagnostics_reset_and_preserve_separator_payload`; `tests/fm-control-relaunch.test.sh` `test_herdr_exit_failure_diagnostics_reach_error_and_journal`; `tests/fm-secondmate-restart.test.sh` `test_remote_restart_preserves_exit_send_diagnostics`.
+- Upstream: does not report which submit stage failed; a candidate contribution.
+
+### herdr-finished-focus-lease
+
+- Intent: cleaning up a finished Herdr task keeps an attached viewer's focus only for a bounded lease instead of indefinitely.
+- Class: carried.
+- Seam: the focus-lease hunks in `bin/backends/herdr.sh` and `bin/fm-teardown.sh`, their section in `docs/herdr-backend.md`, and evidence in `docs/verification/runtime-backends.md` (shared).
+- Guard: `tests/fm-backend-herdr.test.sh` `test_finished_task_focus_lease_*` cases; `tests/fm-teardown.test.sh` `test_herdr_projection_teardown_bounds_finished_task_focus`; live, `tests/fm-herdr-attached-viewer-live-e2e.test.sh`.
+- Upstream: has no finished-task focus lease; drop once an equivalent bound lands.
+
+### watcher-takeover-bound
+
+- Intent: a supervision host taking over from a slow watcher waits the watcher's full stop allowance, so recovery does not loop.
+- Class: carried.
+- Seam: the takeover wait in `take_over_cycle` in `bin/fm-watch-arm.sh`, its note in `docs/watcher-continuity.md`, and evidence in `docs/verification/supervision.md` (shared).
+- Guard: `tests/fm-supervision-host-attended.test.sh` `test_host_takeover_waits_full_stop_bound` and its decimal and prefixed-receipt variants.
+- Upstream: waits five seconds after TERM before a plain attach, losing the handover snapshot on a slow exit; drop once its takeover honors the full stop allowance.
+
+### scout-readonly-cleanup
+
+- Intent: a scratch scout copy whose work made directories read-only is restored to owner write before return, never across another device, so it can be cleaned; a ship with unlanded read-only content is still refused.
+- Class: carried.
+- Seam: `prepare_scout_scratch_for_return` and its call in `bin/fm-teardown.sh` (shared), which runs before upstream's scratch scrub.
+- Guard: fork-only `tests/fm-teardown-scout-readonly.test.sh`.
+- Upstream: scrubs a scratch copy with `git clean` (upstream #5843), which cannot remove a read-only tree; drop once upstream restores write first.
+
+### codex-double-chevron
+
+- Intent: Codex 0.160's `»` live composer prompt reads as empty only when it holds no input.
+- Class: carried.
+- Seam: the Codex prompt glyphs in `bin/fm-composer-lib.sh` (shared).
+- Guard: `tests/fm-composer-lib.test.sh` `test_matrix_codex_double_chevron`.
+- Upstream: does not recognize `»`; drop once it does.
+
+### ci-shard-split
+
+- Intent: portable serial CI runs as eleven shards, with the supervision-host suite split into attended, away, and recovery suites, so each shard stays inside the CI job limit.
+- Class: carried.
+- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, plus the shard matrix in `.github/workflows/ci.yml`, shard weights in `bin/fm-test-run.sh`, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
+- Guard: `tests/fm-test-run.test.sh` shard cases; every integration ports upstream's new supervision-host tests into the split suites.
+- Upstream: runs nine serial shards and one supervision-host suite; drop once upstream shards equivalently.
+
 ## Incidental
 
 - `codex-animation-port`: the fork's port of upstream #4297 (`tests/fixtures/codex-animation/`), which upstream replaced with #4532; the animation, painted-braille, and ghost extraction hunks in `bin/fm-composer-lib.sh`, their cases in `tests/fm-composer-ghost.test.sh` and `tests/fm-composer-lib.test.sh`, and the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`; kept for now at a known cost.
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
-- `upstream-lint-memory-fallback`: the lint owner and its regression suite take upstream https://github.com/kunchenguid/firstmate/pull/6443 ahead of the next ancestry merge; only memory-exhausted roots retry without source following, within the original bounds, while every canonical library remains a direct lint root.
-  Drop this item once an integration contains that upstream commit.
+- `pi-package-discovery`: fork-only `tests/pi-package.sh` lets the Pi SDK suites find a Homebrew Pi install; offer it upstream.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.
