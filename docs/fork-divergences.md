@@ -404,6 +404,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-muse-harness.test.sh` `test_spawn_maps_effort_and_model`.
 - Upstream: maps `max` onto Muse `ultra` from the 0.1.0 vocabulary with no version or catalog gate; drop when upstream adopts the native `max` mapping with equivalent gates.
 
+### pi-custom-run-events
+
+- Intent: Pi 1.2.0 custom-triggered runs still mark the processing turn for away-mode cancellation but never enter captain dialog mirroring or consume a user wake, while Pi 1.1.0 user events without a message type keep working.
+- Class: carried.
+- Seam: the `before_agent_start` handlers in `.pi/extensions/fm-branch-supervision.ts` and `.pi/extensions/fm-primary-pi-watch.ts` (shared); the queued processing content stays queued there for upstream's later `message_start` match.
+- Guard: `tests/fm-pi-branch-extension.test.sh` custom-triggered mirror and processing-abort cases, and `tests/fm-pi-watch-extension.test.sh` custom-run wake case.
+- Upstream: reads `event.prompt` on every run; drop when upstream handles custom-triggered run events equivalently.
+
 ### raw-launch-verbatim
 
 - Intent: an explicit raw command avoids adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
