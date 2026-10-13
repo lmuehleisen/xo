@@ -1200,6 +1200,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on?.("before_agent_start", (event) => {
+    // Pi 1.2.0 custom runs have no user prompt; Pi 1.1.0 user events have
+    // prompt but no messageType. Only a user run can consume a user wake.
+    if (!("prompt" in event)) return;
     consumeWake(generation, event.prompt);
   });
   pi.on?.("message_start", (event) => {

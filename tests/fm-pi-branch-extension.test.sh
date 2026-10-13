@@ -1059,6 +1059,12 @@ const mainCtx = {
     getEntries: () => entries,
   },
 };
+// Pi 1.2.0 also fires this hook for custom-triggered runs. Even text that
+// looks like a request must not become a mirrored user prompt.
+await fire("before_agent_start", {
+  messageType: "custom",
+  message: { role: "custom", customType: "extension-note", content: explicitRequest, display: false },
+}, mainCtx);
 const operational = spawnSync(
   "bash",
   [`${realRoot}/bin/fm-operational-input.sh`, "encode", "watcher"],
@@ -1101,7 +1107,10 @@ for (let index = 0; index < requestedPrompts.length; index += 1) {
   if (index < longRequests.length && content.length <= 4000) {
     throw new Error(`request fixture ${index} did not exceed the mirror bound`);
   }
-  await fire("before_agent_start", { prompt: content }, mainCtx);
+  // Cover 1.2.0's discriminator and 1.1.0's undiscriminated user event.
+  await fire("before_agent_start", index % 2 === 0
+    ? { messageType: "user", prompt: content }
+    : { prompt: content }, mainCtx);
   // Pi persists this only after every before_agent_start handler has returned.
   entries.push({ type: "message", message: { role: "user", content } });
   await fire("agent_start", {}, mainCtx);
@@ -1122,6 +1131,9 @@ for (let index = 0; index < requestedPrompts.length; index += 1) {
 const mirroredCaptainText = globalThis.__fmSessions[0].ops
   .filter((op) => op.kind === "custom" && op.message.customType === "fm-main-mirror")
   .map((op) => op.message.content);
+if (mirroredCaptainText.includes(`[captain] ${explicitRequest}`)) {
+  throw new Error("a custom-triggered run entered captain mirror context");
+}
 for (const content of [unsolicitedPrompt, ...requestedPrompts]) {
   const copies = mirroredCaptainText.filter((text) => text === `[captain] ${content}`).length;
   if (copies !== 1) throw new Error(`current captain prompt was mirrored ${copies} times instead of once`);
@@ -2122,7 +2134,10 @@ if (stolen?.messages?.some((message) => message.customType === "fm-branch-proces
 }
 await fire("agent_end", {});
 aborted = false;
-await fire("before_agent_start", { prompt: pending.message.content }, abortCtx);
+await fire("before_agent_start", {
+  messageType: "custom",
+  message: processingMsg,
+}, abortCtx);
 await fire("agent_start", {}, defaultSessionCtx);
 const openedByRequest = await fire("context", { messages: [...history, processingMsg] }, abortCtx);
 if (!aborted) throw new Error("a dedicated processing turn with history was not aborted under the record");
