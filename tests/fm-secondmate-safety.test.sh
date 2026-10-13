@@ -1892,7 +1892,7 @@ EOF
   rc=$?
   set -e
 
-  [ "$rc" -eq 4 ] || fail "nested process-event restoration failure was collapsed at a recursive teardown boundary"
+  [ "$rc" -eq 5 ] || fail "nested process-event restoration failure was collapsed at a recursive teardown boundary"
   grep -F 'active waits may remain retired; recover registrations from ' "$err" >/dev/null || fail "nested restoration failure did not report its recovery backup"
   backup=$(find "$TMP_ROOT" -maxdepth 1 -type d -name '.fm-procevent-restore.*' \
     -exec test -e '{}/leaf-source.source' \; -print -quit)
@@ -1959,7 +1959,7 @@ EOF
   rc=$?
   set -e
 
-  [ "$rc" -eq 4 ] || fail "failed process-event restoration did not return its distinct recoverable status"
+  [ "$rc" -eq 5 ] || fail "failed process-event restoration did not return its distinct recoverable status"
   grep -F 'active waits may remain retired; recover registrations from ' "$err" >/dev/null || fail "failed process-event restoration did not report its recovery backup"
   backup=$(find "$TMP_ROOT" -maxdepth 1 -type d -name '.fm-procevent-restore.*' \
     -exec test -e '{}/source.source' \; -print -quit)

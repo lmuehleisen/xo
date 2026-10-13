@@ -428,7 +428,7 @@ NEW_PID=$(tracked)
 [ "$(launch_count bootout)" -eq 1 ] && [ "$(launch_count bootstrap)" -eq 1 ] && [ "$(launch_count kickstart)" -eq 1 ] \
   || { cat "$LAUNCH_LOG"; fail 'the async bootout reload did not perform exactly one bootout/bootstrap/kickstart'; }
 fm_remote_job_wait_for_probe "$REMOTE_ROOT" "$ACCOUNT_HOME" \
-  || { cat "$WORKER_LOG"; fail 'the replacement worker did not become ready after async bootout cleanup'; }
+  || { cat "$FM_TEST_WORKER_LOG"; fail 'the replacement worker did not become ready after async bootout cleanup'; }
 [ "$(tracked)" = "$NEW_PID" ] && [ "$(lock_owner)" = "$NEW_PID" ] \
   || fail 'launchd tracking and worker ownership diverged after async bootout cleanup'
 [ ! -e "$FM_TEST_REMOVING" ] || fail 'launchd removal remained pending after successful bootstrap'

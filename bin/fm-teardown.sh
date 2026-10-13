@@ -108,10 +108,11 @@
 # no longer a readable worktree is reported at once with the lost pool slot and
 # what remains. Teardown then finishes every cleanup step, reports the lost slot
 # instead of a clean return, and exits 4. Exit 4 means only "cleaned up, but a
-# returned pool slot was lost"; refusals and errors exit 1, and an invalid
-# request exits 2. A local retirement of a remote secondmate whose remote run
-# exits 4 still completes locally, forwards only the remote lost-slot warning
-# to stderr, and then exits 4.
+# returned pool slot was lost"; refusals and errors exit 1, an invalid request
+# exits 2, and a failed process-event restoration exits 5 so it is never read
+# as a completed retirement. A local retirement of a remote secondmate whose
+# remote run exits 4 still completes locally, forwards only the remote lost-slot
+# warning to stderr, and then exits 4.
 # Before destructive cleanup, teardown validates task check artifacts as
 # ordinary single-link files on the state device. It refuses and preserves
 # task state when that proof fails; otherwise it removes the task's check,
@@ -1816,7 +1817,7 @@ fi
 STALE_WORKTREE_LOCK_RETRY_WAIT_SECS=$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS
 TEARDOWN_TREEHOUSE_LOCK_REFUSED=2
 TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED=3
-TEARDOWN_PROCEVENT_RESTORE_FAILED=4
+TEARDOWN_PROCEVENT_RESTORE_FAILED=5
 
 # True when treehouse/git stderr shows the transient index.lock "File exists" race.
 # Other return failures must not enter the retry path.
