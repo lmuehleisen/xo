@@ -117,6 +117,34 @@ SH
   cat > "$fakebin/muse" <<'SH'
 #!/usr/bin/env bash
 set -u
+if [ "${1:-}" = --version ]; then
+  printf 'Muse Code %s\n' "${FM_FAKE_MUSE_VERSION:-1.4.6-R6000.1}"
+  exit 0
+fi
+effort=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --reasoning-effort)
+      shift
+      effort=${1:-}
+      ;;
+  esac
+  shift || true
+done
+if [ -n "${FM_FAKE_MUSE_ARGS_RESULT:-}" ]; then
+  case "$effort" in
+    none | minimal | low | medium | high | xhigh | ultra) ;;
+    max)
+      case "${FM_FAKE_MUSE_VERSION:-1.4.6-R6000.1}" in
+        1.4.[0-5]* | 0.*) printf 'rejected:%s\n' "$effort" > "$FM_FAKE_MUSE_ARGS_RESULT"; exit 2 ;;
+      esac
+      ;;
+    '') ;;
+    *) printf 'rejected:%s\n' "$effort" > "$FM_FAKE_MUSE_ARGS_RESULT"; exit 2 ;;
+  esac
+  printf 'accepted:%s\n' "${effort:-default}" > "$FM_FAKE_MUSE_ARGS_RESULT"
+  exit 0
+fi
 [ -n "${FM_FAKE_HARNESS_RESULT:-}" ] || exit 0
 exec "$FM_FAKE_MUSE_VERSIONED" -c 'result=$($FM_FAKE_HARNESS_PROBE); printf "%s" "$result" > "$FM_FAKE_HARNESS_RESULT"'
 SH
@@ -149,6 +177,27 @@ EOF
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$id"
 }
 
+write_muse_catalog() { # <data-home> <model> <max|unsupported> [is-default]
+  local data_home=$1 model=$2 support=$3 is_default=${4:-false} catalog_dir
+  catalog_dir="$data_home/muse/model-catalog"
+  mkdir -p "$catalog_dir"
+  jq -cn --arg model "$model" --arg support "$support" --argjson is_default "$is_default" '
+    {
+      schema_version: 1,
+      provider_id: "meta",
+      rows: [{
+        model_id: $model,
+        is_default: $is_default,
+        reasoning_effort_variants: (
+          (["minimal", "low", "medium", "high", "xhigh"]
+           + (if $support == "max" then ["max"] else [] end))
+          | map({tier: .})
+        )
+      }]
+    }
+  ' > "$catalog_dir/meta-test.json"
+}
+
 run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
   local home=$1 proj=$2 wt=$3 fakebin=$4 id=$5
   shift 5
@@ -162,6 +211,8 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
     FM_FAKE_HARNESS_PROBE="$HARNESS" \
     FM_FAKE_EXECUTE_MUSE_LAUNCH="${FM_FAKE_EXECUTE_MUSE_LAUNCH:-}" \
     FM_FAKE_HARNESS_RESULT="${FM_FAKE_HARNESS_RESULT:-}" \
+    FM_FAKE_MUSE_VERSION="${FM_TEST_MUSE_VERSION:-1.4.6-R6000.1}" \
+    FM_FAKE_MUSE_ARGS_RESULT="${FM_TEST_MUSE_ARGS_RESULT:-}" \
     FM_FAKE_WORKER_META_KEY="${FM_TEST_MUSE_WORKER_KEY-present}" \
     META_API_KEY="${FM_TEST_MUSE_KEY-test-key}" \
     XDG_CONFIG_HOME="${FM_TEST_MUSE_CONFIG_HOME-$home/xdgconfig}" \
@@ -278,31 +329,108 @@ EOF
 }
 
 test_spawn_maps_effort_and_model() {
-  local rec case_dir home proj wt fakebin id launch
+  local rec case_dir home proj wt fakebin id launch model
   local -a cases=(
     "low|--reasoning-effort 'low'"
     "medium|--reasoning-effort 'medium'"
     "high|--reasoning-effort 'high'"
     "xhigh|--reasoning-effort 'xhigh'"
-    "max|--reasoning-effort 'ultra'"
+    "max|--reasoning-effort 'max'"
   )
   local entry effort expect
   for entry in "${cases[@]}"; do
     effort=${entry%%|*}
     expect=${entry#*|}
+    model=muse-spark-1.2
+    [ "$effort" != max ] || model=muse-spark-1.3
     rec=$(make_spawn_case "effort-$effort")
     IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $rec
 EOF
+    if [ "$effort" = max ]; then
+      write_muse_catalog "$home/xdgdata" "$model" max
+    fi
     run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
-      --mode no-mistakes --yolo off --model muse-spark-1.2 --effort "$effort" >/dev/null \
+      --mode no-mistakes --yolo off --model "$model" --effort "$effort" >/dev/null \
       || fail "muse spawn with effort $effort failed"
     launch=$(cat "$home/launch.log")
     assert_contains "$launch" "$expect" "muse effort $effort did not map to '$expect'"
-    assert_contains "$launch" "--model 'muse-spark-1.2'" "muse spawn dropped the model axis"
+    assert_contains "$launch" "--model '$model'" "muse spawn dropped the model axis"
   done
-  # ultra is muse's max-class level and must be reachable ONLY through an
-  # explicit max, never as the fallback when no effort was chosen.
+  # Execute the captured launch through a fake Muse CLI that validates its
+  # argument vocabulary, so max is proven against the advertised CLI version.
+  rec=$(make_spawn_case effort-max-current-cli)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  write_muse_catalog "$home/xdgdata" muse-spark-1.3 max
+  FM_FAKE_EXECUTE_MUSE_LAUNCH=1 FM_TEST_MUSE_ARGS_RESULT="$home/muse-args-result" \
+    run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.3 --effort max >/dev/null \
+    || fail "muse spawn with max on Muse 1.4.6 failed"
+  [ "$(cat "$home/muse-args-result")" = accepted:max ] \
+    || fail "Muse 1.4.6 fake CLI rejected the max effort flag"
+
+  # A supported old pinned install cannot accept max and is refused before
+  # creating a worker endpoint.
+  rec=$(make_spawn_case effort-max-old-cli)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  write_muse_catalog "$home/xdgdata" muse-spark-1.3 max
+  local out status
+  out=$(FM_TEST_MUSE_VERSION=0.1.0-R708.1 run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.3 --effort max)
+  status=$?
+  [ "$status" -ne 0 ] || fail "muse spawn accepted max on Muse 0.1.0"
+  assert_contains "$out" 'requires Muse Code 1.4.6 or newer (found 0.1.0)' \
+    "muse max version gate did not explain the minimum supported version"
+  assert_absent "$home/launch.log" "old Muse max refusal created a worker endpoint"
+
+  # A CLI that accepts the max token can still reject it for a model whose
+  # provider catalog omits that variant. Refuse before creating an endpoint.
+  rec=$(make_spawn_case effort-max-unsupported-model)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  write_muse_catalog "$home/xdgdata" muse-spark-1.2 unsupported
+  out=$(run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.2 --effort max)
+  status=$?
+  [ "$status" -ne 0 ] || fail "muse spawn accepted max for a model without catalog support"
+  assert_contains "$out" "Muse model 'muse-spark-1.2' does not advertise max" \
+    "muse model max refusal did not explain the unsupported effort"
+  assert_absent "$home/launch.log" "unsupported Muse model max refusal created a worker endpoint"
+
+  # Unknown or missing provider metadata also fails closed for an explicit max.
+  rec=$(make_spawn_case effort-max-missing-catalog)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  out=$(run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.3 --effort max)
+  status=$?
+  [ "$status" -ne 0 ] || fail "muse spawn accepted max without model capability metadata"
+  assert_contains "$out" 'unable to verify that Muse model' \
+    "muse max catalog refusal did not explain missing capability metadata"
+  assert_absent "$home/launch.log" "unknown Muse model max refusal created a worker endpoint"
+
+  # `default` selects the local catalog's default row and keeps the model flag
+  # omitted from the Muse launch.
+  rec=$(make_spawn_case effort-max-default-model)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  write_muse_catalog "$home/xdgdata" muse-wonder-1.0 max true
+  run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model default --effort max >/dev/null \
+    || fail "muse spawn did not resolve default model support from the catalog"
+  launch=$(cat "$home/launch.log")
+  assert_not_contains "$launch" "--model 'default'" \
+    "muse default model was passed as an explicit provider model id"
+
+  # An omitted effort leaves Muse on its native default; Firstmate does not
+  # synthesize an effort level when no effort was chosen.
   rec=$(make_spawn_case effort-default)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $rec
@@ -311,7 +439,19 @@ EOF
     || fail "muse spawn without an effort axis failed"
   launch=$(cat "$home/launch.log")
   assert_not_contains "$launch" '--reasoning-effort' "muse spawn invented an effort when none was chosen"
-  pass "muse maps the shared effort vocabulary and reaches ultra only via explicit max"
+
+  rec=$(make_spawn_case effort-ultra)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+  out=$(run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" \
+    --mode no-mistakes --yolo off --model muse-spark-1.2 --effort ultra)
+  status=$?
+  [ "$status" -ne 0 ] || fail "muse spawn accepted an explicit ultra effort"
+  assert_contains "$out" 'ultra effort requires pi or pi-signed with codex-native/<model>' \
+    "muse ultra refusal did not come from native effort validation"
+  assert_absent "$home/launch.log" "muse ultra refusal created a worker endpoint"
+  pass "muse gates max by CLI version and model catalog, validates emitted efforts, omits defaults, and refuses explicit ultra"
 }
 
 # An unauthenticated muse pane does not exit: it sits on an OAuth device-code
