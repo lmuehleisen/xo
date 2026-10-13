@@ -1852,6 +1852,24 @@ expect_code 2 "$code" "--lane without a rules file is a usage error"
 pass "lane usage and configuration errors exit 2 with an actionable reason"
 cp "$BASE_RULES" "$RULES"
 
+# Kiro shares the full effort vocabulary and its native provider is inferred.
+jq -n '{model:"jev-1.13.0",answers:{rule:{type:"choice",choice:"rule_1",confidence:0.99,probabilities:{rule_1:0.99,default:0.01}}}}' > "$RESPONSE"
+jq '.providers += [{provider:"kiro",state:{status:"fresh"},quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"},selection:{status:"known",spendPriority:0.5}}]}}]' "$QUOTA" > "$QUOTA.kiro"
+mv "$QUOTA.kiro" "$QUOTA"
+for effort in low medium high xhigh max; do
+  printf '{"rules":[{"when":"Kiro work","use":{"harness":"kiro","model":"auto","effort":"%s"}}]}\n' "$effort" > "$RULES"
+  reset_log
+  TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+  expect_code 0 "$code" "native Kiro accepts effort $effort without an explicit provider"
+  assert_contains "$out" "  profile: --harness 'kiro' --model 'auto' --effort '$effort'" "Kiro profile axes survive resolution"
+done
+printf '{"rules":[{"when":"Kiro work","use":{"harness":"kiro","model":"auto","effort":"ultra"}}]}\n' > "$RULES"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+expect_code 2 "$code" "native Kiro refuses ultra effort"
+assert_contains "$err" 'each use profile effort must be supported by its harness and model' "Kiro refusal identifies an unsupported profile effort"
+cp "$BASE_RULES" "$RULES"
+pass "native Kiro provider inference and effort validation agree with bootstrap"
+
 # --- private call history, including early outcomes and write failures -------
 HISTORY="$HOME_DIR/state/dispatch-history.jsonl"
 # Every completed resolution above should have produced one parseable line;

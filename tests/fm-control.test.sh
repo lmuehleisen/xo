@@ -36,7 +36,7 @@ TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 fm_test_require_tmproot "$TMP_ROOT"
 trap 'fm_test_rm_tmproot "${TMP_ROOT:-}"' EXIT
 
-VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor muse omp devin"
+VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor muse omp devin kiro"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
@@ -51,6 +51,7 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
     pi-signed) printf '/quit\tEscape\t1\t\n' ;;
     omp) printf '/quit\tEscape\t1\t\n' ;;
     devin) printf 'exit\tEscape\t2\t\n' ;;
+    kiro) printf '/quit\tEscape\t1\t\n' ;;
     grok) printf '/exit\tC-c\t1\t\n' ;;
     kimi) printf '/exit\tEscape\t1\t\n' ;;
     cursor) printf '/exit\tEscape\t1\t\n' ;;
@@ -287,7 +288,9 @@ test_exit_types_each_harness_verified_command() {
   for harness in $VERIFIED_HARNESSES; do
     dir=$(new_case "exit-$harness")
     add_task "$dir" t1 "$harness"
-    if [ "$harness" = cursor ]; then
+    if [ "$harness" = kiro ]; then
+      alive_as "$dir" kiro-cli
+    elif [ "$harness" = cursor ]; then
       alive_as "$dir" cursor-agent
     else
       alive_as "$dir" "$harness"
@@ -309,7 +312,9 @@ test_interrupt_sends_each_harness_verified_key() {
     add_task "$dir" t1 "$harness"
     # Devin sends its second press only onto a running turn.
     [ "$harness" != devin ] || printf running > "$dir/fake/devin"
-    if [ "$harness" = cursor ]; then
+    if [ "$harness" = kiro ]; then
+      alive_as "$dir" kiro-cli
+    elif [ "$harness" = cursor ]; then
       alive_as "$dir" cursor-agent
     else
       alive_as "$dir" "$harness"
@@ -352,6 +357,19 @@ test_devin_interrupt_invalidates_busy() {
   awk -v g="$gap" 'BEGIN{exit !(g >= 0.5)}' \
     || fail "Devin's second Escape came ${gap}s after the first; under 0.5s a turn ending between them pairs into the revert picker"
   pass "fm-control Devin interrupt: second press only after the armed hint, then busy invalidated without fabricating idle"
+}
+
+test_kiro_interrupt_invalidates_busy() {
+  local dir out
+  dir=$(new_case kiro-busy)
+  add_task "$dir" t1 kiro
+  alive_as "$dir" kiro-cli
+  "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 >/dev/null
+  out=$(run_control "$dir" t1 interrupt) || fail "Kiro interrupt failed: $out"
+  assert_contains "$out" 'cancel=unconfirmed' 'Kiro cancellation must not claim semantic confirmation'
+  assert_grep 'state=unknown source=fm-interrupt' "$dir/home/state/t1.busy-state" 'cancelled Kiro turn stayed busy'
+  assert_equals Escape "$(keys_sent "$dir")" 'Kiro interrupt must send exactly one Escape'
+  pass "fm-control Kiro interrupt invalidates busy without fabricating idle"
 }
 
 # The revert-picker hazard: on an idle Devin a fast double Escape opens the
@@ -537,7 +555,7 @@ test_harness_kind_capability() {
     fm_control_harness_supports_kind "$harness" scout \
       || fail "$harness should be able to run a scout task"
   done
-  for harness in muse opencode; do
+  for harness in muse opencode kiro; do
     fm_control_harness_supports_kind "$harness" secondmate \
       && fail "$harness is worker-only and must not claim a secondmate"
   done
@@ -1179,6 +1197,7 @@ EOF
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_devin_interrupt_invalidates_busy
+test_kiro_interrupt_invalidates_busy
 test_devin_idle_interrupt_sends_one_press
 test_devin_exit_after_turn_ended_types_exit_once
 test_devin_interrupt_dismisses_revert_picker

@@ -274,7 +274,7 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson verified_harn
     elif $h == "claude" then (["low","medium","high","xhigh","max"] | index($e)) != null
     elif $h == "codex" then ((["low","medium","high","xhigh"] | index($e)) != null or ($e == "max" and ($codex_max_ok | any(. == $m))))
     elif $h == "grok" then (["low","medium","high"] | index($e)) != null
-    elif $h == "agy" then (["low","medium","high","xhigh","max"] | index($e)) != null
+    elif $h == "agy" or $h == "kiro" then (["low","medium","high","xhigh","max"] | index($e)) != null
     elif $h == "pi" or $h == "pi-signed" or $h == "omp" or $h == "muse" then (["low","medium","high","xhigh","max"] | index($e)) != null
     elif $h == "rovo" then (["low","medium","high","max"] | index($e)) != null
     elif $h == "opencode" or $h == "kimi" or $h == "cursor" or $h == "gemini" or $h == "devin" then false

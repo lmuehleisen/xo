@@ -241,6 +241,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ## Carried
 
+### kiro-worker-adapter
+
+- Intent: direct interactive Kiro CLI crewmates and scouts; README "Direct Kiro workers".
+- Class: carried.
+- Seam: shared `kiro` adapter hunks in `bin/fm-agent-process-lib.sh`, `bin/fm-bootstrap.sh`, `bin/fm-busy-lib.sh`, `bin/fm-composer-lib.sh`, `bin/fm-control-lib.sh`, `bin/fm-control.sh`, `bin/fm-dispatch-resolve.sh`, `bin/fm-harness.sh`, `bin/fm-procevent.sh`, `bin/fm-publish-judge.sh`, `bin/fm-quota-axi-lib.sh`, `bin/fm-send.sh`, `bin/fm-spawn.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, and `bin/fm-watch.sh`, the verified-adapter enum in `AGENTS.md`, the harness-adapters router and common control reference, the per-task-home row in the operational-home-layout skill, and their configuration, architecture, tmux, trace, inventory, and runtime-backend documentation; fork-only `.agents/skills/harness-adapters/references/harness/kiro.md` and `docs/verification/kiro.md`.
+- Guard: fork-only `tests/fm-kiro-harness.test.sh` and opt-in `tests/fm-kiro-signals-live-e2e.test.sh`; Kiro cases in `tests/fm-busy-adapter-wiring.test.sh`, `tests/fm-composer-lib.test.sh`, `tests/fm-control.test.sh`, `tests/fm-bootstrap.test.sh`, and `tests/fm-dispatch-resolve.test.sh`.
+- Upstream: the [direct Kiro adapter proposal](https://github.com/kunchenguid/firstmate/pull/6808) is open; this port keeps its V2 launch and hook shape, adding macOS verification, native-marker cancellation recovery, control invalidation, and routing mappings, at the cost of cross-file adapter registration and a localized marker reader; drop the corresponding carried hunks when upstream provides equivalent behavior.
+
 ### devin-adapter-mechanics
 
 - Intent: the fork's own Devin adapter, which predates upstream's; converged onto upstream's private config writer and its common portable suite and live guard (the change that added `tests/fm-devin-fork-harness.test.sh`).

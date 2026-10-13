@@ -38,17 +38,19 @@
 #                    SessionEnd close)
 #   agy-hook         Agy PreInvocation opens; fullyIdle Stop closes (interrupt
 #                    has no Stop and deliberately leaves the record busy)
+#   kiro-hook        Kiro V2 agent-config hooks (userPromptSubmit opens; stop
+#                    closes); its per-turn stop hook keeps the turn-ended touch
 #   codex-hook, codex-appserver  reserved: Codex, gated by
 #                    fm_busy_codex_semantic_source
 #   kimi-wire, kimi-hook  reserved: standalone Kimi, gated by fm_busy_kimi_verified
 # Firstmate-owned sources accepted for every converted adapter:
 #   fm-spawn         the launch-brief turn seeded at spawn
 #   fm-interrupt     the legacy Claude fm-send --key Escape idle event, and the
-#                    unknown invalidation fm-control writes after a Devin interrupt
+#                    unknown invalidation fm-control writes after a Devin or Kiro interrupt
 #   fm-recovery      a documented recovery reset after relaunch
 # Classifier-only sources (never written into a record):
 #   endpoint-gone, herdr-native, grok-regex, rovo-regex, muse-session-log,
-#   cursor-transcript, missing, malformed, gen-mismatch, source-mismatch,
+#   cursor-transcript, kiro-turn-marker, missing, malformed, gen-mismatch, source-mismatch,
 #   kimi-unverified, codex-unverified, capture-failed, no-target, launch-prompt
 #
 # Classification (fm_busy_classify): busy | idle | unknown | dead, always
@@ -68,6 +70,8 @@
 #      this way, however its rendered tail looks, so a genuinely working turn
 #      keeps its ordinary busy verdict and the general BUSY_TURN_MAX_SECS
 #      bound is unchanged.
+#      A busy kiro-hook record with a bound native turn is refined by
+#      fm_busy_kiro_turn_state; missing bindings retain the hook verdict.
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
 #      muse session-log and cursor transcript pull sources, then the Grok/Rovo
@@ -123,6 +127,12 @@
 # verification, so Codex classifies unknown codex-unverified rather than
 # falling back to idle, and fm-spawn installs no Codex busy wiring.
 # docs/verification/supervision.md owns the evidence for both probes.
+#
+# Kiro uses its hook record, with an optional native turn-marker pull fallback
+# for a positively bound turn. The marker binding is scoped to the hook's own
+# process ancestry, busy generation and sequence; its disappearance settles a
+# stale busy hook only while the same process owner and readable directory remain.
+# Missing bindings keep the hook verdict, and rendered text is delivery-only.
 #
 # Sourcing: set -u and set -e safe; no subshell-unfriendly globals.
 
@@ -238,6 +248,7 @@ fm_busy_sources_for_harness() {  # <harness>
     gemini*) adapter=gemini-hook ;;
     agy) adapter=agy-hook ;;
     devin) adapter=devin-hook ;;
+    kiro) adapter=kiro-hook ;;
     pi|pi-signed) adapter=pi-ext ;;
     omp) adapter=omp-ext ;;
     kimi*)
@@ -1000,10 +1011,86 @@ fm_busy_launch_prompt_parked() {  # <harness>
   esac
 }
 
+# Bind only a marker owned by this hook's process ancestry, never another Kiro
+# session. The busy sequence ties the binding to this exact submitted turn;
+# the process birth value prevents a recycled pid from proving idle. jq is
+# optional: without a proven binding the classifier keeps the hook verdict.
+fm_busy_kiro_bind_turn() {  # <state-dir> <id> <gen> <hook-parent-pid>
+  local state=$1 id=$2 gen=$3 pid=$4 dir=${KIRO_TURN_MARKER_DIR:-}
+  local record seq marker selected='' born tmp current
+  command -v jq >/dev/null 2>&1 || return 1
+  [ -d "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ] || return 1
+  current=$(fm_busy_current_gen "$state" "$id") || return 1
+  [ "$current" = "$gen" ] || return 1
+  record=$(fm_busy_record_read "$state" "$id") || return 1
+  case "$record" in 'busy kiro-hook user-prompt-submit '*) seq=${record##* } ;; *) return 1 ;; esac
+  for _ in 1 2 3 4 5 6 7 8; do
+    case "$pid" in ''|*[!0-9]*|0|1) break ;; esac
+    for marker in "$dir/$pid"-*.json; do
+      [ -f "$marker" ] || continue
+      jq -e --argjson pid "$pid" '
+        .pid == $pid and .engine == "v2" and .session_interface == "interactive_cli"
+        and (.turn_started_at_ms | type) == "number"
+        and (.owner_started_at_s | type) == "number"
+      ' "$marker" >/dev/null 2>&1 || return 1
+      [ -z "$selected" ] || return 1
+      selected=$marker
+    done
+    if [ -n "$selected" ]; then
+      born=$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null) || return 1
+      [ -n "$born" ] || return 1
+      tmp=$(mktemp "$state/$id.kiro-home/turn-marker.$gen.XXXXXX") || return 1
+      if jq -n --arg gen "$gen" --arg seq "$seq" --arg pid "$pid" \
+        --arg born "$born" --arg path "$selected" \
+        '{gen:$gen,seq:$seq,pid:$pid,born:$born,path:$path}' > "$tmp"; then
+        mv -f "$tmp" "$state/$id.kiro-home/turn-marker.$gen.json"
+        return $?
+      fi
+      rm -f "$tmp"
+      return 1
+    fi
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+  return 1
+}
+
+# A disappeared, previously bound marker means idle only while the same owner
+# remains alive and its marker directory is readable. Crashes, malformed data,
+# stale generations/sequences and unobserved turns never manufacture idle.
+fm_busy_kiro_turn_state() {  # <state-dir> <id> <busy-seq>
+  local state=$1 id=$2 seq=$3 gen binding data pid born path dir marker live
+  command -v jq >/dev/null 2>&1 || { printf unbound; return; }
+  gen=$(fm_busy_current_gen "$state" "$id") || { printf unbound; return; }
+  binding="$state/$id.kiro-home/turn-marker.$gen.json"
+  [ -f "$binding" ] || { printf unbound; return; }
+  data=$(jq -er --arg gen "$gen" --arg seq "$seq" '
+    select(.gen == $gen and .seq == $seq)
+    | select((.pid | test("^[0-9]+$")) and (.born | type) == "string" and (.path | type) == "string")
+    | [.pid,.born,.path] | @tsv
+  ' "$binding" 2>/dev/null) || { printf unbound; return; }
+  IFS=$'\t' read -r pid born path <<< "$data"
+  live=$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null) || { printf unknown; return; }
+  [ -n "$born" ] && [ "$live" = "$born" ] || { printf unknown; return; }
+  dir=${path%/*}
+  case "${path##*/}" in "$pid"-[0-9]*.json) ;; *) printf unknown; return ;; esac
+  [ -d "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ] || { printf unknown; return; }
+  for marker in "$dir/$pid"-*.json; do
+    [ -e "$marker" ] || [ -L "$marker" ] || continue
+    jq -e --argjson pid "$pid" '
+      .pid == $pid and .engine == "v2" and .session_interface == "interactive_cli"
+      and (.turn_started_at_ms | type) == "number"
+      and (.owner_started_at_s | type) == "number"
+    ' "$marker" >/dev/null 2>&1 || { printf unknown; return; }
+    printf busy
+    return
+  done
+  printf idle
+}
+
 # fm_busy_classify: semantic classification for a task whose endpoint the
 # caller has already established as present. Prints "<verdict> <source>":
-# busy|idle|unknown plus the producing source (see header). Never probes
-# process state. <tail40> is optional pre-captured plain output: the grok and
+# busy|idle|unknown plus the producing source (see header). Endpoint liveness
+# remains caller-owned; the Kiro pull fallback checks only its bound owner identity. <tail40> is optional pre-captured plain output: the grok and
 # rovo arms capture it themselves through fm_backend_capture when it is absent
 # (or report unknown capture-failed if that is unavailable too), while the
 # launch-prompt backstop below has no capture fallback of its own - without a
@@ -1053,6 +1140,13 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
       if [ "$r_state" = busy ] && [ "$r_source" = fm-spawn ] && [ -n "$tail40" ] \
         && printf '%s' "$tail40" | fm_busy_launch_prompt_parked "$harness"; then
         printf 'unknown launch-prompt'
+      elif [ "$harness" = kiro ] && [ "$r_state" = busy ] && [ "$r_source" = kiro-hook ]; then
+        case "$(fm_busy_kiro_turn_state "$state" "$id" "${out##* }")" in
+          busy) printf 'busy kiro-turn-marker' ;;
+          idle) printf 'idle kiro-turn-marker' ;;
+          unknown) printf 'unknown kiro-turn-marker' ;;
+          *) printf '%s %s' "$r_state" "$r_source" ;;
+        esac
       else
         printf '%s %s' "$r_state" "$r_source"
       fi
