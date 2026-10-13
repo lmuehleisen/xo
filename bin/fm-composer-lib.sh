@@ -1572,11 +1572,53 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
   [ -z "${blocks//▀/}" ]
 }
 
+# fm_composer_leftbar_idle_evidence: positive proof that the bottom-most V2
+# left-bar composer is idle, for a caller deciding what an unknown verdict
+# allows; it never changes a verdict. The composer must show V2's complete
+# idle placeholder line, drawn only while the input is empty, between blank
+# rows, end in the mode/model footer and sit on the half-block floor. The
+# whole line must match, so a draft that merely starts with the placeholder
+# text refuses; a placeholder cut short by a narrow pane refuses too. Rows
+# below the floor stay unread, so an unfamiliar status row there cannot
+# withhold proof, but a permission prompt or a dialog title (`... esc`)
+# anywhere on the screen refuses.
+FM_COMPOSER_DIALOG_RE_DEFAULT='Permission required|Allow once|Always allow|[[:space:]]esc$'
+FM_COMPOSER_LEFTBAR_PLACEHOLDER_RE_DEFAULT='^Ask anything…( "[^"]+")?$'
+fm_composer_leftbar_idle_evidence() {  # <screen>
+  local plain first last row content placeholder=0
+  plain=$(printf '%s\n' "$1" | fm_composer_strip_ansi)
+  ! printf '%s\n' "$plain" | LC_ALL=C sed 's/[[:space:]]*$//' |
+    LC_ALL=C grep -qE "$FM_COMPOSER_DIALOG_RE_DEFAULT" || return 1
+  _fm_composer_scan_screen "$plain" ''
+  first=$FM_COMPOSER_SCAN_LEFTBAR_START
+  last=$FM_COMPOSER_SCAN_LEFTBAR_END
+  [ "$first" -ge 0 ] || return 1
+  content=$(_fm_composer_screen_row "$((last + 1))" "$plain")
+  fm_composer_normalize_trim_var content
+  _fm_composer_leftbar_floor_row "$content" || return 1
+  row=$first
+  while [ "$row" -le "$last" ]; do
+    content=$(_fm_composer_row_content "$(_fm_composer_screen_row "$row" "$plain")" 0)
+    content=${content#┃}
+    fm_composer_normalize_trim_var content
+    if [ "$row" -eq "$last" ]; then
+      fm_composer_idle_matches "$content" "${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}" sensitive || return 1
+    elif fm_composer_idle_matches "$content" "$FM_COMPOSER_LEFTBAR_PLACEHOLDER_RE_DEFAULT" sensitive; then
+      placeholder=1
+    fi
+    row=$((row + 1))
+  done
+  [ "$placeholder" = 1 ] && [ "$(_fm_composer_classify_leftbar "$plain" 0 "$first" "$last")" = empty ]
+}
+
 # V2 home-screen tail after the proven location strip: blanks, optionally
-# ending in one version row, optionally with V2's plugin-load notification.
+# ending in one status row. That row is a right-aligned version label, led by
+# V2's MCP count (`⊙ 1 MCP /mcps`, or `⊙ 2 MCP failed`, from 2.0.27 whenever
+# an MCP server is configured) and/or its plugin-load notification. Below 64
+# columns V2 drops the version and the command hints, leaving only a notice.
 # A contiguous row is never furniture.
 _fm_composer_leftbar_tail_is_furniture() {  # <tail>
-  local tail=$1 trimmed nonblank first
+  local tail=$1 trimmed nonblank first notice version
   trimmed=$tail
   fm_composer_normalize_trim_var trimmed
   [ -n "$trimmed" ] || return 0
@@ -1585,7 +1627,9 @@ _fm_composer_leftbar_tail_is_furniture() {  # <tail>
   [ -z "$first" ] || return 1
   nonblank=$(printf '%s\n' "$tail" | LC_ALL=C grep -vE '^[[:space:]]*$')
   case "$nonblank" in *$'\n'*) return 1 ;; esac
-  printf '%s\n' "$nonblank" | LC_ALL=C grep -qE '^([[:space:]]{8,}|[[:space:]]*⊙ [1-9][0-9]* plugins? failed /plugins[[:space:]]{8,})[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$'
+  notice='(⊙ [0-9]+ MCP( failed)?( /mcps)?|⊙ [1-9][0-9]* plugins? failed( /plugins)?)'
+  version='[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+'
+  printf '%s\n' "$nonblank" | LC_ALL=C grep -qE "^($version|[[:space:]]*$notice([[:space:]]{2,}$notice)?($version)?)[[:space:]]*\$"
 }
 
 # _fm_composer_row_is_composer_furniture: 0 when <trimmed-row> is DEMONSTRABLY

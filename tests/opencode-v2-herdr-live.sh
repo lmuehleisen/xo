@@ -250,6 +250,7 @@ while [ "$i" -lt 90 ]; do
 done
 [ "$i" -lt 90 ] || fail 'manual permission prompt absent'
 [ "$(fm_backend_composer_state herdr "$HERDR_LAB_SESSION:$PERM_PANE")" != empty ] || fail 'permission prompt falsely allows typed input'
+! fm_composer_leftbar_idle_evidence "$(cat "$LAB/permission.txt")" || fail 'permission prompt read as an idle composer'
 # Escape never selects Allow once or Always allow; teardown owns final stop.
 PATH="$ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane send-keys "$PERM_PANE" escape >/dev/null
 pass "$VERSION: manual permission prompt refuses typed delivery; no permission accepted"

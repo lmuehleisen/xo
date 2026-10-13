@@ -2784,21 +2784,24 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 
 ## OpenCode V2
 
-Verified on 2026-10-06 with `opencode v2.0.18` on macOS and a private tmux server.
-The supported launch floor is V2 2.0.18; V1 launch is refused before worker allocation.
+Verified on 2026-10-12 with `opencode v2.0.27` on macOS and a private tmux server.
+The supported launch floor is V2 2.0.18 with no upper bound; V1 launch is refused before worker allocation.
+`OPENCODE_VERIFIED_VERSION` in `bin/fm-harness.sh` names the newest release this guard has passed, and a spawn on a newer release or on any prerelease launches with a notice; bump it together with a refreshed record here.
 Refresh the worker evidence with:
 
 ```sh
-FM_OPENCODE_LIVE_E2E=1 bash tests/fm-opencode-primary-live-e2e.test.sh
+FM_OPENCODE_LIVE_BACKEND=tmux FM_OPENCODE_LIVE_MODEL=opencode/muse-spark-1.3-contributor-free FM_OPENCODE_LIVE_E2E=1 bash bin/fm-test-run.sh tests/fm-opencode-primary-live-e2e.test.sh
 ```
 
 The V2 branch uses `tests/opencode-v2-live.sh` with an independent scratch repository, disposable profile, and `opencode/muse-spark-1.3-contributor-free`.
-The displayed model was `Build auto · Muse Spark 1.3 Free OpenCode Zen`.
+The displayed model was `Build auto · Muse Spark 1.3 Free OpenCode`; 2.0.18 rendered the provider as `OpenCode Zen`.
 The exact terminal result was:
 
 ```text
-ok - opencode v2.0.18: fresh home version label, cursorless styled/plain readiness and draft refusal
-ok - opencode v2.0.18: fresh spawn, bare relaunch model, preserved work, brief/status, busy/idle, turn-end, cursorless composer, durable steer, interrupt, exit and failed-restart retention
+ok - opencode v2.0.27: fresh home version label and MCP status, cursorless styled/plain readiness and draft refusal
+ok - opencode v2.0.27: manual permission prompt refuses typed delivery; no permission accepted
+ok - opencode v2.0.27: native skill tool loads home-local and worktree override skills without project config
+ok - opencode v2.0.27: fresh spawn, bare relaunch model, preserved work, brief/status, busy/idle, turn-end, cursorless composer, durable steer, interrupt, exit and failed-restart retention
 ```
 
 The guard proves the real spawn template and per-task plugin load, semantic busy/idle settlement, turn-end notification, ancestry detection, tmux liveness, cursor-aware and cursorless idle classification, draft classification, durable inbox acknowledgement, interruption of a running turn, stopped-agent verification, and bare `fm-spawn.sh --relaunch` in the same scratch copy.
@@ -2807,18 +2810,23 @@ Only scratch allocation is stubbed; fresh endpoint creation, launch, readiness, 
 The control command reports `cancel=unconfirmed`; the live guard separately requires the plugin's idle event before proceeding.
 [Supervision verification](supervision.md#opencode-v2-primary-boundary) owns the separate portable evidence that primary modules preserve their legacy V1 exports.
 The V2 composer includes `Build auto`, a location/status strip below its half-block floor, and sidebar content alongside the input rows.
-The guard exercises the fresh home screen before submitting a prompt, requiring both styled and plain cursorless readiness and preserving a typed draft as pending.
+The guard exercises the fresh home screen before submitting a prompt, requiring both styled and plain cursorless readiness and preserving a typed draft as pending, once bare and once with a configured MCP server that never starts.
 Its separated, indented version label is furniture only behind the proven composer and shortcut strip; extra output still refuses.
 The running-turn strip can pair `esc interrupt` with `ctrl+p commands` without a path, and the guard verifies cursorless readiness during a real running turn.
 Its location strip can put the path before or after `ctrl+p commands`, including paths shortened with `…/` or rendered relative to home with `~/`; cursorless classification requires the bounded floor and mode/model footer for either order.
-The separated version row can also contain the exact plugin-load notification; a permission dialog, notification popup, additional output, or real draft still refuses typed delivery.
+From 2.0.27 the separated version row leads with the MCP server count whenever one is configured (`⊙ 1 MCP /mcps`, or `⊙ 1 MCP failed /mcps`), and it can also contain the exact plugin-load notification; below 64 columns the row keeps only those notices.
+A permission dialog, notification popup, additional output, or real draft still refuses typed delivery.
+A settled launch screen the classifier still cannot read no longer stops a spawn when it positively shows an idle composer: the complete idle placeholder line between blank input rows, the mode/model footer, the half-block floor, and no permission prompt or dialog title anywhere (`fm_composer_leftbar_idle_evidence` in `bin/fm-composer-lib.sh`).
+`bin/fm-spawn.sh` then submits through its guarded path with a notice once the agent is alive; a draft, permission prompt, dialog, or pending verdict still refuses.
+The guard requires that evidence on both fresh homes and its absence on their drafts.
+From a profile without `--auto` it also raises a real shell permission prompt, which replaces the composer with `△ Permission required` above an `Allow once   Always allow   Reject` row, and requires both the classifier and the evidence to refuse it before Escape rejects it.
 Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-control-relaunch.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-sessionstart-nudge.test.sh`.
 This tmux run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.
 V2 primary operation is deferred as documented by the [harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration).
 
 ### External worker skills
 
-Verified on 2026-10-09 with `opencode v2.0.18`, a disposable profile, a private tmux server, and `opencode/muse-spark-1.3-contributor-free`:
+Verified on 2026-10-09 with `opencode v2.0.18` and again on 2026-10-12 with `opencode v2.0.27`, a disposable profile, a private tmux server, and `opencode/muse-spark-1.3-contributor-free`:
 
 ```sh
 FM_OPENCODE_LIVE_BACKEND=tmux FM_OPENCODE_LIVE_MODEL=opencode/muse-spark-1.3-contributor-free FM_OPENCODE_LIVE_E2E=1 bash bin/fm-test-run.sh tests/fm-opencode-primary-live-e2e.test.sh
@@ -2827,7 +2835,7 @@ FM_OPENCODE_LIVE_BACKEND=tmux FM_OPENCODE_LIVE_MODEL=opencode/muse-spark-1.3-con
 The added result line was:
 
 ```text
-ok - opencode v2.0.18: native skill tool loads home-local and worktree override skills without project config
+ok - opencode v2.0.27: native skill tool loads home-local and worktree override skills without project config
 ```
 
 The guard creates a home-only skill and a duplicate skill in its Firstmate code-root fixture, then launches the worker in a separate scratch project with an overriding definition of the duplicate.
