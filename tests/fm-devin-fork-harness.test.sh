@@ -797,7 +797,13 @@ EOF
   : "$case_dir"
   run_devin_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout >/dev/null
   plant_legacy_devin_wiring "$wt"
+  # The project's rule is committed: a scratch or forced copy's untracked files
+  # are scrubbed before return, so only tracked content is project-owned here.
   printf 'project rule\n' > "$wt/.devin/rules/project-rule.md"
+  git -C "$wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    add .devin/rules/project-rule.md
+  git -C "$wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm "Track a project devin rule"
   run_devin_teardown "$home" "$fakebin" "$id" --force >/dev/null \
     || fail "teardown of the devin task should succeed"
   [ ! -e "$wt/.devin/config.local.json" ] || fail "teardown must remove .devin/config.local.json"

@@ -37,6 +37,7 @@ Use this repository when cloning for these changes; the upstream project overvie
 - **No required `no-mistakes`:** workers run relevant tests and lint directly, then deliver through `direct-PR` or `local-only`; legacy no-mistakes delivery tokens map to `direct-PR` unless a home opts in through `config/no-mistakes`, so local work needs no pipeline.
 - **Reviewed worker permissions:** Claude and Codex launches default to automatic permission review, with a manual-review option, instead of bypassing permissions or the sandbox; see [worker permission modes](docs/configuration.md#worker-permission-mode-configcrew-permissions).
   agy crewmates and scouts in Auto use the policy layer and judge by default; `--no-agy-bypass` selects `accept-edits`, while Manual keeps agy's review mode. Devin workers stay in reviewed mode behind their own hook, never in bypass.
+- **Direct Kiro workers:** installed `kiro-cli` runs interactive V2 crewmates and scouts with isolated configuration and native busy-state hooks.
 - **Remote-less local work:** explicit `local-only` ship tasks can start from local `main` or `master` without a remote, while rejecting dirty or divergent task bases.
 - **Away watchdog outside tmux:** while away, a detached watchdog alarms through the [wedge-alarm channels](docs/wedge-alarm.md) if the fleet's tmux server or the away watcher stops, and the return brief names what stopped and when.
 - **Durable approval waits:** completed ship work awaiting merge approval remains tracked and visible in Ops, with quiet supervision after the finished worker is verified stopped.
@@ -264,6 +265,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/gerrit-forge-integration.md](docs/gerrit-forge-integration.md) - maintainer architecture for the forge axis: why change-shaped review is not a forge variant, the mode/forge/shape composition test, and where responsibility for forge mechanics sits.
 - [docs/gitlab-merge-watch.md](docs/gitlab-merge-watch.md) - maintainer verification for watching and merging GitLab merge requests on arbitrary instances.
 - [docs/gerrit-change-watch.md](docs/gerrit-change-watch.md) - maintainer verification for watching Gerrit changes read-only, and why the merge path refuses one.
+- [docs/forgejo-tea-integration.md](docs/forgejo-tea-integration.md) - maintainer verification for watching and merging Forgejo/Gitea pull requests via `tea`.
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's current "no turn ends blind" backstop, scope, loop safety, and compatibility limits.
 - [docs/verification/supervision.md](docs/verification/supervision.md) - active maintainer verification for session-start, guard, continuity, and wedge integrations.
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode V1, Pi and `pi-signed`, omp, Grok, Cursor, Agy, and unknown harness fallback.

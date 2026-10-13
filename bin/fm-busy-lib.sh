@@ -104,11 +104,37 @@
 # guards in bin/fm-composer-lib.sh match rendered footers for submit
 # acknowledgement and away-mode supervisor injection only; neither is a
 # recorded worker state source.
+#
+# The muse pull source is semantic, not rendered: it folds muse's own durable
+# session event log. It has no writer, no arm, and no gen, because
+# muse's default build ships no hook or plugin surface that could push events
+# (its plugin engine reports "plugins are not available in this build" without
+# MUSE_EXPERIMENTAL_PLUGINS). Nothing is armed for muse for the same reason
+# standalone Kimi is not: a seeded record with no writer could never be
+# cleared. See fm_busy_muse_run_state for the fold.
+#
+# The cursor pull source works the same way and for the same reason: it folds
+# cursor's own durable per-conversation transcript, which brackets each turn
+# with a role:user open and a typed turn_ended close that covers aborts. It has
+# no writer, no arm, and no gen, so nothing is seeded that could never be
+# cleared. See fm_busy_cursor_turn_state for the fold. Cursor's rendered
+# `ctrl+c to stop` footer is deliberately not a state source here.
+#
+# Codex negotiation (fm_busy_codex_appserver_observable,
+# fm_busy_codex_hooks_verified): the approved contract prefers Codex's
+# app-server turn lifecycle with capability negotiation, and sanctions its
+# stable lifecycle hooks as the intermediate. Neither has complete live
+# verification, so Codex classifies unknown codex-unverified rather than
+# falling back to idle, and fm-spawn installs no Codex busy wiring.
+# docs/verification/supervision.md owns the evidence for both probes.
+#
 # Kiro uses its hook record, with an optional native turn-marker pull fallback
 # for a positively bound turn. The marker binding is scoped to the hook's own
 # process ancestry, busy generation and sequence; its disappearance settles a
 # stale busy hook only while the same process owner and readable directory remain.
 # Missing bindings keep the hook verdict, and rendered text is delivery-only.
+#
+# Sourcing: set -u and set -e safe; no subshell-unfriendly globals.
 
 FM_BUSY_LIB_VERSION=v1
 
