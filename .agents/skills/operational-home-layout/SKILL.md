@@ -67,6 +67,7 @@ state/               runtime records and signals; gitignored
   <id>.busy-state <id>.busy-gen   semantic busy-state record (one line, atomically replaced) and its per-incarnation gen sidecar; bin/fm-busy-event.sh is the only writer and bin/fm-busy-lib.sh owns the record format and classification; arming again replaces the previous incarnation so late events carrying its gen are rejected as stale; removed by retire and teardown
   <id>.grok-turnend-token   firstmate-owned grok hook registry token for the task; removed by teardown
   <id>.kimi-turnend-token   firstmate-owned Kimi hook registry token for the task; removed by teardown
+  <id>.kiro-home/    per-task KIRO_HOME with the agent config, generated hooks, trust setting, sessions, and generation-bound native turn-marker binding; removed whole by teardown
   <id>.gemini-settings.json  firstmate-owned per-task Gemini settings carrying the busy-state and turn-end hooks, reached through GEMINI_CLI_SYSTEM_SETTINGS_PATH so nothing is written into the project's own .gemini/; removed by teardown
   <id>.devin-permission.json <id>.devin-permission-pending/ <id>.devin-permission-cache/  firstmate-owned per-task Devin permission policy file, pending-escalation markers, and approved-verdict cache read by bin/fm-devin-permission-policy.sh's hooks; removed by teardown
   devin-permission-log.jsonl  home-wide append-only log of every Devin permission refusal, approval, judge verdict, and escalation outcome (bin/fm-devin-permission-policy.sh); safe to delete

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -278,6 +278,11 @@ harness_process_verdict() {  # <pid>
     # two layers agree on the same harness, so detect_own keeps either verdict.
     agy) echo "comm agy"; return ;;
     devin) echo "comm devin"; return ;;
+    # Kiro's macOS process chain includes kiro-cli-chat (ACP and host) plus
+    # kiro-cli; the upstream AL2 wrapper uses kiro-cli. Anchor both names rather
+    # than searching argv for kiro. macOS exports KIRO_* variables, but the
+    # markerless AL2 build still needs structural ancestry for identity.
+    kiro-cli|kiro-cli-chat) echo "comm kiro"; return ;;
     node*|python*)
       # Bare interpreter: match the harness name in its script path.
       args=$(ps -o args= -p "$pid" 2>/dev/null)

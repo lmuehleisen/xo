@@ -51,6 +51,9 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
     # way (verified, devin 3000.11.1: comm=devin), so a `*devin*` glob never
     # claims an unrelated command.
     agy|devin) printf 'agent' ;;
+    # Kiro's launcher and macOS chat backend have exact native names. A glob
+    # would claim unrelated commands containing kiro; the live guard owns proof.
+    kiro-cli|kiro-cli-chat) printf 'agent' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
     *)
       if fm_harness_path_name "$path" >/dev/null || fm_harness_path_name "$argv0" >/dev/null; then
