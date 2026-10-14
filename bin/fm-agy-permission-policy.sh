@@ -351,7 +351,7 @@ evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
     view_file|grep_search|list_dir|write_to_file|replace_file_content)
       local fields
       fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive}')
-      credential_native "$fields" "${AGY_CWD:-$WORKTREE}"
+      credential_native "$fields" "$WORKTREE"
       ;;
   esac
   case "$TOOL" in

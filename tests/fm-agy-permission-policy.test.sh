@@ -182,7 +182,7 @@ test_refusal_leaves_safe_commands_alone() {
   done <<'EOF'
 git push -u origin fm/x
 command -v sudo
-grep -rn sudo tests
+grep -n sudo README.md
 cat README.md
 git log --oneline -5
 bin/fm-lint.sh

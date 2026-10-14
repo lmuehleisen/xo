@@ -6,7 +6,7 @@ credential_hook() {  # <policy> <tool-kind> <fields-json> <step>
   local policy=$1 kind=$2 fields=$3 step=$4 adapter payload tool event
   adapter=${POLICY_SH##*/}
   if [ "$adapter" = fm-devin-permission-policy.sh ]; then
-    case "$kind" in exec) tool=exec ;; read) tool=read ;; search) tool=grep ;; write) tool=edit ;; list) tool=glob ;; esac
+    case "$kind" in exec) tool='exec' ;; read) tool='read' ;; search) tool='grep' ;; write) tool=edit ;; list) tool=glob ;; esac
     event=permission-request
     payload=$(jq -nc --arg tool "$tool" --argjson fields "$fields" --arg step "$step" \
       '{tool_name:$tool,tool_input:$fields,tool_use_id:$step,session_id:"fixture"}')
@@ -42,8 +42,13 @@ credential_allowed() {
 }
 
 test_shared_credential_access() {
-  local policy dir wt fields command step=1000 entry grants log judge_calls
+  local policy dir wt fields command kind step=1000 entry grants log judge_calls
+  # shellcheck disable=SC2016 # This is the synthetic judge's script body.
   policy=$(new_case credential-classifier 'printf "%s\n" "$@" >> "$CREDENTIAL_JUDGE_PROMPT"
+while [ $# -gt 0 ]; do
+  if [ "$1" = --prompt-file ]; then cat "$2" >> "$CREDENTIAL_JUDGE_PROMPT"; shift; fi
+  shift
+done
 printf "called\n" >> "$CREDENTIAL_JUDGE_CALLS"
 echo "APPROVE: synthetic ordinary effect"')
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
@@ -115,7 +120,9 @@ EOF
   credential_hook "$policy" search "$fields" "$step"; step=$((step + 1))
   credential_held || fail "native recursive search must hold an unproved content footprint"
   grants=$(jq -nc --arg path "$wt/registered" '{credential_env_files:[$path]}')
-  printf '\n```firstmate-grants\n%s\n```\n' "$grants" >> "$dir/data/t1/brief.md"
+  local fence
+  fence=$(printf '\140\140\140')
+  printf '\n%sfirstmate-grants\n%s\n%s\n' "$fence" "$grants" "$fence" >> "$dir/data/t1/brief.md"
   "$POLICY_SH" repin-grants "$policy" >/dev/null || fail "repin synthetic grants"
   credential_exec "$policy" 'set -a; source registered; set +a' "$step"; step=$((step + 1))
   credential_allowed || fail "exact authorized loading must stay usable: $OUT"
@@ -130,12 +137,20 @@ EOF
   credential_exec "$policy" "python3 -c 'print(1)'" "$step"; step=$((step + 1))
   credential_allowed || fail "ordinary unresolved execution must still reach the judge"
   [ -s "$CREDENTIAL_JUDGE_CALLS" ] || fail "ordinary residue never reached the judge"
+  fields='{"file_path":"new-resource","AbsolutePath":"new-resource"}'
+  # Force a prior ordinary cacheable verdict through the public hook by
+  # using a supported edit outside the task roots, then register that file.
+  fields=$(jq -nc --arg path "$dir/new-resource" '{file_path:$path,AbsolutePath:$path}')
+  if [ "${POLICY_SH##*/}" = fm-devin-permission-policy.sh ]; then
+    credential_hook "$policy" write "$fields" "$step"; step=$((step + 1))
+    credential_allowed || fail "ordinary fixture edit must reach the judge"
+  fi
   judge_calls=$(wc -l < "$CREDENTIAL_JUDGE_CALLS")
   # A live addition must veto a prior ordinary judge approval immediately.
-  jq --arg path "$wt/new-resource" '.revision="fixture-2" | .entries += [{path:$path,scope:"file",kind:"credential",use_modes:[],provenance:"synthetic addition"}]' \
+  jq --arg path "$dir/new-resource" '.revision="fixture-2" | .entries += [{path:$path,scope:"file",kind:"credential",use_modes:[],provenance:"synthetic addition"}]' \
     "$dir/config/declared-credentials.json" > "$dir/config/registry.new"
   mv "$dir/config/registry.new" "$dir/config/declared-credentials.json"
-  credential_exec "$policy" "python3 -c 'print(1)' new-resource" "$step"; step=$((step + 1))
+  credential_hook "$policy" write "$fields" "$step"; step=$((step + 1))
   credential_held || fail "new registry identity must take precedence over approval"
   [ "$(wc -l < "$CREDENTIAL_JUDGE_CALLS")" = "$judge_calls" ] || fail "newly protected access reached the judge"
   # Removed/malformed expected registries fail closed for content, but leave

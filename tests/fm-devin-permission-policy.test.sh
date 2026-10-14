@@ -168,7 +168,7 @@ git push --set-upstream origin fm/x
 git push -o ci.skip --dry-run origin fm/x
 git push -- origin fm/x
 command -v sudo
-grep -rn sudo tests
+grep -n sudo README.md
 git log --grep=force
 EOF
   hook "$policy" pre-tool-use exec "cat <<'DOC'
@@ -247,7 +247,7 @@ test_read_and_build_approvals_are_silent() {
   done <<EOF
 cat README.md
 head -50 bin/fm-spawn.sh | grep -n devin
-grep -rn "a|b" bin; echo done
+grep -n "a|b" bin/fm-spawn.sh; echo done
 find . -name "*.sh" -type f
 git merge-base HEAD origin/main
 git -C . log --oneline -5

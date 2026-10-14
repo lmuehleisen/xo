@@ -76,6 +76,8 @@ function registry(context) {
   }
   try {
     // This is the sole content read: an operator-owned metadata registry.
+    const resolved = resolveOperand(context.registryPath, "", context.userHome);
+    if ((context.writeRoots || []).some(root => inside(resolved.canonical, fold(root)))) throw new Error("mutable registry");
     const info = fs.lstatSync(context.registryPath);
     if (!info.isFile() || info.isSymbolicLink() || info.size > 131072) throw new Error("registry");
     const r = JSON.parse(fs.readFileSync(context.registryPath, "utf8"));
@@ -198,6 +200,9 @@ function segment(request) {
           if (base === "jq" && ["--rawfile", "--slurpfile"].includes(name)) {
             i++; operands.push(word(words[++i] || "", "option-file")); continue;
           }
+          if ((base === "jq" || ["sed", "gsed"].includes(base)) && /^-f.+/.test(v)) {
+            operands.push(word(v.slice(2), "option-file")); pattern = true; continue;
+          }
           if (["-e", "--regexp", "--expression"].includes(name) && (search || ["sed", "gsed"].includes(base))) {
             if (!v.includes("=")) i++; pattern = true; continue;
           }
@@ -228,11 +233,14 @@ function segment(request) {
       for (let i = 0; i < words.length; i++) {
         const v = values[i];
         if (["bash", "sh", "zsh", "ksh", "dash"].includes(base) && i > 0 && /^-[^-]*c/.test(values[i - 1])) continue;
+        if (base === "gh" && /^(--body-file|--input)$/.test(v)) {
+          operands.push(word(words[++i] || "", "option-file")); continue;
+        }
         if (v.startsWith("-")) {
           if (v.includes("=")) operands.push(word(v.slice(v.indexOf("=") + 1).replace(/^@/, ""), "option-file"));
           continue;
         }
-        operands.push(word({ ...words[i], value: v.replace(/^@/, "") }));
+        operands.push(word({ ...words[i], value: v.replace(/^.*=@/, "").replace(/^@/, "") }));
       }
       if (operands.length) add("execute");
     }

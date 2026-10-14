@@ -2956,7 +2956,7 @@ approve_plain() {  # <base>
       return 0 ;;
     cd|pushd)
       if [ "${#E[@]}" -ge 2 ] && [ "${EV[1]}" = 0 ] && [ "${EG[1]}" = 0 ] && [ "${E[1]}" != - ]; then
-        CWD=$(resolve_path "${E[1]}" "$CWD") || CWD=
+        CWD=$(physical_target "${E[1]}" "$CWD" 1) || CWD=
       else
         CWD=
       fi

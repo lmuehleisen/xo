@@ -39,7 +39,7 @@ credential_policy() {
 classify_credential_access() {  # <structured request JSON>
   local request output
   load_grants
-  request=$(printf '%s' "$1" | jq -c --arg cwd "${CWD:-$WORKTREE}" \
+  request=$(printf '%s' "$1" | jq -c --arg cwd "${CWD-$WORKTREE}" \
     --arg home "$CREDENTIAL_USER_HOME" --arg registry "$CREDENTIAL_REGISTRY_PATH" \
     --argjson required "$CREDENTIAL_REGISTRY_REQUIRED" --argjson trace "$CREDENTIAL_TRACE" \
     --arg grants "$GRANT_ENV_FILES" --arg roots "$WORKTREE"$'\n'"$DATA_DIR"$'\n'"$TASKTMP"$'\n'"$GRANT_WRITE_DIRS" \
