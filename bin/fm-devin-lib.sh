@@ -127,7 +127,8 @@ FM_DEVIN_CONFIG_COMPLETE='
   ($spec.keep_trailers or .attribution == false)
   and (.permissions.allow as $a | all($spec.allow[]; . as $e | $a | index([$e])))
   and (.permissions.deny as $d | all($spec.deny[]; . as $e | $d | index([$e])))
-  and has_cmd("PreToolUse"; $spec.pre) and has_cmd("PermissionRequest"; $spec.perm)
+  and any(.hooks.PreToolUse[]?; .matcher == "" and any(.hooks[]?; .command == $spec.pre))
+  and has_cmd("PermissionRequest"; $spec.perm)
   and has_cmd("PostToolUse"; $spec.post)
   and has_cmd("UserPromptSubmit"; $spec.policy_stop) and has_cmd("Stop"; $spec.policy_stop)
   and has_cmd("SessionEnd"; $spec.policy_stop)
@@ -211,7 +212,9 @@ fm_devin_spawn_wire() {
     --arg data "$devin_task_data" --arg tasktmp "$TASK_TMP" --arg brief "$BRIEF" \
     --arg log "$STATE_REAL/devin-permission-log.jsonl" --arg devin "${DEVIN_BIN:-}" \
     --arg grants_sha "$devin_grants_sha" --arg config "$devin_config" \
-    '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, devin:$devin, judge_model:"swe-2-high", judge_timeout:"60", grants_sha:$grants_sha, config:$config}' \
+    --arg credential_home "$HOME" \
+    --argjson registry_required "$( [ -e "$devin_config/declared-credentials.json" ] && printf true || printf false )" \
+    '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, devin:$devin, judge_model:"swe-2-high", judge_timeout:"60", grants_sha:$grants_sha, config:$config, credential_user_home:$credential_home, credential_registry_required:$registry_required}' \
     >"$devin_policy" || {
     rm -f -- "$snapshot" "$config"
     echo "error: cannot spawn devin worker: could not write $devin_policy" >&2
@@ -263,7 +266,7 @@ fm_devin_spawn_wire() {
       | join_group("UserPromptSubmit"; [cmd($spec.policy_stop; 30), cmd($spec.retry_arm; 30)])
       | join_group("Stop"; [cmd($spec.policy_stop; 30), cmd($spec.retry_stop; 30)])
       | join_group("SessionEnd"; [cmd($spec.policy_stop; 30), cmd($spec.retry_end; 30)])
-      | group("PreToolUse"; "^exec$"; cmd($spec.pre; 30))
+      | group("PreToolUse"; ""; cmd($spec.pre; 30))
       | group("PermissionRequest"; ""; cmd($spec.perm; 120))
       | group("PostToolUse"; ""; cmd($spec.post; 30))
       | if ($u | type) == "object" and ($u | has("read_config_from"))

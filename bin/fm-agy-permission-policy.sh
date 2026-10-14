@@ -266,6 +266,7 @@ if [ -n "$POLICY" ]; then
   [ -n "$TASK" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"${POLICY%/*}/$TASK.agy-hooks"
   [ -n "$LOG" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$LOG"
 fi
+credential_policy
 
 TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='' INPUT_STRINGS='' CACHE_INPUT=''
 {
@@ -347,11 +348,14 @@ write_armed() {
 evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
   case "$TOOL" in
+    view_file|grep_search|list_dir|write_to_file|replace_file_content)
+      local fields
+      fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive}')
+      credential_native "$fields" "${AGY_CWD:-$WORKTREE}"
+      ;;
+  esac
+  case "$TOOL" in
     view_file|grep_search|list_dir|search_web|read_url_content)
-      sensitive_text "$INPUT_STRINGS" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of credential material"; }
-      granted_env_file_text "$INPUT_STRINGS" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of a credential file this task may only source"; }
       ;;
     write_to_file|replace_file_content)
       local abs rel
@@ -380,10 +384,7 @@ evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
         refuse "$TOOL of firstmate's own permission wiring ($FILE_PATH) is refused by firstmate policy"
         return 0
       fi
-      sensitive_text "$FILE_PATH" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of credential material"; return 0; }
-      granted_env_file_text "$FILE_PATH" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of a credential file this task may only source"; return 0; }
+      [ -z "$CREDENTIAL_HOLD" ] || return 0
       if strictly_inside "$abs" "$WORKTREE"; then
         rel=${abs#"$(norm_abs "$WORKTREE")"/}
         case "$rel" in

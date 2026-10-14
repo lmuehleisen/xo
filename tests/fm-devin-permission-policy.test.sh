@@ -22,6 +22,8 @@ set -u
 . "$ROOT/bin/fm-classify-lib.sh"
 
 POLICY_SH="$ROOT/bin/fm-devin-permission-policy.sh"
+# shellcheck source=tests/credential-policy-helpers.sh
+. "$ROOT/tests/credential-policy-helpers.sh"
 TMP_ROOT=$(fm_test_tmproot fm-devin-permission-policy)
 
 # The shared publish policy (bin/fm-gh-publish-policy.mjs) runs inside this
@@ -2432,6 +2434,7 @@ test_recursive_rm_resolves_symlinked_components
 test_preallowed_git_forms_are_refused_before_they_run
 test_native_writes_resolve_symlinks
 test_retire_closes_orphaned_escalations
+test_shared_credential_access
 test_read_and_build_approvals_are_silent
 test_residue_escalates_without_judge
 test_escalation_closes_on_post_tool_use_and_stop

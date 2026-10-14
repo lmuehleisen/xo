@@ -444,7 +444,7 @@ EOF
   # because an absent digest is what makes a block the worker adds inert.
   jq -e 'has("grants_sha")' "$policy" >/dev/null \
     || fail "policy file must record the brief's grants digest: $(cat "$policy")"
-  [ "$(jq -r '.hooks.PreToolUse[0].matcher' "$hook_file")" = '^exec$' ] || fail "PreToolUse guard must match exec"
+  [ "$(jq -r '.hooks.PreToolUse[0].matcher' "$hook_file")" = '' ] || fail "PreToolUse credential guard must match every tool"
   [ "$(jq -r '.hooks.PermissionRequest[0].matcher' "$hook_file")" = '' ] || fail "PermissionRequest must match every tool"
   cmd_pre=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$hook_file")
   cmd_perm=$(jq -r '.hooks.PermissionRequest[0].hooks[0].command' "$hook_file")

@@ -350,7 +350,9 @@ fm_agy_spawn_wire() {
       --arg version "$agy_version" --arg gen "$BUSY_GEN" --arg grants_sha "$agy_grants_sha" \
       --arg judge_tier "$AGY_JUDGE_TIER" --arg judge_bin "$AGY_JUDGE_BIN" \
       --arg judge_model "$AGY_JUDGE_MODEL" --arg config "$agy_config" \
-      '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen, agy_version:$version, judge_tier:$judge_tier, judge_bin:$judge_bin, judge_model:$judge_model, judge_timeout:"60", grants_sha:$grants_sha, config:$config}' \
+      --arg credential_home "$HOME" \
+      --argjson registry_required "$( [ -e "$agy_config/declared-credentials.json" ] && printf true || printf false )" \
+      '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen, agy_version:$version, judge_tier:$judge_tier, judge_bin:$judge_bin, judge_model:$judge_model, judge_timeout:"60", grants_sha:$grants_sha, config:$config, credential_user_home:$credential_home, credential_registry_required:$registry_required}' \
       > "$agy_policy" || {
       echo "error: cannot spawn agy bypass worker: could not write $agy_policy" >&2
       exit 1
