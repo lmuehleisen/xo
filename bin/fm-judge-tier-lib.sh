@@ -66,7 +66,7 @@ fm_judge_attribution() {
 # judge_model retargets a running worker's judge without touching this file.
 fm_judge_tier_model() {  # <tier>
   case "${1-}" in
-    agy) printf 'gemini-3.6-flash-low\n' ;;
+    agy) printf 'gemini-3.8-flash-low\n' ;;
     devin) printf 'swe-2-high\n' ;;
     *) return 1 ;;
   esac

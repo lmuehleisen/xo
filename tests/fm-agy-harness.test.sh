@@ -1262,18 +1262,18 @@ EOF
   # With no flag the judge stays on this adapter's own tier, and says so.
   [ "$(jq -r .judge_tier "$policy")" = agy ] \
     || fail "the default judge tier must be recorded in the policy: $(cat "$policy")"
-  [ "$(jq -r .judge_model "$policy")" = gemini-3.6-flash-low ] \
+  [ "$(jq -r .judge_model "$policy")" = gemini-3.8-flash-low ] \
     || fail "the tier's own model must be recorded: $(cat "$policy")"
   [ -x "$(jq -r .judge_bin "$policy")" ] \
     || fail "the resolved judge executable must be recorded: $(cat "$policy")"
-  grep -q '^agy_judge=agy:gemini-3.6-flash-low$' "$home/state/$id.meta" \
+  grep -q '^agy_judge=agy:gemini-3.8-flash-low$' "$home/state/$id.meta" \
     || fail "the judge tier must ride the recorded posture: $(cat "$home/state/$id.meta")"
   case "$out" in
-    *"agy bypass judge tier: agy model=gemini-3.6-flash-low"*) ;;
+    *"agy bypass judge tier: agy model=gemini-3.8-flash-low"*) ;;
     *) fail "the spawn must name the judge tier before launching, got: $out" ;;
   esac
   case "$out" in
-    *"judge=agy:gemini-3.6-flash-low"*) ;;
+    *"judge=agy:gemini-3.8-flash-low"*) ;;
     *) fail "the spawned line must name the judge tier, got: $out" ;;
   esac
   pass "fm-spawn.sh: the default agy policy layer records and prints its judge tier"
@@ -1860,7 +1860,7 @@ test_agy_worker_tool_observer() {
   log="$state/agy-permission-log.jsonl"
   OBS_PAYLOAD=$(jq -n --arg wt "$wt" '{
     conversationId:"00000000-0000-4000-8000-0000000000a1", stepIdx:2,
-    modelName:"gemini-3.6-flash-low",
+    modelName:"gemini-3.8-flash-low",
     toolCall:{name:"run_command",args:{CommandLine:"/usr/bin/touch ws/A",Cwd:"/tmp/ws",WaitMsBeforeAsync:5000,toolAction:"Running shell command",toolSummary:"Touch A"}},
     workspacePaths:[$wt],
     transcriptPath:"/x/brain/conv/.system_generated/logs/transcript_full.jsonl",
@@ -1877,7 +1877,7 @@ test_agy_worker_tool_observer() {
   printf '%s' "$line" | jq -e '
     .event == "pre-tool-use" and .tool == "run_command" and .task == "agy-obs"
     and .session_id == "00000000-0000-4000-8000-0000000000a1" and .step_idx == 2
-    and .model == "gemini-3.6-flash-low" and .input == "/usr/bin/touch ws/A"
+    and .model == "gemini-3.8-flash-low" and .input == "/usr/bin/touch ws/A"
     and .cwd == "/tmp/ws" and .error == ""
     and (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' >/dev/null \
     || fail "pre-tool line wrong: $line"

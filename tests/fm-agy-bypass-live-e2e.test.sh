@@ -54,7 +54,7 @@ fm_live_gate opt-in FM_AGY_BYPASS_LIVE agy jq
 AGY_VERSION=$("$AGY_BIN" --version 2>/dev/null | tr -d '\n')
 [ -n "$AGY_VERSION" ] || fail 'the installed agy did not report a version'
 
-MODEL=${FM_AGY_BYPASS_LIVE_MODEL:-gemini-3.6-flash-low}
+MODEL=${FM_AGY_BYPASS_LIVE_MODEL:-gemini-3.8-flash-low}
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-agy-bypass.XXXXXX")
 LAB=$(cd "$LAB" && pwd -P)
 fm_test_require_tmproot "$LAB"
