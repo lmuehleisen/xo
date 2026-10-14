@@ -1865,7 +1865,7 @@ checkout_discards() {  # <first-arg-index> <args>...
 
 analyze_segment() {
   local -a E=() EV=() EG=() ESRC=()
-  local k=0 w base=''
+  local k=0 w base='' credential_dynamic=false
   local count=${#SW[@]}
   SEG_BASE='' SEG_EMITS_FETCH=0
 
@@ -1904,7 +1904,8 @@ analyze_segment() {
         [ "$k" -lt "$count" ] || { no_approve "bare env prints the environment"; k=$count; continue; }
         while [ "$k" -lt "$count" ]; do
           case "${SW[k]}" in
-            -u|--unset|-C|--chdir) no_approve "env option"; k=$((k + 2)) ;;
+            -u|--unset) no_approve "env option"; k=$((k + 2)) ;;
+            -C|--chdir|--chdir=*) credential_dynamic=true; no_approve "env cwd option"; k=$((k + 2)) ;;
             -S*|--split-string*) no_approve "env -S"; k=$((k + 1)) ;;
             -*) k=$((k + 1)) ;;
             *=*) no_approve "environment assignment"; k=$((k + 1)) ;;
@@ -1913,6 +1914,7 @@ analyze_segment() {
         done
         continue ;;
       xargs)
+        credential_dynamic=true
         k=$((k + 1))
         while [ "$k" -lt "$count" ]; do
           case "${SW[k]}" in

@@ -83,16 +83,13 @@ credential_trace_context() {
 }
 
 credential_segment() {
-  local i words redirects request dynamic=false bare_env=false
+  local i words redirects request dynamic=${credential_dynamic:-false} bare_env=false
   words=$({
     for ((i = 0; i < ${#E[@]}; i++)); do printf '%s\0%s\0%s\0' "${E[i]}" "${EV[i]}" "${EG[i]}"; done
   } | jq -Rsc 'split("\u0000") | .[:-1] | [range(0; length; 3) as $i | {value:.[$i], expanded:(.[$i+1] == "1"), glob:(.[$i+2] == "1")}]')
   redirects=$({
     for ((i = 0; i < ${#SRO[@]}; i++)); do printf '%s\0%s\0%s\0%s\0' "${SRO[i]}" "${SRT[i]}" "${SRV[i]}" "${SRG[i]-0}"; done
   } | jq -Rsc 'split("\u0000") | .[:-1] | [range(0; length; 4) as $i | {operator:.[$i], path:.[$i+1], role:"redirection", expanded:(.[$i+2] == "1"), glob:(.[$i+3] == "1")}]')
-  for ((i = 0; i < ${#SW[@]}; i++)); do
-    case "${SW[i]}" in xargs|-C|--chdir|--chdir=*) dynamic=true ;; esac
-  done
   if [ "${#E[@]}" = 0 ]; then
     for ((i = 0; i < ${#SW[@]}; i++)); do
       [ "${SW[i]}" = env ] || continue
