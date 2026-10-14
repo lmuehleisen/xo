@@ -43,7 +43,6 @@ credential_policy() {
 credential_record_grants() {  # [new grants digest]: firstmate-owned event only
   local GRANTS_SHA=${1:-$GRANTS_SHA} request output
   load_grants
-  [ -n "$GRANT_ENV_FILES" ] || return 0
   request=$(jq -nc --arg home "$CREDENTIAL_USER_HOME" --arg cwd "$WORKTREE" \
     --arg registry "$CREDENTIAL_REGISTRY_PATH" --argjson required "$CREDENTIAL_REGISTRY_REQUIRED" \
     --arg grants "$GRANT_ENV_FILES" --arg roots "$WORKTREE"$'\n'"$DATA_DIR"$'\n'"$TASKTMP"$'\n'"$GRANT_WRITE_DIRS" \
@@ -54,7 +53,7 @@ credential_record_grants() {  # [new grants digest]: firstmate-owned event only
     printf 'credential registration failed: %s\n' "$(printf '%s' "$output" | jq -r '.reason // "registry unavailable"')" >&2
     return 1
   }
-  CREDENTIAL_REGISTRY_REQUIRED=true
+  if [ -n "$GRANT_ENV_FILES" ] || [ -e "$CREDENTIAL_REGISTRY_PATH" ]; then CREDENTIAL_REGISTRY_REQUIRED=true; fi
 }
 
 credential_pin_registry() {

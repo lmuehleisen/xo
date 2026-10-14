@@ -339,3 +339,30 @@ test_credential_registration_locking() {
   credential_held || fail "registration recovery must preserve protection"
   pass "shared credential registration: contention preserves both identities and dead-owner recovery keeps protection"
 }
+
+test_credential_registry_without_grants() {
+  local policy dir registry
+  policy=$(new_case registry-without-grants 'echo "APPROVE: synthetic judge"')
+  dir=$(case_dir "$policy") registry="$dir/config/declared-credentials.json"
+  "$POLICY_SH" register-credentials "$policy" </dev/null >/dev/null || fail "a genuinely absent optional registry must allow launch"
+  jq -e '.credential_registry_required == false' "$policy" >/dev/null || fail "an absent registry must remain optional"
+  mkdir -p "$dir/config"
+  printf 'invalid registry\n' > "$registry"
+  if "$POLICY_SH" register-credentials "$policy" </dev/null >/dev/null 2>&1; then
+    fail "an invalid registry must refuse registration even without grants"
+  fi
+  rm -f "$registry"
+  mkdir "$registry"
+  if "$POLICY_SH" register-credentials "$policy" </dev/null >/dev/null 2>&1; then
+    fail "a non-file registry must refuse registration even without grants"
+  fi
+  rmdir "$registry"
+  printf '{"version":1,"revision":"synthetic","entries":[]}\n' > "$registry"
+  "$POLICY_SH" register-credentials "$policy" </dev/null >/dev/null || fail "a valid registry with no task grants must allow launch"
+  jq -e '.credential_registry_required == true' "$policy" >/dev/null || fail "registration must pin an existing registry independently of grants"
+  rm -f "$registry"
+  if "$POLICY_SH" register-credentials "$policy" </dev/null >/dev/null 2>&1; then
+    fail "a removed expected registry must refuse registration even without grants"
+  fi
+  pass "shared credential registration: no-grant tasks validate and pin existing registries while genuine absence stays optional"
+}

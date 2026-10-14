@@ -160,7 +160,10 @@ function acquireRegistryLock(lock) {
 // Operator-only launch/repin registration, separate from the pure classifier.
 // Firstmate retains known identities here; revoking task use never removes them.
 function registerGrants(context) {
-  if (!(context.useGrants || []).length) return result("ordinary", "no-new-credential-identities");
+  if (!(context.useGrants || []).length) {
+    return registry(context).invalid ? result("unresolved", "credential-registration-unavailable")
+      : result("ordinary", "no-new-credential-identities");
+  }
   if (!context.registryPath) return result("unresolved", "missing-registry-location");
   const lock = `${context.registryPath}.lock`;
   let temporary = "", releaseLock;
