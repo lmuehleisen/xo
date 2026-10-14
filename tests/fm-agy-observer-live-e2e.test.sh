@@ -66,7 +66,7 @@ LOG="$STATE/agy-permission-log.jsonl"
 CANARY="$WORKSPACE/observer-canary"
 out=$(cd "$WORKSPACE" && "$AGY_BIN" -p \
   "Run this exact shell command with run_command, then reply DONE: /usr/bin/touch $CANARY" \
-  --model gemini-3.6-flash-low --dangerously-skip-permissions \
+  --model gemini-3.8-flash-low --dangerously-skip-permissions \
   --add-dir "$WORKSPACE" --add-dir "$STATE/$ID.agy-hooks" \
   --print-timeout 120s 2>&1) \
   || fail "agy headless run failed: $out"
