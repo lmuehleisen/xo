@@ -52,7 +52,7 @@ fm_live_gate opt-in FM_AGY_BYPASS_LIVE agy jq
 AGY_VERSION=$("$AGY_BIN" --version 2>/dev/null | tr -d '\n')
 [ -n "$AGY_VERSION" ] || fail 'the installed agy did not report a version'
 
-MODEL=gemini-3.6-flash-low
+MODEL=gemini-3.8-flash-low
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-agy-bypass.XXXXXX")
 LAB=$(cd "$LAB" && pwd -P)
 fm_test_require_tmproot "$LAB"
@@ -83,7 +83,7 @@ write_policy() {
     --arg judge_timeout "$1" \
     '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data,
       tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy,
-      judge_model:"gemini-3.6-flash-low", judge_timeout:$judge_timeout,
+      judge_model:"gemini-3.8-flash-low", judge_timeout:$judge_timeout,
       grants_sha:$grants_sha}' > "$CASE_POLICY" \
     || fail "could not write the case policy file"
 }

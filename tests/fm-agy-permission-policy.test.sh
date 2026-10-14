@@ -83,7 +83,7 @@ EOF
     '{task:"t1", worktree:$wt, status:($d+"/state/t1.status"), inbox:($d+"/state/t1.inbox"),
       data:($d+"/data/t1"), tasktmp:($d+"/tmp"), brief:($d+"/data/t1/brief.md"),
       log:($d+"/state/agy-permission-log.jsonl"), agy:$judge, gen:"g1",
-      judge_model:(if $judge == "" then "" else "gemini-3.6-flash-low" end), judge_timeout:"5",
+      judge_model:(if $judge == "" then "" else "gemini-3.8-flash-low" end), judge_timeout:"5",
       grants_sha:$sha}' \
     > "$dir/state/t1.agy-permission.json"
   printf '%s\n' "$dir/state/t1.agy-permission.json"
@@ -1091,7 +1091,7 @@ exit 0')
   # file that records the tier is removed at teardown, the log outlives it.
   tail -1 "$dir/state/agy-permission-log.jsonl" | grep -qF 'judge: devin/swe-2-high' \
     || fail "the judge record must name the tier that decided it: $(tail -1 "$dir/state/agy-permission-log.jsonl")"
-  grep -qF 'judge: agy/gemini-3.6-flash-low' "$dir/state/agy-permission-log.jsonl" \
+  grep -qF 'judge: agy/gemini-3.8-flash-low' "$dir/state/agy-permission-log.jsonl" \
     || fail "the adapter's own tier must be named in its own judge records: $(cat "$dir/state/agy-permission-log.jsonl")"
   pass "fm-agy-permission-policy: the judge tier is selected, and an unknown or unavailable one denies instead of falling back"
 }
@@ -1216,7 +1216,7 @@ exit 0')
       toolCall:{name:"run_command", args:{CommandLine:"npm install", Cwd:$wt}}}')" \
     | "$POLICY_SH" judge-probe "$policy" 2>/dev/null)
   case "$out" in
-    *"tier=agy"*"model=gemini-3.6-flash-low"*"static=residue"*"verdict=approve"*) ;;
+    *"tier=agy"*"model=gemini-3.8-flash-low"*"static=residue"*"verdict=approve"*) ;;
     *) fail "the probe must report the tier, model, static class, and verdict, got: $out" ;;
   esac
   [ "$(grep -c probed "$JUDGE_CALLS")" = 1 ] || fail "the probe must actually ask the judge"
