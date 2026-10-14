@@ -164,7 +164,7 @@ case "$EVENT" in
 esac
 
 if [ "$EVENT" = verified-versions ]; then
-  # The agy versions docs/verification/runtime-backends.md records live
+  # The agy versions docs/verification/runtime-backends-fork.md records live
   # evidence for; fm-spawn gates --agy-bypass launches on this set. Each
   # entry is admitted only after tests/fm-agy-bypass-live-e2e.test.sh passes
   # against that installed binary, because the hook contract this layer rests
