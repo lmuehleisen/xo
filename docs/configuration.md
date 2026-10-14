@@ -805,6 +805,7 @@ Protected Git writes and operations outside the allowed sandbox still require th
 The Devin and agy worker policy layers share the metadata-only credential classifier in [`bin/fm-credential-access.mjs`](../bin/fm-credential-access.mjs).
 Its header owns the `config/declared-credentials.json` schema and live-update behavior; the registry contains protected identities and permitted use modes, never credential values, and lives outside worker write roots.
 Firstmate retains declared credential identities at launch and repin; removing a task grant never removes registry protection.
+Existing policy files need their current pinned declarations registered through the adapter's `register-credentials` event before credential grants are edited.
 Task `credential_env_files` grants authorize exact trusted sourcing with tracing disabled; protection persists independently of that use authority.
 The classifier applies before static approvals, ordinary caches, and judges, including Devin's native pre-tool veto; unproved recursive or dynamic content footprints require a narrowed call or an explicit operator exception.
 The portable entry points are `tests/fm-devin-permission-policy.test.sh` and `tests/fm-agy-permission-policy.test.sh`, with live hook coverage refreshed by their corresponding live adapter guards.

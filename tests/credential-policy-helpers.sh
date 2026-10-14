@@ -151,7 +151,7 @@ EOF
   "$POLICY_SH" repin-grants "$policy" >/dev/null || fail "repin synthetic grants"
   credential_exec "$policy" 'set -a; source registered; set +a' "$step"; step=$((step + 1))
   credential_allowed || fail "exact authorized loading must stay usable: $OUT"
-  for command in 'set -x; source registered' 'source registered; set -v' "bash -x -c 'source registered'" 'cat registered'; do
+  for command in 'set -x; source registered' 'source registered; set -v' "bash -x -c 'source registered'" "env SHELLOPTS=xtrace bash -c 'source registered'" 'cat registered'; do
     credential_exec "$policy" "$command" "$step"; step=$((step + 1))
     credential_held || fail "a use grant must not permit disclosure: $command => $OUT"
   done

@@ -99,6 +99,7 @@ credential_trace_context() {
   local i j base flag
   for ((i = 0; i < ${#T_TXT[@]}; i++)); do
     [ "${T_KIND[i]}" = w ] || continue
+    case "${T_TXT[i]}" in SHELLOPTS=*xtrace*|SHELLOPTS=*verbose*) CREDENTIAL_TRACE=1 ;; esac
     base=${T_TXT[i]##*/}
     case "$base" in set|bash|sh|zsh|ksh|dash) ;; *) continue ;; esac
     for ((j = i + 1; j < ${#T_TXT[@]}; j++)); do
