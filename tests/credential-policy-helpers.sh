@@ -75,11 +75,14 @@ echo "APPROVE: synthetic ordinary effect"')
     credential_held || fail "credential effect must hold despite an always-approve judge: $command => $OUT"
   done <<'EOF'
 cat vendor.env
+cat -n vendor.env
 head vendor.env
 tail vendor.env
 grep FIXTURE vendor.env
 rg FIXTURE vendor.env
 sed -n '1p' vendor.env
+sed -f registered README.md
+jq -f registered README.md
 cat < registered
 cat alias
 cat hard-alias
@@ -99,6 +102,7 @@ jq --rawfile value registered -n '$value'
 cp registered copied.txt
 set
 env -0
+command env -0
 /usr/bin/env -0
 printenv
 jq -n env
@@ -106,6 +110,8 @@ printf '%s' "$KEY"
 ps eww 123
 gh auth status --show-token
 source registered
+set -x
+set -v
 cat sample.env.example
 EOF
   [ ! -e "$CREDENTIAL_JUDGE_CALLS" ] || fail "credential/unknown-footprint calls must never reach the judge"
@@ -160,6 +166,10 @@ EOF
   credential_held || fail "malformed registry must hold content access"
   credential_exec "$policy" 'ls nested' "$step"
   credential_allowed || fail "malformed registry must leave ordinary metadata usable"
+  step=$((step + 1))
+  rm "$dir/config/declared-credentials.json"
+  credential_exec "$policy" 'cat README.md' "$step"; step=$((step + 1))
+  credential_held || fail "missing expected registry must hold content access"
   log=$(jq -r .log "$policy")
   if grep -qF HARMLESS_SENTINEL_VALUE "$log" "$CREDENTIAL_JUDGE_PROMPT" "$(jq -r .status "$policy")"; then
     fail "credential contents propagated into metadata evidence"

@@ -164,6 +164,7 @@ function segment(request) {
   }
   const outputExpansion = ["echo", "printf"].includes(base) && words.slice(1).some(w => w.expanded);
   const envPrinter = (base === "set" && values.length === 1)
+    || (request.trace && ["set", "bash", "sh", "zsh", "ksh", "dash"].includes(base))
     || ["printenv"].includes(base)
     || (["export", "declare", "typeset"].includes(base) && (values.length === 1 || values.includes("-p")))
     || (base === "env" && (request.bareEnvironment || values.length === 1
@@ -193,9 +194,13 @@ function segment(request) {
         if (options && v.startsWith("-") && v !== "-") {
           if ((search || copy) && /^-[^-]*[rR]/.test(v) || ["--recursive", "--dereference-recursive"].includes(v)) recursive = true;
           const name = v.split("=")[0];
-          if (["-f", "--file", "--file-list"].includes(name) && (search || ["sed", "gsed", "jq"].includes(base))) {
+          if ((["-f", "--file"].includes(name) && (search || ["sed", "gsed", "jq", "hexdump"].includes(base)))
+            || ["--ignore-file", "--exclude-from", "--files0-from", "--files-from"].includes(name)) {
             const value = v.includes("=") ? word(v.slice(v.indexOf("=") + 1), "option-file") : word(words[++i] || "", "option-file");
-            operands.push(value); pattern = true; continue;
+            operands.push(value);
+            if (["--files0-from", "--files-from"].includes(name)) unresolved = true;
+            if (["-f", "--file"].includes(name)) pattern = true;
+            continue;
           }
           if (base === "jq" && ["--rawfile", "--slurpfile"].includes(name)) {
             i++; operands.push(word(words[++i] || "", "option-file")); continue;
@@ -208,7 +213,16 @@ function segment(request) {
           }
           const takesValue = search ? ["-g", "--glob", "--iglob", "-t", "-T", "--type", "--type-not", "-m", "--max-count", "-A", "-B", "-C", "--context", "--encoding"]
             : base === "jq" ? ["--arg", "--argjson"]
-              : ["-n", "-c", "-b", "-d", "-s", "-w", "-t", "-k", "-o", "--output", "--lines", "--bytes", "--delimiter", "--fields", "--key"];
+              : ({ head: ["-n", "-c", "--lines", "--bytes"], tail: ["-n", "-c", "--lines", "--bytes", "--sleep-interval"],
+                nl: ["-b", "-d", "-i", "-l", "-n", "-s", "-v", "-w"], od: ["-A", "-j", "-N", "-t", "-w"],
+                hexdump: ["-e", "-n", "-s"], strings: ["-n", "-t", "-e", "--bytes", "--encoding"],
+                shasum: ["-a", "--algorithm"], cut: ["-b", "-c", "-f", "-d", "--bytes", "--characters", "--fields", "--delimiter"],
+                sort: ["-k", "-t", "-o", "-T", "--key", "--field-separator", "--output", "--temporary-directory"],
+                uniq: ["-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"],
+                paste: ["-d", "--delimiters"], fold: ["-w", "--width"], column: ["-c", "-s", "--columns", "--separator"],
+                diff: ["-I", "-x", "--ignore-matching-lines", "--exclude"], cmp: ["-i", "-n", "--ignore-initial", "--bytes"],
+                install: ["-m", "-o", "-g", "--mode", "--owner", "--group"], rsync: ["--include", "--exclude"]
+              }[base] || []);
           if (takesValue.includes(name) && !v.includes("=")) {
             i++; if (base === "jq" && ["--arg", "--argjson"].includes(name)) i++;
           } else if (/^--(pre|pre-glob|files-from|include-from|exclude-from|arg-file)/.test(v)) unresolved = true;
@@ -232,12 +246,19 @@ function segment(request) {
       // Opaque code itself is outside this classifier's security guarantee.
       for (let i = 0; i < words.length; i++) {
         const v = values[i];
-        if (["bash", "sh", "zsh", "ksh", "dash"].includes(base) && i > 0 && /^-[^-]*c/.test(values[i - 1])) continue;
+        if (words[i].expanded && !/^~(?:\/|$)/.test(v) || words[i].glob) continue;
+        const previous = values[i - 1] || "";
+        if (["bash", "sh", "zsh", "ksh", "dash"].includes(base) && /^-[^-]*c/.test(previous)) continue;
+        if (["python", "python3", "node", "perl", "ruby"].includes(base) && ["-c", "-e", "--eval"].includes(previous)) continue;
+        if ((base === "git" && ["-m", "--message", "--grep"].includes(previous))
+          || (base === "gh" && ["--body", "--title", "--jq", "-q", "--template"].includes(previous))) continue;
         if (base === "gh" && /^(--body-file|--input)$/.test(v)) {
           operands.push(word(words[++i] || "", "option-file")); continue;
         }
         if (v.startsWith("-")) {
-          if (v.includes("=")) operands.push(word(v.slice(v.indexOf("=") + 1).replace(/^@/, ""), "option-file"));
+          if (/^--(body-file|input|file|config|cert|key|cacert)=/.test(v)) {
+            operands.push(word(v.slice(v.indexOf("=") + 1).replace(/^@/, ""), "option-file"));
+          }
           continue;
         }
         operands.push(word({ ...words[i], value: v.replace(/^.*=@/, "").replace(/^@/, "") }));

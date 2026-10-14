@@ -93,8 +93,11 @@ credential_segment() {
   for ((i = 0; i < ${#SW[@]}; i++)); do
     case "${SW[i]}" in xargs|-C|--chdir|--chdir=*) dynamic=true ;; esac
   done
-  if [ "${#E[@]}" = 0 ] && [ "${SW[0]-}" = env ]; then
-    bare_env=true words='[{"value":"env","expanded":false,"glob":false}]'
+  if [ "${#E[@]}" = 0 ]; then
+    for ((i = 0; i < ${#SW[@]}; i++)); do
+      [ "${SW[i]}" = env ] || continue
+      bare_env=true words='[{"value":"env","expanded":false,"glob":false}]'
+    done
   fi
   request=$(jq -nc --argjson words "$words" --argjson redirects "$redirects" \
     --argjson dynamic "$dynamic" --argjson env "$bare_env" \
