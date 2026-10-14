@@ -103,6 +103,7 @@ function registry(context) {
 
 export function classify_credential_access(request, state = registry(request)) {
   if (request.environmentDisclosure) return result("protected-disclosure", "environment-or-token-output");
+  if (request.operation === "metadata") return result("ordinary", "metadata-only-access");
   let protectedHit = false, modes = null;
   const operands = request.operands || [];
   for (const operand of operands) {
@@ -155,6 +156,20 @@ const ranked = values => values.sort((a, b) => ({ ordinary: 0, "authorized-load"
   "protected-disclosure": 3 }[b.category] - { ordinary: 0, "authorized-load": 1, unresolved: 2,
   "protected-disclosure": 3 }[a.category]))[0] || result("ordinary", "no-content-access");
 
+function jqEnvironment(values) {
+  for (let i = 1; i < values.length; i++) {
+    const v = values[i];
+    if (["--arg", "--argjson", "--rawfile", "--slurpfile"].includes(v)) { i += 2; continue; }
+    if (["-f", "--from-file", "-L", "--library-path"].includes(v)) { i++; continue; }
+    if (v.startsWith("-")) continue;
+    // An env property or a literal string is not jq's environment operator.
+    // Keep interpolation-bearing strings, whose expressions can dump env.
+    const filter = v.replace(/"(?:\\.|[^"\\])*"/g, s => s.includes("\\(") ? s : '""');
+    return /(^|[^\w.])env([^\w]|$)|\$ENV\b/.test(filter);
+  }
+  return false;
+}
+
 function segment(request) {
   const words = request.words || [], values = words.map(w => w.value), base = path.basename(values[0] || "");
   const calls = [], operands = [];
@@ -165,27 +180,33 @@ function segment(request) {
     }
   }
   const outputExpansion = ["echo", "printf"].includes(base) && words.slice(1).some(w => w.expanded);
+  const metadataSecretOutput = ["ls", "stat", "du", "df", "tree", "find", "readlink", "realpath", "ps"].includes(base)
+    && words.slice(1).some(w => w.expanded && /\$(?:\{)?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(w.value));
   const envPrinter = (base === "set" && values.length === 1)
     || (request.trace && ["set", "bash", "sh", "zsh", "ksh", "dash"].includes(base))
     || ["printenv"].includes(base)
     || (["export", "declare", "typeset"].includes(base) && (values.length === 1 || values.includes("-p")))
     || (base === "env" && (request.bareEnvironment || values.length === 1
       || values.slice(1).every(v => v.startsWith("-"))))
-    || (base === "jq" && values.slice(1).some(v => /(^|[^\w])env([^\w]|$)|\$ENV\b/.test(v)))
+    || (base === "jq" && jqEnvironment(values))
     || (base === "ps" && values.slice(1).some(v => /^[A-Za-z]*e[A-Za-z]*$/.test(v) || v === "--environment" || v === "-E"))
     || (base === "gh" && values.includes("auth") && (values.includes("token") || values.some(v => v.startsWith("--show-token"))));
-  if (envPrinter || outputExpansion) add("read", { environmentDisclosure: true });
+  if (envPrinter || outputExpansion || metadataSecretOutput) add("read", { environmentDisclosure: true });
   if (["source", "."].includes(base)) {
     operands.push(...words.slice(1).map(w => word(w)));
     add("load", { dynamicSelection: request.dynamicSelection || words.length !== 2 });
-  } else if (["ls", "stat", "file", "du", "df", "find", "tree", "readlink", "realpath", "test", "[", "cd", "pushd", "rm", "mv", "shred", "mkdir", "touch", "chmod"].includes(base)) {
+  } else if (["rm", "mv", "shred", "mkdir", "touch", "chmod"].includes(base)) {
+    operands.push(...words.slice(1).filter(w => !w.value.startsWith("-")).map(w => word(w, "destination")));
+    add("write");
+  } else if (["ls", "stat", "du", "df", "find", "tree", "readlink", "realpath", "test", "[", "cd", "pushd"].includes(base)) {
     operands.push(...words.slice(1).filter(w => !w.value.startsWith("-")).map(w => word(w)));
-    add("metadata");
+    if (base === "find" && values.some(v => ["-exec", "-execdir", "-ok", "-okdir"].includes(v))) add("read", { dynamicSelection: true });
+    else add("metadata");
   } else if (["echo", "printf", "pwd", "which", "type", "date", "true", "false", "sleep", "seq", "set", "env", "ps"].includes(base)) {
     // These arguments are data, unless an explicit output form above applies.
   } else {
     const search = ["grep", "egrep", "fgrep", "rg"].includes(base);
-    const readers = ["cat", "head", "tail", "wc", "nl", "od", "hexdump", "strings", "shasum", "sha1sum", "sha256sum", "md5", "md5sum", "cut", "sort", "uniq", "comm", "paste", "fold", "rev", "column", "diff", "cmp"];
+    const readers = ["cat", "head", "tail", "wc", "nl", "od", "hexdump", "strings", "file", "shasum", "sha1sum", "sha256sum", "md5", "md5sum", "cut", "sort", "uniq", "comm", "paste", "fold", "rev", "column", "diff", "cmp"];
     const copy = ["cp", "install", "rsync"].includes(base);
     const relevant = search || readers.includes(base) || copy || ["sed", "gsed", "jq"].includes(base);
     let pattern = false, options = true, recursive = false, unresolved = !!request.dynamicSelection;
@@ -196,11 +217,11 @@ function segment(request) {
         if (options && v.startsWith("-") && v !== "-") {
           if ((search || copy) && /^-[^-]*[rR]/.test(v) || ["--recursive", "--dereference-recursive"].includes(v)) recursive = true;
           const name = v.split("=")[0];
-          if ((["-f", "--file"].includes(name) && (search || ["sed", "gsed", "jq", "hexdump"].includes(base)))
+          if ((["-f", "--file", "--from-file"].includes(name) && (search || ["sed", "gsed", "jq", "hexdump", "file"].includes(base)))
             || ["--ignore-file", "--exclude-from", "--files0-from", "--files-from"].includes(name)) {
             const value = v.includes("=") ? word(v.slice(v.indexOf("=") + 1), "option-file") : word(words[++i] || "", "option-file");
             operands.push(value);
-            if (["--files0-from", "--files-from"].includes(name)) unresolved = true;
+            if (["--files0-from", "--files-from"].includes(name) || base === "file") unresolved = true;
             if (["-f", "--file"].includes(name)) pattern = true;
             continue;
           }

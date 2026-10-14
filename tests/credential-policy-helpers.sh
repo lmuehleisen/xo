@@ -90,6 +90,8 @@ rg FIXTURE vendor.env
 sed -n '1p' vendor.env
 sed -f registered README.md
 jq -f registered README.md
+jq --from-file registered README.md
+file registered
 cat < registered
 cat alias
 cat hard-alias
@@ -97,6 +99,7 @@ cat sub/../vendor.env
 cd nested; cat service.env
 cat directory-alias/service.env
 grep -R . nested
+find nested -exec cat {} +
 rg FIXTURE nested
 cat nested/*
 cat "$FILE"
@@ -118,6 +121,7 @@ command env -0
 printenv
 jq -n env
 printf '%s' "$KEY"
+stat --printf="$KEY" README.md
 ps eww 123
 gh auth status --show-token
 source registered
@@ -147,7 +151,7 @@ EOF
     credential_exec "$policy" "$command" "$step"; step=$((step + 1))
     credential_held || fail "a use grant must not permit disclosure: $command => $OUT"
   done
-  for command in 'cat README.md' 'cat .editorconfig' "sed -n '1,5p' README.md" 'ls nested' 'find nested -type f' "echo 'vendor.env'"; do
+  for command in 'cat README.md' 'cat .editorconfig' "sed -n '1,5p' README.md" 'ls nested' 'ls vendor.env' 'stat registered' 'find nested -type f' "find nested -name '*.env'" "echo 'vendor.env'" 'jq .env README.md' "jq -n '\"env\"'"; do
     credential_exec "$policy" "$command" "$step"; step=$((step + 1))
     credential_allowed || fail "ordinary reads and metadata must stay usable: $command => $OUT"
   done

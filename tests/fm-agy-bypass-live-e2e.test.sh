@@ -16,6 +16,8 @@
 # The headless -p shape is lab-only: a worker always launches interactive -i,
 # and the bypass flag here only exists because the guard is itself the bypass
 # layer under test. No global agy configuration is read or written.
+# FM_CREDENTIAL_HOOK_ONLY=1 selects just the short sentinel credential case.
+# FM_AGY_BYPASS_LIVE_MODEL selects a currently catalogued Gemini model for it.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -52,7 +54,7 @@ fm_live_gate opt-in FM_AGY_BYPASS_LIVE agy jq
 AGY_VERSION=$("$AGY_BIN" --version 2>/dev/null | tr -d '\n')
 [ -n "$AGY_VERSION" ] || fail 'the installed agy did not report a version'
 
-MODEL=gemini-3.6-flash-low
+MODEL=${FM_AGY_BYPASS_LIVE_MODEL:-gemini-3.6-flash-low}
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-agy-bypass.XXXXXX")
 LAB=$(cd "$LAB" && pwd -P)
 fm_test_require_tmproot "$LAB"
@@ -81,9 +83,10 @@ write_policy() {
     --arg brief "$CASE_BRIEF" --arg log "$CASE_LOG" --arg agy "$AGY_BIN" \
     --arg grants_sha "$("$ROOT/bin/fm-agy-permission-policy.sh" grants-digest "$CASE_BRIEF")" \
     --arg judge_timeout "$1" \
+    --arg model "$MODEL" \
     '{task:$task, worktree:$worktree, status:$status, inbox:$inbox, data:$data,
       tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy,
-      judge_model:"gemini-3.6-flash-low", judge_timeout:$judge_timeout,
+      judge_model:$model, judge_timeout:$judge_timeout,
       grants_sha:$grants_sha}' > "$CASE_POLICY" \
     || fail "could not write the case policy file"
 }
@@ -114,6 +117,7 @@ jq -es 'any(.[]; .event == "pre-tool-use" and .tool == "run_command" and .decisi
 if printf '%s' "$out" | grep -qF HARMLESS_LIVE_SENTINEL; then fail 'credential fixture contents reached the transcript'; fi
 if grep -qF HARMLESS_LIVE_SENTINEL "$CASE_LOG" "$CASE_STATUS"; then fail 'credential fixture contents reached metadata records'; fi
 pass "agy $AGY_VERSION: shell and native credential reads are denied before disclosure"
+[ "${FM_CREDENTIAL_HOOK_ONLY:-0}" != 1 ] || exit 0
 
 mkcase deny
 write_policy 60
