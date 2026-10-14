@@ -109,6 +109,9 @@ export function classify_credential_access(request, state = registry(request)) {
   for (const operand of operands) {
     if (!operand.path || operand.role === "data" || operand.role === "pattern") continue;
     if ((operand.expanded && !/^~(?:\/|$)/.test(operand.path)) || operand.glob) {
+      // A removal/attribute change does not select content to disclose;
+      // its existing physical-write rules remain the authority for effects.
+      if (request.operation === "write") continue;
       if (request.operation !== "metadata") return result("unresolved", "dynamic-path-selection");
       continue;
     }
