@@ -387,6 +387,11 @@ function segment(request) {
 
 function native(request) {
   const a = request.fields || {}, tool = request.tool;
+  const localUri = [a.Url, a.URL, a.url].find(u => typeof u === "string" && /^file:/i.test(u));
+  if (localUri) {
+    try { return classify_credential_access({ ...request, operation: "read", operands: [word(fileURLToPath(localUri), "native:local-uri")] }); }
+    catch { return result("unresolved", "unresolved-native-uri"); }
+  }
   if (tool === "search_web") return result("ordinary", "remote-query-data");
   if (tool === "read_url_content") {
     const url = a.Url || a.URL || a.Query || "";
@@ -405,6 +410,8 @@ function native(request) {
   if (metadata) return classify_credential_access({ ...request, operation: "metadata", operands });
   if (operands.some(o => o.path.startsWith("~"))) return result("unresolved", "ambiguous-native-home-expansion");
   if (search && !operands.length) operands.push(word(request.cwd, "search-root"));
+  const knownFileTool = ["read", "notebook_read", "write", "edit", "notebook_edit", "view_file", "write_to_file", "replace_file_content"].includes(tool);
+  if (!operands.length && !search && !knownFileTool) return result("ordinary", "no-known-file-operand");
   const recursive = search && (a.recursive !== false && a.Recursive !== false);
   return classify_credential_access({ ...request, operation: "read", operands, recursive,
     dynamicSelection: !operands.length || operands.some(o => /[$*?\[\]]/.test(o.path)) });

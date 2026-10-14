@@ -283,13 +283,9 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' INPUT_STR
 
 evaluate_tool() {  # non-exec tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
-  case "$TOOL" in
-    read|grep|glob|notebook_read|write|edit|notebook_edit)
-      local fields
-      fields=$(printf '%s' "$PAYLOAD" | jq -c '.tool_input // {} | {file_path,path,notebook_path,recursive}')
-      credential_native "$fields" "$WORKTREE"
-      ;;
-  esac
+  local fields
+  fields=$(printf '%s' "$PAYLOAD" | jq -c '.tool_input // {} | {file_path,path,notebook_path,recursive,url}')
+  credential_native "$fields" "$WORKTREE"
   case "$TOOL" in
     read|grep|glob|notebook_read)
       ;;
