@@ -2,7 +2,7 @@
 # Shared public-hook regressions; sourced by both permission-policy suites.
 # Only synthetic policy/registry files and harmless sentinel material are used.
 
-credential_hook() {  # <policy> <tool-kind> <fields-json> <step>
+credential_hook() {  # <policy> <tool-kind> <fields-json> <step> [event override]
   local policy=$1 kind=$2 fields=$3 step=$4 adapter payload tool event
   adapter=${POLICY_SH##*/}
   if [ "$adapter" = fm-devin-permission-policy.sh ]; then
@@ -17,7 +17,7 @@ credential_hook() {  # <policy> <tool-kind> <fields-json> <step>
       --arg wt "$(jq -r .worktree "$policy")" \
       '{conversationId:"fixture",stepIdx:$step,workspacePaths:[$wt],toolCall:{name:$tool,args:$fields}}')
   fi
-  OUT=$(printf '%s' "$payload" | env -u CWD "$POLICY_SH" "$event" "$policy" 2>/dev/null)
+  OUT=$(printf '%s' "$payload" | env -u CWD "$POLICY_SH" "${5:-$event}" "$policy" 2>/dev/null)
   RC=$?
 }
 
@@ -52,7 +52,7 @@ done
 printf "called\n" >> "$CREDENTIAL_JUDGE_CALLS"
 echo "APPROVE: synthetic ordinary effect"')
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
-  mkdir -p "$dir/config" "$wt/nested" "$wt/sub" "$wt/~" "$dir/user-home"
+  mkdir -p "$dir/config" "$wt/nested" "$wt/sub" "$wt/~" "$wt/src" "$wt/env/lib" "$dir/user-home"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/vendor.env"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/registered"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/secret material.env"
@@ -61,6 +61,12 @@ echo "APPROVE: synthetic ordinary effect"')
   printf 'ordinary\n' > "$wt/README.md"
   printf 'ordinary\n' > "$wt/.editorconfig"
   printf 'fixture\n' > "$wt/sample.env.example"
+  for command in service-credentials.json aws_credentials .npmrc.backup .git-credentials.backup .env .env.local; do
+    printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/$command"
+  done
+  for command in src/env.ts src/env.d.ts env.mjs env/lib/module.py; do
+    printf 'ordinary\n' > "$wt/$command"
+  done
   ln -s vendor.env "$wt/alias"
   ln -s "$wt/registered" "$wt/~/alias"
   ln -s nested "$wt/directory-alias"
@@ -81,6 +87,12 @@ echo "APPROVE: synthetic ordinary effect"')
     credential_held || fail "credential effect must hold despite an always-approve judge: $command => $OUT"
   done <<'EOF'
 cat vendor.env
+cat service-credentials.json
+cat aws_credentials
+cat .npmrc.backup
+cat .git-credentials.backup
+cat .env
+cat .env.local
 cat 'secret material.env'
 cat ~/login.env
 cat '~/alias'
@@ -97,6 +109,17 @@ jq -f registered README.md
 jq --from-file registered README.md
 file registered
 cat < registered
+printf x > registered
+printf x >> registered
+printf x >| registered
+printf x &> registered
+printf x &>> registered
+printf x >& registered
+printf x <> registered
+printf x 2> registered
+printf x > alias
+printf x > hard-alias
+printf x > vendor.env
 cat alias
 cat hard-alias
 cat sub/../vendor.env
@@ -138,7 +161,15 @@ set -v
 cat sample.env.example
 EOF
   [ ! -e "$CREDENTIAL_JUDGE_CALLS" ] || fail "credential/unknown-footprint calls must never reach the judge"
-  for command in registered alias hard-alias vendor.env cycle-a broken; do
+  for command in 'cat service-credentials.json' 'cat aws_credentials' 'cat .npmrc.backup' 'cat .git-credentials.backup' 'printf x > registered' 'printf x >> alias'; do
+    fields=$(jq -nc --arg command "$command" --arg cwd "$wt" '{command:$command,CommandLine:$command,Cwd:$cwd}')
+    credential_hook "$policy" exec "$fields" "$step" pre-tool-use; step=$((step + 1))
+    case "${POLICY_SH##*/}" in
+      fm-devin*) [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] || fail "Devin pre-tool-use did not veto $command" ;;
+      *) credential_held || fail "agy pre-tool-use did not hold $command" ;;
+    esac
+  done
+  for command in registered alias hard-alias vendor.env cycle-a broken service-credentials.json aws_credentials .npmrc.backup .git-credentials.backup .env .env.local; do
     fields=$(jq -nc --arg path "$command" '{file_path:$path,AbsolutePath:$path}')
     for kind in read write; do
       credential_hook "$policy" "$kind" "$fields" "$step"; step=$((step + 1))
@@ -159,9 +190,14 @@ EOF
     credential_exec "$policy" "$command" "$step"; step=$((step + 1))
     credential_held || fail "a use grant must not permit disclosure: $command => $OUT"
   done
-  for command in 'cat README.md' 'cat .editorconfig' "sed -n '1,5p' README.md" 'ls nested' 'ls vendor.env' 'stat registered' 'find nested -type f' "find nested -name '*.env'" "echo 'vendor.env'" 'jq .env README.md' "jq -n '\"env\"'"; do
+  for command in 'cat README.md' 'cat .editorconfig' 'cat src/env.ts' 'cat src/env.d.ts' 'cat env.mjs' 'cat env/lib/module.py' 'printf x > README.md' 'printf x 2>&1' "sed -n '1,5p' README.md" 'ls nested' 'ls vendor.env' 'stat registered' 'find nested -type f' "find nested -name '*.env'" "echo 'vendor.env'" 'jq .env README.md' "jq -n '\"env\"'"; do
     credential_exec "$policy" "$command" "$step"; step=$((step + 1))
     credential_allowed || fail "ordinary reads and metadata must stay usable: $command => $OUT"
+  done
+  for command in src/env.ts src/env.d.ts env.mjs env/lib/module.py; do
+    fields=$(jq -nc --arg path "$command" '{file_path:$path,AbsolutePath:$path}')
+    credential_hook "$policy" read "$fields" "$step"; step=$((step + 1))
+    credential_allowed || fail "ordinary native environment modules must stay usable: $command => $OUT"
   done
   credential_exec "$policy" "python3 -c 'print(1)'" "$step"; step=$((step + 1))
   credential_allowed || fail "ordinary unresolved execution must still reach the judge"
@@ -247,4 +283,49 @@ test_retained_credential_identity() {
     *) denied "$OUT" || fail "worker must not repin its own authority" ;;
   esac
   pass "shared credential access: launch declarations survive revocation and workers cannot repin authority"
+}
+
+test_credential_registration_locking() {
+  local policy other dir config lock grants first second dead_pid
+  local path="$TMP_ROOT/registry-lock-first/wt/opaque" other_path="$TMP_ROOT/registry-lock-second/wt/opaque"
+  grants=$(jq -nc --arg path "$path" '{credential_env_files:[$path]}')
+  policy=$(new_case registry-lock-first 'echo "APPROVE: synthetic judge"' "$grants")
+  grants=$(jq -nc --arg path "$other_path" '{credential_env_files:[$path]}')
+  other=$(new_case registry-lock-second 'echo "APPROVE: synthetic judge"' "$grants")
+  dir=$(case_dir "$policy") config="$dir/config" lock="$dir/config/declared-credentials.json.lock"
+  printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$path"
+  printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$other_path"
+  jq --arg config "$config" '.config=$config' "$other" > "$other.new"
+  mv "$other.new" "$other"
+  mkdir -p "$lock"
+  jq -n --argjson pid "$$" '{pid:$pid,token:"synthetic live holder"}' > "$lock/owner.json"
+  touch -t 200001010000 "$lock"
+  ("$POLICY_SH" register-credentials "$policy" </dev/null > "$dir/first.log" 2>&1; printf '%s\n' "$?" > "$dir/first.rc") &
+  first=$!
+  ("$POLICY_SH" register-credentials "$other" </dev/null > "$dir/second.log" 2>&1; printf '%s\n' "$?" > "$dir/second.rc") &
+  second=$!
+  sleep 0.3
+  [ ! -e "$dir/first.rc" ] && [ ! -e "$dir/second.rc" ] || fail "contending registration must wait for the live holder"
+  jq -e --argjson pid "$$" '.pid == $pid' "$lock/owner.json" >/dev/null || fail "lock age must not evict a live holder"
+  rm -f "$lock/owner.json"
+  rmdir "$lock"
+  wait "$first" || fail "first registration process failed"
+  wait "$second" || fail "second registration process failed"
+  [ "$(cat "$dir/first.rc")" = 0 ] && [ "$(cat "$dir/second.rc")" = 0 ] || fail "contending registrations did not both finish"
+  jq -e --arg first "$path" --arg second "$other_path" \
+    '(.entries|length) == 2 and (.entries|any(.path==$first)) and (.entries|any(.path==$second))' \
+    "$config/declared-credentials.json" >/dev/null || fail "concurrent registrations lost a credential identity"
+  [ ! -e "$lock" ] || fail "successful registration left its lock behind"
+
+  # A real exited fixture process supplies a provably dead owner PID.
+  sleep 0.01 & dead_pid=$!
+  wait "$dead_pid"
+  ! kill -0 "$dead_pid" 2>/dev/null || fail "fixture lock owner did not exit"
+  mkdir "$lock"
+  jq -n --argjson pid "$dead_pid" '{pid:$pid,token:"synthetic dead holder"}' > "$lock/owner.json"
+  "$POLICY_SH" register-credentials "$policy" </dev/null >/dev/null || fail "dead-owner lock was not recovered"
+  [ ! -e "$lock" ] || fail "dead-owner recovery left a lock behind"
+  credential_exec "$policy" 'cat opaque' 4000
+  credential_held || fail "registration recovery must preserve protection"
+  pass "shared credential registration: contention preserves both identities and dead-owner recovery keeps protection"
 }

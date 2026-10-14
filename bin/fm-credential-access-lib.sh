@@ -16,7 +16,7 @@
 
 CREDENTIAL_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 CREDENTIAL_USER_HOME='' CREDENTIAL_REGISTRY_PATH='' CREDENTIAL_REGISTRY_REQUIRED=false
-CREDENTIAL_TRACE=0 CREDENTIAL_HOLD='' CREDENTIAL_CATEGORY=ordinary
+CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
 CREDENTIAL_LAST_CATEGORY=ordinary CREDENTIAL_LAST_REASON=''
 
 credential_policy() {
@@ -87,9 +87,11 @@ classify_credential_access() {  # <structured request JSON>
 credential_apply() {
   case "$CREDENTIAL_LAST_CATEGORY" in
     protected-disclosure|unresolved)
-      CREDENTIAL_CATEGORY=$CREDENTIAL_LAST_CATEGORY CREDENTIAL_HOLD=1 SENSITIVE_HIT=1
+      # shellcheck disable=SC2034 # Output globals consumed by both sourcing adapters.
+      CREDENTIAL_HOLD=1 SENSITIVE_HIT=1
       no_approve "credential access $CREDENTIAL_LAST_CATEGORY: $CREDENTIAL_LAST_REASON"
       # No script snapshot can accompany a call with a credential veto.
+      # shellcheck disable=SC2034 # Shared judge context read by fm-command-policy-lib.sh.
       JUDGE_SCRIPT_INPUT='' JUDGE_SCRIPT_HASHES=''
       ;;
   esac
@@ -152,7 +154,8 @@ credential_segment() {
 }
 
 credential_native() {  # <sanitized path-role fields JSON> <effective cwd>
-  CWD=$2 CREDENTIAL_TRACE=0 CREDENTIAL_HOLD='' CREDENTIAL_CATEGORY=ordinary
+  # shellcheck disable=SC2034 # CREDENTIAL_HOLD is read by the sourcing adapters.
+  CWD=$2 CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
   local request
   request=$(jq -nc --arg tool "$TOOL" --argjson fields "$1" '{operation:"native",tool:$tool,fields:$fields}')
   classify_credential_access "$request"

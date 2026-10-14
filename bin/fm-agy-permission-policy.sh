@@ -268,7 +268,7 @@ if [ -n "$POLICY" ]; then
 fi
 credential_policy
 
-TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='' INPUT_STRINGS='' CACHE_INPUT=''
+TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT=''
 {
   IFS= read -r -d '' TOOL
   IFS= read -r -d '' TOOL_USE_ID
@@ -278,7 +278,6 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='
   IFS= read -r -d '' AGY_CWD
   IFS= read -r -d '' FILE_PATH
   IFS= read -r -d '' INPUT_JSON
-  IFS= read -r -d '' INPUT_STRINGS
   IFS= read -r -d '' CACHE_INPUT
 } < <(printf '%s' "$PAYLOAD" | jq -j '
   def s: (. // "") | tostring | gsub("\u0000"; "");
@@ -296,7 +295,6 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='
       ([$a.TargetFile, $a.AbsolutePath, $a.FilePath, $a.File]
        | map(select(type == "string" and . != "")) | .[0] // "" | s),
       (($a) | tojson | .[0:2000] | s),
-      ([$a | .. | strings] | join("\n") | s),
       (($cacheargs) | tojson | s)
     ] | join("\u0000") + "\u0000"' 2>/dev/null)
 

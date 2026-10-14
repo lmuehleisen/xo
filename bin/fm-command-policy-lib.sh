@@ -84,7 +84,7 @@
 #   CONFIG_DIR  the home config directory the brief's status command names.
 #       Empty on an older policy file, which falls back to the config sibling
 #       of a status file under state/.
-#   EVENT TOOL TOOL_USE_ID SESSION_ID CMD FILE_PATH INPUT_JSON INPUT_STRINGS
+#   EVENT TOOL TOOL_USE_ID SESSION_ID CMD FILE_PATH INPUT_JSON
 #   CACHE_INPUT PENDING_DIR CACHE_DIR JUDGE_MODEL JUDGE_TIMEOUT
 #   FM_POLICY_ADAPTER (short adapter id; names the judge's scratch directory
 #       under the task temp root, <id>-permission-judge)
@@ -3163,7 +3163,7 @@ evaluate_exec() {
   JUDGE_CACHE_KEY=''
   # shellcheck disable=SC2034 # output global; the agy adapter reads it after evaluate_exec.
   SENSITIVE_HIT=''
-  CREDENTIAL_TRACE=0 CREDENTIAL_HOLD='' CREDENTIAL_CATEGORY=ordinary
+  CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
   FETCH_FILES=''
   analyze_command "$1" "$start_cwd"
   while [ "$q" -lt "${#NESTED[@]}" ] && [ "$q" -lt 32 ]; do

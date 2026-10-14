@@ -261,7 +261,7 @@ fi
 fm_judge_tier_bind "$FM_JUDGE_TIER_NATIVE" "$DEVIN"
 credential_policy
 
-TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' INPUT_STRINGS='' CACHE_INPUT=''
+TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT=''
 {
   IFS= read -r -d '' TOOL
   IFS= read -r -d '' TOOL_USE_ID
@@ -269,7 +269,6 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' INPUT_STR
   IFS= read -r -d '' CMD
   IFS= read -r -d '' FILE_PATH
   IFS= read -r -d '' INPUT_JSON
-  IFS= read -r -d '' INPUT_STRINGS
   IFS= read -r -d '' CACHE_INPUT
 } < <(printf '%s' "$PAYLOAD" | jq -j '
   def s: (. // "") | tostring | gsub("\u0000"; "");
@@ -277,7 +276,6 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' INPUT_STR
     (.tool_input.command | s),
     ((.tool_input.file_path // .tool_input.path // .tool_input.notebook_path) | s),
     ((.tool_input // {}) | del(.content?, .new_string?, .old_string?) | tojson | .[0:2000] | s),
-    ([(.tool_input // {}) | del(.content?, .new_string?, .old_string?) | .. | strings] | join("\n") | s),
     ((.tool_input // {}) | tojson | s)
   ] | join("\u0000") + "\u0000"' 2>/dev/null)
 

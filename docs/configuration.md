@@ -805,9 +805,13 @@ Protected Git writes and operations outside the allowed sandbox still require th
 The Devin and agy worker policy layers share the metadata-only credential classifier in [`bin/fm-credential-access.mjs`](../bin/fm-credential-access.mjs).
 Its header owns the `config/declared-credentials.json` schema and live-update behavior; the registry contains protected identities and permitted use modes, never credential values, and lives outside worker write roots.
 Firstmate retains declared credential identities at launch and repin; removing a task grant never removes registry protection.
+Registry registration retries contention for up to five seconds and recovers locks whose recorded process has exited; it never expires a live lock by age.
+Uncertain owner metadata or an interrupted recovery refuses registration for operator inspection and repair.
 Existing policy files need their current pinned declarations registered through the adapter's `register-credentials` event before credential grants are edited.
 Task `credential_env_files` grants authorize exact trusted sourcing with tracing disabled; protection persists independently of that use authority.
-The classifier applies before static approvals, ordinary caches, and judges, including Devin's native pre-tool veto; unproved recursive or dynamic content footprints require a narrowed call or an explicit operator exception.
+The classifier applies before static approvals, ordinary caches, and judges, including Devin's native pre-tool veto.
+Devin refuses unproved recursive or dynamic content footprints before its permission prompt; those calls must be narrowed, with no one-shot operator exception through that adapter.
+agy routes those holds to firstmate's existing one-shot approval path.
 The portable entry points are `tests/fm-devin-permission-policy.test.sh` and `tests/fm-agy-permission-policy.test.sh`, with live hook coverage refreshed by their corresponding live adapter guards.
 
 This policy closes direct, statically visible credential-viewing paths.

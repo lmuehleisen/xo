@@ -64,8 +64,9 @@ function resolveOperand(value, cwd, userHome) {
 
 function protectedName(p, home) {
   const components = p.toLowerCase().split("/");
-  if (components.some(c => /(^|\.)env($|\.)/.test(c)
-    || /^(id_(rsa|ed25519|ecdsa|dsa)(\..*)?|\.netrc|\.git-credentials|\.npmrc|\.pypirc|hosts\.yml|credentials?(\..*)?|.*\.(pem|p12|pfx|key))$/.test(c)
+  if (components.some(c => /\.env($|\.)/.test(c)
+    || /credentials/.test(c)
+    || /^(id_(rsa|ed25519|ecdsa|dsa)(\..*)?|\.(netrc|git-credentials|npmrc|pypirc)(\..*)?|hosts\.yml(\..*)?|credential(\..*)?|.*\.(pem|p12|pfx|key)(\..*)?)$/.test(c)
     || c.includes("antigravity-oauth-token")
     || [".ssh", ".aws", ".gnupg", "keychains", "keychain"].includes(c))) return true;
   const locations = [".config/gh", ".config/devin", ".devin/config", ".docker/config.json",
@@ -105,20 +106,71 @@ function registry(context) {
   }
 }
 
+// Bounded contention handling. A live PID is never evicted by lock age, and
+// missing/uncertain owner metadata needs operator repair rather than guessing.
+// A marker inside the old directory serializes dead-owner recovery; renaming
+// that directory before cleanup cannot remove a replacement holder's lock.
+function acquireRegistryLock(lock) {
+  const token = crypto.randomBytes(16).toString("hex"), ownerFile = `${lock}/owner.json`;
+  const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
+  const dead = pid => {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); return false; }
+    catch (error) { return error.code === "ESRCH"; }
+  };
+  const owner = () => JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+  const deadline = Date.now() + 5000;
+  do {
+    let acquired;
+    try { fs.mkdirSync(lock, { mode: 0o700 }); acquired = fs.lstatSync(lock); }
+    catch (error) { if (error.code !== "EEXIST") throw error; }
+    if (acquired) {
+      try { fs.writeFileSync(ownerFile, JSON.stringify({ pid: process.pid, token }), { flag: "wx", mode: 0o600 }); }
+      catch (error) { fs.rmdirSync(lock); throw error; }
+      return () => {
+        if (same(acquired, fs.lstatSync(lock)) && owner().token === token) fs.rmSync(lock, { recursive: true });
+      };
+    }
+    const recovery = `${lock}/recover`;
+    let marker;
+    try {
+      const previous = fs.lstatSync(lock), recorded = owner();
+      if (previous.isDirectory() && !previous.isSymbolicLink() && dead(recorded.pid)) {
+        fs.mkdirSync(recovery, { mode: 0o700 }); marker = fs.lstatSync(recovery);
+        const current = owner();
+        if (same(previous, fs.lstatSync(lock)) && current.token === recorded.token && dead(current.pid)) {
+          const retired = `${lock}.${crypto.randomBytes(16).toString("hex")}.retired`;
+          fs.renameSync(lock, retired);
+          fs.rmSync(retired, { recursive: true });
+          continue;
+        }
+      }
+    } catch { /* Another registration/recovery or uncertain metadata: retry. */ }
+    finally {
+      if (marker) {
+        try { if (same(marker, fs.lstatSync(recovery))) fs.rmdirSync(recovery); }
+        catch { /* The old directory was retired or its holder finished. */ }
+      }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  } while (Date.now() < deadline);
+  throw Object.assign(new Error("lock"), { reason: "credential-registry-lock-unavailable" });
+}
+
 // Operator-only launch/repin registration, separate from the pure classifier.
 // Firstmate retains known identities here; revoking task use never removes them.
 function registerGrants(context) {
   if (!(context.useGrants || []).length) return result("ordinary", "no-new-credential-identities");
   if (!context.registryPath) return result("unresolved", "missing-registry-location");
   const lock = `${context.registryPath}.lock`;
-  let temporary = "", locked = false;
+  let temporary = "", releaseLock;
   try {
     const parent = resolveOperand(path.dirname(context.registryPath), "", context.userHome).canonical;
     for (const root of context.writeRoots || []) {
       if (inside(parent, resolveOperand(root, context.cwd, context.userHome).canonical)) throw new Error("mutable");
     }
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-    fs.mkdirSync(lock, { mode: 0o700 }); locked = true;
+    releaseLock = acquireRegistryLock(lock);
     const state = registry(context);
     if (state.invalid) throw new Error("registry");
     const document = fs.existsSync(context.registryPath)
@@ -140,11 +192,12 @@ function registerGrants(context) {
       fs.renameSync(temporary, context.registryPath); temporary = "";
     }
     return result("ordinary", "retained-credential-identities");
-  } catch {
-    return result("unresolved", "credential-registration-unavailable");
+  } catch (error) {
+    return result("unresolved", error.reason === "credential-registry-lock-unavailable"
+      ? error.reason : "credential-registration-unavailable");
   } finally {
     if (temporary) { try { fs.unlinkSync(temporary); } catch { /* no partial publication */ } }
-    if (locked) fs.rmdirSync(lock);
+    if (releaseLock) releaseLock();
   }
 }
 
@@ -229,6 +282,10 @@ function segment(request) {
   for (const r of request.redirects || []) {
     if (["<", "<>", "<&"].includes(r.operator) && !/^[0-9-]+$/.test(r.path)) {
       calls.push({ ...request, operation: "read", operands: [r] });
+    }
+    if ([">", ">>", ">|", "<>", "&>", "&>>", ">&"].includes(r.operator)
+      && !/^[0-9-]+$/.test(r.path)) {
+      calls.push({ ...request, operation: "write", operands: [{ ...r, role: "destination" }] });
     }
   }
   // Credential semantics also apply to explicit-path wrapper invocations;
@@ -415,7 +472,8 @@ function native(request) {
   const knownFileTool = ["read", "notebook_read", "write", "edit", "notebook_edit", "view_file", "write_to_file", "replace_file_content"].includes(tool);
   if (!operands.length && !search && !knownFileTool) return result("ordinary", "no-known-file-operand");
   const recursive = search && (a.recursive !== false && a.Recursive !== false);
-  return classify_credential_access({ ...request, operation: "read", operands, recursive,
+  const write = ["write", "edit", "notebook_edit", "write_to_file", "replace_file_content"].includes(tool);
+  return classify_credential_access({ ...request, operation: write ? "write" : "read", operands, recursive,
     dynamicSelection: !operands.length || operands.some(o => /[$*?\[\]]/.test(o.path)) });
 }
 

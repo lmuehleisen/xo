@@ -221,6 +221,7 @@ fm_devin_spawn_wire() {
     exit 1
   }
   "$SCRIPT_DIR/fm-devin-permission-policy.sh" register-credentials "$devin_policy" </dev/null || {
+    rm -f -- "$snapshot" "$config"
     echo "error: cannot retain Devin credential declarations" >&2
     exit 1
   }
