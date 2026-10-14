@@ -179,6 +179,31 @@ function segment(request) {
       calls.push({ ...request, operation: "read", operands: [r] });
     }
   }
+  // Credential semantics also apply to explicit-path wrapper invocations;
+  // these checks confer no executable-identity or ordinary command authority.
+  if (["env", "xargs", "nohup", "nice", "timeout", "command", "builtin", "exec"].includes(base)) {
+    if ((request.depth || 0) >= 16 || base === "xargs") return result("unresolved", "wrapper-selected-input");
+    let i = 1, dynamic = !!request.dynamicSelection;
+    while (i < words.length) {
+      const v = values[i];
+      if (v === "--") { i++; break; }
+      if (base === "env" && (v.startsWith("-S") || v.startsWith("--split-string"))) return result("unresolved", "wrapper-inline-program");
+      if (base === "env" && /^\w+=/.test(v)) { i++; continue; }
+      if (!v.startsWith("-")) break;
+      if (base === "env" && ["-C", "--chdir"].includes(v)) dynamic = true;
+      if (base === "env" && v.startsWith("--chdir=")) dynamic = true;
+      i += (base === "env" && ["-u", "--unset", "-C", "--chdir"].includes(v))
+        || (base === "nice" && v === "-n")
+        || (base === "timeout" && ["-s", "-k", "--signal", "--kill-after"].includes(v)) ? 2 : 1;
+    }
+    if (base === "timeout" && i < words.length) i++;
+    if (i >= words.length) {
+      const verdict = base === "env" ? result("protected-disclosure", "environment-or-token-output") : result("ordinary", "wrapper-metadata");
+      return ranked([...calls.map(c => classify_credential_access(c)), verdict]);
+    }
+    return ranked([...calls.map(c => classify_credential_access(c)), segment({ ...request, words: words.slice(i),
+      redirects: [], dynamicSelection: dynamic, depth: (request.depth || 0) + 1 })]);
+  }
   const outputExpansion = ["echo", "printf"].includes(base) && words.slice(1).some(w => w.expanded);
   const metadataSecretOutput = ["ls", "stat", "du", "df", "tree", "find", "readlink", "realpath", "ps"].includes(base)
     && words.slice(1).some(w => w.expanded && /\$(?:\{)?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(w.value));

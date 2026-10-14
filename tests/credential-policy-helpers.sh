@@ -118,6 +118,10 @@ set
 env -0
 command env -0
 /usr/bin/env -0
+/usr/bin/env -u IGNORED
+/usr/bin/env cat registered
+/usr/bin/nohup cat "$FILE"
+printf '%s' registered | /usr/bin/xargs cat
 printenv
 jq -n env
 printf '%s' "$KEY"
