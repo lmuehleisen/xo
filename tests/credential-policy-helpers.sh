@@ -251,10 +251,14 @@ EOF
   "$POLICY_SH" repin-grants "$policy" >/dev/null || fail "remove synthetic use grant"
   credential_exec "$policy" 'cat registered' "$step"; step=$((step + 1))
   credential_held || fail "removing a use grant must not remove registry protection"
-  ln -s "$dir/config" "$wt/config-alias"
+  # Pin a safe write alias, then change its identity after the operator check.
+  # Registration itself now refuses a registry already inside write roots.
+  ln -s "$wt/sub" "$wt/config-alias"
   grants=$(jq -nc --arg path "$wt/config-alias" '{write_dirs:[$path]}')
   printf '\n%sfirstmate-grants\n%s\n%s\n' "$fence" "$grants" "$fence" >> "$dir/data/t1/brief.md"
   "$POLICY_SH" repin-grants "$policy" >/dev/null || fail "pin synthetic writable-registry alias"
+  rm "$wt/config-alias"
+  ln -s "$dir/config" "$wt/config-alias"
   credential_exec "$policy" 'cat README.md' "$step"; step=$((step + 1))
   credential_held || fail "a registry under a granted physical write root must be rejected"
   # Removed/malformed expected registries fail closed for content, but leave
