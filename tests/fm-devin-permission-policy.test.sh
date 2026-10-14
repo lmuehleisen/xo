@@ -22,6 +22,8 @@ set -u
 . "$ROOT/bin/fm-classify-lib.sh"
 
 POLICY_SH="$ROOT/bin/fm-devin-permission-policy.sh"
+# shellcheck source=tests/credential-policy-helpers.sh
+. "$ROOT/tests/credential-policy-helpers.sh"
 TMP_ROOT=$(fm_test_tmproot fm-devin-permission-policy)
 
 # The shared publish policy (bin/fm-gh-publish-policy.mjs) runs inside this
@@ -166,7 +168,7 @@ git push --set-upstream origin fm/x
 git push -o ci.skip --dry-run origin fm/x
 git push -- origin fm/x
 command -v sudo
-grep -rn sudo tests
+grep -n sudo README.md
 git log --grep=force
 EOF
   hook "$policy" pre-tool-use exec "cat <<'DOC'
@@ -245,7 +247,7 @@ test_read_and_build_approvals_are_silent() {
   done <<EOF
 cat README.md
 head -50 bin/fm-spawn.sh | grep -n devin
-grep -rn "a|b" bin; echo done
+grep -n "a|b" bin/fm-spawn.sh; echo done
 find . -name "*.sh" -type f
 git merge-base HEAD origin/main
 git -C . log --oneline -5
@@ -2432,6 +2434,10 @@ test_recursive_rm_resolves_symlinked_components
 test_preallowed_git_forms_are_refused_before_they_run
 test_native_writes_resolve_symlinks
 test_retire_closes_orphaned_escalations
+test_shared_credential_access
+test_retained_credential_identity
+test_credential_registration_locking
+test_credential_registry_without_grants
 test_read_and_build_approvals_are_silent
 test_residue_escalates_without_judge
 test_escalation_closes_on_post_tool_use_and_stop

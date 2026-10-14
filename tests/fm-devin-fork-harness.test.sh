@@ -444,7 +444,7 @@ EOF
   # because an absent digest is what makes a block the worker adds inert.
   jq -e 'has("grants_sha")' "$policy" >/dev/null \
     || fail "policy file must record the brief's grants digest: $(cat "$policy")"
-  [ "$(jq -r '.hooks.PreToolUse[0].matcher' "$hook_file")" = '^exec$' ] || fail "PreToolUse guard must match exec"
+  [ "$(jq -r '.hooks.PreToolUse[0].matcher' "$hook_file")" = '' ] || fail "PreToolUse credential guard must match every tool"
   [ "$(jq -r '.hooks.PermissionRequest[0].matcher' "$hook_file")" = '' ] || fail "PermissionRequest must match every tool"
   cmd_pre=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$hook_file")
   cmd_perm=$(jq -r '.hooks.PermissionRequest[0].hooks[0].command' "$hook_file")
@@ -550,7 +550,7 @@ EOF
 # --- private config: user settings, Claude import, refusal -------------------
 
 test_devin_private_config_preserves_user_config() {
-  local fields case_dir home proj wt fakebin id config user out before
+  local fields case_dir home proj wt fakebin id config user out before grants fence
   fields=$(make_spawn_case userconfig)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $fields
@@ -628,6 +628,31 @@ EOF
   esac
   [ ! -e "$home/state/$id.devin-config.json" ] || fail "an undecorated base config must not survive a refused compose"
   [ ! -s "$home/launch.log" ] || fail "an undecorated base config must not reach the pane"
+
+  fields=$(make_spawn_case userconfig-registration-failure)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  user="$home/userhome/.config/devin/config.json"
+  mkdir -p "$(dirname "$user")"
+  printf '%s\n' '{"theme":"synthetic"}' > "$user"
+  before=$(cat "$user")
+  printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$home/fixture.env"
+  grants=$(jq -nc --arg path "$home/fixture.env" '{credential_env_files:[$path]}')
+  fence=$(printf '\140\140\140')
+  printf '\n%sfirstmate-grants\n%s\n%s\n' "$fence" "$grants" "$fence" >> "$home/data/$id/brief.md"
+  printf 'invalid registry\n' > "$home/config/declared-credentials.json"
+  out=$(run_devin_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) \
+    && fail "a malformed credential registry must refuse the launch"
+  case "$out" in
+    *'cannot retain Devin credential declarations'*) ;;
+    *) fail "refusal must name credential registration, got: $out" ;;
+  esac
+  [ ! -e "$home/state/$id.devin-config.json" ] || fail "failed credential registration left a base config"
+  [ -z "$(find "$home/state" -maxdepth 1 -name ".$id.devin-*config.*" -print)" ] \
+    || fail "failed credential registration left a private snapshot"
+  [ ! -s "$home/launch.log" ] || fail "failed credential registration reached the pane"
+  [ "$(cat "$user")" = "$before" ] || fail "failed registration changed the user config"
 
   pass "fm-spawn.sh: devin private config keeps user settings and import choice, and refuses a bad compose"
 }

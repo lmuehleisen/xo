@@ -802,6 +802,23 @@ Every Claude launch also passes `--add-dir` for exactly its Firstmate task chann
 Claude Code path-checks its Read, Glob, and Grep tools against its working directories, and since 2.1.257 the first outside read in auto mode parks the pane on a one-time question, so the grant keeps those channels readable without that question.
 Protected Git writes and operations outside the allowed sandbox still require the harness's normal review.
 
+The Devin and agy worker policy layers share the metadata-only credential classifier in [`bin/fm-credential-access.mjs`](../bin/fm-credential-access.mjs).
+Its header owns the `config/declared-credentials.json` schema and live-update behavior; the registry contains protected identities and permitted use modes, never credential values, and lives outside worker write roots.
+Firstmate retains declared credential identities at launch and repin; removing a task grant never removes registry protection.
+Registry registration retries contention for up to five seconds and recovers locks whose recorded process has exited; it never expires a live lock by age.
+Uncertain owner metadata or an interrupted recovery refuses registration for operator inspection and repair.
+Existing policy files need their current pinned declarations registered through the adapter's `register-credentials` event before credential grants are edited.
+Task `credential_env_files` grants authorize exact trusted sourcing with tracing disabled; protection persists independently of that use authority.
+The classifier applies before static approvals, ordinary caches, and judges, including Devin's native pre-tool veto.
+Devin refuses unproved recursive or dynamic content footprints before its permission prompt; those calls must be narrowed, with no one-shot operator exception through that adapter.
+agy routes those holds to firstmate's existing one-shot approval path.
+The portable entry points are `tests/fm-devin-permission-policy.test.sh` and `tests/fm-agy-permission-policy.test.sh`, with live hook coverage refreshed by their corresponding live adapter guards.
+
+This policy closes direct, statically visible credential-viewing paths.
+A worker that can write arbitrary code and run it unsandboxed can read secrets through that code: neither a command-name allowlist nor a judge shown only the command line proves that `npm test` or a granted driver will not do so.
+A stronger guarantee requires OS confinement or controlled credential injection.
+Trusted shell sourcing also assumes the operator trusts the file's executable shell code; ordinary files copied or renamed into unregistered identities remain outside the metadata guarantee.
+
 For a Claude primary with mostly Codex workers, launch `claude` in this home, set `config/crew-harness` to `codex`, and keep `config/backend` at `tmux`.
 Select Claude explicitly for an individual review when wanted; a dispatch-profile file is unnecessary for this simple default.
 Choose the primary's own Auto mode through its CLI or interface rather than changing global settings on behalf of unrelated sessions.

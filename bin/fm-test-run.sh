@@ -1678,7 +1678,7 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-agy-permission-policy.test.sh
       printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       ;;
-    bin/fm-command-policy-lib.sh|bin/fm-devin-permission-policy.sh)
+    bin/fm-command-policy-lib.sh|bin/fm-devin-permission-policy.sh|bin/fm-credential-access-lib.sh|bin/fm-credential-access.mjs|tests/credential-policy-helpers.sh)
       # The shared command policy binds both adapters: a change to it or to
       # the Devin adapter's shell selects both portable suites plus each
       # adapter's live guard.

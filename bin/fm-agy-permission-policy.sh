@@ -13,7 +13,7 @@
 #        fm-agy-permission-policy.sh grants-digest <brief-file>
 #        fm-agy-permission-policy.sh verified-versions
 # The agy hook payload arrives as JSON on stdin; the management verbs
-# (approve, decline, retire, repin-grants) and the two query verbs read none.
+# (approve, decline, retire, repin-grants, register-credentials) and the two query verbs read none.
 #
 #   armed (PreInvocation)      the adapter's first hook call of a session
 #                              writes one {event:"armed"} line to the observer
@@ -156,7 +156,7 @@ EVENT=${1-}
 POLICY=${2-}
 KEY=${3-}
 case "$EVENT" in
-  armed|pre-tool-use|post-tool-use|stop|approve|decline|retire|repin-grants|grants-digest|verified-versions|judge-probe) ;;
+  armed|pre-tool-use|post-tool-use|stop|approve|decline|retire|repin-grants|register-credentials|grants-digest|verified-versions|judge-probe) ;;
   *)
     sed -n '9,11s/^# *//p' "${BASH_SOURCE[0]}" >&2
     exit 0
@@ -221,7 +221,7 @@ if [ "$EVENT" = retire ]; then
 fi
 
 PAYLOAD=
-case "$EVENT" in retire|repin-grants|approve|decline) ;; *) PAYLOAD=$(cat) ;; esac
+case "$EVENT" in retire|repin-grants|register-credentials|approve|decline) ;; *) PAYLOAD=$(cat) ;; esac
 
 TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' AGY='' JUDGE_BIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' CONFIG_DIR='' GEN='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
@@ -266,8 +266,9 @@ if [ -n "$POLICY" ]; then
   [ -n "$TASK" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"${POLICY%/*}/$TASK.agy-hooks"
   [ -n "$LOG" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$LOG"
 fi
+credential_policy
 
-TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='' INPUT_STRINGS='' CACHE_INPUT=''
+TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT=''
 {
   IFS= read -r -d '' TOOL
   IFS= read -r -d '' TOOL_USE_ID
@@ -277,7 +278,6 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='
   IFS= read -r -d '' AGY_CWD
   IFS= read -r -d '' FILE_PATH
   IFS= read -r -d '' INPUT_JSON
-  IFS= read -r -d '' INPUT_STRINGS
   IFS= read -r -d '' CACHE_INPUT
 } < <(printf '%s' "$PAYLOAD" | jq -j '
   def s: (. // "") | tostring | gsub("\u0000"; "");
@@ -295,7 +295,6 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='
       ([$a.TargetFile, $a.AbsolutePath, $a.FilePath, $a.File]
        | map(select(type == "string" and . != "")) | .[0] // "" | s),
       (($a) | tojson | .[0:2000] | s),
-      ([$a | .. | strings] | join("\n") | s),
       (($cacheargs) | tojson | s)
     ] | join("\u0000") + "\u0000"' 2>/dev/null)
 
@@ -346,12 +345,11 @@ write_armed() {
 
 evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
+  local fields
+  fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive,Url,URL,Query}')
+  credential_native "$fields" "$WORKTREE"
   case "$TOOL" in
     view_file|grep_search|list_dir|search_web|read_url_content)
-      sensitive_text "$INPUT_STRINGS" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of credential material"; }
-      granted_env_file_text "$INPUT_STRINGS" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of a credential file this task may only source"; }
       ;;
     write_to_file|replace_file_content)
       local abs rel
@@ -380,10 +378,7 @@ evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
         refuse "$TOOL of firstmate's own permission wiring ($FILE_PATH) is refused by firstmate policy"
         return 0
       fi
-      sensitive_text "$FILE_PATH" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of credential material"; return 0; }
-      granted_env_file_text "$FILE_PATH" \
-        && { SENSITIVE_HIT=1; no_approve "$TOOL of a credential file this task may only source"; return 0; }
+      [ -z "$CREDENTIAL_HOLD" ] || return 0
       if strictly_inside "$abs" "$WORKTREE"; then
         rel=${abs#"$(norm_abs "$WORKTREE")"/}
         case "$rel" in
@@ -672,6 +667,10 @@ case "$EVENT" in
     fi
     exit 0
     ;;
+  register-credentials)
+    credential_record_grants && credential_pin_registry || exit 1
+    exit 0
+    ;;
   repin-grants)
     # Firstmate edits a live brief's grants on purpose; this records the new
     # digest so the block is honored again. Nothing a worker can reach runs it.
@@ -680,6 +679,7 @@ case "$EVENT" in
       exit 1
     }
     new_sha=$(grants_digest "$(grants_block)" 2>/dev/null || true)
+    credential_record_grants "$new_sha" || exit 1
     if ! jq --arg sha "$new_sha" '.grants_sha = $sha' "$POLICY" > "$POLICY.repin" 2>/dev/null \
       || ! mv "$POLICY.repin" "$POLICY"; then
       rm -f "$POLICY.repin"
@@ -687,6 +687,7 @@ case "$EVENT" in
       exit 1
     fi
     echo "repinned grants digest for ${TASK:-this task}: ${new_sha:-(no grants block)}"
+    credential_pin_registry || exit 1
     exit 0
     ;;
   retire)

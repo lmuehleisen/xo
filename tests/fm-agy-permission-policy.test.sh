@@ -25,6 +25,8 @@ set -u
 . "$ROOT/bin/fm-classify-lib.sh"
 
 POLICY_SH="$ROOT/bin/fm-agy-permission-policy.sh"
+# shellcheck source=tests/credential-policy-helpers.sh
+. "$ROOT/tests/credential-policy-helpers.sh"
 HOOK_SH="$ROOT/bin/fm-agy-hook.sh"
 TMP_ROOT=$(fm_test_tmproot fm-agy-permission-policy)
 
@@ -180,7 +182,7 @@ test_refusal_leaves_safe_commands_alone() {
   done <<'EOF'
 git push -u origin fm/x
 command -v sudo
-grep -rn sudo tests
+grep -n sudo README.md
 cat README.md
 git log --oneline -5
 bin/fm-lint.sh
@@ -203,7 +205,6 @@ test_non_command_tool_mapping() {
   done <<EOF
 view_file|$wt/README.md
 view_file|README.md
-grep_search|needle
 list_dir|$wt/sub
 search_web|firstmate agy permission hooks
 read_url_content|https://example.com/docs
@@ -2153,3 +2154,7 @@ test_audit_counts_terminal_metrics_once
 test_common_negative_read_boundaries
 test_archive_scopes_reused_task_ids
 test_spent_credential_token_binds_to_invocation
+test_shared_credential_access
+test_retained_credential_identity
+test_credential_registration_locking
+test_credential_registry_without_grants

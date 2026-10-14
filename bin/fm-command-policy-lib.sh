@@ -68,7 +68,7 @@
 #   storing it never recomputes a key under newer authority.
 #
 #   Task grants: load_grants/grants_block/grants_digest/
-#   fm_grants_digest_of_file/granted_env_file*/granted_task_script/
+#   fm_grants_digest_of_file/granted_task_script/
 #   granted_script_invocation/inside_grant_write_dirs/grants_excerpt.
 #
 #   Support: now_utc, one_line, json_reason, log_record, status_append,
@@ -84,7 +84,7 @@
 #   CONFIG_DIR  the home config directory the brief's status command names.
 #       Empty on an older policy file, which falls back to the config sibling
 #       of a status file under state/.
-#   EVENT TOOL TOOL_USE_ID SESSION_ID CMD FILE_PATH INPUT_JSON INPUT_STRINGS
+#   EVENT TOOL TOOL_USE_ID SESSION_ID CMD FILE_PATH INPUT_JSON
 #   CACHE_INPUT PENDING_DIR CACHE_DIR JUDGE_MODEL JUDGE_TIMEOUT
 #   FM_POLICY_ADAPTER (short adapter id; names the judge's scratch directory
 #       under the task temp root, <id>-permission-judge)
@@ -123,7 +123,10 @@
 #       runs a program (--output, --ext-diff, -O, --open-files-in-pager))
 #
 # Read-and-build set (full-command inspection, not prefix matching). A
-# command is approved only when it has no unquoted-delimiter heredoc, no
+# structured credential-access check precedes this set; its four categories,
+# protected identities, and use authority are owned by fm-credential-access.mjs.
+# This set supplies routine command approval after that check succeeds.
+# A command is approved only when it has no unquoted-delimiter heredoc, no
 # command or process substitution, no background &, no leading VAR=value
 # assignment, no argument naming credential material (.ssh, .aws, .gnupg,
 # .netrc, .env, gh hosts.yml, key files, git credentials, agent config - except
@@ -315,6 +318,10 @@
 # second copy of the judge here.
 # shellcheck source=bin/fm-judge-tier-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fm-judge-tier-lib.sh"
+
+# Credential identity and disclosure semantics have one metadata-only owner.
+# shellcheck source=bin/fm-credential-access-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fm-credential-access-lib.sh"
 
 # A literal "~" held in a variable: case patterns undergo tilde expansion, so
 # the grant paths below compare against this instead of a tilde token.
@@ -531,7 +538,9 @@ load_grants() {
     IFS= read -r -d '' remote
   } < <(printf '%s' "$block" | jq -j '
     def l(f): ((f // []) | if type == "array" then (.[0:32] | map(tostring)) else [] end | join("\n"));
-    [ l(.credential_env_files), l(.write_dirs), l(.remote_writes) ]
+    def credentials(f): ((f // []) | if type == "array" and all(.[]; type == "string" and (test("[\u0000-\u001f]") | not))
+      then .[0:32] else [] end | join("\n"));
+    [ credentials(.credential_env_files), l(.write_dirs), l(.remote_writes) ]
     | map(gsub("\u0000"; "")) | join("\u0000") + "\u0000"' 2>/dev/null)
   local line abs
   while IFS= read -r line; do
@@ -572,37 +581,10 @@ load_grants() {
 grant_abs() {  # <declared-path>
   local w=$1
   case "$w" in
-    "$TILDE"/*) [ -n "${HOME:-}" ] || return 1; w="$HOME/${w#"$TILDE"/}" ;;
+    "$TILDE"/*) [ -n "${CREDENTIAL_USER_HOME:-${HOME:-}}" ] || return 1; w="${CREDENTIAL_USER_HOME:-$HOME}/${w#"$TILDE"/}" ;;
     "$TILDE") return 1 ;;
   esac
   resolve_path "$w" "$WORKTREE"
-}
-
-# 0 when any line of <text> names a granted credential env file. Declaring a
-# file as the task's credential file makes it credential material for every
-# use except the one sanctioned `. <file>` / `source <file>` shape, even when
-# its name matches none of the generic patterns in sensitive_text.
-granted_env_file_text() {  # <text>
-  local line abs
-  load_grants
-  [ -n "$GRANT_ENV_FILES" ] || return 1
-  while IFS= read -r line; do
-    case "$line" in *[/~]*) ;; *) continue ;; esac
-    abs=$(resolve_maybe_tilde "$line" 1 "$CWD" 2>/dev/null) \
-      || abs=$(resolve_maybe_tilde "$line" 0 "$CWD" 2>/dev/null) || continue
-    granted_env_file "$abs" && return 0
-  done <<<"$1"
-  return 1
-}
-
-granted_env_file() {  # <abs>
-  local f
-  load_grants
-  [ -n "$GRANT_ENV_FILES" ] || return 1
-  while IFS= read -r f; do
-    [ -n "$f" ] && [ "$f" = "$1" ] && return 0
-  done <<<"$GRANT_ENV_FILES"
-  return 1
 }
 
 # 0 when <word> physically resolves to a script the grants block names.
@@ -708,7 +690,7 @@ judge_script_simple_command() {
 }
 
 judge_script_input() {
-  local k=0 i abs logical word root phys bytes content hash base interpreter=0 first arg rest
+  local k=0 i abs logical word phys bytes content hash base interpreter=0 first arg rest
   [ "${#E[@]}" -gt 0 ] || return 0
   [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] || return 0
   base=${E[0]##*/}
@@ -727,8 +709,7 @@ judge_script_input() {
       *) word=$(CDPATH='' cd -- "$CWD" 2>/dev/null && command -v -- "$word") || return 0 ;;
     esac
     logical=$(resolve_maybe_tilde "$word" 0 "$CWD" 2>/dev/null) || return 0
-    sensitive_text "$logical" && return 0
-    granted_env_file "$logical" && return 0
+    credential_context_safe "$logical" "$CWD" || return 0
     phys=$(judge_script_path "$word" "$CWD") || return 0
     if judge_script_mutable_launcher "$phys"; then
       JUDGE_SCRIPT_UNCACHEABLE=1
@@ -785,20 +766,11 @@ judge_script_input() {
   [ -z "$(brief_read_constraints)" ] || return 0
   logical=$(resolve_maybe_tilde "${E[k]}" "${EV[k]}" "$CWD" 2>/dev/null) || return 0
   word=${E[k]}
-  sensitive_text "$logical" && return 0
-  granted_env_file "$logical" && return 0
+  credential_context_safe "$logical" "$CWD" || return 0
   # Keep .. until directory symlinks are followed; lexical normalization
   # first could identify a different file from the one the command runs.
   abs=$(judge_script_path "$word" "$CWD") || return 0
-  sensitive_text "$abs" && return 0
-  granted_env_file "$abs" && return 0
-  # A credential grant may itself name a symlink. Its target remains
-  # credential material even when this invocation uses another alias.
-  while IFS= read -r root; do
-    [ -n "$root" ] || continue
-    phys=$(judge_script_path "$root" '') || continue
-    [ "$phys" != "$abs" ] || return 0
-  done <<<"$GRANT_ENV_FILES"
+  credential_context_safe "$abs" "$CWD" || return 0
   judge_script_in_roots "$abs" || return 0
   [ -f "$abs" ] && [ -r "$abs" ] || return 0
   bytes=$(wc -c < "$abs" 2>/dev/null) || return 0
@@ -1521,38 +1493,12 @@ resolve_maybe_tilde() {  # <word> <expansion-flag> <cwd>
   local w=$1
   if [ "$2" = 1 ]; then
     case "$w" in
-      "$TILDE"/*) [ -n "${HOME:-}" ] || return 1; w="$HOME/${w#"$TILDE"/}" ;;
+      "$TILDE"/*) [ -n "${CREDENTIAL_USER_HOME:-${HOME:-}}" ] || return 1; w="${CREDENTIAL_USER_HOME:-$HOME}/${w#"$TILDE"/}" ;;
       *) return 1 ;;
     esac
     case "$w" in *'$'*|*'`'*) return 1 ;; esac
   fi
   resolve_path "$w" "$3"
-}
-
-sensitive_text() {  # <text>
-  # A file tool's string arguments arrive joined one per line, so each line is
-  # checked on its own: an end-anchored pattern such as */.env must still match
-  # a path that is followed by another argument.
-  case "$1" in
-    *$'\n'*)
-      local line
-      while IFS= read -r line; do
-        sensitive_text "$line" && return 0
-      done <<<"$1"
-      return 1 ;;
-  esac
-  case "$1" in
-    *.ssh*|*.aws/*|*.aws|*.gnupg*|*.netrc*|*.git-credentials*|*hosts.yml*|\
-    *id_rsa*|*id_ed25519*|*id_ecdsa*|*.pem|*.pem\ *|*.p12*|*.key|*credentials*|\
-    *.config/gh*|*.config/devin*|*.devin/config*|*.docker/config.json*|\
-    *.npmrc*|*.pypirc*|*keychain*|*Keychains*|\
-    *antigravity-oauth-token*|*.gemini/oauth_creds*|*.config/gcloud/*)
-      return 0 ;;
-  esac
-  case "/$1" in
-    */.env|*/.env.*|*/.env\ *|*\ .env|*\ .env\ *) return 0 ;;
-  esac
-  return 1
 }
 
 # --- tokenizer -----------------------------------------------------------------
@@ -1921,7 +1867,7 @@ checkout_discards() {  # <first-arg-index> <args>...
 
 analyze_segment() {
   local -a E=() EV=() EG=() ESRC=()
-  local k=0 w base=''
+  local k=0 w base='' credential_dynamic=false
   local count=${#SW[@]}
   SEG_BASE='' SEG_EMITS_FETCH=0
 
@@ -1960,7 +1906,8 @@ analyze_segment() {
         [ "$k" -lt "$count" ] || { no_approve "bare env prints the environment"; k=$count; continue; }
         while [ "$k" -lt "$count" ]; do
           case "${SW[k]}" in
-            -u|--unset|-C|--chdir) no_approve "env option"; k=$((k + 2)) ;;
+            -u|--unset) no_approve "env option"; k=$((k + 2)) ;;
+            -C|--chdir|--chdir=*) credential_dynamic=true; no_approve "env cwd option"; k=$((k + 2)) ;;
             -S*|--split-string*) no_approve "env -S"; k=$((k + 1)) ;;
             -*) k=$((k + 1)) ;;
             *=*) no_approve "environment assignment"; k=$((k + 1)) ;;
@@ -1969,6 +1916,7 @@ analyze_segment() {
         done
         continue ;;
       xargs)
+        credential_dynamic=true
         k=$((k + 1))
         while [ "$k" -lt "$count" ]; do
           case "${SW[k]}" in
@@ -1991,6 +1939,7 @@ analyze_segment() {
   [ "$count" -gt 0 ] && base=${E[0]##*/}
   SEG_BASE=$base
   [ "${EV[0]-0}" = 1 ] && no_approve "command name is an expansion"
+  credential_segment
   judge_script_input
 
   # A fetch's output piped into a shell or interpreter is code, not data. The
@@ -2039,7 +1988,8 @@ analyze_segment() {
         esac
         ;;
       '<'|'<<<')
-        sensitive_text "$tgt" && { SENSITIVE_HIT=1; no_approve "input from credential material"; }
+        # File input identity was classified with the segment's structured
+        # redirections; a here-string is data, not a filename.
         ;;
       '<<') ;;
       *)
@@ -2106,25 +2056,10 @@ analyze_segment() {
           && word_emits_fetch "${SWINNER[1]-0}" "${SWSUBS[1]-0}" \
           && never_approve "sources a fetched page"
       fi
-      if [ "${#SW[@]}" -eq 2 ] && [ -n "$gabs" ] && granted_env_file "$gabs"; then return 0; fi
+      if [ "$CREDENTIAL_LAST_CATEGORY" = authorized-load ]; then return 0; fi
       no_approve "sourcing ${SW[1]-a file} is not granted by the task instructions"
       return 0 ;;
   esac
-
-  # Sensitive arguments anywhere in the segment, including a granted credential
-  # file reached by anything other than the sourcing shape handled above.
-  local grant_check=0 sabs
-  load_grants
-  [ -n "$GRANT_ENV_FILES" ] && grant_check=1
-  for ((k = 0; k < ${#SW[@]}; k++)); do
-    sensitive_text "${SW[k]}" \
-      && { SENSITIVE_HIT=1; no_approve "argument names credential material"; break; }
-    [ "$grant_check" = 1 ] || continue
-    case "${SW[k]}" in *[/~]*) ;; *) continue ;; esac
-    sabs=$(resolve_maybe_tilde "${SW[k]}" "${SWV[k]}" "$CWD" 2>/dev/null) || continue
-    granted_env_file "$sabs" \
-      && { SENSITIVE_HIT=1; no_approve "argument names a credential file this task may only source"; break; }
-  done
 
   [ "$count" -gt 0 ] || return 0
 
@@ -3025,7 +2960,7 @@ approve_plain() {  # <base>
       return 0 ;;
     cd|pushd)
       if [ "${#E[@]}" -ge 2 ] && [ "${EV[1]}" = 0 ] && [ "${EG[1]}" = 0 ] && [ "${E[1]}" != - ]; then
-        CWD=$(resolve_path "${E[1]}" "$CWD") || CWD=
+        CWD=$(physical_target "${E[1]}" "$CWD" 1) || CWD=
       else
         CWD=
       fi
@@ -3170,7 +3105,8 @@ analyze_command() {
   fi
   [ "$P_SUBST" -eq 1 ] && no_approve "command or process substitution"
   [ "$P_HEREDOC_EXPANDING" -eq 1 ] && no_approve "heredoc with expansions"
-  SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=()
+  credential_trace_context
+  SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
   local pending_redir=
   for ((idx = 0; idx < ${#T_TXT[@]}; idx++)); do
     case "${T_KIND[idx]}" in
@@ -3179,6 +3115,7 @@ analyze_command() {
           SRO[${#SRO[@]}]=$pending_redir
           SRT[${#SRT[@]}]=${T_TXT[idx]}
           SRV[${#SRV[@]}]=${T_VAR[idx]}
+          SRG[${#SRG[@]}]=${T_GLOB[idx]}
           pending_redir=
         else
           SW[${#SW[@]}]=${T_TXT[idx]}
@@ -3201,7 +3138,7 @@ analyze_command() {
         else
           PIPE_FROM_FETCH=0
         fi
-        SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=()
+        SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
         pending_redir=
         ;;
     esac
@@ -3226,6 +3163,8 @@ evaluate_exec() {
   JUDGE_CACHE_KEY=''
   # shellcheck disable=SC2034 # output global; the agy adapter reads it after evaluate_exec.
   SENSITIVE_HIT=''
+  # shellcheck disable=SC2034 # CREDENTIAL_HOLD is an output read by both sourcing adapters.
+  CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
   FETCH_FILES=''
   analyze_command "$1" "$start_cwd"
   while [ "$q" -lt "${#NESTED[@]}" ] && [ "$q" -lt 32 ]; do

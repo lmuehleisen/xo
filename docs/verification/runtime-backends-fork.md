@@ -810,3 +810,22 @@ bash bin/fm-test-run.sh tests/fm-quota-devin-catalog-live-e2e.test.sh
 ```text
 ok - devin 3000.11.3: catalog-backed included_quota binding verified without model tokens
 ```
+
+## Shared credential hook veto
+
+Verified 2026-10-14 with Devin 3000.11.3 (9c803229faa4) and agy 1.3.5.
+The focused guards use a harmless credential fixture, attempt one shell read and one native read through each real CLI, and assert both vetoes and absence of fixture values in transcripts and decision metadata.
+The guards' headers own the focused mode and model override; the shared classification contract is owned by [`bin/fm-credential-access.mjs`](../../bin/fm-credential-access.mjs).
+
+```sh
+FM_CREDENTIAL_HOOK_ONLY=1 FM_DEVIN_PERMISSION_LIVE=1 bash bin/fm-test-run.sh tests/fm-devin-permission-policy-live-e2e.test.sh
+FM_CREDENTIAL_HOOK_ONLY=1 FM_AGY_BYPASS_LIVE=1 FM_AGY_BYPASS_LIVE_MODEL=gemini-3.8-flash-low bash bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
+```
+
+```text
+ok - devin 3000.11.3 (9c803229faa4): credential pre-tool veto covers exec and native read
+ok - agy 1.3.5: shell and native credential reads are denied before disclosure
+```
+
+The portable public-hook suites cover independent registry identity, source grants, path aliases, option-file inputs, traversal footprints, tracing, environment/token output, and an always-approve judge counterfactual.
+This focused live evidence proves the credential hook transport, not all lifecycle or permission-mode behavior, and does not expand the spawn-verified version set.

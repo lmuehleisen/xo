@@ -8,11 +8,13 @@
 #
 # Usage: fm-devin-permission-policy.sh <event> <policy-file>
 #   events: pre-tool-use | permission-request | post-tool-use | stop | retire |
-#           repin-grants | judge-probe
+#           repin-grants | register-credentials | judge-probe
 #        fm-devin-permission-policy.sh grants-digest <brief-file>
 # The Devin hook payload arrives as JSON on stdin (the last three read none).
 #
-#   pre-tool-use (matcher ^exec$)
+#   pre-tool-use (every tool)
+#       Applies the shared credential veto to exec and native read/write tools
+#       before native permissions can admit them without PermissionRequest.
 #       Refuses the hard-line list for the whole command string, including
 #       every && / ; / | segment, $(...) and backtick bodies, bash -c / sh -c /
 #       eval strings, find -exec commands, and env / xargs / nohup / timeout
@@ -137,8 +139,8 @@
 # github.com credential present), and every lookup names github.com itself. An unprovable PR, a failed or timed-out lookup, or any other forge
 # write keeps the never-approve escalation.
 #
-# Non-exec tools: read / grep / glob / notebook_read are approved unless an
-# argument names credential material; write / edit / notebook_edit are
+# Non-exec tools: read / grep / glob / notebook_read and native writes first
+# use bin/fm-credential-access.mjs through its shell transport; native writes are
 # approved for a file strictly inside the worktree (outside .git/, .devin/,
 # and .claude/), the task data directory, the task temp root, a granted write
 # directory, or /tmp / $TMPDIR scratch space, measured where the path
@@ -154,7 +156,8 @@
 # and judge_bin (the judge tier this task runs and its executable; absent
 # means this adapter's own Devin tier on the `devin` field above, and a tier
 # this build does not know denies rather than falling back), and grants_sha
-# (the digest pin the shared library describes). Pending escalation
+# (the digest pin the shared library describes). Credential policy fields are
+# owned by bin/fm-credential-access-lib.sh. Pending escalation
 # markers live in the sibling directory <policy-file minus .json>-pending/,
 # and the per-task verdict cache in <policy-file minus .json>-cache/.
 # bin/fm-teardown.sh removes both with the policy file.
@@ -174,7 +177,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 EVENT=${1-}
 POLICY=${2-}
 case "$EVENT" in
-  pre-tool-use|permission-request|post-tool-use|stop|retire|repin-grants|grants-digest|judge-probe) ;;
+  pre-tool-use|permission-request|post-tool-use|stop|retire|repin-grants|register-credentials|grants-digest|judge-probe) ;;
   *)
     sed -n '9,11s/^# *//p' "${BASH_SOURCE[0]}" >&2
     exit 0
@@ -229,7 +232,7 @@ if [ "$EVENT" = retire ]; then
 fi
 
 PAYLOAD=
-case "$EVENT" in retire|repin-grants) ;; *) PAYLOAD=$(cat) ;; esac
+case "$EVENT" in retire|repin-grants|register-credentials) ;; *) PAYLOAD=$(cat) ;; esac
 
 TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' DEVIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' CONFIG_DIR='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
@@ -256,8 +259,9 @@ fi
 # by default: a policy that names no tier keeps this adapter's own tier on the
 # binary above, which is the posture every Devin task has always had.
 fm_judge_tier_bind "$FM_JUDGE_TIER_NATIVE" "$DEVIN"
+credential_policy
 
-TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' INPUT_STRINGS='' CACHE_INPUT=''
+TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT=''
 {
   IFS= read -r -d '' TOOL
   IFS= read -r -d '' TOOL_USE_ID
@@ -265,7 +269,6 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' INPUT_STR
   IFS= read -r -d '' CMD
   IFS= read -r -d '' FILE_PATH
   IFS= read -r -d '' INPUT_JSON
-  IFS= read -r -d '' INPUT_STRINGS
   IFS= read -r -d '' CACHE_INPUT
 } < <(printf '%s' "$PAYLOAD" | jq -j '
   def s: (. // "") | tostring | gsub("\u0000"; "");
@@ -273,17 +276,16 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' INPUT_STR
     (.tool_input.command | s),
     ((.tool_input.file_path // .tool_input.path // .tool_input.notebook_path) | s),
     ((.tool_input // {}) | del(.content?, .new_string?, .old_string?) | tojson | .[0:2000] | s),
-    ([(.tool_input // {}) | del(.content?, .new_string?, .old_string?) | .. | strings] | join("\n") | s),
     ((.tool_input // {}) | tojson | s)
   ] | join("\u0000") + "\u0000"' 2>/dev/null)
 
 evaluate_tool() {  # non-exec tools: sets NOT_APPROVABLE
-  REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE=''
+  REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
+  local fields
+  fields=$(printf '%s' "$PAYLOAD" | jq -c '.tool_input // {} | {file_path,path,notebook_path,recursive,url}')
+  credential_native "$fields" "$WORKTREE"
   case "$TOOL" in
     read|grep|glob|notebook_read)
-      sensitive_text "$INPUT_STRINGS" && no_approve "$TOOL of credential material"
-      granted_env_file_text "$INPUT_STRINGS" \
-        && no_approve "$TOOL of a credential file this task may only source"
       ;;
     write|edit|notebook_edit)
       local abs rel wt_abs
@@ -293,9 +295,11 @@ evaluate_tool() {  # non-exec tools: sets NOT_APPROVABLE
         refuse "writing this task's own instructions ($FILE_PATH) is refused by firstmate policy"
         return 0
       fi
-      sensitive_text "$FILE_PATH" && { no_approve "$TOOL of credential material"; return 0; }
-      granted_env_file_text "$FILE_PATH" \
-        && { no_approve "$TOOL of a credential file this task may only source"; return 0; }
+      if [ -n "$wt_abs" ] && protected_target "$wt_abs"; then
+        refuse "writing firstmate's own permission wiring ($FILE_PATH) is refused by firstmate policy"
+        return 0
+      fi
+      [ -z "$CREDENTIAL_HOLD" ] || return 0
       # The write root check resolves the path PHYSICALLY, as the agy adapter
       # does: a symlink inside the worktree that points outside the roots must
       # not carry the write with it, and an unresolvable target asks first.
@@ -522,19 +526,24 @@ case "$EVENT" in
     if [ -n "$REFUSE_REASON" ]; then judge_probe refuse
     elif [ -z "$NOT_APPROVABLE" ]; then judge_probe read-and-build
     elif [ -n "$NEVER_APPROVE" ]; then judge_probe never-approve
+    elif [ -n "$CREDENTIAL_HOLD" ]; then judge_probe credential
     else judge_probe residue
     fi
     exit 0
     ;;
   pre-tool-use)
-    [ "$TOOL" = exec ] || exit 0
     # A pre-allowed call reaches no later step, so the forms review would
     # have caught are refused here (see the header).
     FM_POLICY_PREALLOW_GUARD=1
-    evaluate_exec "$CMD"
+    if [ "$TOOL" = exec ]; then evaluate_exec "$CMD"; else evaluate_tool; fi
     if [ -n "$REFUSE_REASON" ]; then
       log_record refuse policy "$REFUSE_REASON"
       json_reason block "Blocked by firstmate policy: $REFUSE_REASON"
+      exit 2
+    fi
+    if [ -n "$CREDENTIAL_HOLD" ]; then
+      log_record refuse policy "$NOT_APPROVABLE"
+      json_reason block "Blocked by firstmate policy: $NOT_APPROVABLE"
       exit 2
     fi
     exit 0
@@ -570,6 +579,11 @@ case "$EVENT" in
       # cached at the prompt either, so approving one stays a one-off.
       escalate_reason=$NEVER_APPROVE escalate_source='firstmate policy'
       log_record escalate policy "$NEVER_APPROVE"
+    elif [ -n "$CREDENTIAL_HOLD" ]; then
+      # Neither a positive model verdict nor an old ordinary cache can
+      # authorize credential disclosure or an unbounded content footprint.
+      escalate_reason=$NOT_APPROVABLE escalate_source='firstmate policy'
+      log_record escalate policy "$NOT_APPROVABLE"
     elif cache_lookup; then
       log_record approve cache "$CACHE_REASON (static: $NOT_APPROVABLE)"
       json_reason approve "Approved by firstmate policy cache: $CACHE_REASON"
@@ -591,7 +605,7 @@ case "$EVENT" in
       marker="$PENDING_DIR/$slug.pending"
       if [ ! -e "$marker" ]; then
         ckey=''
-        [ -n "$NEVER_APPROVE" ] || ckey=$(cache_key 2>/dev/null || true)
+        [ -n "$NEVER_APPROVE" ] || [ -n "$CREDENTIAL_HOLD" ] || ckey=$(cache_key 2>/dev/null || true)
         printf '%s\n%s\n%s\n' "$key" "$(one_line "$(input_summary)" 2000)" "$ckey" \
           > "$marker" 2>/dev/null || true
         status_append "needs-decision [key=$key]: Devin is waiting at a permission prompt for $TOOL ($escalate_source: $(one_line "$escalate_reason" 160)): $(one_line "$(input_summary)" 300)"
@@ -612,6 +626,10 @@ case "$EVENT" in
     done
     exit 0
     ;;
+  register-credentials)
+    credential_record_grants && credential_pin_registry || exit 1
+    exit 0
+    ;;
   repin-grants)
     # Firstmate edits a live brief's grants on purpose; this records the new
     # digest so the block is honored again. Nothing a worker can reach runs it.
@@ -620,12 +638,14 @@ case "$EVENT" in
       exit 1
     }
     new_sha=$(grants_digest "$(grants_block)" 2>/dev/null || true)
+    credential_record_grants "$new_sha" || exit 1
     if ! jq --arg sha "$new_sha" '.grants_sha = $sha' "$POLICY" > "$POLICY.repin" 2>/dev/null \
       || ! mv "$POLICY.repin" "$POLICY"; then
       rm -f "$POLICY.repin"
       echo "fm-devin-permission-policy: cannot repin grants: $POLICY could not be rewritten" >&2
       exit 1
     fi
+    credential_pin_registry || exit 1
     echo "repinned grants digest for ${TASK:-this task}: ${new_sha:-(no grants block)}"
     exit 0
     ;;
