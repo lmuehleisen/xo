@@ -486,8 +486,13 @@ EOF
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 
 run_kiro_spawn() {
-  local case_dir=$1 home=$2 proj=$3 wt=$4 fakebin=$5 id=$6
+  local case_dir=$1 home=$2 proj=$3 wt=$4 fakebin=$5 id=$6 arg
+  local -a mode_args
   shift 6
+  mode_args=(--mode no-mistakes --yolo off)
+  for arg in "$@"; do
+    [ "$arg" != --scout ] || { mode_args=(); break; }
+  done
   HOME="$home" FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="${FM_TEST_STATE_OVERRIDE:-$home/state}" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -500,7 +505,7 @@ run_kiro_spawn() {
     FM_FAKE_KIRO_MODELS_RENAMED="${FM_FAKE_KIRO_MODELS_RENAMED:-0}" \
     FM_KIRO_MODELS_TIMEOUT="${FM_KIRO_MODELS_TIMEOUT:-1}" \
     PATH="$fakebin:$BASE_PATH" \
-    "$SPAWN" "$id" "$proj" --harness kiro --mode no-mistakes --yolo off "$@" 2>&1
+    "$SPAWN" "$id" "$proj" --harness kiro ${mode_args[@]+"${mode_args[@]}"} "$@" 2>&1
 }
 
 test_kiro_launch_carries_brief_agent_engine_and_clears_markers() {
@@ -584,7 +589,7 @@ test_kiro_per_task_hook_config_is_out_of_tree() {
 }
 
 test_kiro_workers_enforce_publish_policy() {
-  local kind id rec out rc agent hook payload command code case_spec
+  local kind meta_kind id rec out rc agent hook payload command code case_spec
   for kind in crewmate scout; do
     id="kiro-publish-$kind-$$"
     rec=$(make_kiro_spawn_case "publish-$kind" "$id")
@@ -596,7 +601,12 @@ test_kiro_workers_enforce_publish_policy() {
     fi
     rc=$?
     expect_code 0 "$rc" "kiro $kind spawn should succeed: $out"
+    meta_kind=$kind
+    [ "$kind" != crewmate ] || meta_kind=ship
+    assert_equals "$meta_kind" "$(sed -n 's/^kind=//p' "$HOME_DIR/state/$id.meta")" 'the publish probe spawned the requested worker kind'
     agent="$HOME_DIR/state/$id.kiro-home/agents/firstmate.json"
+    jq -e '.resources | index("file://AGENTS.md") != null and index("file://README.md") == null' \
+      "$agent" >/dev/null || fail "Kiro $kind must keep project instructions without README context"
     assert_equals shell "$(jq -r '.hooks.preToolUse[0].matcher' "$agent")" 'Kiro hook matches its canonical shell tool'
     hook=$(jq -r '.hooks.preToolUse[0].command' "$agent")
     for case_spec in \
