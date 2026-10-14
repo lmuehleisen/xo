@@ -58,6 +58,9 @@ echo "APPROVE: synthetic ordinary effect"')
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/123"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/secret material.env"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$dir/user-home/login.env"
+  mkdir -p "$dir/user-home/.config/devin" "$dir/user-home/.config/editor"
+  printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$dir/user-home/.config/devin/config.json"
+  printf 'ordinary\n' > "$dir/user-home/.config/editor/config.json"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/nested/service.env"
   printf 'ordinary\n' > "$wt/README.md"
   printf 'ordinary\n' > "$wt/.editorconfig"
@@ -170,6 +173,15 @@ set -x
 set -v
 cat sample.env.example
 EOF
+  for command in "$dir/user-home/.config/devin/config.json" "$dir/USER-HOME/.config/DEVIN/config.json"; do
+    credential_exec "$policy" "cat '$command'" "$step"; step=$((step + 1))
+    credential_held || fail "protected home locations and case aliases must hold: $command => $OUT"
+    fields=$(jq -nc --arg path "$command" '{file_path:$path,AbsolutePath:$path}')
+    for kind in read write; do
+      credential_hook "$policy" "$kind" "$fields" "$step"; step=$((step + 1))
+      credential_held || fail "native protected home location must hold: $command => $OUT"
+    done
+  done
   [ ! -e "$CREDENTIAL_JUDGE_CALLS" ] || fail "credential/unknown-footprint calls must never reach the judge"
   for command in 'cat service-credentials.json' 'cat aws_credentials' 'cat .npmrc.backup' 'cat .git-credentials.backup' 'printf x > registered' 'printf x >> alias'; do
     fields=$(jq -nc --arg command "$command" --arg cwd "$wt" '{command:$command,CommandLine:$command,Cwd:$cwd}')
@@ -209,6 +221,8 @@ EOF
     credential_hook "$policy" read "$fields" "$step"; step=$((step + 1))
     credential_allowed || fail "ordinary native environment modules must stay usable: $command => $OUT"
   done
+  credential_exec "$policy" "cat '$dir/user-home/.config/editor/config.json'" "$step"; step=$((step + 1))
+  credential_allowed || fail "ordinary home configuration must stay usable"
   credential_exec "$policy" "python3 -c 'print(1)'" "$step"; step=$((step + 1))
   credential_allowed || fail "ordinary unresolved execution must still reach the judge"
   [ -s "$CREDENTIAL_JUDGE_CALLS" ] || fail "ordinary residue never reached the judge"

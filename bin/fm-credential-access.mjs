@@ -71,7 +71,9 @@ function protectedName(p, home) {
     || /\.aws$/.test(c))) return true;
   const locations = [".config/gh", ".config/devin", ".devin/config", ".docker/config.json",
     ".gemini/oauth_creds.json", ".config/gcloud", ".config/antigravity-oauth-token"];
-  return !!home && locations.some(l => inside(p, fold(path.join(home, l))));
+  // Conservative names cover case aliases on case-insensitive filesystems,
+  // just as the filename patterns above do, without reading file contents.
+  return !!home && locations.some(l => inside(p.toLowerCase(), fold(path.join(home, l)).toLowerCase()));
 }
 
 function registry(context) {
