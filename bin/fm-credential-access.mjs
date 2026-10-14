@@ -8,9 +8,13 @@
 // "subtree", kind:"credential"|"nonsecret", use_modes:["source"], provenance:"..."}]}.
 // A launch records registryRequired; removing/corrupting an expected registry
 // holds content access. Live additions take effect before any ordinary cache.
+// register-grants is an operator-only launch/repin operation: it retains source
+// declarations under an exclusive registry lock and never removes identities.
+// A revoked grant removes use authority, including for extensionless resources.
 // No operand file is opened, enumerated, or included as contents in a verdict.
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const result = (category, reason) => ({ category, reason });
@@ -98,6 +102,49 @@ function registry(context) {
     return { entries, invalid: false };
   } catch (error) {
     return { entries: [], invalid: error.code !== "ENOENT" || !!context.registryRequired };
+  }
+}
+
+// Operator-only launch/repin registration, separate from the pure classifier.
+// Firstmate retains known identities here; revoking task use never removes them.
+function registerGrants(context) {
+  if (!(context.useGrants || []).length) return result("ordinary", "no-new-credential-identities");
+  if (!context.registryPath) return result("unresolved", "missing-registry-location");
+  const lock = `${context.registryPath}.lock`;
+  let temporary = "", locked = false;
+  try {
+    const parent = resolveOperand(path.dirname(context.registryPath), "", context.userHome).canonical;
+    for (const root of context.writeRoots || []) {
+      if (inside(parent, resolveOperand(root, context.cwd, context.userHome).canonical)) throw new Error("mutable");
+    }
+    fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(lock, { mode: 0o700 }); locked = true;
+    const state = registry(context);
+    if (state.invalid) throw new Error("registry");
+    const document = fs.existsSync(context.registryPath)
+      ? JSON.parse(fs.readFileSync(context.registryPath, "utf8")) : { version: 1, revision: "initial", entries: [] };
+    let changed = false;
+    for (const grant of context.useGrants) {
+      if (/[\x00-\x1f*?\[\]]/.test(grant)) throw new Error("grant");
+      const identity = resolveOperand(grant, context.cwd, context.userHome);
+      if (document.entries.some(e => e.path === identity.lexical && e.kind === "credential")) continue;
+      if (document.entries.length >= 256) throw new Error("capacity");
+      document.entries.push({ path: identity.lexical, scope: "file", kind: "credential",
+        use_modes: ["source"], provenance: "firstmate source declaration" });
+      changed = true;
+    }
+    if (changed) {
+      document.revision = crypto.createHash("sha256").update(JSON.stringify(document.entries)).digest("hex");
+      temporary = `${context.registryPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+      fs.writeFileSync(temporary, JSON.stringify(document, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+      fs.renameSync(temporary, context.registryPath); temporary = "";
+    }
+    return result("ordinary", "retained-credential-identities");
+  } catch {
+    return result("unresolved", "credential-registration-unavailable");
+  } finally {
+    if (temporary) { try { fs.unlinkSync(temporary); } catch { /* no partial publication */ } }
+    if (locked) fs.rmdirSync(lock);
   }
 }
 
@@ -356,9 +403,11 @@ function native(request) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   try {
     const request = JSON.parse(fs.readFileSync(0, "utf8"));
-    const verdict = request.operation === "exec-segment" ? segment(request)
+    const verdict = request.operation === "register-grants" ? registerGrants(request)
+      : request.operation === "exec-segment" ? segment(request)
       : request.operation === "native" ? native(request) : classify_credential_access(request);
     process.stdout.write(JSON.stringify(verdict) + "\n");
+    if (request.operation === "register-grants" && verdict.category !== "ordinary") process.exitCode = 1;
   } catch {
     process.stdout.write(JSON.stringify(result("unresolved", "invalid-classifier-metadata")) + "\n");
   }

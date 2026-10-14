@@ -210,3 +210,32 @@ EOF
   fi
   pass "shared credential access: grants, identity, footprints, output, and registry authority through public hooks"
 }
+
+test_retained_credential_identity() {
+  local policy dir path grants step=3000 fields command
+  path="$TMP_ROOT/retained-credential/wt/opaque"
+  grants=$(jq -nc --arg path "$path" '{credential_env_files:[$path]}')
+  policy=$(new_case retained-credential 'echo "APPROVE: synthetic judge"' "$grants")
+  dir=$(case_dir "$policy")
+  printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$path"
+  "$POLICY_SH" register-credentials "$policy" </dev/null >/dev/null || fail "register source declarations at launch"
+  jq -e --arg path "$path" '.entries | any(.path == $path and .kind == "credential")' \
+    "$dir/config/declared-credentials.json" >/dev/null || fail "source declaration was not retained independently"
+  credential_exec "$policy" 'source opaque' "$step"; step=$((step + 1))
+  credential_allowed || fail "a retained source identity still requires and honors task use"
+  printf '# Task\n## Synthetic verification\nNo source grant.\n' > "$dir/data/t1/brief.md"
+  "$POLICY_SH" repin-grants "$policy" </dev/null >/dev/null || fail "revoke synthetic source authority"
+  for command in 'cat opaque' 'source opaque'; do
+    credential_exec "$policy" "$command" "$step"; step=$((step + 1))
+    credential_held || fail "revoking a grant must not unprotect an extensionless credential: $command => $OUT"
+  done
+  fields='{"file_path":"opaque","AbsolutePath":"opaque"}'
+  credential_hook "$policy" read "$fields" "$step"; step=$((step + 1))
+  credential_held || fail "native reads must retain protection after source revocation"
+  credential_exec "$policy" "bash $POLICY_SH repin-grants $policy" "$step"
+  case "${POLICY_SH##*/}" in
+    fm-devin*) [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] || fail "worker must not repin its own authority" ;;
+    *) denied "$OUT" || fail "worker must not repin its own authority" ;;
+  esac
+  pass "shared credential access: launch declarations survive revocation and workers cannot repin authority"
+}

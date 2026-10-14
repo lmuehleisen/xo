@@ -220,6 +220,10 @@ fm_devin_spawn_wire() {
     echo "error: cannot spawn devin worker: could not write $devin_policy" >&2
     exit 1
   }
+  "$SCRIPT_DIR/fm-devin-permission-policy.sh" register-credentials "$devin_policy" </dev/null || {
+    echo "error: cannot retain Devin credential declarations" >&2
+    exit 1
+  }
   policy_cmd="$(shell_quote "$FM_ROOT/bin/fm-devin-permission-policy.sh")"
   policy_file=$(shell_quote "$devin_policy")
   # The rate-limit retry (bin/fm-devin-rate-limit-retry.sh, whose header owns

@@ -8,6 +8,9 @@
 # Policy fields: credential_user_home (trusted launch HOME) and
 # credential_registry_required (registry existed at launch). The only registry
 # path is <policy config>/declared-credentials.json, never a tool/brief field.
+# register-credentials and repin-grants are firstmate-only adapter events:
+# they retain credential declarations in the registry before launch/repinning,
+# and never delete identity when a use grant is revoked.
 # Registry schema, path identity, and the four categories are owned by the mjs
 # classifier's header, not by adapter-specific text/filename heuristics.
 
@@ -34,6 +37,33 @@ credential_policy() {
   # covered by the existing wiring guard, including granted write directories.
   [ -z "$CREDENTIAL_REGISTRY_PATH" ] \
     || POLICY_PROTECTED="${POLICY_PROTECTED:-}"$'\n'"$CREDENTIAL_REGISTRY_PATH"
+  [ -z "${POLICY:-}" ] || POLICY_PROTECTED="${POLICY_PROTECTED:-}"$'\n'"$POLICY"
+}
+
+credential_record_grants() {  # [new grants digest]: firstmate-owned event only
+  local GRANTS_SHA=${1:-$GRANTS_SHA} request output
+  load_grants
+  [ -n "$GRANT_ENV_FILES" ] || return 0
+  request=$(jq -nc --arg home "$CREDENTIAL_USER_HOME" --arg cwd "$WORKTREE" \
+    --arg registry "$CREDENTIAL_REGISTRY_PATH" --argjson required "$CREDENTIAL_REGISTRY_REQUIRED" \
+    --arg grants "$GRANT_ENV_FILES" --arg roots "$WORKTREE"$'\n'"$DATA_DIR"$'\n'"$TASKTMP"$'\n'"$GRANT_WRITE_DIRS" \
+    '{operation:"register-grants", userHome:$home, cwd:$cwd, registryPath:$registry, registryRequired:$required,
+      useGrants:($grants|split("\n")|map(select(. != ""))), writeRoots:($roots|split("\n")|map(select(. != "")))}')
+  output=$(printf '%s' "$request" | node "$CREDENTIAL_LIB_DIR/fm-credential-access.mjs" 2>/dev/null) \
+    && [ "$(printf '%s' "$output" | jq -r .category)" = ordinary ] || {
+    printf 'credential registration failed: %s\n' "$(printf '%s' "$output" | jq -r '.reason // "registry unavailable"')" >&2
+    return 1
+  }
+  CREDENTIAL_REGISTRY_REQUIRED=true
+}
+
+credential_pin_registry() {
+  local staged
+  staged=$(mktemp "${POLICY%/*}/.credential-policy.XXXXXX") || return 1
+  if jq --argjson required "$CREDENTIAL_REGISTRY_REQUIRED" '.credential_registry_required=$required' "$POLICY" > "$staged" \
+    && mv -f -- "$staged" "$POLICY"; then return 0; fi
+  rm -f -- "$staged"
+  return 1
 }
 
 classify_credential_access() {  # <structured request JSON>
@@ -84,6 +114,20 @@ credential_trace_context() {
 
 credential_segment() {
   local i words redirects request dynamic=${credential_dynamic:-false} bare_env=false
+  local operator_script=0 target
+  for ((i = 0; i < ${#E[@]}; i++)); do
+    case "${E[i]##*/}" in fm-devin-permission-policy.sh|fm-agy-permission-policy.sh) operator_script=1 ;; esac
+    [ "$operator_script" = 1 ] || continue
+    case "${E[i]}" in
+      register-credentials|repin-grants)
+        target=$(write_target_path "${E[i+1]-}" "${EV[i+1]-1}" 2>/dev/null) || target=''
+        if [ -n "$target" ] && [ "$target" = "$(norm_abs "${POLICY:-}")" ]; then
+          refuse "worker mutation of credential authority is refused by firstmate policy"
+          return 0
+        fi
+        ;;
+    esac
+  done
   words=$({
     for ((i = 0; i < ${#E[@]}; i++)); do printf '%s\0%s\0%s\0' "${E[i]}" "${EV[i]}" "${EG[i]}"; done
   } | jq -Rsc 'split("\u0000") | .[:-1] | [range(0; length; 3) as $i | {value:.[$i], expanded:(.[$i+1] == "1"), glob:(.[$i+2] == "1")}]')

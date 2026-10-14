@@ -538,7 +538,9 @@ load_grants() {
     IFS= read -r -d '' remote
   } < <(printf '%s' "$block" | jq -j '
     def l(f): ((f // []) | if type == "array" then (.[0:32] | map(tostring)) else [] end | join("\n"));
-    [ l(.credential_env_files), l(.write_dirs), l(.remote_writes) ]
+    def credentials(f): ((f // []) | if type == "array" and all(.[]; type == "string" and (test("[\u0000-\u001f]") | not))
+      then .[0:32] else [] end | join("\n"));
+    [ credentials(.credential_env_files), l(.write_dirs), l(.remote_writes) ]
     | map(gsub("\u0000"; "")) | join("\u0000") + "\u0000"' 2>/dev/null)
   local line abs
   while IFS= read -r line; do

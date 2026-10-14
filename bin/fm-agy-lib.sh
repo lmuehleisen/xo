@@ -357,6 +357,10 @@ fm_agy_spawn_wire() {
       echo "error: cannot spawn agy bypass worker: could not write $agy_policy" >&2
       exit 1
     }
+    "$SCRIPT_DIR/fm-agy-permission-policy.sh" register-credentials "$agy_policy" </dev/null || {
+      echo "error: cannot retain agy credential declarations" >&2
+      exit 1
+    }
     "$FM_ROOT/bin/fm-agy-hook.sh" install-worker "$STATE_REAL" "$ID" "$BUSY_GEN" "$WT" "$agy_policy" || {
       echo "error: could not install agy worker hooks for $ID" >&2
       exit 1

@@ -8,7 +8,7 @@
 #
 # Usage: fm-devin-permission-policy.sh <event> <policy-file>
 #   events: pre-tool-use | permission-request | post-tool-use | stop | retire |
-#           repin-grants | judge-probe
+#           repin-grants | register-credentials | judge-probe
 #        fm-devin-permission-policy.sh grants-digest <brief-file>
 # The Devin hook payload arrives as JSON on stdin (the last three read none).
 #
@@ -177,7 +177,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 EVENT=${1-}
 POLICY=${2-}
 case "$EVENT" in
-  pre-tool-use|permission-request|post-tool-use|stop|retire|repin-grants|grants-digest|judge-probe) ;;
+  pre-tool-use|permission-request|post-tool-use|stop|retire|repin-grants|register-credentials|grants-digest|judge-probe) ;;
   *)
     sed -n '9,11s/^# *//p' "${BASH_SOURCE[0]}" >&2
     exit 0
@@ -232,7 +232,7 @@ if [ "$EVENT" = retire ]; then
 fi
 
 PAYLOAD=
-case "$EVENT" in retire|repin-grants) ;; *) PAYLOAD=$(cat) ;; esac
+case "$EVENT" in retire|repin-grants|register-credentials) ;; *) PAYLOAD=$(cat) ;; esac
 
 TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' DEVIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' CONFIG_DIR='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
@@ -632,6 +632,10 @@ case "$EVENT" in
     done
     exit 0
     ;;
+  register-credentials)
+    credential_record_grants && credential_pin_registry || exit 1
+    exit 0
+    ;;
   repin-grants)
     # Firstmate edits a live brief's grants on purpose; this records the new
     # digest so the block is honored again. Nothing a worker can reach runs it.
@@ -640,12 +644,14 @@ case "$EVENT" in
       exit 1
     }
     new_sha=$(grants_digest "$(grants_block)" 2>/dev/null || true)
+    credential_record_grants "$new_sha" || exit 1
     if ! jq --arg sha "$new_sha" '.grants_sha = $sha' "$POLICY" > "$POLICY.repin" 2>/dev/null \
       || ! mv "$POLICY.repin" "$POLICY"; then
       rm -f "$POLICY.repin"
       echo "fm-devin-permission-policy: cannot repin grants: $POLICY could not be rewritten" >&2
       exit 1
     fi
+    credential_pin_registry || exit 1
     echo "repinned grants digest for ${TASK:-this task}: ${new_sha:-(no grants block)}"
     exit 0
     ;;

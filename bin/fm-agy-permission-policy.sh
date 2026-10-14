@@ -13,7 +13,7 @@
 #        fm-agy-permission-policy.sh grants-digest <brief-file>
 #        fm-agy-permission-policy.sh verified-versions
 # The agy hook payload arrives as JSON on stdin; the management verbs
-# (approve, decline, retire, repin-grants) and the two query verbs read none.
+# (approve, decline, retire, repin-grants, register-credentials) and the two query verbs read none.
 #
 #   armed (PreInvocation)      the adapter's first hook call of a session
 #                              writes one {event:"armed"} line to the observer
@@ -156,7 +156,7 @@ EVENT=${1-}
 POLICY=${2-}
 KEY=${3-}
 case "$EVENT" in
-  armed|pre-tool-use|post-tool-use|stop|approve|decline|retire|repin-grants|grants-digest|verified-versions|judge-probe) ;;
+  armed|pre-tool-use|post-tool-use|stop|approve|decline|retire|repin-grants|register-credentials|grants-digest|verified-versions|judge-probe) ;;
   *)
     sed -n '9,11s/^# *//p' "${BASH_SOURCE[0]}" >&2
     exit 0
@@ -221,7 +221,7 @@ if [ "$EVENT" = retire ]; then
 fi
 
 PAYLOAD=
-case "$EVENT" in retire|repin-grants|approve|decline) ;; *) PAYLOAD=$(cat) ;; esac
+case "$EVENT" in retire|repin-grants|register-credentials|approve|decline) ;; *) PAYLOAD=$(cat) ;; esac
 
 TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' AGY='' JUDGE_BIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' CONFIG_DIR='' GEN='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
@@ -673,6 +673,10 @@ case "$EVENT" in
     fi
     exit 0
     ;;
+  register-credentials)
+    credential_record_grants && credential_pin_registry || exit 1
+    exit 0
+    ;;
   repin-grants)
     # Firstmate edits a live brief's grants on purpose; this records the new
     # digest so the block is honored again. Nothing a worker can reach runs it.
@@ -681,6 +685,7 @@ case "$EVENT" in
       exit 1
     }
     new_sha=$(grants_digest "$(grants_block)" 2>/dev/null || true)
+    credential_record_grants "$new_sha" || exit 1
     if ! jq --arg sha "$new_sha" '.grants_sha = $sha' "$POLICY" > "$POLICY.repin" 2>/dev/null \
       || ! mv "$POLICY.repin" "$POLICY"; then
       rm -f "$POLICY.repin"
@@ -688,6 +693,7 @@ case "$EVENT" in
       exit 1
     fi
     echo "repinned grants digest for ${TASK:-this task}: ${new_sha:-(no grants block)}"
+    credential_pin_registry || exit 1
     exit 0
     ;;
   retire)
