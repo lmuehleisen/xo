@@ -75,8 +75,12 @@ function registry(context) {
     // This is the sole content read: an operator-owned metadata registry.
     const info = fs.lstatSync(context.registryPath);
     const resolved = resolveOperand(context.registryPath, "", context.userHome);
-    if ((context.writeRoots || []).some(root => inside(resolved.canonical, fold(root))
-      || inside(fold(context.registryPath), fold(root)))) throw new Error("mutable registry");
+    if ((context.writeRoots || []).some(root => {
+      let physical;
+      try { physical = resolveOperand(root, context.cwd, context.userHome).canonical; }
+      catch { return true; }
+      return inside(resolved.canonical, physical) || inside(fold(context.registryPath), fold(root));
+    })) throw new Error("mutable registry");
     if (!info.isFile() || info.isSymbolicLink() || info.size > 131072) throw new Error("registry");
     const r = JSON.parse(fs.readFileSync(context.registryPath, "utf8"));
     if (r.version !== 1 || typeof r.revision !== "string" || !r.revision || !Array.isArray(r.entries)
