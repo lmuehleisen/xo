@@ -592,6 +592,8 @@
 # chat.disableTrustAllConfirmation into that per-task home's settings. kiro is
 # crewmate/scout only and refused for --secondmate. The kiro-hook record is its
 # primary busy-state source, with a task-bound native marker fallback (bin/fm-busy-lib.sh).
+# Its shell preToolUse hook forwards the unchanged V2 payload to the same
+# publish-only transport as Claude workers; exit 2 returns stderr to the model.
 # cursor installs no per-task hook either: it writes state/<id>.cursor-session to
 # bind the pane to cursor's own conversation transcript (projects root, the exact
 # workspace path cursor records in .workspace-trusted, and the conversations that
@@ -6034,14 +6036,18 @@ EOF
     # nothing here has to depend on. The redirect, the refused-event tolerance
     # (|| true) and the turn-end touch all live inside the scripts, where the
     # interpreter is fixed by their own shebang, so a stale-gen writer still
-    # cannot break kiro's lifecycle. No stdout contract applies.
+    # cannot break kiro's lifecycle. The publish hook preserves the policy's
+    # exit 2 and stderr; V2 blocks the call and returns that text to the model.
     KIRO_HOME_DIR="$STATE_REAL/$ID.kiro-home"
     mkdir -p "$KIRO_HOME_DIR/agents" "$KIRO_HOME_DIR/settings" "$KIRO_HOME_DIR/hooks"
-    printf '{"chat.disableTrustAllConfirmation":true}\n' >"$KIRO_HOME_DIR/settings/cli.json"
+    # V2 otherwise inherits README.md even with resources=[]. Preserve its
+    # instruction, steering, and skill defaults explicitly, without that extra context.
+    printf '{"chat.disableTrustAllConfirmation":true,"chat.disableInheritingDefaultResources":true}\n' >"$KIRO_HOME_DIR/settings/cli.json"
     busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
     busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source kiro-hook"
     k_submit="$KIRO_HOME_DIR/hooks/user-prompt-submit"
     k_stop="$KIRO_HOME_DIR/hooks/stop"
+    k_publish="$KIRO_HOME_DIR/hooks/pre-tool-use"
     cat >"$k_submit" <<EOF
 #!/usr/bin/env bash
 $busy_cmd_prefix busy $busy_suffix --event user-prompt-submit 2>/dev/null || exit 0
@@ -6054,9 +6060,13 @@ EOF
 $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null && touch $(shell_quote "$TURNEND")
 exit 0
 EOF
-    chmod +x "$k_submit" "$k_stop"
+    cat >"$k_publish" <<EOF
+#!/usr/bin/env bash
+exec $(shell_quote "$FM_ROOT/bin/fm-arm-pretool-check.sh") --claude --publish-only
+EOF
+    chmod +x "$k_submit" "$k_stop" "$k_publish"
     cat >"$KIRO_HOME_DIR/agents/firstmate.json" <<EOF
-{"name":"firstmate","description":"Firstmate per-task crewmate agent (busy-state and turn-end hooks)","tools":["*"],"allowedTools":["*"],"hooks":{"userPromptSubmit":[{"command":"$(json_escape "$k_submit")"}],"stop":[{"command":"$(json_escape "$k_stop")"}]}}
+{"name":"firstmate","description":"Firstmate per-task worker agent","tools":["*"],"allowedTools":["*"],"resources":["file://AmazonQ.md","file://**/AGENTS.md","file://.kiro/steering/**/*.md","$(json_escape "file://$KIRO_HOME_DIR/steering/**/*.md")","skill://.kiro/skills/*/SKILL.md","$(json_escape "skill://$KIRO_HOME_DIR/skills/*/SKILL.md")"],"hooks":{"preToolUse":[{"matcher":"shell","command":"$(json_escape "$k_publish")"}],"userPromptSubmit":[{"command":"$(json_escape "$k_submit")"}],"stop":[{"command":"$(json_escape "$k_stop")"}]}}
 EOF
     ;;
   opencode*)

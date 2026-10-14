@@ -3,7 +3,7 @@
 Maintainer-verification record for the interactive V2 `kiro` crewmate/scout adapter.
 The adapter reference is [Kiro CLI](../../.agents/skills/harness-adapters/references/harness/kiro.md); executable busy trust belongs to `bin/fm-busy-lib.sh`.
 Run the opt-in guard after each Kiro upgrade because the process names, hooks, composer, and native marker are vendor-controlled surfaces.
-The guard submits two small synthetic prompts under an isolated `KIRO_HOME` and private tmux server.
+The guard submits three small synthetic prompts under an isolated `KIRO_HOME` and private tmux server.
 
 ## macOS verification
 
@@ -96,13 +96,47 @@ The model catalog is `kiro-cli chat --agent-engine v2 --list-models -f json`; `-
 Interactive model selection is required: the 2.24.0 headless `--no-interactive` path can reject model selection and silently run Auto, so no adapter launch uses it.
 Auto does not record which model was served.
 
+## Publish hook and context verification
+
+Date: 2026-10-14 (UTC).
+Tool: `kiro-cli 2.24.0`, V2 engine; backend: tmux.
+Refresh with the exact opt-in command above.
+The [CLI 2.x reference](https://kiro.dev/docs/cli/2x-reference/) documents embedded camelCase hooks and exit 2 returning stderr to the agent while blocking a `preToolUse` call.
+The [agent configuration reference](https://kiro.dev/docs/custom-agents/configuration-reference/#disabling-default-resource-inheritance) documents the resource-inheritance switch; its V2 behavior is verified live here.
+
+The shell hook receives this shape on stdin, with identifiers and paths normalized:
+
+```json
+{"hook_event_name":"preToolUse","cwd":"/tmp/example-workspace","session_id":"example-session","tool_name":"shell","tool_input":{"command":"gh --version"}}
+```
+
+Both the canonical `shell` matcher and its `execute_bash` alias matched live shell calls.
+The generated script forwards stdin unchanged to `bin/fm-arm-pretool-check.sh --claude --publish-only`.
+The policy's exit 2 blocks the entire shell call before its leading marker can run, and Kiro delivers the stderr object as text in an error tool result beginning `PreToolHook blocked the tool execution:`.
+An allowed call exits 0 silently and executes normally; no Kiro-specific payload or decision adapter is needed.
+The guard uses a repository-free workspace and a `gh pr create --dry-run` command without a destination, then a read-only `gh --version` call, so no public write is attempted.
+
+Relevant output:
+
+```text
+ok - the real Kiro context retains root and nested AGENTS, steering inclusion, and project/global skills without README
+ok - the real Kiro shell preToolUse hook blocks a gh dry-run before execution and returns its reason to the model
+ok - the real Kiro publish hook allows a read-only gh call
+```
+
+Omitting resources or setting `resources=[]` inherits `README.md` on this V2 build.
+The task-local `chat.disableInheritingDefaultResources=true` setting and explicit resource selectors remove that extra context while including root and nested `AGENTS.md`, legacy `AmazonQ.md`, project/per-task steering, and project/per-task skill metadata.
+The recursive instruction resource matches both root `AGENTS.md` and `services/api/AGENTS.md`; restoring only the root resource cannot establish nested instruction coverage.
+The guard checks `/context show` directly with matching fixture files, including the nested instruction file, always-included steering, and manual steering that must stay excluded.
+The selector list belongs to `bin/fm-spawn.sh`; project `AGENTS.md` remains available to workers.
+
 ## Regression and upstream scope
 
 ```sh
 bash bin/fm-test-run.sh tests/fm-kiro-harness.test.sh tests/fm-busy-adapter-wiring.test.sh tests/fm-control.test.sh tests/fm-composer-lib.test.sh
 ```
 
-The portable suites cover launch isolation, model refusal and timeout behavior, effort flags, hook generations, native-marker fallback, composer scope, lifecycle keys, and teardown.
+The portable suites cover launch isolation, model refusal and timeout behavior, effort flags, hook generations, native-marker fallback, composer scope, lifecycle keys, teardown, and crewmate/scout publish-policy and resource wiring.
 The original adapter's Linux evidence came from kiro-cli 2.21.4 on Amazon Linux 2 with a toolbox/aim-sandbox wrapper and native auth at `~/.local/share/kiro-cli/data.sqlite3`.
 That build exported no `KIRO_*` identity marker; anchored process ancestry therefore remains the portable detection mechanism.
 The current live refresh above covers macOS, while Linux regression and lint remain CI-enforced.
