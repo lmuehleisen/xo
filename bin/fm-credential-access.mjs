@@ -71,14 +71,12 @@ function protectedName(p, home) {
 
 function registry(context) {
   if (!context.registryPath) return { entries: [], invalid: !!context.registryRequired };
-  if ((context.writeRoots || []).some(root => inside(fold(context.registryPath), fold(root)))) {
-    return { entries: [], invalid: true };
-  }
   try {
     // This is the sole content read: an operator-owned metadata registry.
-    const resolved = resolveOperand(context.registryPath, "", context.userHome);
-    if ((context.writeRoots || []).some(root => inside(resolved.canonical, fold(root)))) throw new Error("mutable registry");
     const info = fs.lstatSync(context.registryPath);
+    const resolved = resolveOperand(context.registryPath, "", context.userHome);
+    if ((context.writeRoots || []).some(root => inside(resolved.canonical, fold(root))
+      || inside(fold(context.registryPath), fold(root)))) throw new Error("mutable registry");
     if (!info.isFile() || info.isSymbolicLink() || info.size > 131072) throw new Error("registry");
     const r = JSON.parse(fs.readFileSync(context.registryPath, "utf8"));
     if (r.version !== 1 || typeof r.revision !== "string" || !r.revision || !Array.isArray(r.entries)
