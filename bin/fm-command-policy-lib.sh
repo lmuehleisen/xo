@@ -3163,6 +3163,7 @@ evaluate_exec() {
   JUDGE_CACHE_KEY=''
   # shellcheck disable=SC2034 # output global; the agy adapter reads it after evaluate_exec.
   SENSITIVE_HIT=''
+  # shellcheck disable=SC2034 # CREDENTIAL_HOLD is an output read by both sourcing adapters.
   CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
   FETCH_FILES=''
   analyze_command "$1" "$start_cwd"
