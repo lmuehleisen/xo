@@ -108,6 +108,9 @@ grep -f registered README.md
 grep -fregistered README.md
 jq --rawfile value registered -n '$value'
 cp registered copied.txt
+git show HEAD:registered
+git cat-file -p HEAD:registered
+git grep FIXTURE
 set
 env -0
 command env -0

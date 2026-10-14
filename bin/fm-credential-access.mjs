@@ -246,10 +246,24 @@ function segment(request) {
     } else {
       // Explicit path and @file operands on opaque programs remain protected.
       // Opaque code itself is outside this classifier's security guarantee.
+      let gitVerb = "";
+      if (base === "git") {
+        let i = 1;
+        while (i < words.length && values[i].startsWith("-")) {
+          if (values[i] === "-C") {
+            try { request = { ...request, cwd: resolveOperand(values[i + 1], request.cwd, request.userHome).canonical }; }
+            catch { request = { ...request, dynamicSelection: true }; }
+            i += 2;
+          } else if (["-c", "--git-dir", "--work-tree"].includes(values[i])) i += 2;
+          else i++;
+        }
+        gitVerb = values[i] || "";
+      }
       for (let i = 0; i < words.length; i++) {
         const v = values[i];
         if (words[i].expanded && !/^~(?:\/|$)/.test(v) || words[i].glob) continue;
         const previous = values[i - 1] || "";
+        if (base === "git" && previous === "-C") continue;
         if (["bash", "sh", "zsh", "ksh", "dash"].includes(base) && /^-[^-]*c/.test(previous)) continue;
         if (["python", "python3", "node", "perl", "ruby"].includes(base) && ["-c", "-e", "--eval"].includes(previous)) continue;
         if ((base === "git" && ["-m", "--message", "--grep"].includes(previous))
@@ -263,9 +277,11 @@ function segment(request) {
           }
           continue;
         }
-        operands.push(word({ ...words[i], value: v.replace(/^.*=@/, "").replace(/^@/, "") }));
+        const input = base === "git" && ["show", "cat-file"].includes(gitVerb)
+          ? v.replace(/^[^:]+:/, "") : v;
+        operands.push(word({ ...words[i], value: input.replace(/^.*=@/, "").replace(/^@/, "") }));
       }
-      if (operands.length) add("execute");
+      if (operands.length) add("execute", { recursive: gitVerb === "grep" });
     }
   }
   if (request.dynamicSelection && !calls.length) add("read", { dynamicSelection: true });
