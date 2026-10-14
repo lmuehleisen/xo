@@ -576,7 +576,7 @@ test_kiro_per_task_hook_config_is_out_of_tree() {
     || fail "kiro still inherits its extra default README context"
   jq -e --arg global_skill "skill://$home_dir/skills/*/SKILL.md" \
     --arg global_steering "file://$home_dir/steering/**/*.md" '
-    .resources == ["file://AmazonQ.md", "file://AGENTS.md",
+    .resources == ["file://AmazonQ.md", "file://**/AGENTS.md",
       "file://.kiro/steering/**/*.md", $global_steering,
       "skill://.kiro/skills/*/SKILL.md", $global_skill]
   ' "$agent" >/dev/null || fail "kiro must preserve instruction and skill defaults without README.md"
@@ -605,7 +605,7 @@ test_kiro_workers_enforce_publish_policy() {
     [ "$kind" != crewmate ] || meta_kind=ship
     assert_equals "$meta_kind" "$(sed -n 's/^kind=//p' "$HOME_DIR/state/$id.meta")" 'the publish probe spawned the requested worker kind'
     agent="$HOME_DIR/state/$id.kiro-home/agents/firstmate.json"
-    jq -e '.resources | index("file://AGENTS.md") != null and index("file://README.md") == null' \
+    jq -e '.resources | index("file://**/AGENTS.md") != null and index("file://README.md") == null' \
       "$agent" >/dev/null || fail "Kiro $kind must keep project instructions without README context"
     assert_equals shell "$(jq -r '.hooks.preToolUse[0].matcher' "$agent")" 'Kiro hook matches its canonical shell tool'
     hook=$(jq -r '.hooks.preToolUse[0].command' "$agent")

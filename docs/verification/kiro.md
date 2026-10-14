@@ -119,14 +119,15 @@ The guard uses a repository-free workspace and a `gh pr create --dry-run` comman
 Relevant output:
 
 ```text
-ok - the real Kiro context retains AGENTS, steering inclusion, and project/global skills without README
+ok - the real Kiro context retains root and nested AGENTS, steering inclusion, and project/global skills without README
 ok - the real Kiro shell preToolUse hook blocks a gh dry-run before execution and returns its reason to the model
 ok - the real Kiro publish hook allows a read-only gh call
 ```
 
 Omitting resources or setting `resources=[]` inherits `README.md` on this V2 build.
-The task-local `chat.disableInheritingDefaultResources=true` setting and explicit resource selectors remove that extra context while retaining `AGENTS.md`, legacy `AmazonQ.md`, project/per-task steering, and project/per-task skill metadata.
-The guard checks `/context show` directly with matching fixture files, including always-included steering and manual steering that must stay excluded.
+The task-local `chat.disableInheritingDefaultResources=true` setting and explicit resource selectors remove that extra context while including root and nested `AGENTS.md`, legacy `AmazonQ.md`, project/per-task steering, and project/per-task skill metadata.
+The recursive instruction resource matches both root `AGENTS.md` and `services/api/AGENTS.md`; restoring only the root resource cannot establish nested instruction coverage.
+The guard checks `/context show` directly with matching fixture files, including the nested instruction file, always-included steering, and manual steering that must stay excluded.
 The selector list belongs to `bin/fm-spawn.sh`; project `AGENTS.md` remains available to workers.
 
 ## Regression and upstream scope

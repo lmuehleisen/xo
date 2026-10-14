@@ -118,9 +118,11 @@ printf '%s' "\$payload" | "$ROOT/bin/fm-arm-pretool-check.sh" --claude --publish
 EOF
 chmod +x "$K_SUBMIT_CMD" "$K_STOP_CMD" "$K_PUBLISH_CMD"
 cat > "$KIRO_HOME_DIR/agents/firstmate.json" <<EOF
-{"name":"firstmate","description":"live guard","tools":["*"],"allowedTools":["*"],"resources":["file://AmazonQ.md","file://AGENTS.md","file://.kiro/steering/**/*.md","file://$KIRO_HOME_DIR/steering/**/*.md","skill://.kiro/skills/*/SKILL.md","skill://$KIRO_HOME_DIR/skills/*/SKILL.md"],"hooks":{"preToolUse":[{"matcher":"shell","command":"$K_PUBLISH_CMD"}],"userPromptSubmit":[{"command":"$K_SUBMIT_CMD"}],"stop":[{"command":"$K_STOP_CMD"}]}}
+{"name":"firstmate","description":"live guard","tools":["*"],"allowedTools":["*"],"resources":["file://AmazonQ.md","file://**/AGENTS.md","file://.kiro/steering/**/*.md","file://$KIRO_HOME_DIR/steering/**/*.md","skill://.kiro/skills/*/SKILL.md","skill://$KIRO_HOME_DIR/skills/*/SKILL.md"],"hooks":{"preToolUse":[{"matcher":"shell","command":"$K_PUBLISH_CMD"}],"userPromptSubmit":[{"command":"$K_SUBMIT_CMD"}],"stop":[{"command":"$K_STOP_CMD"}]}}
 EOF
+mkdir -p "$WORKSPACE/services/api"
 printf 'Synthetic project instructions for the live guard.\n' > "$WORKSPACE/AGENTS.md"
+printf 'Synthetic scoped project instructions for the live guard.\n' > "$WORKSPACE/services/api/AGENTS.md"
 printf 'Synthetic README context.\n' > "$WORKSPACE/README.md"
 mkdir -p "$WORKSPACE/.kiro/steering" "$WORKSPACE/.kiro/skills/probe" "$KIRO_HOME_DIR/steering" "$KIRO_HOME_DIR/skills/global-probe"
 printf '%s\n' '---' 'inclusion: always' '---' 'Synthetic project steering.' > "$WORKSPACE/.kiro/steering/project.md"
@@ -318,11 +320,13 @@ for _ in $(seq 1 120); do
 done
 [ -n "$context_seen" ] || fail "Kiro did not show its active context"
 context_compact=$(printf '%s' "$screen" | tr -d '[:space:]')
-for resource in AGENTS.md project.md global.md .kiro/skills/probe/SKILL.md skills/global-probe/SKILL.md; do
+printf '%s\n' "$screen" | grep -Eq '[[:space:]]AGENTS\.md[[:space:]]' \
+  || fail "Kiro lost the root AGENTS.md resource"
+for resource in services/api/AGENTS.md project.md global.md .kiro/skills/probe/SKILL.md skills/global-probe/SKILL.md; do
   case "$context_compact" in *"$resource"*) ;; *) fail "Kiro lost the $resource resource" ;; esac
 done
 case "$screen" in *README.md*|*manual.md*) fail "Kiro inherited README or eagerly included manual steering" ;; esac
-pass "the real Kiro context retains AGENTS, steering inclusion, and project/global skills without README"
+pass "the real Kiro context retains root and nested AGENTS, steering inclusion, and project/global skills without README"
 "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Escape || fail "could not close the context view"
 context_closed=
 for _ in $(seq 1 120); do

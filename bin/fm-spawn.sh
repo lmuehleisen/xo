@@ -6066,7 +6066,7 @@ exec $(shell_quote "$FM_ROOT/bin/fm-arm-pretool-check.sh") --claude --publish-on
 EOF
     chmod +x "$k_submit" "$k_stop" "$k_publish"
     cat >"$KIRO_HOME_DIR/agents/firstmate.json" <<EOF
-{"name":"firstmate","description":"Firstmate per-task worker agent","tools":["*"],"allowedTools":["*"],"resources":["file://AmazonQ.md","file://AGENTS.md","file://.kiro/steering/**/*.md","$(json_escape "file://$KIRO_HOME_DIR/steering/**/*.md")","skill://.kiro/skills/*/SKILL.md","$(json_escape "skill://$KIRO_HOME_DIR/skills/*/SKILL.md")"],"hooks":{"preToolUse":[{"matcher":"shell","command":"$(json_escape "$k_publish")"}],"userPromptSubmit":[{"command":"$(json_escape "$k_submit")"}],"stop":[{"command":"$(json_escape "$k_stop")"}]}}
+{"name":"firstmate","description":"Firstmate per-task worker agent","tools":["*"],"allowedTools":["*"],"resources":["file://AmazonQ.md","file://**/AGENTS.md","file://.kiro/steering/**/*.md","$(json_escape "file://$KIRO_HOME_DIR/steering/**/*.md")","skill://.kiro/skills/*/SKILL.md","$(json_escape "skill://$KIRO_HOME_DIR/skills/*/SKILL.md")"],"hooks":{"preToolUse":[{"matcher":"shell","command":"$(json_escape "$k_publish")"}],"userPromptSubmit":[{"command":"$(json_escape "$k_submit")"}],"stop":[{"command":"$(json_escape "$k_stop")"}]}}
 EOF
     ;;
   opencode*)

@@ -28,7 +28,7 @@ Primary and secondmate operation are unsupported because there is no Kiro superv
 `--agent` accepts a name rather than a path.
 Spawn writes `state/<id>.kiro-home/agents/firstmate.json` and three executable hook scripts under that home, then relocates `KIRO_HOME` to reach them.
 The same home carries `settings/cli.json` with `chat.disableTrustAllConfirmation=true`, suppressing the otherwise blocking trust-all confirmation modal, and `chat.disableInheritingDefaultResources=true`; it also holds the task's sessions.
-Explicit resources preserve V2 project instructions, steering inclusion rules, and project/per-task skills while omitting inherited `README.md`; an empty resource list alone still inherits it.
+Explicit resources include root and nested project instructions, steering inclusion rules, and project/per-task skills while omitting inherited `README.md`; an empty resource list alone still inherits it.
 The spawn owner defines the selectors, and the verification record proves the resulting context membership.
 No project `.kiro/` or real `~/.kiro` agent, setting, or session is changed.
 Hook commands are single-token absolute script paths, so spawn refuses a per-task home path containing whitespace.
