@@ -65,10 +65,10 @@ function resolveOperand(value, cwd, userHome) {
 function protectedName(p, home) {
   const components = p.toLowerCase().split("/");
   if (components.some(c => /\.env($|\.)/.test(c)
-    || /credentials/.test(c)
-    || /^(id_(rsa|ed25519|ecdsa|dsa)(\..*)?|\.(netrc|git-credentials|npmrc|pypirc)(\..*)?|hosts\.yml(\..*)?|credential(\..*)?|.*\.(pem|p12|pfx|key)(\..*)?)$/.test(c)
+    || /credentials|\.ssh|\.gnupg|\.netrc|\.git-credentials|\.npmrc|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)|hosts\.yml|keychain/.test(c)
+    || /^(credential(\..*)?|.*\.(pem|p12|pfx|key)(\..*)?)$/.test(c)
     || c.includes("antigravity-oauth-token")
-    || [".ssh", ".aws", ".gnupg", "keychains", "keychain"].includes(c))) return true;
+    || /\.aws$/.test(c))) return true;
   const locations = [".config/gh", ".config/devin", ".devin/config", ".docker/config.json",
     ".gemini/oauth_creds.json", ".config/gcloud", ".config/antigravity-oauth-token"];
   return !!home && locations.some(l => inside(p, fold(path.join(home, l))));
@@ -280,11 +280,12 @@ function segment(request) {
   const calls = [], operands = [];
   const add = (operation, extra = {}) => calls.push({ ...request, operation, operands: [...operands], ...extra });
   for (const r of request.redirects || []) {
-    if (["<", "<>", "<&"].includes(r.operator) && !/^[0-9-]+$/.test(r.path)) {
+    const descriptor = ["<&", ">&"].includes(r.operator) && /^(?:[0-9]+-?|-)$/u.test(r.path);
+    if (["<", "<>", "<&"].includes(r.operator) && !descriptor) {
       calls.push({ ...request, operation: "read", operands: [r] });
     }
     if ([">", ">>", ">|", "<>", "&>", "&>>", ">&"].includes(r.operator)
-      && !/^[0-9-]+$/.test(r.path)) {
+      && !descriptor) {
       calls.push({ ...request, operation: "write", operands: [{ ...r, role: "destination" }] });
     }
   }

@@ -55,13 +55,14 @@ echo "APPROVE: synthetic ordinary effect"')
   mkdir -p "$dir/config" "$wt/nested" "$wt/sub" "$wt/~" "$wt/src" "$wt/env/lib" "$dir/user-home"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/vendor.env"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/registered"
+  printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/123"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/secret material.env"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$dir/user-home/login.env"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/nested/service.env"
   printf 'ordinary\n' > "$wt/README.md"
   printf 'ordinary\n' > "$wt/.editorconfig"
   printf 'fixture\n' > "$wt/sample.env.example"
-  for command in service-credentials.json aws_credentials .npmrc.backup .git-credentials.backup .env .env.local; do
+  for command in service-credentials.json aws_credentials .npmrc.backup .git-credentials.backup .npmrc-backup saved.netrc id_rsa.saved service-keychain.json hosts.yml.backup .env .env.local; do
     printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/$command"
   done
   for command in src/env.ts src/env.d.ts env.mjs env/lib/module.py; do
@@ -77,7 +78,9 @@ echo "APPROVE: synthetic ordinary effect"')
   for hop in $(seq 1 41); do ln -s "hop-$((hop + 1))" "$wt/hop-$hop"; done
   ln -s vendor.env "$wt/hop-42"
   entry=$(jq -nc --arg path "$wt/registered" '{path:$path,scope:"file",kind:"credential",use_modes:["source"],provenance:"synthetic registration"}')
-  jq -n --argjson entry "$entry" '{version:1,revision:"fixture-1",entries:[$entry]}' > "$dir/config/declared-credentials.json"
+  jq -n --argjson entry "$entry" --arg numeric "$wt/123" \
+    '{version:1,revision:"fixture-1",entries:[$entry,{path:$numeric,scope:"file",kind:"credential",use_modes:[],provenance:"synthetic numeric filename"}]}' \
+    > "$dir/config/declared-credentials.json"
   jq --arg config "$dir/config" --arg home "$dir/user-home" \
     '.config=$config | .credential_user_home=$home | .credential_registry_required=true' "$policy" > "$policy.new"
   mv "$policy.new" "$policy"
@@ -91,6 +94,11 @@ cat service-credentials.json
 cat aws_credentials
 cat .npmrc.backup
 cat .git-credentials.backup
+cat .npmrc-backup
+cat saved.netrc
+cat id_rsa.saved
+cat service-keychain.json
+cat hosts.yml.backup
 cat .env
 cat .env.local
 cat 'secret material.env'
@@ -109,6 +117,8 @@ jq -f registered README.md
 jq --from-file registered README.md
 file registered
 cat < registered
+cat < 123
+printf x > 123
 printf x > registered
 printf x >> registered
 printf x >| registered
@@ -169,7 +179,7 @@ EOF
       *) credential_held || fail "agy pre-tool-use did not hold $command" ;;
     esac
   done
-  for command in registered alias hard-alias vendor.env cycle-a broken service-credentials.json aws_credentials .npmrc.backup .git-credentials.backup .env .env.local; do
+  for command in registered 123 alias hard-alias vendor.env cycle-a broken service-credentials.json aws_credentials .npmrc.backup .git-credentials.backup .npmrc-backup saved.netrc id_rsa.saved service-keychain.json hosts.yml.backup .env .env.local; do
     fields=$(jq -nc --arg path "$command" '{file_path:$path,AbsolutePath:$path}')
     for kind in read write; do
       credential_hook "$policy" "$kind" "$fields" "$step"; step=$((step + 1))
