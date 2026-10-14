@@ -348,9 +348,9 @@ write_armed() {
 evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
   case "$TOOL" in
-    view_file|grep_search|list_dir|write_to_file|replace_file_content)
+    view_file|grep_search|list_dir|write_to_file|replace_file_content|search_web|read_url_content)
       local fields
-      fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive}')
+      fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive,Url,URL,Query}')
       credential_native "$fields" "$WORKTREE"
       ;;
   esac

@@ -387,6 +387,15 @@ function segment(request) {
 
 function native(request) {
   const a = request.fields || {}, tool = request.tool;
+  if (tool === "search_web") return result("ordinary", "remote-query-data");
+  if (tool === "read_url_content") {
+    const url = a.Url || a.URL || a.Query || "";
+    if (/^https?:\/\//i.test(url)) return result("ordinary", "remote-http-read");
+    try {
+      const filename = fileURLToPath(url);
+      return classify_credential_access({ ...request, operation: "read", operands: [word(filename, "native:local-uri")] });
+    } catch { return result("unresolved", "unresolved-native-uri"); }
+  }
   const metadata = ["glob", "list_dir"].includes(tool);
   const search = ["grep", "grep_search"].includes(tool);
   const operands = [];
@@ -394,6 +403,7 @@ function native(request) {
     if (typeof a[name] === "string" && a[name]) operands.push(word(a[name], `native:${name}`));
   }
   if (metadata) return classify_credential_access({ ...request, operation: "metadata", operands });
+  if (operands.some(o => o.path.startsWith("~"))) return result("unresolved", "ambiguous-native-home-expansion");
   if (search && !operands.length) operands.push(word(request.cwd, "search-root"));
   const recursive = search && (a.recursive !== false && a.Recursive !== false);
   return classify_credential_access({ ...request, operation: "read", operands, recursive,

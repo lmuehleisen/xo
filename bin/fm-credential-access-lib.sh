@@ -67,7 +67,8 @@ credential_pin_registry() {
 }
 
 classify_credential_access() {  # <structured request JSON>
-  local request output
+  local request output category reason
+  CREDENTIAL_LAST_CATEGORY=unresolved CREDENTIAL_LAST_REASON=classifier-unavailable
   load_grants
   request=$(printf '%s' "$1" | jq -c --arg cwd "${CWD-$WORKTREE}" \
     --arg home "$CREDENTIAL_USER_HOME" --arg registry "$CREDENTIAL_REGISTRY_PATH" \
@@ -77,8 +78,10 @@ classify_credential_access() {  # <structured request JSON>
       trace:($trace == 1), useGrants:($grants | split("\n") | map(select(. != ""))),
       writeRoots:($roots | split("\n") | map(select(. != "")))}' 2>/dev/null) || request=''
   output=$(printf '%s' "$request" | node "$CREDENTIAL_LIB_DIR/fm-credential-access.mjs" 2>/dev/null) || output=''
-  CREDENTIAL_LAST_CATEGORY=$(printf '%s' "$output" | jq -r '.category // "unresolved"' 2>/dev/null) || CREDENTIAL_LAST_CATEGORY=unresolved
-  CREDENTIAL_LAST_REASON=$(printf '%s' "$output" | jq -r '.reason // "classifier-unavailable"' 2>/dev/null) || CREDENTIAL_LAST_REASON=classifier-unavailable
+  [ -n "$output" ] || return 0
+  category=$(printf '%s' "$output" | jq -er '.category | select(. == "ordinary" or . == "protected-disclosure" or . == "authorized-load" or . == "unresolved")' 2>/dev/null) || return 0
+  reason=$(printf '%s' "$output" | jq -er '.reason | select(type == "string" and length > 0)' 2>/dev/null) || return 0
+  CREDENTIAL_LAST_CATEGORY=$category CREDENTIAL_LAST_REASON=$reason
 }
 
 credential_apply() {

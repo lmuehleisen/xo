@@ -232,6 +232,11 @@ test_retained_credential_identity() {
   fields='{"file_path":"opaque","AbsolutePath":"opaque"}'
   credential_hook "$policy" read "$fields" "$step"; step=$((step + 1))
   credential_held || fail "native reads must retain protection after source revocation"
+  mkdir -p "$dir/no-node"
+  printf '#!/bin/sh\nexit 1\n' > "$dir/no-node/node"
+  chmod +x "$dir/no-node/node"
+  PATH="$dir/no-node:$PATH" credential_hook "$policy" read "$fields" "$step"; step=$((step + 1))
+  credential_held || fail "unavailable classifier must fail closed rather than statically approve"
   credential_exec "$policy" "bash $POLICY_SH repin-grants $policy" "$step"
   case "${POLICY_SH##*/}" in
     fm-devin*) [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] || fail "worker must not repin its own authority" ;;
