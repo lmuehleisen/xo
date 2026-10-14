@@ -403,8 +403,8 @@ The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the fi
 ### Bypass permission layer
 
 Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the same six checks then passed on 1.3.1 on 2026-10-07 (see the 1.3.1 refresh below), so the layer's live-verified set is `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1`.
-A version without that evidence, such as 1.2.8 through 1.2.10, 1.3.0, or any later release, stays outside the set.
+The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the 1.3.1 and 1.3.5 refreshes below extend the layer's live-verified set to `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5`.
+A version without that evidence, including 1.2.8 through 1.2.10, 1.3.0, and 1.3.2 through 1.3.4, stays outside the set; later releases require their own live verification.
 The set stays an explicit allowlist rather than a minimum version, because each entry is individually proven against the version-sensitive hook contract.
 
 ```sh
@@ -487,6 +487,38 @@ FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=63124
 These checks cover exact numeric inbox acknowledgements and symlink/sibling refusals, interpreter routing, read-exclusion context beyond bounded brief excerpts, one-shot exact-batch credential approvals, and generation-bound audit retention.
 The fixtures verify policy transport and enforcement, not model agreement with the revised prompt or native background-task ownership.
 They do not extend the live-verified agy version set above.
+
+#### 1.3.5 refresh (2026-10-14)
+
+Refreshed on 2026-10-14 with agy 1.3.5 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.8-flash-low` headless runs.
+The same six bypass checks and the observer live check passed unchanged from the 1.3.1 guard, apart from the model update to `gemini-3.8-flash-low`, which the `agy models` catalog lists.
+The version-sensitive contract used by the layer is unchanged: named `hooks.json` registrations still load matcher groups containing command hooks, and deny, abstain, timeout, and `force_ask` behavior match the prior refresh.
+A scratch capture confirmed matching pre/post `conversationId`, `stepIdx`, and `toolCall`, with `workspacePaths`, `modelName`, `transcriptPath`, and `artifactDirectoryPath` intact and a successful post-tool `error` of `""`.
+The `run_command` args still carry `CommandLine`, `Cwd`, `WaitMsBeforeAsync`, `toolAction`, and `toolSummary`; optional `RunPersistent` and `IsDaemon` arguments were also observed.
+No layer adaptation was needed beyond admitting 1.3.5; 1.3.2 through 1.3.4 have no live evidence and stay outside the set.
+
+```sh
+FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
+```
+
+```text
+ok - agy 1.3.5: a policy deny blocks a bypassed call and the reason reaches the model
+ok - agy 1.3.5: an abstained task-local file op runs unchanged and the armed heartbeat logged
+ok - agy 1.3.5: a timed-out judge denies, holds the call for firstmate, and never abstains
+ok - agy 1.3.5: install-worker refuses a malformed merged hooks.json before any launch
+ok - agy 1.3.5: a force_ask decision under bypass did not block the call - no prompt exists to force
+ok - agy 1.3.5: a bypass session whose hook never logs leaves no armed line for the canary to trust
+# agy bypass permission layer live checks passed (agy 1.3.5)
+```
+
+```sh
+FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
+```
+
+```text
+ok - agy 1.3.5: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
+# agy observer live checks passed (agy 1.3.5)
+```
 
 ### Primary and secondmate supervision
 

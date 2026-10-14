@@ -164,7 +164,7 @@ case "$EVENT" in
 esac
 
 if [ "$EVENT" = verified-versions ]; then
-  # The agy versions docs/verification/runtime-backends.md records live
+  # The agy versions docs/verification/runtime-backends-fork.md records live
   # evidence for; fm-spawn gates --agy-bypass launches on this set. Each
   # entry is admitted only after tests/fm-agy-bypass-live-e2e.test.sh passes
   # against that installed binary, because the hook contract this layer rests
@@ -175,7 +175,7 @@ if [ "$EVENT" = verified-versions ]; then
   # armed line; a version without that evidence stays out. Keep this an
   # explicit list, never a minimum or a range: a range would admit the next
   # release unproven, which is the failure this gate exists to prevent.
-  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1\n'
+  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5\n'
   exit 0
 fi
 if [ "$EVENT" = grants-digest ]; then

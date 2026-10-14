@@ -893,8 +893,8 @@ test_missing_policy_file_fails_closed() {
 test_verified_versions_and_grants_digest_verbs() {
   local versions digest dir
   versions=$("$POLICY_SH" verified-versions 2>/dev/null)
-  case " $versions " in
-    *" 1.2.5 "*) ;;
+  case "$versions" in
+    '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5') ;;
     *) fail "verified-versions must list the live-verified agy set, got: $versions" ;;
   esac
   dir="$TMP_ROOT/verbs"
