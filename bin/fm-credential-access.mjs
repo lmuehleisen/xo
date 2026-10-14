@@ -155,7 +155,8 @@ export function classify_credential_access(request, state = registry(request)) {
   const operands = request.operands || [];
   for (const operand of operands) {
     if (!operand.path || operand.role === "data" || operand.role === "pattern") continue;
-    if ((operand.expanded && !/^~(?:\/|$)/.test(operand.path)) || operand.glob) {
+    const homeOnlyExpansion = /^~(?:\/|$)/.test(operand.path) && !/[$`]/.test(operand.path);
+    if ((operand.expanded && !homeOnlyExpansion) || operand.glob) {
       // A removal/attribute change does not select content to disclose;
       // its existing physical-write rules remain the authority for effects.
       if (request.operation === "write") continue;
@@ -163,7 +164,8 @@ export function classify_credential_access(request, state = registry(request)) {
       continue;
     }
     let resolved;
-    try { resolved = resolveOperand(operand.path, request.cwd, request.userHome); }
+    const literalPath = operand.path.startsWith("~") && !operand.expanded ? `./${operand.path}` : operand.path;
+    try { resolved = resolveOperand(literalPath, request.cwd, request.userHome); }
     catch { return result("unresolved", "unresolvable-path-identity"); }
     const matches = state.entries.filter(e => [resolved.lexical, resolved.canonical].some(p =>
       e.scope === "subtree" ? inside(p, e.lexical) || inside(p, e.canonical)

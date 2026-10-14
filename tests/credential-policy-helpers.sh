@@ -52,7 +52,7 @@ done
 printf "called\n" >> "$CREDENTIAL_JUDGE_CALLS"
 echo "APPROVE: synthetic ordinary effect"')
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
-  mkdir -p "$dir/config" "$wt/nested" "$wt/sub" "$dir/user-home"
+  mkdir -p "$dir/config" "$wt/nested" "$wt/sub" "$wt/~" "$dir/user-home"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/vendor.env"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/registered"
   printf 'FIXTURE_KEY=HARMLESS_SENTINEL_VALUE\n' > "$wt/secret material.env"
@@ -62,6 +62,7 @@ echo "APPROVE: synthetic ordinary effect"')
   printf 'ordinary\n' > "$wt/.editorconfig"
   printf 'fixture\n' > "$wt/sample.env.example"
   ln -s vendor.env "$wt/alias"
+  ln -s "$wt/registered" "$wt/~/alias"
   ln -s nested "$wt/directory-alias"
   ln "$wt/registered" "$wt/hard-alias"
   ln -s cycle-b "$wt/cycle-a"; ln -s cycle-a "$wt/cycle-b"
@@ -82,6 +83,9 @@ echo "APPROVE: synthetic ordinary effect"')
 cat vendor.env
 cat 'secret material.env'
 cat ~/login.env
+cat '~/alias'
+cat ~/'$FILE'
+cat ~/"$FILE"
 cat -n vendor.env
 head vendor.env
 tail vendor.env
