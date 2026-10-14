@@ -12,6 +12,7 @@ Primary and secondmate operation are unsupported because there is no Kiro superv
 | Launch | `KIRO_HOME=<per-task> kiro-cli chat --agent-engine v2 --agent firstmate --model <id> --effort <level> --trust-all-tools "<brief>"`; the positional brief auto-submits in the interactive TUI; never use `--no-interactive`, whose model selection is unsupported on the measured macOS build. |
 | Busy state | V2 `userPromptSubmit` and `stop` hooks write `kiro-hook`; a task-bound native turn marker can settle a stale busy hook after manual Escape; `../../../../../bin/fm-busy-lib.sh` owns binding, trust, and conservative fallback; rendered text is never a Kiro worker-state source. |
 | Turn end | A successful generation-bound `stop` event touches the task's `turn-ended` notification; Escape emits no `stop`. |
+| Publish policy | A per-task `preToolUse` hook matches `shell` and forwards V2 stdin unchanged to `../../../../../bin/fm-arm-pretool-check.sh --claude --publish-only`; exit 2 blocks before execution and returns stderr to the model; `../../../../../docs/arm-pretool-check.md` owns the shared transport. |
 | Interrupt | One Escape cancels the agent turn and leaves an empty composer; the control plane invalidates the busy record to `unknown`, without claiming cancellation acknowledgement; a running tool process survives Escape until it finishes or the session exits; follow an interrupt with exit or relaunch when the tool must stop. |
 | Exit | `/quit`, one Enter; the process exits and may print `Session ended.` and `Resume with: kiro-cli --resume-id <id>`. |
 | Resume | `--resume-id <id>` or cwd-scoped `--resume`; positional prompts work on resume; Firstmate automates deterministic relaunch from the durable brief. |
@@ -25,8 +26,10 @@ Primary and secondmate operation are unsupported because there is no Kiro superv
 ## Per-task configuration and credentials
 
 `--agent` accepts a name rather than a path.
-Spawn writes `state/<id>.kiro-home/agents/firstmate.json` and two executable hook scripts under that home, then relocates `KIRO_HOME` to reach them.
-The same home carries `settings/cli.json` with `chat.disableTrustAllConfirmation=true`, suppressing the otherwise blocking trust-all confirmation modal, and holds the task's sessions.
+Spawn writes `state/<id>.kiro-home/agents/firstmate.json` and three executable hook scripts under that home, then relocates `KIRO_HOME` to reach them.
+The same home carries `settings/cli.json` with `chat.disableTrustAllConfirmation=true`, suppressing the otherwise blocking trust-all confirmation modal, and `chat.disableInheritingDefaultResources=true`; it also holds the task's sessions.
+Explicit resources preserve V2 project instructions, steering inclusion rules, and project/per-task skills while omitting inherited `README.md`; an empty resource list alone still inherits it.
+The spawn owner defines the selectors, and the verification record proves the resulting context membership.
 No project `.kiro/` or real `~/.kiro` agent, setting, or session is changed.
 Hook commands are single-token absolute script paths, so spawn refuses a per-task home path containing whitespace.
 

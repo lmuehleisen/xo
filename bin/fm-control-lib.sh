@@ -460,9 +460,9 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
     devin) printf '%s\n' "$state/$id.devin-config.json" ;;
     # kiro's busy-state and turn-end hooks live in a firstmate-owned per-task
     # agent config the launch reaches through a relocated KIRO_HOME, at
-    # <state>/<id>.kiro-home/agents/firstmate.json, whose two hook commands are
-    # generated scripts beside it under hooks/. All three carry the incarnation's
-    # gen, so all three are retired; the sibling settings/sessions carry no gen
+    # <state>/<id>.kiro-home/agents/firstmate.json, whose hook commands are
+    # generated scripts beside it under hooks/. Retire the config and scripts
+    # together, including the publish policy transport; settings/sessions carry no gen
     # and are cleared wholesale by teardown's rm -rf of <id>.kiro-home. Nothing
     # is written into the worktree, whose own .kiro/ belongs to the project, and
     # nothing in the operator's real ~/.kiro is touched.
@@ -470,6 +470,7 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
       printf '%s\n' "$state/$id.kiro-home/agents/firstmate.json"
       printf '%s\n' "$state/$id.kiro-home/hooks/user-prompt-submit"
       printf '%s\n' "$state/$id.kiro-home/hooks/stop"
+      printf '%s\n' "$state/$id.kiro-home/hooks/pre-tool-use"
       gen=
       [ ! -f "$state/$id.busy-gen" ] || IFS= read -r gen < "$state/$id.busy-gen" || true
       case "$gen" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac

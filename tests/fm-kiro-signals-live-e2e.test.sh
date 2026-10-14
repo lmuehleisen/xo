@@ -4,7 +4,8 @@
 # signal), the rendered `Kiro is working` footer the DELIVERY guard matches, the
 # anchored `kiro-cli` foreground process name both detection arms key on, the
 # composer glyph and idle placeholder, Escape interrupt, and /quit exit with its
-# resume line. Opt-in because it submits real prompts (no echo provider exists
+# resume line, plus shell publish refusal and resource inheritance. Opt-in
+# because it submits real prompts (no echo provider exists
 # for kiro). v3/KAS is explicitly out of scope and never exercised here.
 #
 # Run deliberately with FM_KIRO_SIGNALS_LIVE=1. FM_KIRO_LIVE_MODEL selects a
@@ -47,7 +48,7 @@ pass() {
   printf 'ok - %s\n' "$1"
 }
 
-fm_live_gate opt-in FM_KIRO_SIGNALS_LIVE kiro-cli tmux jq
+fm_live_gate opt-in FM_KIRO_SIGNALS_LIVE kiro-cli tmux jq node gh
 case "$MODEL" in ''|*[!A-Za-z0-9._-]*) fail "live model must be a bare catalog id" ;; esac
 [ -n "$KIRO_BIN" ] || fail "kiro-cli is not installed"
 
@@ -81,9 +82,10 @@ export PATH
 KIRO_HOME_DIR="$LAB/state/guard.kiro-home"
 GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$LAB/state" guard) || fail "could not arm the live busy generation"
 mkdir -p "$KIRO_HOME_DIR/hooks"
-printf '{"chat.disableTrustAllConfirmation":true}\n' > "$KIRO_HOME_DIR/settings/cli.json"
+printf '{"chat.disableTrustAllConfirmation":true,"chat.disableInheritingDefaultResources":true}\n' > "$KIRO_HOME_DIR/settings/cli.json"
 K_SUBMIT_CMD="$KIRO_HOME_DIR/hooks/user-prompt-submit"
 K_STOP_CMD="$KIRO_HOME_DIR/hooks/stop"
+K_PUBLISH_CMD="$KIRO_HOME_DIR/hooks/pre-tool-use"
 cat > "$K_SUBMIT_CMD" <<EOF
 #!/usr/bin/env bash
 "$ROOT/bin/fm-busy-event.sh" apply "$LAB/state" guard busy --gen "$GEN" --source kiro-hook --event user-prompt-submit 2>/dev/null || exit 0
@@ -108,10 +110,24 @@ printf seen > $LAB/TURNEND
 printf stop > $LAB/STOP 2>/dev/null || true
 exit 0
 EOF
-chmod +x "$K_SUBMIT_CMD" "$K_STOP_CMD"
-cat > "$KIRO_HOME_DIR/agents/firstmate.json" <<EOF
-{"name":"firstmate","description":"live guard","tools":["*"],"allowedTools":["*"],"hooks":{"userPromptSubmit":[{"command":"$K_SUBMIT_CMD"}],"stop":[{"command":"$K_STOP_CMD"}]}}
+cat > "$K_PUBLISH_CMD" <<EOF
+#!/usr/bin/env bash
+payload=\$(cat)
+printf '%s\\n' "\$payload" >> "$LAB/pretool.jsonl"
+printf '%s' "\$payload" | "$ROOT/bin/fm-arm-pretool-check.sh" --claude --publish-only
 EOF
+chmod +x "$K_SUBMIT_CMD" "$K_STOP_CMD" "$K_PUBLISH_CMD"
+cat > "$KIRO_HOME_DIR/agents/firstmate.json" <<EOF
+{"name":"firstmate","description":"live guard","tools":["*"],"allowedTools":["*"],"resources":["file://AmazonQ.md","file://AGENTS.md","file://.kiro/steering/**/*.md","file://$KIRO_HOME_DIR/steering/**/*.md","skill://.kiro/skills/*/SKILL.md","skill://$KIRO_HOME_DIR/skills/*/SKILL.md"],"hooks":{"preToolUse":[{"matcher":"shell","command":"$K_PUBLISH_CMD"}],"userPromptSubmit":[{"command":"$K_SUBMIT_CMD"}],"stop":[{"command":"$K_STOP_CMD"}]}}
+EOF
+printf 'Synthetic project instructions for the live guard.\n' > "$WORKSPACE/AGENTS.md"
+printf 'Synthetic README context.\n' > "$WORKSPACE/README.md"
+mkdir -p "$WORKSPACE/.kiro/steering" "$WORKSPACE/.kiro/skills/probe" "$KIRO_HOME_DIR/steering" "$KIRO_HOME_DIR/skills/global-probe"
+printf '%s\n' '---' 'inclusion: always' '---' 'Synthetic project steering.' > "$WORKSPACE/.kiro/steering/project.md"
+printf '%s\n' '---' 'inclusion: manual' '---' 'Synthetic manual steering.' > "$WORKSPACE/.kiro/steering/manual.md"
+printf '%s\n' '---' 'inclusion: always' '---' 'Synthetic global steering.' > "$KIRO_HOME_DIR/steering/global.md"
+printf '%s\n' '---' 'name: project-probe' 'description: Synthetic project skill.' '---' 'Live guard fixture.' > "$WORKSPACE/.kiro/skills/probe/SKILL.md"
+printf '%s\n' '---' 'name: global-probe' 'description: Synthetic global skill.' '---' 'Live guard fixture.' > "$KIRO_HOME_DIR/skills/global-probe/SKILL.md"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-busy-lib.sh"
@@ -290,6 +306,82 @@ composer=$(FM_COMPOSER_HARNESS=kiro fm_composer_classify_screen styled=1 "$style
 pass "the real styled Kiro idle composer classifies empty"
 printf '%s\n' "$styled" | grep 'ask a question' | sed $'s/\033/[ESC]/g'
 
+# Inspect Kiro's context membership directly, without relying on a model's
+# recollection. File resources retain steering inclusion metadata on V2.
+"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l '/context show' || fail "could not type the context query"
+"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter || fail "could not submit the context query"
+context_seen=
+for _ in $(seq 1 120); do
+  screen=$(capture)
+  case "$screen" in *'Active agent context: firstmate'*) context_seen=1; break ;; esac
+  sleep 0.5
+done
+[ -n "$context_seen" ] || fail "Kiro did not show its active context"
+context_compact=$(printf '%s' "$screen" | tr -d '[:space:]')
+for resource in AGENTS.md project.md global.md .kiro/skills/probe/SKILL.md skills/global-probe/SKILL.md; do
+  case "$context_compact" in *"$resource"*) ;; *) fail "Kiro lost the $resource resource" ;; esac
+done
+case "$screen" in *README.md*|*manual.md*) fail "Kiro inherited README or eagerly included manual steering" ;; esac
+pass "the real Kiro context retains AGENTS, steering inclusion, and project/global skills without README"
+"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Escape || fail "could not close the context view"
+context_closed=
+for _ in $(seq 1 120); do
+  screen=$("$REAL_TMUX" -L "$SOCKET" capture-pane -p -t "$TARGET" 2>/dev/null || true)
+  case "$screen" in *'esc to close'*) ;; *'ask a question or describe a task'*) context_closed=1; break ;; esac
+  sleep 0.5
+done
+[ -n "$context_closed" ] || fail "the Kiro context view did not close before the next prompt"
+
+# A repository-free workspace and --dry-run keep the denied command harmless
+# even if a vendor regression lets it through. Markers distinguish refusal
+# before execution from a tool that merely fails after starting.
+rm -f "$LAB/STOP" "$LAB/TURNEND"
+publish_prompt="This is a deliberate publish-hook test. Use two separate shell calls. First attempt exactly \`touch '$LAB/denied-marker'; gh pr create --dry-run --title probe --body probe\`. If blocked, do not retry or work around it. Then run exactly \`touch '$LAB/allowed-marker'; gh --version\`. Report the hook error and version, then stop."
+"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l \
+  "$publish_prompt" \
+  || fail "could not type the publish probe"
+"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter || fail "could not submit the publish probe"
+publish_done=
+for _ in $(seq 1 480); do
+  [ -f "$LAB/STOP" ] && [ -f "$LAB/allowed-marker" ] && { publish_done=1; break; }
+  sleep 0.5
+done
+[ -n "$publish_done" ] || fail "the Kiro publish probe never completed its allowed call"
+[ ! -e "$LAB/denied-marker" ] || fail "Kiro executed a command denied by the publish policy"
+jq -se --arg cwd "$WORKSPACE" '
+  any(.[]; .hook_event_name == "preToolUse" and .tool_name == "shell"
+    and .cwd == $cwd and (.session_id | type) == "string"
+    and (.tool_input.command | contains("gh pr create")))
+' "$LAB/pretool.jsonl" >/dev/null || fail "Kiro changed its shell preToolUse input contract"
+denial_seen=
+allowed_seen=
+for session_file in "$KIRO_HOME_DIR"/sessions/cli/*.jsonl; do
+  [ -f "$session_file" ] || continue
+  jq -se 'any(.[] | .data.content[]?;
+    .kind == "toolResult" and .data.status == "error" and
+    any(.data.content[]?; .kind == "text" and (.data | contains("PreToolHook blocked the tool execution:") and contains("[gh-no-repo]"))))
+  ' "$session_file" >/dev/null 2>&1 && denial_seen=1
+  jq -se 'any(.[] | .data.content[]?;
+    .kind == "toolResult" and .data.status == "success" and
+    any(.data.content[]?; .kind == "json" and (.data.stdout | contains("gh version"))))
+  ' "$session_file" >/dev/null 2>&1 && allowed_seen=1
+done
+[ -n "$denial_seen" ] || fail "Kiro did not return the hook refusal to the model"
+[ -n "$allowed_seen" ] || fail "Kiro did not return the allowed read-only gh result"
+pass "the real Kiro shell preToolUse hook blocks a gh dry-run before execution and returns its reason to the model"
+pass "the real Kiro publish hook allows a read-only gh call"
+publish_idle=
+for _ in $(seq 1 120); do
+  styled=$("$REAL_TMUX" -L "$SOCKET" capture-pane -e -p -t "$TARGET" 2>/dev/null || true)
+  composer=$(FM_COMPOSER_HARNESS=kiro fm_composer_classify_screen styled=1 "$styled")
+  if [ "$composer" = empty ] && ! printf '%s' "$styled" | kiro_footer_busy; then
+    publish_idle=1
+    break
+  fi
+  sleep 0.5
+done
+[ -n "$publish_idle" ] || fail "Kiro did not settle to an idle composer after the publish probe"
+
 # Interrupt a genuinely long turn with exactly one Escape and require the
 # Cancelled row it prints.
 "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l \
@@ -320,11 +412,11 @@ for _ in $(seq 1 100); do
 done
 [ -n "$bound" ] || fail "the long turn never acquired its generation- and sequence-bound native marker"
 pass "the real Kiro turn binds its native marker to the hook generation and sequence"
-for _ in $(seq 1 100); do
+for _ in $(seq 1 480); do
   [ -s "$LAB/tool-pid" ] && break
-  sleep 0.1
+  sleep 0.5
 done
-[ -s "$LAB/tool-pid" ] || fail "the synthetic tool process never started"
+[ -s "$LAB/tool-pid" ] || { capture >&2; fail "the synthetic tool process never started"; }
 read -r tool_pid < "$LAB/tool-pid"
 case "$tool_pid" in ''|*[!0-9]*) fail "the synthetic tool did not record a pid" ;; esac
 kill -0 "$tool_pid" 2>/dev/null || fail "the synthetic tool stopped before Escape"

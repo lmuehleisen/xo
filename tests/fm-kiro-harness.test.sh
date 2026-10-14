@@ -27,6 +27,8 @@
 #      or unreadable listing launches unvalidated instead. --effort passes the full
 #      low|medium|high|xhigh|max vocabulary.
 #   5. kiro is a crewmate/scout adapter only: a secondmate launch is refused.
+#   6. Both worker kinds run the publish-only policy before shell calls and
+#      retain project instructions/skills without inheriting README.md.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -167,13 +169,14 @@ test_kiro_wiring_path_is_the_out_of_tree_hook_config() {
   out=$(fm_control_harness_wiring_paths kiro /wt /state kid)
   expected="/state/kid.kiro-home/agents/firstmate.json
 /state/kid.kiro-home/hooks/user-prompt-submit
-/state/kid.kiro-home/hooks/stop"
+/state/kid.kiro-home/hooks/stop
+/state/kid.kiro-home/hooks/pre-tool-use"
   [ "$out" = "$expected" ] \
-    || fail "kiro wiring must retire the per-task hook config and both hook scripts, got '$out'"
+    || fail "kiro wiring must retire the per-task hook config and all hook scripts, got '$out'"
   case "$out" in
     */wt/*) fail "kiro wiring must not point inside the worktree" ;;
   esac
-  pass "fm-control-lib: kiro wiring paths are the out-of-tree hook config and its two hook scripts"
+  pass "fm-control-lib: kiro wiring paths retire the out-of-tree config and all three hook scripts"
 }
 
 # --- Busy: the hook record is the only state source -------------------------
@@ -550,7 +553,7 @@ test_kiro_per_task_hook_config_is_out_of_tree() {
   # or splits argv. What those scripts DO is executed end to end in
   # tests/fm-busy-adapter-wiring.test.sh.
   jq -e . "$agent" >/dev/null || fail "the kiro agent config is not valid JSON"
-  for trigger in userPromptSubmit stop; do
+  for trigger in userPromptSubmit stop preToolUse; do
     cmd=$(jq -r ".hooks[\"$trigger\"][0].command" "$agent")
     [ -n "$cmd" ] && [ "$cmd" != null ] \
       || fail "the kiro agent config lacks the $trigger hook command"
@@ -564,12 +567,61 @@ test_kiro_per_task_hook_config_is_out_of_tree() {
   done
   [ "$(jq -r '.["chat.disableTrustAllConfirmation"]' "$settings")" = true ] \
     || fail "the kiro trust modal is not suppressed"
+  [ "$(jq -r '.["chat.disableInheritingDefaultResources"]' "$settings")" = true ] \
+    || fail "kiro still inherits its extra default README context"
+  jq -e --arg global_skill "skill://$home_dir/skills/*/SKILL.md" \
+    --arg global_steering "file://$home_dir/steering/**/*.md" '
+    .resources == ["file://AmazonQ.md", "file://AGENTS.md",
+      "file://.kiro/steering/**/*.md", $global_steering,
+      "skill://.kiro/skills/*/SKILL.md", $global_skill]
+  ' "$agent" >/dev/null || fail "kiro must preserve instruction and skill defaults without README.md"
   # The pivotal element-3 guarantee: nothing is written into the disposable
   # worktree's own .kiro/.
   [ ! -e "$WT_DIR/.kiro" ] || fail "kiro spawn wrote into the worktree's own .kiro/ (must stay out of tree)"
   # The busy generation is armed and embedded in the hook.
   [ -e "$HOME_DIR/state/$id.busy-gen" ] || fail "kiro spawn did not arm a busy generation"
   pass "fm-spawn: kiro writes an out-of-tree per-task hook config and trust setting, never the worktree's .kiro/"
+}
+
+test_kiro_workers_enforce_publish_policy() {
+  local kind id rec out rc agent hook payload command code case_spec
+  for kind in crewmate scout; do
+    id="kiro-publish-$kind-$$"
+    rec=$(make_kiro_spawn_case "publish-$kind" "$id")
+    read_kiro_spawn_record "$rec"
+    if [ "$kind" = scout ]; then
+      out=$(run_kiro_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" --scout)
+    else
+      out=$(run_kiro_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+    fi
+    rc=$?
+    expect_code 0 "$rc" "kiro $kind spawn should succeed: $out"
+    agent="$HOME_DIR/state/$id.kiro-home/agents/firstmate.json"
+    assert_equals shell "$(jq -r '.hooks.preToolUse[0].matcher' "$agent")" 'Kiro hook matches its canonical shell tool'
+    hook=$(jq -r '.hooks.preToolUse[0].command' "$agent")
+    for case_spec in \
+      'gh-no-repo|gh pr create --dry-run --title probe --body probe' \
+      'git-identity|git -c user.name=probe status' \
+      'git-no-verify|git push --no-verify origin HEAD'; do
+      code=${case_spec%%|*}
+      command=${case_spec#*|}
+      payload=$(jq -cn --arg command "$command" --arg cwd "$WT_DIR" \
+        '{hook_event_name:"preToolUse",cwd:$cwd,session_id:"probe",tool_name:"shell",tool_input:{command:$command}}')
+      printf '%s' "$payload" | "$hook" >"$CASE_DIR/hook.out" 2>"$CASE_DIR/hook.err"
+      rc=$?
+      expect_code 2 "$rc" "Kiro $kind hook must refuse $code"
+      [ ! -s "$CASE_DIR/hook.out" ] || fail "a Kiro refusal must leave stdout empty"
+      assert_contains "$(cat "$CASE_DIR/hook.err")" "[$code]" 'Kiro stderr carries the shared policy reason'
+    done
+    for command in 'gh pr view --repo cli/cli' 'bin/fm-watch-arm.sh &'; do
+      payload=$(jq -cn --arg command "$command" '{tool_name:"shell",tool_input:{command:$command}}')
+      out=$(printf '%s' "$payload" | "$hook" 2>&1)
+      rc=$?
+      expect_code 0 "$rc" "Kiro $kind publish-only hook must allow $command"
+      assert_equals '' "$out" 'allowed Kiro calls stay silent'
+    done
+    pass "fm-spawn: Kiro $kind hook enforces the shared publish policy without primary watcher restrictions"
+  done
 }
 
 test_kiro_effort_xhigh_passes_through() {
@@ -748,6 +800,7 @@ test_kiro_composer_glyph_and_placeholder
 test_kiro_delivery_footer_matches_and_is_scoped
 test_kiro_launch_carries_brief_agent_engine_and_clears_markers
 test_kiro_per_task_hook_config_is_out_of_tree
+test_kiro_workers_enforce_publish_policy
 test_kiro_effort_xhigh_passes_through
 test_kiro_unlisted_model_refuses_before_pane_creation
 test_kiro_whitespace_hook_path_refuses_before_pane_creation
