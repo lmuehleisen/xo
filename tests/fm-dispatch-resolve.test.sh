@@ -2013,6 +2013,22 @@ run_gate_case "$NO_TOOL_BIN" "$GATE_HOME_FALLBACK" code out err "$BRIEF"
 assert_not_contains "$out" 'rovo tool not installed' "a rovo installed only at ~/.local/bin stays eligible"
 run_without_tool code out err "$BRIEF"
 assert_contains "$out" 'candidate: rovo:auto  -> not eligible: rovo tool not installed on this host' "a rovo with no launch location anywhere is not eligible"
+# A launch location counts only when it resolves to an executable file, the
+# requirement bin/fm-spawn.sh's resolvers enforce: an exported function of the
+# launch name is present to command -v but is not the tool, and spawn would
+# refuse the launch, so the gate must not count the route installed.
+printf '%s\n' '{"rules":[{"when":"Kimi work","use":[{"harness":"kimi","model":"kimi-code/k3"},{"harness":"claude","model":"sonnet"}]}]}' > "$RULES"
+# shellcheck disable=SC2329 # Exported for indirect use by the resolver under test.
+kimi() { :; }
+export -f kimi
+run_without_tool code out err "$BRIEF"
+assert_contains "$out" 'candidate: kimi:kimi-code/k3  -> not eligible: kimi tool not installed on this host' "an exported function of the launch name is not an installed tool"
+unset -f kimi
+# The same rules with the real executable on PATH stay eligible, so the
+# executable check does not reject a genuine install.
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" 'candidate: kimi:kimi-code/k3  provider=kimi  -> eligible' "a real PATH executable keeps the route eligible"
+assert_not_contains "$out" 'kimi tool not installed' "the executable check does not reject a genuine install"
 # The gate also covers lane class routes.
 lane_quota kiro=-0.6 codex=0.2
 printf '%s\n' '{"rules":[{"when":"Lane work","lane":"mix","order":"pool","classes":["k","c"]}],"classes":{"k":{"family":"kiro","routes":[{"harness":"kiro","model":"auto"}]},"c":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5"}]}}}' > "$RULES"

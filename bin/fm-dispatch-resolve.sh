@@ -125,15 +125,17 @@
 #   local lookup over every location the single-owner table
 #   fm_control_harness_launch_candidates in bin/fm-control-lib.sh accepts: a
 #   bare name on PATH, or an absolute resolver fallback path such as Kimi's
-#   ~/.kimi-code/bin - the same locations bin/fm-spawn.sh's resolvers search,
-#   so an installation the launcher would accept is never excluded. A harness
-#   with no launch location anywhere prints
-#   "not eligible: <harness> tool not installed on this host", because
-#   dispatch configuration is identical across homes while installed tools are
-#   not, so a host without the tool must never pick a route that cannot
-#   launch. The gate declines that route only: it never falls back to another
-#   route by itself, every candidate is still printed with its evidence, and
-#   an all-ineligible outcome keeps the ordinary escalate result.
+#   ~/.kimi-code/bin. Each must resolve to an executable file, exactly as
+#   bin/fm-spawn.sh's resolvers require, so an installation the launcher would
+#   accept is never excluded and an exported function, builtin, or alias of the
+#   same name never counts. A harness with no executable launch location
+#   anywhere prints "not eligible: <harness> tool not installed on this host",
+#   because dispatch configuration is identical across homes while installed
+#   tools are not, so a host without the tool must never pick a route that
+#   cannot launch. The gate declines that route only: it never falls back to
+#   another route by itself, every candidate is still printed with its
+#   evidence, and an all-ineligible outcome keeps the ordinary escalate
+#   result.
 #
 # Environment:
 #   TYPESAFE_API_KEY activates resolution; OPENROUTER_API_KEY is ignored here
@@ -246,14 +248,22 @@ done
 # location the single-owner table in bin/fm-control-lib.sh accepts exists - a
 # bare name on PATH, or an absolute resolver fallback path such as Kimi's
 # ~/.kimi-code/bin. This mirrors bin/fm-spawn.sh's resolvers exactly, so a
-# route is never excluded for an installation the launcher would accept.
+# route is never excluded for an installation the launcher would accept, and
+# never counted for one the launchers would refuse.
 harness_installed() {  # <harness>
-  local candidate
+  local candidate resolved
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
     case "$candidate" in
       */*) [ -x "$candidate" ] && return 0 ;;
-      *) command -v "$candidate" >/dev/null 2>&1 && return 0 ;;
+      *)
+        # A PATH candidate counts only when it resolves to an executable file,
+        # the same requirement the spawn resolvers enforce: type -P searches
+        # PATH alone, so an exported function, builtin, or alias of the same
+        # name never stands in for the launcher.
+        resolved=$(type -P -- "$candidate" 2>/dev/null) || continue
+        [ -n "$resolved" ] && [ -x "$resolved" ] && return 0
+        ;;
     esac
   done < <(fm_control_harness_launch_candidates "$1")
   return 1
