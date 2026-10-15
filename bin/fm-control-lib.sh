@@ -15,11 +15,12 @@
 # This file owns three capability tables plus their pure artifact-path tables,
 # and ONE named exception to that purity - fm_control_endpoint_absence_verdict,
 # the single owner of the per-backend endpoint-absence proof, which does run
-# backend reads. It also owns one launch-surface table, the harness executable
-# name mapping fm_control_harness_executable, whose PATH resolution lives in
-# bin/fm-spawn.sh and bin/fm-cursor-lib.sh. Everything else has no side
-# effects, runs no backend command, and reads no state, so sourcing this file
-# is still free and the tables can be read by a test as a pure contract:
+# backend reads. It also owns one launch-surface table, the harness launch
+# locations fm_control_harness_launch_candidates, whose PATH resolution and
+# verification live in bin/fm-spawn.sh and bin/fm-cursor-lib.sh. Everything
+# else has no side effects, runs no backend command, and reads no state, so
+# sourcing this file is still free and the tables can be read by a test as a
+# pure contract:
 #
 #   1. Verb allowlist. There is no arbitrary-text and no generic raw-key entry
 #      point on the control plane; a caller either names an allowlisted verb or
@@ -76,24 +77,56 @@ fm_control_harnesses() {
   printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin kiro
 }
 
-# fm_control_harness_executable <harness>
-#   Prints the launch executable name for a verified harness. This table is the
-#   single owner of that mapping. Every launch executable is resolved from PATH
-#   under this name: bin/fm-spawn.sh resolves pi, pi-signed, omp, agy, and kiro
-#   through resolve_pi_executable (kiro's executable is kiro-cli, not kiro),
-#   kimi, muse, rovo, and devin through their own resolvers, and every other
-#   verified harness under its own name; bin/fm-cursor-lib.sh
-#   fm_cursor_resolve_binary searches cursor-agent before its legacy agent
-#   alias. bin/fm-dispatch-resolve.sh reads this table for its installed-tool
-#   eligibility gate, so a host without the executable cannot pick that route
-#   and fail at launch. An unknown name prints itself: an unverified harness is
-#   refused before any executable is resolved.
-fm_control_harness_executable() {  # <harness>
+# fm_control_harness_launch_candidates <harness>
+#   Prints every location the launch resolvers accept for a verified harness,
+#   one per line, in search order: bare names looked up on PATH first, then
+#   absolute fallback paths under HOME. This table is the single owner of that
+#   mapping. bin/fm-spawn.sh's resolve_kimi_binary and resolve_rovo_binary
+#   search exactly these candidates, bin/fm-spawn.sh resolves kiro's kiro-cli
+#   through it, and bin/fm-cursor-lib.sh fm_cursor_resolve_binary verifies the
+#   same cursor names and fallback paths before launch - an availability hit
+#   here still proves nothing about identity, and spawn keeps that check.
+#   Every other verified harness launches under its own name from PATH only.
+#   bin/fm-dispatch-resolve.sh reads this table for its installed-tool
+#   eligibility gate, so a route is excluded only when NO launch location
+#   exists: a harness installed solely at a resolver fallback stays eligible,
+#   and launch remains the authority that refuses an unusable executable.
+#   An unknown name is itself the single PATH candidate; an unverified harness
+#   is refused by validation before any executable is resolved.
+fm_control_harness_launch_candidates() {  # <harness>
+  local home=${HOME:-}
   case "${1-}" in
-    cursor) printf 'cursor-agent\n' ;;
+    cursor)
+      printf '%s\n' cursor-agent agent
+      if [ -n "$home" ]; then
+        printf '%s\n' "$home/.local/bin/cursor-agent" "$home/.local/bin/agent"
+      fi
+      ;;
+    kimi)
+      printf 'kimi\n'
+      if [ -n "$home" ]; then
+        printf '%s\n' "$home/.kimi-code/bin/kimi"
+      fi
+      ;;
+    rovo)
+      printf 'rovo\n'
+      if [ -n "$home" ]; then
+        printf '%s\n' "$home/.local/bin/rovo"
+      fi
+      ;;
     kiro) printf 'kiro-cli\n' ;;
     *) printf '%s\n' "${1-}" ;;
   esac
+  return 0
+}
+
+# fm_control_harness_executable <harness>
+#   Prints the harness's primary launch executable name: the first candidate
+#   fm_control_harness_launch_candidates accepts, which is the name a launcher
+#   resolves from PATH first (kiro-cli for kiro, cursor-agent for cursor, the
+#   harness name otherwise).
+fm_control_harness_executable() {  # <harness>
+  fm_control_harness_launch_candidates "${1-}" | head -n 1
 }
 
 fm_control_harness_supported() {  # <harness>

@@ -27,10 +27,10 @@ mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN"
 for command_name in bash chmod cp date dirname jq mkdir mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
 done
-# Every verified harness's launch executable is present here, so the resolver's
+# Every verified harness's launch location is present here, so the resolver's
 # installed-tool gate sees the harnesses its rules name as installed; the
 # installed-tool cases below remove chosen executables on purpose. Names come
-# from the single-owner mapping in bin/fm-control-lib.sh: cursor-agent for
+# from the single-owner table in bin/fm-control-lib.sh: cursor-agent for
 # cursor, kiro-cli for kiro, the harness name otherwise. agy and devin keep the
 # functional catalog fakes defined below.
 fm_fake_exit0 "$FAKEBIN" claude codex opencode pi pi-signed grok kimi cursor-agent gemini muse rovo omp kiro-cli
@@ -1907,31 +1907,50 @@ cp "$BASE_RULES" "$RULES"
 
 # --- installed-tool eligibility gate -------------------------------------------
 # Dispatch configuration is identical across homes while installed tools are
-# not, so every resolve probes each configured harness's launch executable on
-# PATH under the single-owner name bin/fm-control-lib.sh maps it to. The two
-# names that differ from the harness name - kiro's kiro-cli and cursor's
-# cursor-agent - are removed together here so one fake PATH proves both.
-# NO_TOOL_BIN is this host's whole toolchain with exactly those two launch
-# executables absent, plus the FAKEBIN catalog fakes, so a resolve still runs
-# end to end without the network.
+# not, so every resolve probes each configured harness's launch locations from
+# the single-owner table bin/fm-control-lib.sh maps it to: a bare name on PATH,
+# or an absolute resolver fallback path such as Kimi's ~/.kimi-code/bin.
+# NO_TOOL_BIN is this host's whole toolchain with every launch location of the
+# gated harnesses absent (kiro-cli and cursor-agent, plus kimi, rovo, and
+# cursor's legacy agent alias so a host install cannot leak in), plus the
+# FAKEBIN catalog fakes, so a resolve still runs end to end without the
+# network. The empty gate HOME carries no fallback paths; the fallback gate
+# HOME installs kimi, rovo, and cursor only at their resolver fallback paths.
+GATE_HOME_EMPTY="$TMP_ROOT/gate-home-empty"
+GATE_HOME_FALLBACK="$TMP_ROOT/gate-home-fallback"
+ALIAS_BIN="$TMP_ROOT/gate-alias-bin"
+mkdir -p "$GATE_HOME_EMPTY" "$ALIAS_BIN" \
+  "$GATE_HOME_FALLBACK/.kimi-code/bin" "$GATE_HOME_FALLBACK/.local/bin"
+fm_fake_exit0 "$GATE_HOME_FALLBACK/.kimi-code/bin" kimi
+fm_fake_exit0 "$GATE_HOME_FALLBACK/.local/bin" rovo cursor-agent
+fm_fake_exit0 "$ALIAS_BIN" agent
 NO_TOOL_BIN="$TMP_ROOT/no-tool-bin"
 mkdir -p "$NO_TOOL_BIN"
 for stub in "$FAKEBIN"/*; do
-  case "${stub##*/}" in kiro-cli | cursor-agent) continue ;; esac
+  case "${stub##*/}" in kiro-cli | cursor-agent | kimi | rovo) continue ;; esac
   ln -s "$stub" "$NO_TOOL_BIN/${stub##*/}"
 done
 while IFS= read -r tool_dir; do
   [ -d "$tool_dir" ] || continue
   for entry in "$tool_dir"/*; do
     [ -f "$entry" ] && [ -x "$entry" ] || continue
-    case "${entry##*/}" in kiro-cli | cursor-agent) continue ;; esac
+    case "${entry##*/}" in kiro-cli | cursor-agent | kimi | rovo | agent) continue ;; esac
     [ -e "$NO_TOOL_BIN/${entry##*/}" ] || ln -s "$entry" "$NO_TOOL_BIN/${entry##*/}" 2>/dev/null || true
   done
 done <<<"${BASE_PATH//:/$'\n'}"
 run_without_tool() {
   local __exit=$1 __out=$2 __err=$3 _out _code
   shift 3
-  _out=$(PATH="$NO_TOOL_BIN" FM_HOME="$HOME_DIR" TYPESAFE_API_KEY="$KEY" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  _out=$(PATH="$NO_TOOL_BIN" HOME="$GATE_HOME_EMPTY" FM_HOME="$HOME_DIR" TYPESAFE_API_KEY="$KEY" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  _code=$?
+  printf -v "$__exit" '%s' "$_code"
+  printf -v "$__out" '%s' "$_out"
+  printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
+}
+run_gate_case() {  # <path> <home> <exit-var> <out-var> <err-var> [args...]
+  local __path=$1 __home=$2 __exit=$3 __out=$4 __err=$5 _out _code
+  shift 5
+  _out=$(PATH="$__path" HOME="$__home" FM_HOME="$HOME_DIR" TYPESAFE_API_KEY="$KEY" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
   _code=$?
   printf -v "$__exit" '%s' "$_code"
   printf -v "$__out" '%s' "$_out"
@@ -1940,7 +1959,7 @@ run_without_tool() {
 run_lane_without_tool() {
   local __exit=$1 __out=$2 __err=$3 _out _code
   shift 3
-  _out=$(PATH="$NO_TOOL_BIN" FM_HOME="$HOME_DIR" CODEX_HOME="$LANE_CODEX_HOME" \
+  _out=$(PATH="$NO_TOOL_BIN" HOME="$GATE_HOME_EMPTY" FM_HOME="$HOME_DIR" CODEX_HOME="$LANE_CODEX_HOME" \
     QUOTA_AXI_FIXTURE="$LANE_QUOTA" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
   _code=$?
   printf -v "$__exit" '%s' "$_code"
@@ -1966,11 +1985,34 @@ run_without_tool code out err "$BRIEF"
 assert_contains "$out" '  status: escalate' "an all-ineligible outcome escalates"
 assert_contains "$out" '  reason: no rankable eligible candidate' "the escalate reason is unchanged"
 assert_not_contains "$out" '  profile:' "an all-ineligible outcome emits no profile"
-# cursor proves the other executable-name exception in the same owner.
+# cursor proves the name exception in the same owner: absent everywhere it is
+# not eligible, and an installation only at its ~/.local/bin fallback - which
+# fm_cursor_resolve_binary verifies and launches - stays eligible.
 printf '%s\n' '{"rules":[{"when":"Cursor work","use":[{"harness":"cursor","model":"cursor-grok-4.6-medium"},{"harness":"claude","model":"sonnet"}]}]}' > "$RULES"
 run_without_tool code out err "$BRIEF"
-assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  -> not eligible: cursor tool not installed on this host' "cursor is gated on its cursor-agent executable name"
-assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "the installed route beside the gated cursor route wins"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  -> not eligible: cursor tool not installed on this host' "cursor is gated when no launch location exists"
+run_gate_case "$NO_TOOL_BIN" "$GATE_HOME_FALLBACK" code out err "$BRIEF"
+expect_code 0 "$code" "a cursor installed only at its fallback path still resolves"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor' "the fallback-installed cursor route keeps its evidence"
+assert_not_contains "$out" 'cursor tool not installed' "a resolver fallback install keeps the route eligible"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the fallback-installed route ranks and wins"
+# The legacy agent alias on PATH is a launch location too: spawn accepts it
+# after verifying identity, so the gate must not exclude it.
+run_gate_case "$NO_TOOL_BIN:$ALIAS_BIN" "$GATE_HOME_EMPTY" code out err "$BRIEF"
+assert_not_contains "$out" 'cursor tool not installed' "cursor's legacy agent alias on PATH keeps the route eligible"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the alias-installed route ranks and wins"
+# kimi and rovo accept the same fallback locations their spawn resolvers do.
+printf '%s\n' '{"rules":[{"when":"Kimi work","use":[{"harness":"kimi","model":"kimi-code/k3"},{"harness":"claude","model":"sonnet"}]}]}' > "$RULES"
+run_gate_case "$NO_TOOL_BIN" "$GATE_HOME_FALLBACK" code out err "$BRIEF"
+assert_not_contains "$out" 'kimi tool not installed' "a kimi installed only at ~/.kimi-code/bin stays eligible"
+assert_contains "$out" 'candidate: kimi:kimi-code/k3  provider=kimi  -> eligible, unranked' "the fallback-installed kimi route keeps its evidence"
+run_without_tool code out err "$BRIEF"
+assert_contains "$out" 'candidate: kimi:kimi-code/k3  -> not eligible: kimi tool not installed on this host' "a kimi with no launch location anywhere is not eligible"
+printf '%s\n' '{"rules":[{"when":"Rovo work","use":[{"harness":"rovo","model":"auto","provider":"rovo"},{"harness":"claude","model":"sonnet"}]}]}' > "$RULES"
+run_gate_case "$NO_TOOL_BIN" "$GATE_HOME_FALLBACK" code out err "$BRIEF"
+assert_not_contains "$out" 'rovo tool not installed' "a rovo installed only at ~/.local/bin stays eligible"
+run_without_tool code out err "$BRIEF"
+assert_contains "$out" 'candidate: rovo:auto  -> not eligible: rovo tool not installed on this host' "a rovo with no launch location anywhere is not eligible"
 # The gate also covers lane class routes.
 lane_quota kiro=-0.6 codex=0.2
 printf '%s\n' '{"rules":[{"when":"Lane work","lane":"mix","order":"pool","classes":["k","c"]}],"classes":{"k":{"family":"kiro","routes":[{"harness":"kiro","model":"auto"}]},"c":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5"}]}}}' > "$RULES"
@@ -1980,7 +2022,7 @@ assert_contains "$out" 'class=k family=kiro  -> not eligible: kiro tool not inst
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-5'" "the lane ranks its installed route"
 cp "$BASE_RULES" "$RULES"
 write_response "$RESPONSE" rule_4 0.9
-pass "an installed-tool gate marks routes whose launch executable is absent from PATH not eligible and keeps all-ineligible outcomes escalating"
+pass "an installed-tool gate marks routes with no launch location not eligible, keeps fallback-installed harnesses eligible, and all-ineligible outcomes escalate"
 
 # Kiro shares the full effort vocabulary and its native provider is inferred.
 jq -n '{model:"jev-1.13.0",answers:{rule:{type:"choice",choice:"rule_1",confidence:0.99,probabilities:{rule_1:0.99,default:0.01}}}}' > "$RESPONSE"

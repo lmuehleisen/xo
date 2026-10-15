@@ -120,19 +120,20 @@
 #   3600, a conservative one-hour completion budget). The output discloses it
 #   and each bound's usableRunwaySeconds; unknown runway remains unranked.
 #
-# Installed-tool gate: every candidate's harness must have its launch
-#   executable on PATH on this host. Each configured harness is probed once
-#   per resolve with a cheap local command -v lookup under the executable name
-#   fm_control_harness_executable in bin/fm-control-lib.sh owns - the same
-#   name bin/fm-spawn.sh resolves at launch (kiro-cli for kiro, cursor-agent
-#   for cursor, the harness name otherwise). A route whose executable is
-#   absent prints "not eligible: <harness> tool not installed on this host",
-#   because dispatch configuration is identical across homes while installed
-#   tools are not, so a host without the tool must never pick a route that
-#   cannot launch. The gate declines that route only: it never falls back to
-#   another route by itself, every candidate is still printed with its
-#   evidence, and an all-ineligible outcome keeps the ordinary escalate
-#   result.
+# Installed-tool gate: every candidate's harness must have a launch location on
+#   this host. Each configured harness is probed once per resolve with a cheap
+#   local lookup over every location the single-owner table
+#   fm_control_harness_launch_candidates in bin/fm-control-lib.sh accepts: a
+#   bare name on PATH, or an absolute resolver fallback path such as Kimi's
+#   ~/.kimi-code/bin - the same locations bin/fm-spawn.sh's resolvers search,
+#   so an installation the launcher would accept is never excluded. A harness
+#   with no launch location anywhere prints
+#   "not eligible: <harness> tool not installed on this host", because
+#   dispatch configuration is identical across homes while installed tools are
+#   not, so a host without the tool must never pick a route that cannot
+#   launch. The gate declines that route only: it never falls back to another
+#   route by itself, every candidate is still printed with its evidence, and
+#   an all-ineligible outcome keeps the ordinary escalate result.
 #
 # Environment:
 #   TYPESAFE_API_KEY activates resolution; OPENROUTER_API_KEY is ignored here
@@ -240,6 +241,23 @@ while [ $# -gt 0 ]; do
     *) [ -z "$BRIEF" ] || die "one brief file only"; BRIEF=$1; shift ;;
   esac
 done
+
+# One cheap local lookup: a harness counts as installed when ANY launch
+# location the single-owner table in bin/fm-control-lib.sh accepts exists - a
+# bare name on PATH, or an absolute resolver fallback path such as Kimi's
+# ~/.kimi-code/bin. This mirrors bin/fm-spawn.sh's resolvers exactly, so a
+# route is never excluded for an installation the launcher would accept.
+harness_installed() {  # <harness>
+  local candidate
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    case "$candidate" in
+      */*) [ -x "$candidate" ] && return 0 ;;
+      *) command -v "$candidate" >/dev/null 2>&1 && return 0 ;;
+    esac
+  done < <(fm_control_harness_launch_candidates "$1")
+  return 1
+}
 
 # ---- opt-in gate ---------------------------------------------------------------
 # A named --lane sends no Choice request, so it needs no key.
@@ -369,11 +387,12 @@ while IFS= read -r h; do
   [ -n "$h" ] || continue
   p=$(fm_quota_single_provider_for_harness "$h" 2>/dev/null) || p=''
   PMAP=$(jq -c --arg h "$h" --arg p "$p" '. + {($h): (if $p == "" then null else $p end)}' <<<"$PMAP")
-  # Installed-tool gate input: one cheap local lookup per configured harness,
-  # keyed by the single-owner executable name bin/fm-spawn.sh launches under.
-  # A missing executable makes that route not eligible rather than picked and
-  # then failed at launch.
-  if command -v "$(fm_control_harness_executable "$h")" >/dev/null 2>&1; then
+  # Installed-tool gate input: one cheap local lookup per configured harness
+  # over every launch location the single-owner table in fm-control-lib.sh
+  # accepts, so a harness installed only at a resolver fallback stays
+  # eligible. A harness with no launch location anywhere makes its route
+  # not eligible rather than picked and then failed at launch.
+  if harness_installed "$h"; then
     INSTALLED=$(jq -c --arg h "$h" '. + {($h): true}' <<<"$INSTALLED")
   else
     INSTALLED=$(jq -c --arg h "$h" '. + {($h): false}' <<<"$INSTALLED")

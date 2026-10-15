@@ -468,25 +468,48 @@ test_harness_family_resolution() {
 
 # The launch executable name for every verified harness is one owned table, so
 # a consumer such as the dispatch resolver's installed-tool gate and
-# bin/fm-spawn.sh's launch resolution cannot drift apart.
+# bin/fm-spawn.sh's launch resolution cannot drift apart. The table carries
+# every location the launch resolvers accept, in search order, and the primary
+# executable is its first entry.
 test_harness_executable_names() {
-  local h got
+  local h got first
   for h in $(fm_control_harnesses); do
     got=$(fm_control_harness_executable "$h") \
       || fail "every verified harness needs a launch executable name, missing: $h"
     case "$got" in
       '' | *[[:space:]]*) fail "$h must map to one bare executable name, got '$got'" ;;
     esac
+    got=$(fm_control_harness_launch_candidates "$h") \
+      || fail "every verified harness needs launch candidates, missing: $h"
+    [ -n "$got" ] || fail "$h must accept at least one launch location"
+    first=$(printf '%s\n' "$got" | head -n 1)
+    [ "$first" = "$(fm_control_harness_executable "$h")" ] \
+      || fail "$h primary executable must be its first launch candidate, got '$first'"
   done
   [ "$(fm_control_harness_executable kiro)" = kiro-cli ] \
     || fail "kiro launches through kiro-cli, not kiro"
-  [ "$(fm_control_harness_executable cursor)" = cursor-agent ] \
-    || fail "cursor launches through cursor-agent, not cursor"
+  [ "$(fm_control_harness_launch_candidates kiro)" = kiro-cli ] \
+    || fail "kiro accepts exactly kiro-cli, got: $(fm_control_harness_launch_candidates kiro | tr '\n' ' ')"
   [ "$(fm_control_harness_executable codex)" = codex ] \
     || fail "codex launches under its own name"
   [ "$(fm_control_harness_executable pi-signed)" = pi-signed ] \
     || fail "pi-signed launches under its own name"
-  pass "fm-control-lib: each verified harness maps to the executable its launcher resolves"
+  # Cursor accepts its legacy agent alias beside cursor-agent, plus both
+  # ~/.local/bin fallbacks fm_cursor_resolve_binary verifies before launch.
+  [ "$(HOME=/gate/home fm_control_harness_launch_candidates cursor | tr '\n' ' ')" \
+    = "cursor-agent agent /gate/home/.local/bin/cursor-agent /gate/home/.local/bin/agent " ] \
+    || fail "cursor launch candidates drifted from fm_cursor_resolve_binary's search: $(HOME=/gate/home fm_control_harness_launch_candidates cursor | tr '\n' ' ')"
+  # Kimi and Rovo accept their resolver fallback paths beside the PATH name.
+  [ "$(HOME=/gate/home fm_control_harness_launch_candidates kimi | tr '\n' ' ')" \
+    = "kimi /gate/home/.kimi-code/bin/kimi " ] \
+    || fail "kimi launch candidates drifted from resolve_kimi_binary's search"
+  [ "$(HOME=/gate/home fm_control_harness_launch_candidates rovo | tr '\n' ' ')" \
+    = "rovo /gate/home/.local/bin/rovo " ] \
+    || fail "rovo launch candidates drifted from resolve_rovo_binary's search"
+  # A harness with no fallback lists only its own name.
+  [ "$(HOME=/gate/home fm_control_harness_launch_candidates muse | tr '\n' ' ')" = "muse " ] \
+    || fail "muse must stay PATH-only"
+  pass "fm-control-lib: each verified harness maps to the launch locations its launcher resolves"
 }
 
 test_prefixed_recorded_harness_reaches_each_control_verb() {

@@ -146,6 +146,11 @@ fm_cursor_catalog_has_model() {  # <model>
 # Print the stable absolute launcher path for the Cursor executable, or return 1
 # with a diagnostic on stderr.
 #
+# The accepted names and fallback locations are the cursor rows of the
+# single-owner launch-location table fm_control_harness_launch_candidates in
+# bin/fm-control-lib.sh, which bin/fm-dispatch-resolve.sh's installed-tool gate
+# reads; this function stays the launch-time verifier of identity.
+#
 # Resolution order, shared by bin/fm-spawn.sh and bin/fm-remote-doctor.sh:
 # cursor-agent on PATH, `agent` on PATH, then the ~/.local/bin installs of
 # both. cursor-agent is preferred over the alias at every stage. The
