@@ -3131,7 +3131,7 @@ omp)
   }
   ;;
 kiro)
-  KIRO_BIN=$(resolve_pi_executable kiro-cli) || {
+  KIRO_BIN=$(resolve_pi_executable "$(fm_control_harness_executable kiro)") || {
     echo "error: kiro-cli executable not found on PATH; install Kiro CLI or select a different verified harness" >&2
     exit 1
   }

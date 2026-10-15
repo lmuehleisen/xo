@@ -15,9 +15,11 @@
 # This file owns three capability tables plus their pure artifact-path tables,
 # and ONE named exception to that purity - fm_control_endpoint_absence_verdict,
 # the single owner of the per-backend endpoint-absence proof, which does run
-# backend reads. Everything else has no side effects, runs no backend command,
-# and reads no state, so sourcing this file is still free and the tables can be
-# read by a test as a pure contract:
+# backend reads. It also owns one launch-surface table, the harness executable
+# name mapping fm_control_harness_executable, whose PATH resolution lives in
+# bin/fm-spawn.sh and bin/fm-cursor-lib.sh. Everything else has no side
+# effects, runs no backend command, and reads no state, so sourcing this file
+# is still free and the tables can be read by a test as a pure contract:
 #
 #   1. Verb allowlist. There is no arbitrary-text and no generic raw-key entry
 #      point on the control plane; a caller either names an allowlisted verb or
@@ -72,6 +74,26 @@ fm_control_verb_allowed() {  # <verb>
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
   printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin kiro
+}
+
+# fm_control_harness_executable <harness>
+#   Prints the launch executable name for a verified harness. This table is the
+#   single owner of that mapping. Every launch executable is resolved from PATH
+#   under this name: bin/fm-spawn.sh resolves pi, pi-signed, omp, agy, and kiro
+#   through resolve_pi_executable (kiro's executable is kiro-cli, not kiro),
+#   kimi, muse, rovo, and devin through their own resolvers, and every other
+#   verified harness under its own name; bin/fm-cursor-lib.sh
+#   fm_cursor_resolve_binary searches cursor-agent before its legacy agent
+#   alias. bin/fm-dispatch-resolve.sh reads this table for its installed-tool
+#   eligibility gate, so a host without the executable cannot pick that route
+#   and fail at launch. An unknown name prints itself: an unverified harness is
+#   refused before any executable is resolved.
+fm_control_harness_executable() {  # <harness>
+  case "${1-}" in
+    cursor) printf 'cursor-agent\n' ;;
+    kiro) printf 'kiro-cli\n' ;;
+    *) printf '%s\n' "${1-}" ;;
+  esac
 }
 
 fm_control_harness_supported() {  # <harness>

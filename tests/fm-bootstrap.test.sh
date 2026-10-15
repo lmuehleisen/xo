@@ -1124,7 +1124,7 @@ test_crew_dispatch_lanes_template_is_valid() {
   mkdir -p "$case_dir/home/config" "$case_dir/codex-home"
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
   cp "$ROOT/docs/examples/crew-dispatch-lanes.json" "$case_dir/home/config/crew-dispatch.json"
-  printf '%s\n' '{"models":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"max"}]},{"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"max"}]}]}' > "$case_dir/codex-home/models_cache.json"
+  printf '%s\n' '{"models":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"max"},{"effort":"ultra"}]},{"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"max"}]}]}' > "$case_dir/codex-home/models_cache.json"
   fakebin=$(make_fake_toolchain "$case_dir")
   add_real_jq "$fakebin"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
@@ -1353,6 +1353,49 @@ ROWS
   pass "bootstrap accepts Codex max exactly where the installed catalog advertises it"
 }
 
+test_crew_dispatch_codex_ultra_follows_catalog() {
+  local case_dir fakebin catalog label model expect out
+  case_dir="$TMP_ROOT/dispatch-codex-ultra-catalog"
+  mkdir -p "$case_dir/home/config" "$case_dir/codex-home"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  catalog='{"models":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"high"},{"effort":"ultra"}]},{"slug":"gpt-5","supported_reasoning_levels":[{"effort":"high"}]}]}'
+  while IFS='^' read -r label model expect; do
+    [ -n "$label" ] || continue
+    case "$label" in
+      advertised* | not-advertised*) printf '%s\n' "$catalog" > "$case_dir/codex-home/models_cache.json" ;;
+      missing*) rm -f "$case_dir/codex-home/models_cache.json" ;;
+      invalid*) printf '%s\n' '{"models":{}}' > "$case_dir/codex-home/models_cache.json" ;;
+    esac
+    printf '{"rules":[{"when":"big feature","use":{"harness":"codex","model":"%s","effort":"ultra"}}]}\n' "$model" > "$case_dir/home/config/crew-dispatch.json"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      CODEX_HOME="$case_dir/codex-home" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    [ "$out" = "$expect" ] || fail "codex ultra $label: expected '$expect', got: $out"
+  done <<'ROWS'
+advertised model^gpt-6.1-sol^
+not-advertised model^gpt-5^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:ultra
+missing catalog advertised model^gpt-6.1-sol^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:ultra
+invalid catalog advertised model^gpt-6.1-sol^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:ultra
+ROWS
+  # Ultra needs an explicit catalog-advertised model: no name-based fallback.
+  printf '%s\n' '{"rules":[{"when":"big feature","use":{"harness":"codex","effort":"ultra"}}]}' > "$case_dir/home/config/crew-dispatch.json"
+  printf '%s\n' "$catalog" > "$case_dir/codex-home/models_cache.json"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    CODEX_HOME="$case_dir/codex-home" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = "CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:ultra" ] \
+    || fail "codex ultra without an explicit model must be refused, got: $out"
+  # Pi/Pi-signed codex-native ultra acceptance is unchanged with no codex catalog.
+  for h in pi pi-signed; do
+    printf '{"rules":[{"when":"native","use":{"harness":"%s","model":"codex-native/gpt-6-astra","effort":"ultra","provider":"codex"}}]}\n' "$h" > "$case_dir/home/config/crew-dispatch.json"
+    rm -f "$case_dir/codex-home/models_cache.json"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      CODEX_HOME="$case_dir/codex-home" TYPESAFE_API_KEY=test-key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    [ -z "$out" ] || fail "$h codex-native ultra must stay accepted with no codex catalog, got: $out"
+  done
+  pass "bootstrap accepts Codex ultra exactly where the installed catalog advertises it and leaves Pi native ultra unchanged"
+}
+
 test_bootstrap_reporting
 test_dropped_tools_are_not_required
 test_no_mistakes_opt_in_reports_unavailable_cli
@@ -1384,3 +1427,4 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
 test_crew_dispatch_lanes_template_is_valid
 test_crew_dispatch_codex_max_follows_catalog
+test_crew_dispatch_codex_ultra_follows_catalog

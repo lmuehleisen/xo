@@ -27,6 +27,13 @@ mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN"
 for command_name in bash chmod cp date dirname jq mkdir mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
 done
+# Every verified harness's launch executable is present here, so the resolver's
+# installed-tool gate sees the harnesses its rules name as installed; the
+# installed-tool cases below remove chosen executables on purpose. Names come
+# from the single-owner mapping in bin/fm-control-lib.sh: cursor-agent for
+# cursor, kiro-cli for kiro, the harness name otherwise. agy and devin keep the
+# functional catalog fakes defined below.
+fm_fake_exit0 "$FAKEBIN" claude codex opencode pi pi-signed grok kimi cursor-agent gemini muse rovo omp kiro-cli
 
 cat > "$BRIEF" <<'MD'
 # Task
@@ -1149,7 +1156,53 @@ for case in advertised:gpt-6-luna:ok not-advertised:gpt-5:bad missing-catalog:gp
     assert_contains "$err" 'each use profile effort must be supported by its harness and model' "codex max $label is refused"
   fi
 done
+# Codex ultra follows the installed catalog like max, but with no name-based
+# fallback: an explicit model whose catalog advertises ultra is accepted, every
+# other case is refused. This matches bin/fm-harness.sh validate-native-effort
+# and bootstrap's crew_dispatch_validate.
+mkdir -p "$TMP_ROOT/codex-ultra-catalog"
+printf '%s\n' '{"models":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"ultra"},{"effort":"high"}]},{"slug":"gpt-5","supported_reasoning_levels":[{"effort":"high"}]}]}' > "$TMP_ROOT/codex-ultra-catalog/models_cache.json"
+for case in advertised:gpt-6.1-sol:ok not-advertised:gpt-5:bad missing-catalog:gpt-6.1-sol:bad missing-catalog-luna:gpt-5.6-luna:bad; do
+  IFS=: read -r label model verdict <<< "$case"
+  codex_home=$TMP_ROOT/codex-ultra-catalog
+  case "$label" in missing-catalog*) codex_home=$TMP_ROOT/codex-ultra-catalog-absent ;; esac
+  printf '{"rules":[{"when":"x","use":{"harness":"codex","model":"%s","effort":"ultra"}}]}\n' "$model" > "$RULES"
+  CODEX_HOME=$codex_home TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+  if [ "$verdict" = ok ]; then
+    expect_code 0 "$code" "codex ultra $label resolves without a configuration error"
+    assert_not_contains "$err" 'malformed rules file' "codex ultra $label is well formed"
+  else
+    assert_contains "$err" 'each use profile effort must be supported by its harness and model' "codex ultra $label is refused"
+  fi
+done
+# A codex-ultra profile with no explicit model is refused: ultra needs an
+# explicit catalog-advertised model.
+printf '%s\n' '{"rules":[{"when":"x","use":{"harness":"codex","effort":"ultra"}}]}' > "$RULES"
+CODEX_HOME=$TMP_ROOT/codex-ultra-catalog TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$err" 'each use profile effort must be supported by its harness and model' "codex ultra without an explicit model is refused"
+# Pi/Pi-signed codex-native ultra acceptance is unchanged.
+for h in pi pi-signed; do
+  printf '{"rules":[{"when":"x","use":{"harness":"%s","model":"codex-native/gpt-6-astra","effort":"ultra","provider":"codex"}}]}\n' "$h" > "$RULES"
+  CODEX_HOME=$TMP_ROOT/codex-ultra-catalog-absent TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+  assert_not_contains "$err" 'malformed rules file' "$h codex-native ultra remains accepted with no codex catalog"
+done
+pass "codex ultra config validation follows the installed catalog and leaves Pi native ultra unchanged"
+
+# A resolved clear outcome naming codex ultra passes a launchable profile line
+# through to fm-spawn. Use a quota fixture that makes the codex native row the
+# single eligible candidate so the Choice collapses to one profile.
+CODEX_ULTRA_RULES="$TMP_ROOT/codex-ultra-clear-rules.json"
+printf '%s\n' '{"rules":[{"when":"A simple bug fix with a stated root cause.","use":{"harness":"codex","model":"gpt-6.1-sol","effort":"ultra","floor":{"scope":"all_models","min_percent":10}}}]}' > "$CODEX_ULTRA_RULES"
+cp "$CODEX_ULTRA_RULES" "$RULES"
+printf '%s\n' '{"model":"jev","answers":{"rule":{"type":"choice","choice":"rule_1","confidence":0.95,"probabilities":{"rule_1":0.99,"default":0.01}}},"usage":{"input_tokens":10,"output_tokens":5}}' > "$RESPONSE"
+CODEX_HOME=$TMP_ROOT/codex-ultra-catalog TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+expect_code 0 "$code" "a codex ultra clear resolves with exit 0"
+assert_contains "$out" '  status: clear' "a codex ultra profile resolves to a clear outcome"
+assert_contains "$out" "  profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'ultra'" "the clear codex ultra profile line is launchable by fm-spawn"
 cp "$BASE_RULES" "$RULES"
+write_response "$RESPONSE" rule_4 0.9
+pass "a clear codex ultra profile passes a launchable --effort ultra line to fm-spawn"
+
 for removed in --json --rules --quota; do
   TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" "$removed"
   expect_code 2 "$code" "removed option is rejected: $removed"
@@ -1319,7 +1372,7 @@ LANE_CODEX_HOME="$TMP_ROOT/lane-codex-home"
 mkdir -p "$LANE_CODEX_HOME"
 cat > "$LANE_CODEX_HOME/models_cache.json" <<'JSON'
 {"models":[
-  {"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"high"},{"effort":"xhigh"},{"effort":"max"}]},
+  {"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"}]},
   {"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"max"}]},
   {"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"xhigh"},{"effort":"max"}]}]}
 JSON
@@ -1851,6 +1904,83 @@ run_lane code out err "$BRIEF" --lane standard
 expect_code 2 "$code" "--lane without a rules file is a usage error"
 pass "lane usage and configuration errors exit 2 with an actionable reason"
 cp "$BASE_RULES" "$RULES"
+
+# --- installed-tool eligibility gate -------------------------------------------
+# Dispatch configuration is identical across homes while installed tools are
+# not, so every resolve probes each configured harness's launch executable on
+# PATH under the single-owner name bin/fm-control-lib.sh maps it to. The two
+# names that differ from the harness name - kiro's kiro-cli and cursor's
+# cursor-agent - are removed together here so one fake PATH proves both.
+# NO_TOOL_BIN is this host's whole toolchain with exactly those two launch
+# executables absent, plus the FAKEBIN catalog fakes, so a resolve still runs
+# end to end without the network.
+NO_TOOL_BIN="$TMP_ROOT/no-tool-bin"
+mkdir -p "$NO_TOOL_BIN"
+for stub in "$FAKEBIN"/*; do
+  case "${stub##*/}" in kiro-cli | cursor-agent) continue ;; esac
+  ln -s "$stub" "$NO_TOOL_BIN/${stub##*/}"
+done
+while IFS= read -r tool_dir; do
+  [ -d "$tool_dir" ] || continue
+  for entry in "$tool_dir"/*; do
+    [ -f "$entry" ] && [ -x "$entry" ] || continue
+    case "${entry##*/}" in kiro-cli | cursor-agent) continue ;; esac
+    [ -e "$NO_TOOL_BIN/${entry##*/}" ] || ln -s "$entry" "$NO_TOOL_BIN/${entry##*/}" 2>/dev/null || true
+  done
+done <<<"${BASE_PATH//:/$'\n'}"
+run_without_tool() {
+  local __exit=$1 __out=$2 __err=$3 _out _code
+  shift 3
+  _out=$(PATH="$NO_TOOL_BIN" FM_HOME="$HOME_DIR" TYPESAFE_API_KEY="$KEY" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  _code=$?
+  printf -v "$__exit" '%s' "$_code"
+  printf -v "$__out" '%s' "$_out"
+  printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
+}
+run_lane_without_tool() {
+  local __exit=$1 __out=$2 __err=$3 _out _code
+  shift 3
+  _out=$(PATH="$NO_TOOL_BIN" FM_HOME="$HOME_DIR" CODEX_HOME="$LANE_CODEX_HOME" \
+    QUOTA_AXI_FIXTURE="$LANE_QUOTA" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  _code=$?
+  printf -v "$__exit" '%s' "$_code"
+  printf -v "$__out" '%s' "$_out"
+  printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
+}
+printf '%s\n' '{"model":"jev","answers":{"rule":{"type":"choice","choice":"rule_1","confidence":0.95,"probabilities":{"rule_1":0.99,"default":0.01}}},"usage":{"input_tokens":10,"output_tokens":5}}' > "$RESPONSE"
+# A kiro route beside an installed one: the installed route is chosen and the
+# kiro route keeps its evidence with the not-eligible reason.
+printf '%s\n' '{"rules":[{"when":"Kiro work","use":[{"harness":"kiro","model":"auto"},{"harness":"claude","model":"sonnet"}]}]}' > "$RULES"
+run_without_tool code out err "$BRIEF"
+expect_code 0 "$code" "a host without kiro-cli still resolves"
+assert_contains "$out" 'candidate: kiro:auto  -> not eligible: kiro tool not installed on this host' "a route whose tool is absent is not eligible with its reason"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "the installed route is chosen without any fallback mechanism"
+# The same configuration on a host with the executable keeps the route
+# eligible: the gate reads host state, never the configuration.
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" 'candidate: kiro:auto' "the kiro route is still listed with its evidence"
+assert_not_contains "$out" 'kiro tool not installed' "an installed executable keeps its route eligible"
+# A single-route rule whose tool is absent keeps the ordinary escalate result.
+printf '%s\n' '{"rules":[{"when":"Kiro work","use":{"harness":"kiro","model":"auto"}}]}' > "$RULES"
+run_without_tool code out err "$BRIEF"
+assert_contains "$out" '  status: escalate' "an all-ineligible outcome escalates"
+assert_contains "$out" '  reason: no rankable eligible candidate' "the escalate reason is unchanged"
+assert_not_contains "$out" '  profile:' "an all-ineligible outcome emits no profile"
+# cursor proves the other executable-name exception in the same owner.
+printf '%s\n' '{"rules":[{"when":"Cursor work","use":[{"harness":"cursor","model":"cursor-grok-4.6-medium"},{"harness":"claude","model":"sonnet"}]}]}' > "$RULES"
+run_without_tool code out err "$BRIEF"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  -> not eligible: cursor tool not installed on this host' "cursor is gated on its cursor-agent executable name"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "the installed route beside the gated cursor route wins"
+# The gate also covers lane class routes.
+lane_quota kiro=-0.6 codex=0.2
+printf '%s\n' '{"rules":[{"when":"Lane work","lane":"mix","order":"pool","classes":["k","c"]}],"classes":{"k":{"family":"kiro","routes":[{"harness":"kiro","model":"auto"}]},"c":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5"}]}}}' > "$RULES"
+run_lane_without_tool code out err "$BRIEF" --lane mix
+expect_code 0 "$code" "a lane resolve on a host without kiro-cli exits 0"
+assert_contains "$out" 'class=k family=kiro  -> not eligible: kiro tool not installed on this host' "a lane route whose tool is absent is not eligible"
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-5'" "the lane ranks its installed route"
+cp "$BASE_RULES" "$RULES"
+write_response "$RESPONSE" rule_4 0.9
+pass "an installed-tool gate marks routes whose launch executable is absent from PATH not eligible and keeps all-ineligible outcomes escalating"
 
 # Kiro shares the full effort vocabulary and its native provider is inferred.
 jq -n '{model:"jev-1.13.0",answers:{rule:{type:"choice",choice:"rule_1",confidence:0.99,probabilities:{rule_1:0.99,default:0.01}}}}' > "$RESPONSE"

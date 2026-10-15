@@ -1073,7 +1073,7 @@ EOF
 }
 
 crew_dispatch_validate() {
-  local file err verified_harnesses codex_max_ok typed_key typed_active=false
+  local file err verified_harnesses codex_max_ok codex_ultra_ok typed_key typed_active=false
   file="$CONFIG/crew-dispatch.json"
   [ -f "$file" ] || return 0
   if ! command -v jq >/dev/null 2>&1; then
@@ -1093,15 +1093,18 @@ crew_dispatch_validate() {
   else
     verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","gemini","agy","muse","rovo","omp","devin","kiro"]'
   fi
-  # Codex max follows the installed catalog (bin/fm-codex-catalog-lib.sh).
+  # Codex max and ultra follow the installed catalog (bin/fm-codex-catalog-lib.sh).
   codex_max_ok=$({ jq -r '.. | objects | select(.harness == "codex" and .effort == "max") | .model | strings' "$file" 2>/dev/null || true; } | fm_codex_max_allowed_json)
-  err=$(jq -r --argjson typed "$typed_active" --argjson codex_max_ok "$codex_max_ok" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_DISPATCH_LANES_JQ"'
+  codex_ultra_ok=$({ jq -r '.. | objects | select(.harness == "codex" and .effort == "ultra") | .model | strings' "$file" 2>/dev/null || true; } | fm_codex_ultra_allowed_json)
+  err=$(jq -r --argjson typed "$typed_active" --argjson codex_max_ok "$codex_max_ok" --argjson codex_ultra_ok "$codex_ultra_ok" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_DISPATCH_LANES_JQ"'
     def verified($h): $verified_harnesses | index($h);
     def provider_id($p): ($p | type) == "string" and ($p | test($provider_re));
     def effort_ok($h; $m; $e):
       if $e == null then true
       elif ($e | type) != "string" then false
-      elif $e == "ultra" then (($h == "pi" or $h == "pi-signed") and (($m | type) == "string") and ($m | startswith("codex-native/")) and ($m | length) > 13)
+      elif $e == "ultra" then
+        ((($h == "pi" or $h == "pi-signed") and (($m | type) == "string") and ($m | startswith("codex-native/")) and ($m | length) > 13)
+          or ($h == "codex" and ($codex_ultra_ok | any(. == $m))))
       elif $h == "claude" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "codex" then ((["low","medium","high","xhigh"] | index($e)) != null or ($e == "max" and ($codex_max_ok | any(. == $m))))
       elif $h == "grok" then (["low","medium","high"] | index($e))

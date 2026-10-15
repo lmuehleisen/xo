@@ -58,7 +58,8 @@
     "sol-ultra": {
       "family": "gpt",
       "routes": [
-        { "harness": "pi", "model": "codex-native/gpt-6.1-sol", "effort": "ultra", "provider": "codex" }
+        { "harness": "pi", "model": "codex-native/gpt-6.1-sol", "effort": "ultra", "provider": "codex" },
+        { "harness": "codex", "model": "gpt-6.1-sol", "effort": "ultra" }
       ]
     },
     "luna-max": {

@@ -466,6 +466,29 @@ test_harness_family_resolution() {
   pass "fm-control-lib: a recorded harness resolves to its verified adapter without guessing"
 }
 
+# The launch executable name for every verified harness is one owned table, so
+# a consumer such as the dispatch resolver's installed-tool gate and
+# bin/fm-spawn.sh's launch resolution cannot drift apart.
+test_harness_executable_names() {
+  local h got
+  for h in $(fm_control_harnesses); do
+    got=$(fm_control_harness_executable "$h") \
+      || fail "every verified harness needs a launch executable name, missing: $h"
+    case "$got" in
+      '' | *[[:space:]]*) fail "$h must map to one bare executable name, got '$got'" ;;
+    esac
+  done
+  [ "$(fm_control_harness_executable kiro)" = kiro-cli ] \
+    || fail "kiro launches through kiro-cli, not kiro"
+  [ "$(fm_control_harness_executable cursor)" = cursor-agent ] \
+    || fail "cursor launches through cursor-agent, not cursor"
+  [ "$(fm_control_harness_executable codex)" = codex ] \
+    || fail "codex launches under its own name"
+  [ "$(fm_control_harness_executable pi-signed)" = pi-signed ] \
+    || fail "pi-signed launches under its own name"
+  pass "fm-control-lib: each verified harness maps to the executable its launcher resolves"
+}
+
 test_prefixed_recorded_harness_reaches_each_control_verb() {
   local dir out rc
   dir=$(new_case prefixed-interrupt)
@@ -1205,6 +1228,7 @@ test_devin_stuck_picker_refuses_and_exit_types_nothing
 test_opencode_interrupts_twice_and_others_once
 test_unverified_harness_is_refused
 test_harness_family_resolution
+test_harness_executable_names
 test_relaunch_resume_flag_is_per_adapter_and_reference_owner
 test_prefixed_recorded_harness_reaches_each_control_verb
 test_backend_key_capability_matrix
