@@ -211,7 +211,7 @@ test_apply_patch_executor_paths() {
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
   mkdir -p "$wt/src" "$wt/app/[slug]" "$wt/~"
   ln -s /etc "$wt/escape"
-  # shellcheck disable=SC2016 # apply_patch treats dollar signs as literal filename bytes.
+  # shellcheck disable=SC2016,SC2088 # Patch filenames contain literal dollar signs and tildes.
   for target in 'app/[slug]/page.tsx' 'src/$value*?.txt' 'src/ leading space.txt' '~/new.txt' '~draft'; do
     patch=$(printf '*** Begin Patch\n*** Add File: %s\n+ordinary\n*** End Patch' "$target")
     patch_hook "$policy" permission-request "$patch" "patch-literal-$id"
@@ -239,6 +239,7 @@ test_apply_patch_executor_paths() {
   ln -s /etc "$wt/src/[outside]"
   ln -s .env "$wt/src/[$]secret"
   printf 'FIXTURE_KEY=ordinary\n' > "$wt/src/.env"
+  # shellcheck disable=SC2088 # Tilde-prefixed patch paths are literal, not home expansions.
   for target in 'src/[outside]/probe.txt' 'src/[$]secret' 'app/[slug]/.env' '~escape/probe.txt' '~/.env' '~/../../outside.txt'; do
     patch=$(printf '*** Begin Patch\n*** Add File: %s\n*** End Patch' "$target")
     patch_hook "$policy" permission-request "$patch" "patch-literal-unsafe-$id"
