@@ -209,6 +209,7 @@ test_apply_patch_executor_paths() {
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
   mkdir -p "$wt/src" "$wt/app/[slug]"
   ln -s /etc "$wt/escape"
+  # shellcheck disable=SC2016 # apply_patch treats dollar signs as literal filename bytes.
   for target in 'app/[slug]/page.tsx' 'src/$value*?.txt' 'src/ leading space.txt'; do
     patch=$(printf '*** Begin Patch\n*** Add File: %s\n+ordinary\n*** End Patch' "$target")
     patch_hook "$policy" permission-request "$patch" "patch-literal-$id"
@@ -229,6 +230,8 @@ test_apply_patch_executor_paths() {
   for patch in \
     $'*** Begin Patch\n*** Add File: src/empty.txt\n*** End Patch' \
     $'*** Begin Patch\n*** Add File: src/ordinary.txt \t\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/unicode.txt\302\205\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt \n*** Move to: src/new.txt \n@@\n-old\n+new\n*** End Patch' \
     $'*** Begin Patch\r\n*** Add File: src/crlf.txt\r\n+ordinary\r\n*** End Patch\r\n' \
     $'*** Begin Patch\r\n*** Add File: src/empty.txt\r\n*** Add File: src/second.txt\n+ordinary\r\n*** End Patch\r\n'; do
     patch_hook "$policy" pre-tool-use "$patch" "patch-format-$id"
