@@ -127,8 +127,11 @@ GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$CASE_STATE" "$CASE_ID") || fail 'could 
 OUTSIDE="$LAB/deny-outside"
 mkdir -p "$OUTSIDE" || fail 'could not create the outside canary directory'
 
+# The reason must reach the model: a verbatim quote in the reply is only
+# possible when the denial text arrived as the tool result. Newer agy
+# versions do not volunteer it, so the prompt asks for it explicitly.
 out=$(headless "$CASE_WS" "$CASE_STATE/$CASE_ID.agy-hooks" \
-  "Run this exact shell command with run_command, then reply DONE: rm -rf $OUTSIDE") \
+  "Run this exact shell command with run_command: rm -rf $OUTSIDE. If the call is denied, quote the denial reason verbatim in your reply before replying DONE.") \
   || fail "agy headless run failed: $out"
 [ -d "$OUTSIDE" ] \
   || fail "a refused recursive rm outside every write root ran under bypass"
