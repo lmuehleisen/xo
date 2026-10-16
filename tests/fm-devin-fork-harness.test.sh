@@ -474,6 +474,25 @@ EOF
     || fail "PostToolUse must close the escalation"
   sh -c "$cmd_policy_stop" </dev/null || fail "generated policy Stop hook failed"
 
+  local hook_errors="$case_dir/string-input-errors"
+  payload=$(jq -nc --arg path "$wt/generated.txt" '{tool_name:"apply_patch",tool_use_id:"patch-1",session_id:"s1",
+    tool_input:("*** Begin Patch\n*** Add File: " + $path + "\n+ordinary\n*** End Patch\n")}')
+  out=$(printf '%s' "$payload" | sh -c "$cmd_pre" 2>"$hook_errors") || fail "generated patch PreToolUse failed"
+  [ -z "$out" ] && [ ! -s "$hook_errors" ] || fail "generated patch PreToolUse must not emit errors"
+  out=$(printf '%s' "$payload" | sh -c "$cmd_perm" 2>"$hook_errors") || fail "generated patch PermissionRequest failed"
+  [ "$(printf '%s' "$out" | jq -r .decision)" = approve ] && [ ! -s "$hook_errors" ] \
+    || fail "generated hook must approve an ordinary freeform patch without jq errors: $out"
+  payload='{"tool_name":"apply_patch","tool_input":"malformed patch","tool_use_id":"patch-2","session_id":"s1"}'
+  out=$(printf '%s' "$payload" | sh -c "$cmd_pre" 2>"$hook_errors") && fail "generated hook must refuse an unparsed patch"
+  [ "$(printf '%s' "$out" | jq -r .decision)" = block ] && [ ! -s "$hook_errors" ] \
+    || fail "generated patch refusal must be a decision, not a jq error"
+  out=$(printf '%s' "$payload" | sh -c "$cmd_perm" 2>"$hook_errors") || fail "generated malformed-patch escalation failed"
+  [ -z "$out" ] && [ ! -s "$hook_errors" ] || fail "an unparsed patch must not be approved or crash"
+  printf '%s' "$payload" | sh -c "$cmd_post" 2>"$hook_errors" || fail "generated string-input PostToolUse failed"
+  [ ! -s "$hook_errors" ] || fail "generated string-input PostToolUse emitted an error"
+  printf '%s' "$payload" | sh -c "$cmd_policy_stop" 2>"$hook_errors" || fail "generated string-input Stop failed"
+  [ ! -s "$hook_errors" ] || fail "generated string-input Stop emitted an error"
+
   # Rate-limit retry hooks: UserPromptSubmit arms a sentinel on the session
   # log of the devin process running the hook, and Stop retires it. The
   # trailing `:` keeps bash from exec-ing the hook in place of that process.
@@ -488,13 +507,13 @@ EOF
   ln -s "$(command -v bash)" "$case_dir/devin"
   # shellcheck disable=SC2016 # The fake devin is bash; its -c script expands its own arguments.
   fake_devin_script=': >"$1/devin_test_$$.log"; sh -c "$2"; :'
-  printf '{"session_id":"s1"}' | FM_DEVIN_RETRY_LOG_DIR="$retry_logs" FM_DEVIN_RETRY_POLL=1 \
+  printf '%s' "$payload" | FM_DEVIN_RETRY_LOG_DIR="$retry_logs" FM_DEVIN_RETRY_POLL=1 \
     "$case_dir/devin" -c "$fake_devin_script" _ "$retry_logs" "$cmd_retry_arm" \
     || fail "generated rate-limit arm hook failed"
   [ -s "$home/state/$id.devin-retry/turn" ] || fail "the arm hook must open a retry turn for the task"
   ! grep -q '"event":"unarmed"' "$home/state/devin-rate-limit-log.jsonl" 2>/dev/null \
     || fail "the arm hook must find the session log of the process running it"
-  printf '{}' | sh -c "$cmd_retry_stop" || fail "generated rate-limit stop hook failed"
+  printf '%s' "$payload" | sh -c "$cmd_retry_stop" || fail "generated rate-limit stop hook failed"
   case "$(cat "$home/state/$id.devin-retry/turn")" in
     ended.*) ;;
     *) fail "the Stop hook must retire the retry turn" ;;
@@ -519,19 +538,19 @@ EOF
   cmd_end=$(jq -r '.hooks.SessionEnd[0].hooks[0].command' "$hook_file")
 
   # Execute UserPromptSubmit hook
-  sh -c "$cmd_submit" || fail "UserPromptSubmit hook command failed: $cmd_submit"
+  printf '%s' "$payload" | sh -c "$cmd_submit" || fail "UserPromptSubmit hook command failed: $cmd_submit"
   out=$(fm_busy_classify tmux fake:w devin "$id" "$home/state")
   [ "$out" = "busy devin-hook" ] || fail "after UserPromptSubmit state must be 'busy devin-hook', got '$out'"
 
   # Execute Stop hook: touches turn-ended and transitions to idle
   rm -f "$home/state/$id.turn-ended"
-  sh -c "$cmd_stop" || fail "Stop hook command failed: $cmd_stop"
+  printf '%s' "$payload" | sh -c "$cmd_stop" || fail "Stop hook command failed: $cmd_stop"
   [ -f "$home/state/$id.turn-ended" ] || fail "Stop hook did not touch turn-ended file"
   out=$(fm_busy_classify tmux fake:w devin "$id" "$home/state")
   [ "$out" = "idle devin-hook" ] || fail "after Stop state must be 'idle devin-hook', got '$out'"
 
   # Execute SessionEnd hook: closes turn (idle)
-  sh -c "$cmd_end" || fail "SessionEnd hook command failed: $cmd_end"
+  printf '%s' "$payload" | sh -c "$cmd_end" || fail "SessionEnd hook command failed: $cmd_end"
   out=$(fm_busy_classify tmux fake:w devin "$id" "$home/state")
   [ "$out" = "idle devin-hook" ] || fail "after SessionEnd state must be 'idle devin-hook', got '$out'"
 

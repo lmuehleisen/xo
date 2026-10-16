@@ -3,8 +3,9 @@
 # Sourced by fm-command-policy-lib.sh; adapters initialize credential_policy
 # after loading their firstmate-owned policy, then call credential_native or
 # evaluate_exec. classify_credential_access accepts structured JSON and sets
-# CREDENTIAL_LAST_CATEGORY/REASON. credential_apply translates that metadata
-# into the shared policy veto; unresolved footprints hold without a judge.
+# CREDENTIAL_LAST_CATEGORY/REASON and CREDENTIAL_LAST_WRITE_TARGETS (validated
+# apply_patch operands from the classifier). credential_apply translates this
+# metadata into the shared policy veto; unresolved footprints hold without a judge.
 # Policy fields: credential_user_home (trusted launch HOME) and
 # credential_registry_required (registry existed at launch). The only registry
 # path is <policy config>/declared-credentials.json, never a tool/brief field.
@@ -17,7 +18,7 @@
 CREDENTIAL_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 CREDENTIAL_USER_HOME='' CREDENTIAL_REGISTRY_PATH='' CREDENTIAL_REGISTRY_REQUIRED=false
 CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
-CREDENTIAL_LAST_CATEGORY=ordinary CREDENTIAL_LAST_REASON=''
+CREDENTIAL_LAST_CATEGORY=ordinary CREDENTIAL_LAST_REASON='' CREDENTIAL_LAST_WRITE_TARGETS='[]'
 
 credential_policy() {
   local config=${CONFIG_DIR:-} fields
@@ -66,8 +67,8 @@ credential_pin_registry() {
 }
 
 classify_credential_access() {  # <structured request JSON>
-  local request output category reason
-  CREDENTIAL_LAST_CATEGORY=unresolved CREDENTIAL_LAST_REASON=classifier-unavailable
+  local request output category reason targets
+  CREDENTIAL_LAST_CATEGORY=unresolved CREDENTIAL_LAST_REASON=classifier-unavailable CREDENTIAL_LAST_WRITE_TARGETS='[]'
   load_grants
   request=$(printf '%s' "$1" | jq -c --arg cwd "${CWD-$WORKTREE}" \
     --arg home "$CREDENTIAL_USER_HOME" --arg registry "$CREDENTIAL_REGISTRY_PATH" \
@@ -80,7 +81,11 @@ classify_credential_access() {  # <structured request JSON>
   [ -n "$output" ] || return 0
   category=$(printf '%s' "$output" | jq -er '.category | select(. == "ordinary" or . == "protected-disclosure" or . == "authorized-load" or . == "unresolved")' 2>/dev/null) || return 0
   reason=$(printf '%s' "$output" | jq -er '.reason | select(type == "string" and length > 0)' 2>/dev/null) || return 0
-  CREDENTIAL_LAST_CATEGORY=$category CREDENTIAL_LAST_REASON=$reason
+  targets='[]'
+  if [ "${TOOL:-}" = apply_patch ]; then
+    targets=$(printf '%s' "$output" | jq -ec '.writeTargets // [] | select(type == "array" and all(.[]; type == "string" and length > 0))' 2>/dev/null) || return 0
+  fi
+  CREDENTIAL_LAST_CATEGORY=$category CREDENTIAL_LAST_REASON=$reason CREDENTIAL_LAST_WRITE_TARGETS=$targets
 }
 
 credential_apply() {
@@ -152,12 +157,19 @@ credential_segment() {
   credential_apply
 }
 
-credential_native() {  # <sanitized path-role fields JSON> <effective cwd>
+credential_native() {  # <path-role fields JSON or apply_patch string JSON> <effective cwd>
   # shellcheck disable=SC2034 # CREDENTIAL_HOLD is read by the sourcing adapters.
   CWD=$2 CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
   local request
-  request=$(jq -nc --arg tool "$TOOL" --argjson fields "$1" '{operation:"native",tool:$tool,fields:$fields}')
+  if ! request=$(jq -nc --arg tool "$TOOL" --argjson fields "$1" '{operation:"native",tool:$tool,fields:$fields}' 2>/dev/null); then
+    CREDENTIAL_LAST_CATEGORY=unresolved CREDENTIAL_LAST_REASON=invalid-native-fields CREDENTIAL_LAST_WRITE_TARGETS='[]'
+    credential_apply
+    return 0
+  fi
   classify_credential_access "$request"
+  if [ "$TOOL" = apply_patch ] && [ "$CREDENTIAL_LAST_CATEGORY" = ordinary ] && [ "$CREDENTIAL_LAST_WRITE_TARGETS" = '[]' ]; then
+    CREDENTIAL_LAST_CATEGORY=unresolved CREDENTIAL_LAST_REASON=unparsed-apply-patch
+  fi
   credential_apply
 }
 

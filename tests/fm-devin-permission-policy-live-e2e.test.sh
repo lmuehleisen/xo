@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Credentialed guard for firstmate's Devin permission policy hooks, opt in with
 # FM_DEVIN_PERMISSION_LIVE=1 (bin/fm-test-run.sh's live-harness-optin family).
+# FM_DEVIN_PATCH_HOOK_ONLY=1 selects one freeform patch probe with no tmux or
+# worktree lab; FM_DEVIN_PATCH_MODEL selects its GPT model (gpt-6-1-sol-max by
+# default). It captures the real hook envelope and checks the resulting file.
 # FM_CREDENTIAL_HOOK_ONLY=1 selects one short sentinel probe using the current
 # CLI login, without copying credentials or starting a tmux/worktree lab.
 # It runs the real generated reviewed launch (tests/devin-live-helpers.sh), in the
@@ -21,6 +24,43 @@
 set -u
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
+if [ "${FM_DEVIN_PATCH_HOOK_ONLY:-0}" = 1 ]; then
+  fm_live_gate opt-in FM_DEVIN_PERMISSION_LIVE devin jq
+  # shellcheck source=bin/fm-command-policy-lib.sh
+  . "$ROOT/bin/fm-command-policy-lib.sh"
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "$ROOT/bin/fm-timeout-lib.sh"
+  VERSION=$(devin --version)
+  PATCH_LAB=$(fm_test_tmproot fm-devin-patch-live)
+  mkdir -p "$PATCH_LAB/ws" "$PATCH_LAB/state" "$PATCH_LAB/data" "$PATCH_LAB/tmp" "$PATCH_LAB/config"
+  PATCH_LAB=$(cd "$PATCH_LAB" && pwd -P)
+  printf '# Task\n## Synthetic verification\nAdd the ordinary patch fixture only.\n' > "$PATCH_LAB/data/brief.md"
+  policy="$PATCH_LAB/state/probe.devin-permission.json"
+  jq -n --arg dir "$PATCH_LAB" --arg home "$HOME" '{task:"probe",worktree:($dir+"/ws"),
+    status:($dir+"/state/probe.status"),data:($dir+"/data"),tasktmp:($dir+"/tmp"),
+    brief:($dir+"/data/brief.md"),config:($dir+"/config"),log:($dir+"/state/decisions.jsonl"),
+    credential_user_home:$home,judge_model:""}' > "$policy"
+  pre=$(shell_join "$ROOT/bin/fm-devin-permission-policy.sh" pre-tool-use "$policy")
+  perm=$(shell_join "$ROOT/bin/fm-devin-permission-policy.sh" permission-request "$policy")
+  post=$(shell_join "$ROOT/bin/fm-devin-permission-policy.sh" post-tool-use "$policy")
+  capture="cat > $(shell_join "$PATCH_LAB/envelope.json")"
+  jq -n --arg pre "$pre" --arg perm "$perm" --arg post "$post" --arg capture "$capture" '
+    def hook($command): {type:"command",command:$command,timeout:30};
+    {read_config_from:{claude:false},hooks:{
+      PreToolUse:[{matcher:"^apply_patch$",hooks:[hook($capture)]},{matcher:"",hooks:[hook($pre)]}],
+      PermissionRequest:[{matcher:"",hooks:[hook($perm)]}],PostToolUse:[{matcher:"",hooks:[hook($post)]}]}}
+  ' > "$PATCH_LAB/config/devin.json"
+  printf '%s\n' "Runtime verification only. Use apply_patch exactly once, with its freeform patch input, to add $PATCH_LAB/ws/probe.txt containing only PATCH_HOOK_SENTINEL and a newline. Do not use exec or other tools, read files, delegate, or retry on failure. Then reply DONE and finish." > "$PATCH_LAB/prompt.txt"
+  out=$(cd "$PATCH_LAB/ws" && fm_run_timed 120 devin --config "$PATCH_LAB/config/devin.json" \
+    --permission-mode smart --respect-workspace-trust false --model "${FM_DEVIN_PATCH_MODEL:-gpt-6-1-sol-max}" \
+    --prompt-file "$PATCH_LAB/prompt.txt" -p 2>&1) || fail "$VERSION: patch hook probe failed: $out"
+  jq -e '.tool_name == "apply_patch" and (.tool_input | type) == "string"' "$PATCH_LAB/envelope.json" >/dev/null \
+    || fail "$VERSION: expected a real freeform apply_patch hook payload"
+  grep -qxF PATCH_HOOK_SENTINEL "$PATCH_LAB/ws/probe.txt" \
+    || fail "$VERSION: policy did not admit the ordinary patch write: $out"
+  pass "$VERSION: freeform apply_patch reaches policy hooks and writes an ordinary in-root target"
+  exit 0
+fi
 if [ "${FM_CREDENTIAL_HOOK_ONLY:-0}" = 1 ]; then
   fm_live_gate opt-in FM_DEVIN_PERMISSION_LIVE devin jq
   VERSION=$(devin --version)

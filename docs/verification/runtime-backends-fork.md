@@ -749,6 +749,22 @@ Static rules settle the common cases first: the worker-contract helper list appr
 Judge verdicts are sampled model output rather than a guarantee, so every guarantee this layer makes rests on its static rules, and the judge is not a security boundary.
 `tests/fm-devin-permission-policy.test.sh` pins the prompt's required contents and the two-line reason-then-verdict parse; `FM_DEVIN_PERMISSION_LIVE=1 bin/fm-test-run.sh tests/fm-devin-permission-policy-live-e2e.test.sh` refreshes the live hook behavior.
 
+Freeform patch transport was verified on 2026-10-16 with `devin 3000.11.92 (7f4e64980e22)` and `gpt-6-1-sol-max`.
+The real `PreToolUse` envelope names `apply_patch` and carries a string `tool_input`, rather than the object used by `exec` and native `write`.
+The focused guard captures that envelope and verifies that an ordinary in-root Add File patch actually creates the expected file through the policy hooks.
+The native patch parser and its validated target metadata are owned by [`bin/fm-credential-access.mjs`](../../bin/fm-credential-access.mjs).
+
+```sh
+FM_DEVIN_PATCH_HOOK_ONLY=1 FM_DEVIN_PERMISSION_LIVE=1 bash bin/fm-test-run.sh tests/fm-devin-permission-policy-live-e2e.test.sh
+```
+
+```text
+ok - devin 3000.11.92 (7f4e64980e22): freeform apply_patch reaches policy hooks and writes an ordinary in-root target
+```
+
+The portable regressions in `tests/fm-devin-permission-policy.test.sh` and `tests/fm-devin-fork-harness.test.sh` exercise multi-target root checks, protected wiring, credential vetoes, malformed patches, and string input across the generated hooks.
+This focused live check proves patch transport and one ordinary write, not all permission modes or lifecycle behavior.
+
 Fetch-contract verdict consistency, verified live on 2026-09-17 with devin 3000.10.21 (611c1cba) on free `swe-2-high`, against the prompt that names read-only web lookups routine work on any host and downloads that do something always declined, eight runs per input:
 
 | input shape | route | verdict |
