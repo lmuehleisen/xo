@@ -120,6 +120,23 @@
 #   3600, a conservative one-hour completion budget). The output discloses it
 #   and each bound's usableRunwaySeconds; unknown runway remains unranked.
 #
+# Installed-tool gate: every candidate's harness must have a launch location on
+#   this host. Each configured harness is probed once per resolve with a cheap
+#   local lookup over every location the single-owner table
+#   fm_control_harness_launch_candidates in bin/fm-control-lib.sh accepts: a
+#   bare name on PATH, or an absolute resolver fallback path such as Kimi's
+#   ~/.kimi-code/bin. Each must resolve to an executable file, exactly as
+#   bin/fm-spawn.sh's resolvers require, so an installation the launcher would
+#   accept is never excluded and an exported function, builtin, or alias of the
+#   same name never counts. A harness with no executable launch location
+#   anywhere prints "not eligible: <harness> tool not installed on this host",
+#   because dispatch configuration is identical across homes while installed
+#   tools are not, so a host without the tool must never pick a route that
+#   cannot launch. The gate declines that route only: it never falls back to
+#   another route by itself, every candidate is still printed with its
+#   evidence, and an all-ineligible outcome keeps the ordinary escalate
+#   result.
+#
 # Environment:
 #   TYPESAFE_API_KEY activates resolution; OPENROUTER_API_KEY is ignored here
 #   and is accepted only from the home .env.
@@ -227,6 +244,31 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# One cheap local lookup: a harness counts as installed when ANY launch
+# location the single-owner table in bin/fm-control-lib.sh accepts exists - a
+# bare name on PATH, or an absolute resolver fallback path such as Kimi's
+# ~/.kimi-code/bin. This mirrors bin/fm-spawn.sh's resolvers exactly, so a
+# route is never excluded for an installation the launcher would accept, and
+# never counted for one the launchers would refuse.
+harness_installed() {  # <harness>
+  local candidate resolved
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    case "$candidate" in
+      */*) [ -x "$candidate" ] && return 0 ;;
+      *)
+        # A PATH candidate counts only when it resolves to an executable file,
+        # the same requirement the spawn resolvers enforce: type -P searches
+        # PATH alone, so an exported function, builtin, or alias of the same
+        # name never stands in for the launcher.
+        resolved=$(type -P -- "$candidate" 2>/dev/null) || continue
+        [ -n "$resolved" ] && [ -x "$resolved" ] && return 0
+        ;;
+    esac
+  done < <(fm_control_harness_launch_candidates "$1")
+  return 1
+}
+
 # ---- opt-in gate ---------------------------------------------------------------
 # A named --lane sends no Choice request, so it needs no key.
 if [ -z "$LANE" ]; then
@@ -262,15 +304,18 @@ VERIFIED_HARNESSES=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(le
 # The fields this tool consumes must be well formed; bootstrap owns the wider
 # schema diagnostic, but an intake never selects around a malformed file.
 # effort_ok must accept exactly what bootstrap's crew_dispatch_validate accepts.
-# Codex max follows the installed catalog (bin/fm-codex-catalog-lib.sh).
+# Codex max and ultra follow the installed catalog (bin/fm-codex-catalog-lib.sh).
 codex_max_ok=$({ jq -r '.. | objects | select(.harness == "codex" and .effort == "max") | .model | strings' "$RULES" 2>/dev/null || true; } | fm_codex_max_allowed_json)
-rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_DISPATCH_LANES_JQ"'
+codex_ultra_ok=$({ jq -r '.. | objects | select(.harness == "codex" and .effort == "ultra") | .model | strings' "$RULES" 2>/dev/null || true; } | fm_codex_ultra_allowed_json)
+rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson codex_ultra_ok "$codex_ultra_ok" --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_DISPATCH_LANES_JQ"'
   def verified($h): $verified_harnesses | index($h);
   def provider_id($p): ($p | type) == "string" and ($p | test($provider_re));
   def effort_ok($h; $m; $e):
     if $e == null then true
     elif ($e | type) != "string" then false
-    elif $e == "ultra" then (($h == "pi" or $h == "pi-signed") and (($m | type) == "string") and ($m | startswith("codex-native/")) and ($m | length) > 13)
+    elif $e == "ultra" then
+      ((($h == "pi" or $h == "pi-signed") and (($m | type) == "string") and ($m | startswith("codex-native/")) and ($m | length) > 13)
+        or ($h == "codex" and ($codex_ultra_ok | any(. == $m))))
     elif $h == "claude" then (["low","medium","high","xhigh","max"] | index($e)) != null
     elif $h == "codex" then ((["low","medium","high","xhigh"] | index($e)) != null or ($e == "max" and ($codex_max_ok | any(. == $m))))
     elif $h == "grok" then (["low","medium","high"] | index($e)) != null
@@ -345,12 +390,23 @@ if [ -n "$missing_provider" ]; then
   die "malformed rules file: $RULES_PATH - $missing_provider_detail"
 fi
 
-# ---- harness -> provider map, from the single owner in fm-quota-axi-lib.sh -----
+# ---- harness -> provider map and installed-tool probe -------------------------
 PMAP='{}'
+INSTALLED='{}'
 while IFS= read -r h; do
   [ -n "$h" ] || continue
   p=$(fm_quota_single_provider_for_harness "$h" 2>/dev/null) || p=''
   PMAP=$(jq -c --arg h "$h" --arg p "$p" '. + {($h): (if $p == "" then null else $p end)}' <<<"$PMAP")
+  # Installed-tool gate input: one cheap local lookup per configured harness
+  # over every launch location the single-owner table in fm-control-lib.sh
+  # accepts, so a harness installed only at a resolver fallback stays
+  # eligible. A harness with no launch location anywhere makes its route
+  # not eligible rather than picked and then failed at launch.
+  if harness_installed "$h"; then
+    INSTALLED=$(jq -c --arg h "$h" '. + {($h): true}' <<<"$INSTALLED")
+  else
+    INSTALLED=$(jq -c --arg h "$h" '. + {($h): false}' <<<"$INSTALLED")
+  fi
 done < <(jq -r "$FM_DISPATCH_LANES_JQ"'
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   ([((.rules // [])[]) | profiles(.use)[]] + profiles(.default // null) + dispatch_class_routes)
@@ -569,7 +625,7 @@ LIVE_TASKS=$(
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 DIRECT=false
 [ -z "$LANE" ] || DIRECT=true
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
+RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson installed "$INSTALLED" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
   ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
@@ -597,7 +653,9 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), usableRunwaySeconds: (.runway.usableRunwaySeconds // null), spendPriority: (.selection.spendPriority // null)});
   def evaluate_route($c; $unmetered; $spend_priority):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
-    if $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
+    if ($installed[$c.harness] // false) | not then
+      {profile: $c, eligible: false, reason: "\($c.harness) tool not installed on this host"}
+    elif $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
     elif $unmetered then
       {profile: $c, provider: $p, unmetered: true, spendPriority: $spend_priority, eligible: true, reason: "unmetered (declared)"}
     elif prov($p; $lane) == null then

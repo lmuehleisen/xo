@@ -882,7 +882,8 @@ Ultra and ultracode can spend substantially more quota, so firstmate selects the
 They do not alter the effort fallback, worker authority, delivery contract, or merge authority.
 Claude ultracode enables dynamic workflows independently of reasoning effort; native goals keep either CLI working toward a supplied completion condition.
 The [Claude](../.agents/skills/harness-adapters/references/harness/claude.md) and [Codex](../.agents/skills/harness-adapters/references/harness/codex.md) adapter references own vendor-specific behavior and supported limits.
-No dispatch-profile fields enable ultracode or goals, and direct Codex ultra is currently a per-spawn override rather than a profile-schema extension.
+No dispatch-profile fields enable ultracode or goals.
+A dispatch profile may request direct Codex `ultra` as its `effort`, validated against the installed catalog exactly as a per-spawn `--effort ultra` is; ultracode and native goals remain per-spawn overrides with no profile-schema field.
 
 ### Choose the secondmate harness
 
@@ -1299,7 +1300,8 @@ This single-provider table is separate from the worker helper's narrower mapping
 
 **Model, effort, and fallback behavior**
 
-- Profile `ultra` remains scoped to native Pi; direct Codex's per-spawn extension is described under [Per-task high-quota launch modes](#per-task-high-quota-launch-modes), with validation owned by `bin/fm-harness.sh validate-native-effort`.
+- Profile `ultra` is valid on native Pi (`pi`/`pi-signed` with a `codex-native/<model>` model) and on direct `codex` when the installed Codex model catalog advertises `ultra` for the profile's explicit model; unlike `max`, Codex `ultra` has no name-based fallback, so a missing or invalid catalog refuses it ([`bin/fm-codex-catalog-lib.sh`](../bin/fm-codex-catalog-lib.sh) owns the lookup).
+- Direct Codex's per-spawn extension is described under [Per-task high-quota launch modes](#per-task-high-quota-launch-modes), with launch-time validation owned by `bin/fm-harness.sh validate-native-effort`; a dispatch profile governs crewmates and scouts, never a secondmate spawn, which still refuses direct Codex `ultra`.
 - Codex `max` is valid when the installed Codex model catalog advertises `max` for the profile's model; when that catalog is missing or invalid, only `gpt-5.6-luna` keeps `max` ([`bin/fm-codex-catalog-lib.sh`](../bin/fm-codex-catalog-lib.sh) owns the lookup).
 - An omitted model or effort means the selected harness uses its own default for that axis.
 - OpenCode V2 receives effort through the build agent's model reference in its per-spawn config; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns the variant mapping and unsupported-value behavior.
@@ -1490,6 +1492,8 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 
 **Candidate eligibility and evidence**
 
+- A candidate whose harness has no executable launch location on this host is not eligible, printing `not eligible: <harness> tool not installed on this host`. Launch locations come from the single-owner table `fm_control_harness_launch_candidates` in [`bin/fm-control-lib.sh`](../bin/fm-control-lib.sh) - a bare name on PATH, or an absolute resolver fallback path such as Kimi's `~/.kimi-code/bin` - and each must resolve to an executable file, as [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s resolvers require; they are probed once per resolve with cheap local lookups, so a harness installed only at a fallback stays eligible while an exported function or alias of the same name never counts.
+- Dispatch configuration is identical across homes while installed tools are not, so a host without the tool never lands on a route that would fail at launch. The gate declines that route only: it never substitutes another route by itself, every candidate is still printed with its evidence, and an all-ineligible outcome keeps the ordinary escalate result.
 - Any applicable hard-bound `exhausted_now` row, known zero bound, or finite projected runway below the completion horizon makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
 - Unknown runway, missing or nonnumeric `spendPriority`, or selection status other than known is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
 

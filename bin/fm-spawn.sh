@@ -3131,7 +3131,7 @@ omp)
   }
   ;;
 kiro)
-  KIRO_BIN=$(resolve_pi_executable kiro-cli) || {
+  KIRO_BIN=$(resolve_pi_executable "$(fm_control_harness_executable kiro)") || {
     echo "error: kiro-cli executable not found on PATH; install Kiro CLI or select a different verified harness" >&2
     exit 1
   }
@@ -3253,31 +3253,45 @@ secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
 }
 
-resolve_kimi_binary() {
-  local candidate dir fallback
-  candidate=$(command -v kimi 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    case "$candidate" in
-    /*)
-      printf '%s\n' "$candidate"
+# Resolve one harness's launch executable from the single-owner candidate list
+# in bin/fm-control-lib.sh: bare names on PATH first, then absolute fallback
+# paths, printing the stable absolute path the pane will launch. Keeping each
+# resolver's search on that one table is what lets bin/fm-dispatch-resolve.sh's
+# installed-tool gate exclude only installations no launcher would accept.
+resolve_owned_harness_binary() {  # <harness> <executable-label>
+  local harness=$1 label=$2 candidate dir line name='' fallback=
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+    */*)
+      [ -n "$fallback" ] || fallback=$line
+      [ -x "$line" ] || continue
+      printf '%s\n' "$line"
       return 0
       ;;
-    *)
-      dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
-      if [ -n "$dir" ]; then
+    esac
+    name=$line
+    candidate=$(command -v "$name" 2>/dev/null || true)
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      case "$candidate" in
+      /*)
+        printf '%s\n' "$candidate"
+        return 0
+        ;;
+      *)
+        dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || continue
         printf '%s/%s\n' "$dir" "$(basename "$candidate")"
         return 0
-      fi
-      ;;
-    esac
-  fi
-  fallback="${HOME:-}/.kimi-code/bin/kimi"
-  if [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
-    printf '%s\n' "$fallback"
-    return 0
-  fi
-  echo "error: kimi executable not found; searched PATH for 'kimi' and fallback '$fallback'" >&2
+        ;;
+      esac
+    fi
+  done < <(fm_control_harness_launch_candidates "$harness")
+  echo "error: $label executable not found; searched PATH for '$name' and fallback '$fallback'" >&2
   return 1
+}
+
+resolve_kimi_binary() {
+  resolve_owned_harness_binary kimi kimi
 }
 
 resolve_muse_binary() {
@@ -3412,30 +3426,7 @@ muse_require_model_max_effort() { # <data-home> <model|default>
 }
 
 resolve_rovo_binary() {
-  local candidate dir fallback
-  candidate=$(command -v rovo 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    case "$candidate" in
-    /*)
-      printf '%s\n' "$candidate"
-      return 0
-      ;;
-    *)
-      dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
-      if [ -n "$dir" ]; then
-        printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-        return 0
-      fi
-      ;;
-    esac
-  fi
-  fallback="${HOME:-}/.local/bin/rovo"
-  if [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
-    printf '%s\n' "$fallback"
-    return 0
-  fi
-  echo "error: rovo executable not found; searched PATH for 'rovo' and fallback '$fallback'" >&2
-  return 1
+  resolve_owned_harness_binary rovo rovo
 }
 
 # muse_credential_present: 0 when a launched muse pane can reach its provider
