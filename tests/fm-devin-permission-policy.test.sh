@@ -209,20 +209,37 @@ test_apply_patch_executor_paths() {
   local policy dir wt patch target kind suffix id=0
   policy=$(new_case patch-executor-paths)
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
-  mkdir -p "$wt/src" "$wt/app/[slug]"
+  mkdir -p "$wt/src" "$wt/app/[slug]" "$wt/~"
   ln -s /etc "$wt/escape"
   # shellcheck disable=SC2016 # apply_patch treats dollar signs as literal filename bytes.
-  for target in 'app/[slug]/page.tsx' 'src/$value*?.txt' 'src/ leading space.txt'; do
+  for target in 'app/[slug]/page.tsx' 'src/$value*?.txt' 'src/ leading space.txt' '~/new.txt' '~draft'; do
     patch=$(printf '*** Begin Patch\n*** Add File: %s\n+ordinary\n*** End Patch' "$target")
     patch_hook "$policy" permission-request "$patch" "patch-literal-$id"
     [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
       || fail "literal patch paths must be approved without shell expansion: $OUT"
     id=$((id + 1))
   done
+  for kind in Update Delete; do
+    patch=$(printf '*** Begin Patch\n*** %s File: ~/old.txt\n' "$kind")
+    [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
+    patch="$patch"$'\n*** End Patch'
+    patch_hook "$policy" permission-request "$patch" "patch-tilde-$kind"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "literal tilde $kind targets must use ordinary write checks: $OUT"
+  done
+  patch=$'*** Begin Patch\n*** Update File: ~/old.txt\n*** Move to: ~draft\n@@\n-old\n+new\n*** End Patch'
+  patch_hook "$policy" permission-request "$patch" patch-tilde-move
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail "both operands of a literal tilde move must be approved: $OUT"
+  ln -s /etc "$wt/~escape"
+  ln -s "$dir/data/t1/brief.md" "$wt/~/brief-link"
+  patch=$'*** Begin Patch\n*** Add File: ~/brief-link\n*** End Patch'
+  patch_hook "$policy" permission-request "$patch" patch-tilde-brief
+  [ "$RC" = 2 ] || fail "literal tilde paths must retain protected brief checks: $OUT"
   ln -s /etc "$wt/src/[outside]"
   ln -s .env "$wt/src/[$]secret"
   printf 'FIXTURE_KEY=ordinary\n' > "$wt/src/.env"
-  for target in 'src/[outside]/probe.txt' 'src/[$]secret' 'app/[slug]/.env'; do
+  for target in 'src/[outside]/probe.txt' 'src/[$]secret' 'app/[slug]/.env' '~escape/probe.txt' '~/.env' '~/../../outside.txt'; do
     patch=$(printf '*** Begin Patch\n*** Add File: %s\n*** End Patch' "$target")
     patch_hook "$policy" permission-request "$patch" "patch-literal-unsafe-$id"
     [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "literal paths must retain physical root and credential checks: $OUT"
@@ -231,6 +248,10 @@ test_apply_patch_executor_paths() {
   # Both whole-patch CRLF and mixed line endings must leave target names intact.
   for patch in \
     $'*** Begin Patch\n*** Add File: src/empty.txt\n*** End Patch' \
+    $'\n\n*** Begin Patch\n*** Add File: src/leading.txt\n+ordinary\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/trailing.txt\n+ordinary\n*** End Patch\n\n\n' \
+    $'\t*** Begin Patch \t\r\n*** Add File: src/markers.txt\r\n+ordinary\r\n \t*** End Patch \t\r\n\r\n' \
+    $'\302\205\n*** Begin Patch\302\205\n*** Add File: src/unicode-markers.txt\n+ordinary\n*** End Patch\n\302\205' \
     $'*** Begin Patch\n*** Add File: src/ordinary.txt \t\n*** End Patch' \
     $'*** Begin Patch\n*** Add File: src/unicode.txt\302\205\n*** End Patch' \
     $'*** Begin Patch\n*** Update File: src/old.txt \n*** Move to: src/new.txt \n@@\n-old\n+new\n*** End Patch' \
@@ -243,6 +264,16 @@ test_apply_patch_executor_paths() {
     patch_hook "$policy" permission-request "$patch" "patch-format-$id"
     [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
       || fail "CRLF and empty Add File patches must be approved: $OUT"
+    id=$((id + 1))
+  done
+  for target in /etc/fm-patch-probe .env "$policy"; do
+    patch=$(printf '\n\n*** Begin Patch \t\n*** Add File: %s\n*** End Patch \t\n\n' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-outer-unsafe-$id"
+    if [ "$target" = "$policy" ]; then
+      [ "$RC" = 2 ] || fail "normalized marker whitespace must retain wiring protection: $OUT"
+    else
+      [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "normalized marker whitespace must retain root and credential checks: $OUT"
+    fi
     id=$((id + 1))
   done
   # Header whitespace is stripped by the executor for every operation and move.
@@ -312,6 +343,8 @@ test_apply_patch_vetoes_and_input_shapes() {
     $'*** Begin Patch\n*** Update File: src/safe.txt\n@@ first\n@@ second\n+new\n*** End Patch' \
     $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n-old\n+new\n@@\n*** End Patch' \
     $'*** Begin Patch\n*** Add File: src/ordinary.txt\n+ordinary\n*** Update File: src/safe.txt\n*** End Patch' \
+    $'\n*** Begin Patch \t\n*** Update File: src/safe.txt\n*** End Patch\n\n' \
+    $'\n*** Begin Patch\n*** Add File: src/safe.txt\n+safe\n*** End Patch\nextra\n\n' \
     $'*** Begin Patch\n*** Add File: src/tab\tname\n+safe\n*** End Patch'; do
     patch_hook "$policy" pre-tool-use "$patch" "patch-malformed-$id"
     [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \

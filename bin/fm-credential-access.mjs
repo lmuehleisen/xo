@@ -457,10 +457,12 @@ function segment(request) {
 // never supplies a partial target list to either policy consumer.
 function patchTargets(patch) {
   if (typeof patch !== "string" || patch.includes("\0")) throw new Error("patch");
-  const lines = patch.split(/\r?\n/);
-  if (lines[lines.length - 1] === "") lines.pop();
+  // Match the executor's Rust trim() for the patch and boundary markers only;
+  // content lines retain their whitespace and diff prefixes.
+  const trim = value => value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  const lines = trim(patch).split(/\r?\n/);
   const end = lines.length - 1, targets = [];
-  if (lines[0] !== "*** Begin Patch" || lines[end] !== "*** End Patch") throw new Error("patch");
+  if (trim(lines[0]) !== "*** Begin Patch" || trim(lines[end]) !== "*** End Patch") throw new Error("patch");
   const target = value => {
     // apply_patch trims header line endings before extracting paths (including
     // Move to). Match Rust trim_end Unicode whitespace, preserving leading spaces.
@@ -504,11 +506,9 @@ function native(request) {
     let writeTargets;
     try { writeTargets = patchTargets(a); }
     catch { return result("unresolved", "unparsed-apply-patch"); }
-    const verdict = writeTargets.some(p => p.startsWith("~"))
-      ? result("unresolved", "ambiguous-native-home-expansion")
-      : classify_credential_access({ ...request, operation: "write",
-        operands: writeTargets.map(p => word(p, "native:patch-target")),
-        dynamicSelection: false });
+    const verdict = classify_credential_access({ ...request, operation: "write",
+      operands: writeTargets.map(p => word(p, "native:patch-target")),
+      dynamicSelection: false });
     return { ...verdict, writeTargets };
   }
   if (!a || typeof a !== "object" || Array.isArray(a)) return result("unresolved", "invalid-native-fields");
