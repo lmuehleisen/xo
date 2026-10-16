@@ -790,7 +790,8 @@ Other harness adapters and explicit raw launch commands retain their existing pe
 This is the only worker permission setting: no value selects Claude's `--dangerously-skip-permissions`, and the upstream-only `config/claude-permission-mode` file is not read.
 
 Auto requests Claude's classifier-backed permission mode and Codex's automatic approval reviewer with workspace-write sandboxing.
-agy has no reviewed-auto mode of its own, so an agy crewmate or scout in Auto uses `--dangerously-skip-permissions` with Firstmate's permission policy and judge by default.
+agy's own reviewed `--mode auto` exists since 1.3.5 ([release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.3.5)) but is gated per account: a refused request warns and silently falls back to default review, and headless `-p` auto-denies permissioned commands while still exiting 0.
+Firstmate does not route workers through it, so an agy crewmate or scout in Auto uses `--dangerously-skip-permissions` with Firstmate's permission policy and judge by default.
 The per-spawn `--no-agy-bypass` option selects `--mode accept-edits`, which approves file edits inside granted directories while still prompting for shell commands.
 Manual leaves agy's default review mode in place, where edits and shell commands prompt; agy secondmates also stay outside the worker policy layer.
 The policy layer's version, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.

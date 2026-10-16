@@ -12,7 +12,7 @@ agy updates itself often and without asking, so treat every version-scoped fact 
 | Binary | Absolute `agy` from `PATH`, resolved once and refused if absent. A single self-updating Go binary; the installed path is the real executable, not a launcher. |
 | Launch | `-i "<prompt>"` runs the opening prompt and KEEPS the interactive session. `-p` is a one-shot headless run and is never used for a worker. |
 | Directory grants | `--add-dir`, repeatable, and MANDATORY - see "The worktree grant" below. |
-| Approvals | No reviewed-auto mode. `--mode accept-edits` covers file edits only; shell commands always prompt. See "Approvals" below. |
+| Approvals | agy 1.3.5+ ships a reviewed `--mode auto` with per-account availability; it is not a Firstmate worker route. `--mode accept-edits` covers file edits only; shell commands always prompt. See "Approvals" below. |
 | Busy state | `agy-hook`: PreInvocation opens; fullyIdle Stop closes. The worker binds its generation and main conversation; interruption emits no Stop and conservatively leaves busy. |
 | Spawn start | A ship or scout spawn reports success only after the worker hook's PreInvocation record replaces spawn's seed; otherwise it records a failure and closes the endpoint, so an agy launch parked before its first model call never looks dispatched. `../../../../../bin/fm-spawn.sh` owns the bound. |
 | Rendered tail | Not a state source, but the running turn's footer is the one ASCII busy token: `esc to cancel` while a turn runs, `? for shortcuts` when idle. The right of the footer names the active mode and model, e.g. `accept-edits · Gemini 3.8 Flash · medium`. |
@@ -51,8 +51,11 @@ Trust is not inherited from a parent directory, so every fresh worktree would ra
 
 ## Approvals
 
-agy has no equivalent of Claude's reviewed `--permission-mode auto` or Codex's `--approve-for-me`.
-Its three options are the default review mode, `--mode accept-edits`, and the blanket `--dangerously-skip-permissions`.
+Since agy 1.3.5 the CLI ships a reviewed `--mode auto`: per the [1.3.5 release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.3.5) it approves file edits and safe commands without asking, still prompts before irreversible actions, and sends commands that would leave the terminal sandbox through a separate review agent.
+Availability is per-account: an account without it gets `warning: --mode auto is not available for this account; continuing in the default mode` and a silent fallback to default review, so the flag alone does not prove the mode is active.
+Under headless `-p` a permissioned command is auto-denied while the run still exits 0, so exit status does not prove a task ran there either.
+Firstmate does not route workers through agy's auto mode.
+The options this adapter uses are the default review mode, `--mode accept-edits`, and the blanket `--dangerously-skip-permissions` under the policy layer.
 
 `config/crew-permissions` selects a policy-layered bypass for agy crewmate and scout launches in Auto, while Manual keeps the default review mode:
 
