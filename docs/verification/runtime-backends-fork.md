@@ -403,7 +403,7 @@ The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the fi
 ### Bypass permission layer
 
 Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the 1.3.1 and 1.3.5 refreshes below extend the layer's live-verified set to `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5`.
+The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the 1.3.1, 1.3.5, and 1.3.6 refreshes below extend the layer's live-verified set to `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6`.
 A version without that evidence, including 1.2.8 through 1.2.10, 1.3.0, and 1.3.2 through 1.3.4, stays outside the set; later releases require their own live verification.
 The set stays an explicit allowlist rather than a minimum version, because each entry is individually proven against the version-sensitive hook contract.
 
@@ -518,6 +518,40 @@ FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
 ```text
 ok - agy 1.3.5: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
 # agy observer live checks passed (agy 1.3.5)
+```
+
+#### 1.3.6 refresh (2026-10-15)
+
+Refreshed on 2026-10-15 with agy 1.3.6 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.8-flash-low` headless runs.
+Agy policy-layer launches refuse versions outside the allowlist, so 1.3.6 required this refresh before it could launch on that path.
+The same six bypass checks and the observer live check passed unchanged from the 1.3.5 refresh, on the same catalog model.
+The version-sensitive contract used by the layer is unchanged: a named `hooks.json` registry carrying `PreInvocation`, `Stop`, `PreToolUse`, and `PostToolUse` command groups still loads, and deny, abstain, timeout, and `force_ask` behavior match the prior refresh.
+A scratch capture of the raw hook stdin on `write_to_file` and `run_command` calls confirmed the same top-level fields (`conversationId`, `stepIdx`, `toolCall`, `workspacePaths`, `modelName`, `transcriptPath`, `artifactDirectoryPath`, plus `error` on the post call alone), matching pre/post pairs on `conversationId`, `stepIdx`, and `toolCall`, and a post-tool `error` of `""`.
+The `run_command` args still carry `CommandLine`, `Cwd`, `WaitMsBeforeAsync`, `toolAction`, and `toolSummary`; the optional `RunPersistent` and `IsDaemon` arguments were not emitted in this capture, and no layer code reads them.
+No layer adaptation was needed beyond admitting 1.3.6.
+
+```sh
+FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
+```
+
+```text
+ok - agy 1.3.6: shell and native credential reads are denied before disclosure
+ok - agy 1.3.6: a policy deny blocks a bypassed call and the reason reaches the model
+ok - agy 1.3.6: an abstained task-local file op runs unchanged and the armed heartbeat logged
+ok - agy 1.3.6: a timed-out judge denies, holds the call for firstmate, and never abstains
+ok - agy 1.3.6: install-worker refuses a malformed merged hooks.json before any launch
+ok - agy 1.3.6: a force_ask decision under bypass did not block the call - no prompt exists to force
+ok - agy 1.3.6: a bypass session whose hook never logs leaves no armed line for the canary to trust
+# agy bypass permission layer live checks passed (agy 1.3.6)
+```
+
+```sh
+FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
+```
+
+```text
+ok - agy 1.3.6: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
+# agy observer live checks passed (agy 1.3.6)
 ```
 
 ### Primary and secondmate supervision
