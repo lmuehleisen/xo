@@ -156,20 +156,22 @@ test_apply_patch_write_targets() {
   for kind in Add Update Delete; do
     patch=$(printf '*** Begin Patch\n*** %s File: src/ordinary.txt\n' "$kind")
     [ "$kind" != Add ] || patch="$patch"$'\n+ordinary'
+    [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
     patch="$patch"$'\n*** End Patch'
     patch_hook "$policy" permission-request "$patch" "patch-kind-$kind"
     [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
       || fail "an in-root $kind File must use the ordinary native-write approval: $OUT"
     patch=$(printf '*** Begin Patch\n*** Add File: src/safe.txt\n+safe\n*** %s File: /etc/fm-patch-probe\n' "$kind")
     [ "$kind" != Add ] || patch="$patch"$'\n+outside'
+    [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
     patch="$patch"$'\n*** End Patch'
     patch_hook "$policy" permission-request "$patch" "patch-outside-$kind"
     [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/patch-outside-$kind.pending" ] \
       || fail "a multi-file patch with an outside-root $kind target must escalate: $OUT"
   done
   for patch in \
-    $'*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: /etc/fm-patch-probe\n*** End Patch' \
-    $'*** Begin Patch\n*** Update File: /etc/fm-patch-probe\n*** Move to: src/new.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: /etc/fm-patch-probe\n@@\n-old\n+new\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: /etc/fm-patch-probe\n*** Move to: src/new.txt\n@@\n-old\n+new\n*** End Patch' \
     $'*** Begin Patch\n*** Add File: escape/fm-patch-probe\n+outside\n*** End Patch' \
     "$(printf '*** Begin Patch\n*** Add File: src/padded.txt\n+%3000s\n*** Delete File: /etc/fm-patch-probe\n*** End Patch' '')"; do
     patch_hook "$policy" permission-request "$patch" "patch-escape-$id"
@@ -182,7 +184,7 @@ test_apply_patch_write_targets() {
     patch_hook "$policy" pre-tool-use "$patch" "patch-protected-$id"
     [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
       || fail "a patch reaching protected instructions or wiring must be refused: $OUT"
-    patch=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: %s\n*** End Patch' "$target")
+    patch=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: %s\n@@\n-old\n+new\n*** End Patch' "$target")
     patch_hook "$policy" permission-request "$patch" "patch-protected-move-$id"
     [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
       || fail "a protected Move to target must be refused: $OUT"
@@ -232,6 +234,8 @@ test_apply_patch_executor_paths() {
     $'*** Begin Patch\n*** Add File: src/ordinary.txt \t\n*** End Patch' \
     $'*** Begin Patch\n*** Add File: src/unicode.txt\302\205\n*** End Patch' \
     $'*** Begin Patch\n*** Update File: src/old.txt \n*** Move to: src/new.txt \n@@\n-old\n+new\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n unchanged context\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n@@ first\n-old\n+new\n@@ second\n+\n*** End Patch' \
     $'*** Begin Patch\r\n*** Add File: src/crlf.txt\r\n+ordinary\r\n*** End Patch\r\n' \
     $'*** Begin Patch\r\n*** Add File: src/empty.txt\r\n*** Add File: src/second.txt\n+ordinary\r\n*** End Patch\r\n'; do
     patch_hook "$policy" pre-tool-use "$patch" "patch-format-$id"
@@ -300,6 +304,14 @@ test_apply_patch_vetoes_and_input_shapes() {
     $'*** Begin Patch\n*** Delete File: src/safe.txt\n*** End Patch\ntrailing' \
     $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n+safe\n*** Move to: /etc/hidden\n*** End Patch' \
     $'*** Begin Patch\n*** Update File: src/safe.txt\nnot a hunk\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n*** Add File: src/empty.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n*** Move to: src/new.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n*** End of File\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@ first\n@@ second\n+new\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n-old\n+new\n@@\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/ordinary.txt\n+ordinary\n*** Update File: src/safe.txt\n*** End Patch' \
     $'*** Begin Patch\n*** Add File: src/tab\tname\n+safe\n*** End Patch'; do
     patch_hook "$policy" pre-tool-use "$patch" "patch-malformed-$id"
     [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
@@ -316,6 +328,15 @@ test_apply_patch_vetoes_and_input_shapes() {
     [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "an unsupported patch input must not be approved: $OUT"
     id=$((id + 1))
   done
+  for input in null true false 7 '[]' '["ordinary"]' '"unsupported string"'; do
+    hook_input "$policy" pre-tool-use exec "$input" "exec-shape-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "non-object exec input must be refused before execution: $input => $OUT"
+    hook_input "$policy" permission-request exec "$input" "exec-shape-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/exec-shape-$id.pending" ] \
+      || fail "non-object exec input must escalate without judge approval: $input => $OUT"
+    id=$((id + 1))
+  done
   input=$(jq -nc '"*** Begin Patch\n*** Add File: src/nu\u0000ll.txt\n+safe\n*** End Patch"')
   hook_input "$policy" pre-tool-use apply_patch "$input" patch-nul
   [ "$RC" = 2 ] || fail "a NUL in a patch path must not be sanitized into an approved path: $OUT"
@@ -323,6 +344,7 @@ test_apply_patch_vetoes_and_input_shapes() {
     for kind in Add Update Delete; do
       patch=$(printf '*** Begin Patch\n*** Add File: src/safe.txt\n+safe\n*** %s File: %s\n' "$kind" "$target")
       [ "$kind" != Add ] || patch="$patch"$'\n+PATCH_CREDENTIAL_SENTINEL'
+      [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
       patch="$patch"$'\n*** End Patch'
       patch_hook "$policy" pre-tool-use "$patch" "patch-credential-$id"
       [ "$RC" = 2 ] || fail "a credential $kind target anywhere in a patch must be refused: $OUT"
@@ -331,8 +353,8 @@ test_apply_patch_vetoes_and_input_shapes() {
       id=$((id + 1))
     done
     for patch in \
-      "$(printf '*** Begin Patch\n*** Update File: src/safe.txt\n*** Move to: %s\n*** End Patch' "$target")" \
-      "$(printf '*** Begin Patch\n*** Update File: %s\n*** Move to: src/safe.txt\n*** End Patch' "$target")"; do
+      "$(printf '*** Begin Patch\n*** Update File: src/safe.txt\n*** Move to: %s\n@@\n-old\n+new\n*** End Patch' "$target")" \
+      "$(printf '*** Begin Patch\n*** Update File: %s\n*** Move to: src/safe.txt\n@@\n-old\n+new\n*** End Patch' "$target")"; do
       patch_hook "$policy" pre-tool-use "$patch" "patch-credential-move-$id"
       [ "$RC" = 2 ] || fail "both sides of a credential move must be refused: $OUT"
       id=$((id + 1))

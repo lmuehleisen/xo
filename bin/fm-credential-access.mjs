@@ -479,13 +479,20 @@ function patchTargets(patch) {
       continue;
     }
     if (i < end && lines[i].startsWith("*** Move to: ")) target(lines[i++].slice("*** Move to: ".length));
-    let changes = 0;
+    let changes = 0, chunkStarted = false;
     while (i < end && !/^\*\*\* (Add|Update|Delete) File: /.test(lines[i])) {
       const line = lines[i++];
       if (line === "*** End of File" && changes) break;
       if (line !== "@@" && !line.startsWith("@@ ") && !/^[ +\-]/.test(line)) throw new Error("change");
-      changes++;
+      if (line === "@@" || line.startsWith("@@ ")) {
+        if (chunkStarted && !changes) throw new Error("empty update chunk");
+        changes = 0;
+        chunkStarted = true;
+      } else {
+        changes++;
+      }
     }
+    if (!changes) throw new Error("empty update");
   }
   if (!targets.length) throw new Error("empty patch");
   return targets;
