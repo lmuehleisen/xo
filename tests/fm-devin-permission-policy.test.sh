@@ -200,6 +200,81 @@ test_apply_patch_write_targets() {
 }
 
 
+
+# Executor header normalization must precede every policy check; patch paths
+# are literal operands, not shell words. Cover CRLF and empty additions too.
+test_apply_patch_executor_paths() {
+  local policy dir wt patch target kind suffix id=0
+  policy=$(new_case patch-executor-paths)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/src" "$wt/app/[slug]"
+  ln -s /etc "$wt/escape"
+  for target in 'app/[slug]/page.tsx' 'src/$value*?.txt' 'src/ leading space.txt'; do
+    patch=$(printf '*** Begin Patch\n*** Add File: %s\n+ordinary\n*** End Patch' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-literal-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "literal patch paths must be approved without shell expansion: $OUT"
+    id=$((id + 1))
+  done
+  ln -s /etc "$wt/src/[outside]"
+  ln -s .env "$wt/src/[$]secret"
+  printf 'FIXTURE_KEY=ordinary\n' > "$wt/src/.env"
+  for target in 'src/[outside]/probe.txt' 'src/[$]secret' 'app/[slug]/.env'; do
+    patch=$(printf '*** Begin Patch\n*** Add File: %s\n*** End Patch' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-literal-unsafe-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "literal paths must retain physical root and credential checks: $OUT"
+    id=$((id + 1))
+  done
+  # Both whole-patch CRLF and mixed line endings must leave target names intact.
+  for patch in \
+    $'*** Begin Patch\n*** Add File: src/empty.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/ordinary.txt \t\n*** End Patch' \
+    $'*** Begin Patch\r\n*** Add File: src/crlf.txt\r\n+ordinary\r\n*** End Patch\r\n' \
+    $'*** Begin Patch\r\n*** Add File: src/empty.txt\r\n*** Add File: src/second.txt\n+ordinary\r\n*** End Patch\r\n'; do
+    patch_hook "$policy" pre-tool-use "$patch" "patch-format-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "valid patch formatting must pass PreToolUse: $OUT"
+    patch_hook "$policy" permission-request "$patch" "patch-format-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "CRLF and empty Add File patches must be approved: $OUT"
+    id=$((id + 1))
+  done
+  # Header whitespace is stripped by the executor for every operation and move.
+  for suffix in ' ' $'\t' $'\302\205'; do
+    for target in .env "$dir/data/t1/brief.md" "$policy"; do
+      for kind in Add Update Delete Move; do
+        if [ "$kind" = Move ]; then
+          patch=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: %s%s\n@@\n-old\n+new\n*** End Patch' "$target" "$suffix")
+        else
+          patch=$(printf '*** Begin Patch\n*** %s File: %s%s\n' "$kind" "$target" "$suffix")
+          [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
+          patch="$patch"$'\n*** End Patch'
+        fi
+        patch_hook "$policy" pre-tool-use "$patch" "patch-whitespace-$id"
+        [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+          || fail "normalized credential and protected $kind targets must be refused: $OUT"
+        patch_hook "$policy" permission-request "$patch" "patch-whitespace-$id"
+        if [ "$target" = .env ]; then
+          [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "normalized credential targets must never be approved: $OUT"
+        else
+          [ "$RC" = 2 ] || fail "normalized protected targets must be refused: $OUT"
+        fi
+        id=$((id + 1))
+      done
+    done
+  done
+  for patch in \
+    $'*** Begin Patch\n*** Add File: escape \n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: escape \n@@\n-old\n+new\n*** End Patch' \
+    $'*** Begin Patch\r\n*** Add File: src/empty.txt\r\n*** Delete File: /etc/fm-patch-probe\r\n*** End Patch\r\n' \
+    $'*** Begin Patch\r\n*** Add File: .env\r\n*** End Patch\r\n'; do
+    patch_hook "$policy" permission-request "$patch" "patch-format-unsafe-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/patch-format-unsafe-$id.pending" ] \
+      || fail "whitespace, CRLF and empty additions must retain root and credential checks: $OUT"
+    id=$((id + 1))
+  done
+  pass 'fm-devin-permission-policy: executor whitespace, literal filenames, CRLF and empty additions retain target checks'
+}
+
 test_apply_patch_vetoes_and_input_shapes() {
   local policy dir wt patch input tool target kind id=0
   # shellcheck disable=SC2016 # Synthetic judge body, evaluated only by the fixture executable.
@@ -217,7 +292,6 @@ test_apply_patch_vetoes_and_input_shapes() {
   for patch in '' \
     $'*** Begin Patch\n*** End Patch' \
     $'*** Begin Patch\n*** Add File: src/safe.txt\n+safe' \
-    $'*** Begin Patch\n*** Add File: src/safe.txt\n*** End Patch' \
     $'*** Begin Patch\n*** Move to: src/safe.txt\n*** End Patch' \
     $'*** Begin Patch\n*** Unknown File: src/safe.txt\n*** End Patch' \
     $'*** Begin Patch\n*** Delete File: src/safe.txt\n*** End Patch\ntrailing' \
@@ -2611,6 +2685,7 @@ test_recursive_rm_resolves_symlinked_components
 test_preallowed_git_forms_are_refused_before_they_run
 test_native_writes_resolve_symlinks
 test_apply_patch_write_targets
+test_apply_patch_executor_paths
 test_apply_patch_vetoes_and_input_shapes
 test_retire_closes_orphaned_escalations
 test_shared_credential_access

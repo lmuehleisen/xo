@@ -457,11 +457,14 @@ function segment(request) {
 // never supplies a partial target list to either policy consumer.
 function patchTargets(patch) {
   if (typeof patch !== "string" || patch.includes("\0")) throw new Error("patch");
-  const lines = patch.split("\n");
+  const lines = patch.split(/\r?\n/);
   if (lines[lines.length - 1] === "") lines.pop();
   const end = lines.length - 1, targets = [];
   if (lines[0] !== "*** Begin Patch" || lines[end] !== "*** End Patch") throw new Error("patch");
   const target = value => {
+    // apply_patch trims header line endings before extracting paths (including
+    // Move to). Match Rust trim_end Unicode whitespace, preserving leading spaces.
+    value = value.replace(/\p{White_Space}+$/u, "");
     if (!value.trim() || /[\x00-\x1f\x7f]/.test(value)) throw new Error("path");
     targets.push(value);
   };
@@ -472,9 +475,7 @@ function patchTargets(patch) {
     target(header[2]);
     if (header[1] === "Delete") continue;
     if (header[1] === "Add") {
-      const start = i;
       while (i < end && lines[i].startsWith("+")) i++;
-      if (i === start) throw new Error("add");
       continue;
     }
     if (i < end && lines[i].startsWith("*** Move to: ")) target(lines[i++].slice("*** Move to: ".length));
@@ -500,7 +501,7 @@ function native(request) {
       ? result("unresolved", "ambiguous-native-home-expansion")
       : classify_credential_access({ ...request, operation: "write",
         operands: writeTargets.map(p => word(p, "native:patch-target")),
-        dynamicSelection: writeTargets.some(p => /[$*?\[\]]/.test(p)) });
+        dynamicSelection: false });
     return { ...verdict, writeTargets };
   }
   if (!a || typeof a !== "object" || Array.isArray(a)) return result("unresolved", "invalid-native-fields");

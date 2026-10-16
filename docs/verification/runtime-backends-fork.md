@@ -762,7 +762,8 @@ FM_DEVIN_PATCH_HOOK_ONLY=1 FM_DEVIN_PERMISSION_LIVE=1 bash bin/fm-test-run.sh te
 ok - devin 3000.11.92 (7f4e64980e22): freeform apply_patch reaches policy hooks and writes an ordinary in-root target
 ```
 
-The portable regressions in `tests/fm-devin-permission-policy.test.sh` and `tests/fm-devin-fork-harness.test.sh` exercise multi-target root checks, protected wiring, credential vetoes, malformed patches, and string input across the generated hooks.
+The portable regressions in `tests/fm-devin-permission-policy.test.sh` and `tests/fm-devin-fork-harness.test.sh` exercise multi-target root checks, protected wiring, credential vetoes, malformed patches, string input across the generated hooks, CRLF patches, empty additions, and literal glob characters in filenames.
+Header target normalization uses the trailing Unicode whitespace semantics in the [open-source apply_patch parser](https://github.com/openai/codex/blob/b9775a0d57b09b43e5bab17a245ec053cc6b4426/codex-rs/apply-patch/src/streaming_parser.rs#L228), including move destinations; portable regressions check normalized targets against credentials, protected wiring, and physical write roots.
 This focused live check proves patch transport and one ordinary write, not all permission modes or lifecycle behavior.
 
 Fetch-contract verdict consistency, verified live on 2026-09-17 with devin 3000.10.21 (611c1cba) on free `swe-2-high`, against the prompt that names read-only web lookups routine work on any host and downloads that do something always declined, eight runs per input:
