@@ -570,3 +570,45 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
+
+  # Aggregate readiness gate: waits on every other CI job and passes only when
+  # all of them ran and passed, so the branch ruleset requires this one check
+  # instead of re-verifying each lane. A job added to this workflow without
+  # joining `needs` below fails tests/fm-ci-workflow.test.sh.
+  ci-pass:
+    name: ci-pass
+    runs-on: ubuntu-latest
+    # Fast tier (see the timeout policy above): result aggregation only.
+    timeout-minutes: 5
+    needs:
+      - lint
+      - test-coverage
+      - tests-portable-parallel-1
+      - tests-portable-parallel-2
+      - tests-portable-serial
+      - tests-herdr
+      - tests-timing-aggregate
+      - macos-stock-bash
+      - publish-identity
+      - invariants
+    if: always()
+    steps:
+      - name: Require every needed job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -eu
+          python3 -c '
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          bad = sorted(
+              name for name, job in needs.items()
+              if job.get("result") != "success"
+          )
+          if bad:
+              for name in bad:
+                  result = needs[name].get("result")
+                  print(f"::error::ci-pass refuses: {name} result is {result}, not success")
+              sys.exit(1)
+          print(f"ci-pass: all {len(needs)} needed jobs succeeded")
+          '
