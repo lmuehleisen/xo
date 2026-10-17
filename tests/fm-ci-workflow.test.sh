@@ -271,6 +271,13 @@ raise "ci-pass.needs names unknown jobs: #{(needs - expected).join(" ")}" unless
 steps = gate.fetch("steps")
 raise "ci-pass must not check out the repo; it only aggregates results" \
   if steps.any? { |s| s.to_s.include?("actions/checkout") }
+surface = steps.flat_map do |s|
+  [s["run"].to_s, Array(s["env"]).flat_map { |k, v| [k.to_s, v.to_s] }]
+end.join("\n")
+raise "ci-pass must read the needed jobs' results, or a no-op gate would pass" \
+  unless surface.include?("needs")
+raise "ci-pass must fail unless each needed result is success" \
+  unless surface.include?("success")
 RUBY
   pass "ci-pass waits on every other CI job and runs under always()"
 }
