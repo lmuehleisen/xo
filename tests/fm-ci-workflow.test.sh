@@ -73,7 +73,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate'
+FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate ci-pass'
 NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash publish-identity'
 HEAVY_TIER_JOBS='tests-herdr'
 
@@ -253,7 +253,37 @@ RUBY
   pass "CI matrices cover every executable serial lane and canonical lint root exactly once"
 }
 
+# The ci-pass aggregate is the one check the branch ruleset requires, so its
+# `needs` must name every other job: a job added to ci.yml without joining
+# ci-pass.needs would otherwise run without gating readiness.
+test_ci_pass_needs_every_other_job() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "ci-pass readiness gate contract"
+jobs = YAML.load_file(ARGV[0]).fetch("jobs")
+gate = jobs.fetch("ci-pass")
+raise "ci-pass must be named ci-pass so the ruleset requires one stable check" \
+  unless gate.fetch("name") == "ci-pass"
+raise "ci-pass must run even when a needed job fails" \
+  unless gate["if"].to_s.strip == "always()"
+needs = Array(gate["needs"]).map(&:to_s).sort
+expected = (jobs.keys.map(&:to_s) - ["ci-pass"]).sort
+raise "ci-pass.needs misses jobs: #{(expected - needs).join(" ")}" unless (expected - needs).empty?
+raise "ci-pass.needs names unknown jobs: #{(needs - expected).join(" ")}" unless (needs - expected).empty?
+steps = gate.fetch("steps")
+raise "ci-pass must not check out the repo; it only aggregates results" \
+  if steps.any? { |s| s.to_s.include?("actions/checkout") }
+surface = steps.flat_map do |s|
+  [s["run"].to_s, Array(s["env"]).flat_map { |k, v| [k.to_s, v.to_s] }]
+end.join("\n")
+raise "ci-pass must read the needed jobs' results, or a no-op gate would pass" \
+  unless surface.include?("needs")
+raise "ci-pass must fail unless each needed result is success" \
+  unless surface.include?("success")
+RUBY
+  pass "ci-pass waits on every other CI job and runs under always()"
+}
+
 test_ci_matrices_match_executable_partitions
+test_ci_pass_needs_every_other_job
 test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
