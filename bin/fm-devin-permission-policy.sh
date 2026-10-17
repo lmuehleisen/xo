@@ -145,7 +145,11 @@
 # and .claude/), the task data directory, the task temp root, a granted write
 # directory, or /tmp / $TMPDIR scratch space, measured where the path
 # physically resolves (directory components and a final symlink chain
-# followed). Every other tool escalates.
+# followed). apply_patch carries a freeform string tool_input; the shared
+# credential classifier parses the complete patch and returns every Add File,
+# Update File, Delete File, and Move to target for these same write checks.
+# Unparsed patches and unsupported input shapes never reach the judge or cache.
+# Every other tool escalates.
 #
 # Policy file (written by bin/fm-spawn.sh): JSON object with string fields
 # task, worktree, status, inbox, data, tasktmp, brief, log, devin (absolute
@@ -261,7 +265,7 @@ fi
 fm_judge_tier_bind "$FM_JUDGE_TIER_NATIVE" "$DEVIN"
 credential_policy
 
-TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT=''
+TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT='' INPUT_TYPE=''
 {
   IFS= read -r -d '' TOOL
   IFS= read -r -d '' TOOL_USE_ID
@@ -270,52 +274,69 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' FILE_PATH='' INPUT_JSON='' CACHE_INP
   IFS= read -r -d '' FILE_PATH
   IFS= read -r -d '' INPUT_JSON
   IFS= read -r -d '' CACHE_INPUT
+  IFS= read -r -d '' INPUT_TYPE
 } < <(printf '%s' "$PAYLOAD" | jq -j '
   def s: (. // "") | tostring | gsub("\u0000"; "");
+  (.tool_input | if type == "object" then . else {} end) as $fields |
   [ (.tool_name | s), (.tool_use_id | s), (.session_id | s),
-    (.tool_input.command | s),
-    ((.tool_input.file_path // .tool_input.path // .tool_input.notebook_path) | s),
-    ((.tool_input // {}) | del(.content?, .new_string?, .old_string?) | tojson | .[0:2000] | s),
-    ((.tool_input // {}) | tojson | s)
+    ($fields.command | s),
+    (($fields.file_path // $fields.path // $fields.notebook_path) | s),
+    ((if (.tool_input | type) == "object" then $fields | del(.content?, .new_string?, .old_string?)
+      else {input_type:(.tool_input | type)} end) | tojson | .[0:2000] | s),
+    (.tool_input | tojson | s), (.tool_input | type)
   ] | join("\u0000") + "\u0000"' 2>/dev/null)
+
+evaluate_write_target() {  # <literal filename>: shared by native writes and every patch target
+  local file_path=$1 abs rel
+  [ -n "$file_path" ] || { no_approve "$TOOL without a file path"; return 0; }
+  abs=$(CWD=$WORKTREE write_target_path "$file_path" 0 2>/dev/null) || abs=''
+  if [ -n "$abs" ] && brief_protected "$abs"; then
+    refuse "writing this task's own instructions ($file_path) is refused by firstmate policy"
+    return 0
+  fi
+  if [ -n "$abs" ] && protected_target "$abs"; then
+    refuse "writing firstmate's own permission wiring ($file_path) is refused by firstmate policy"
+    return 0
+  fi
+  [ -z "$CREDENTIAL_HOLD" ] || return 0
+  # Resolve writes physically: an in-root symlink must not carry a write out.
+  [ -n "$abs" ] || { no_approve "$TOOL path unresolvable"; return 0; }
+  if strictly_inside "$abs" "$WORKTREE"; then
+    rel=${abs#"$(norm_abs "$WORKTREE")"/}
+    case "$rel" in
+      .git|.git/*|.devin|.devin/*|.claude|.claude/*) no_approve "$TOOL of agent or git configuration" ;;
+    esac
+  elif ! inside_scratch_write_roots "$abs"; then
+    no_approve "$TOOL outside the task write roots"
+  fi
+}
 
 evaluate_tool() {  # non-exec tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
-  local fields
-  fields=$(printf '%s' "$PAYLOAD" | jq -c '.tool_input // {} | {file_path,path,notebook_path,recursive,url}')
+  local fields target
+  if [ "$TOOL" = apply_patch ]; then
+    credential_native "$CACHE_INPUT" "$WORKTREE"
+    INPUT_JSON=$(jq -nc --argjson targets "$CREDENTIAL_LAST_WRITE_TARGETS" '{writeTargets:$targets}')
+    while IFS= read -r -d '' target; do
+      evaluate_write_target "$target"
+    done < <(printf '%s' "$CREDENTIAL_LAST_WRITE_TARGETS" | jq -j '.[] | . + "\u0000"')
+    return 0
+  fi
+  if [ "$INPUT_TYPE" != object ]; then
+    credential_native "$CACHE_INPUT" "$WORKTREE"
+    return 0
+  fi
+  fields=$(printf '%s' "$PAYLOAD" | jq -c '.tool_input | {file_path,path,notebook_path,recursive,url}' 2>/dev/null) || fields=''
   credential_native "$fields" "$WORKTREE"
   case "$TOOL" in
-    read|grep|glob|notebook_read)
-      ;;
-    write|edit|notebook_edit)
-      local abs rel wt_abs
-      [ -n "$FILE_PATH" ] || { no_approve "$TOOL without a file path"; return 0; }
-      wt_abs=$(CWD=$WORKTREE write_target_path "$FILE_PATH" 0 2>/dev/null) || wt_abs=''
-      if [ -n "$wt_abs" ] && brief_protected "$wt_abs"; then
-        refuse "writing this task's own instructions ($FILE_PATH) is refused by firstmate policy"
-        return 0
-      fi
-      if [ -n "$wt_abs" ] && protected_target "$wt_abs"; then
-        refuse "writing firstmate's own permission wiring ($FILE_PATH) is refused by firstmate policy"
-        return 0
-      fi
-      [ -z "$CREDENTIAL_HOLD" ] || return 0
-      # The write root check resolves the path PHYSICALLY, as the agy adapter
-      # does: a symlink inside the worktree that points outside the roots must
-      # not carry the write with it, and an unresolvable target asks first.
-      abs=$wt_abs
-      [ -n "$abs" ] || { no_approve "$TOOL path unresolvable"; return 0; }
-      if strictly_inside "$abs" "$WORKTREE"; then
-        rel=${abs#"$(norm_abs "$WORKTREE")"/}
-        case "$rel" in
-          .git|.git/*|.devin|.devin/*|.claude|.claude/*) no_approve "$TOOL of agent or git configuration" ;;
-        esac
-      elif ! inside_scratch_write_roots "$abs"; then
-        no_approve "$TOOL outside the task write roots"
-      fi
-      ;;
+    read|grep|glob|notebook_read) ;;
+    write|edit|notebook_edit) evaluate_write_target "$FILE_PATH" ;;
     *) no_approve "$TOOL is not auto-approved" ;;
   esac
+}
+
+evaluate_call() {
+  if [ "$TOOL" = exec ] && [ "$INPUT_TYPE" = object ]; then evaluate_exec "$CMD"; else evaluate_tool; fi
 }
 
 # --- review-round writes on the task's own PR (see the header) ---------------
@@ -518,11 +539,7 @@ case "$EVENT" in
     # analysis, same prompt as a real permission-request - but nothing is
     # written, so a tier comparison leaves no trace in the task's cache,
     # markers, status file, or observer log.
-    if [ "$TOOL" = exec ]; then
-      evaluate_exec "$CMD"
-    else
-      evaluate_tool
-    fi
+    evaluate_call
     if [ -n "$REFUSE_REASON" ]; then judge_probe refuse
     elif [ -z "$NOT_APPROVABLE" ]; then judge_probe read-and-build
     elif [ -n "$NEVER_APPROVE" ]; then judge_probe never-approve
@@ -535,7 +552,7 @@ case "$EVENT" in
     # A pre-allowed call reaches no later step, so the forms review would
     # have caught are refused here (see the header).
     FM_POLICY_PREALLOW_GUARD=1
-    if [ "$TOOL" = exec ]; then evaluate_exec "$CMD"; else evaluate_tool; fi
+    evaluate_call
     if [ -n "$REFUSE_REASON" ]; then
       log_record refuse policy "$REFUSE_REASON"
       json_reason block "Blocked by firstmate policy: $REFUSE_REASON"
@@ -549,11 +566,7 @@ case "$EVENT" in
     exit 0
     ;;
   permission-request)
-    if [ "$TOOL" = exec ]; then
-      evaluate_exec "$CMD"
-    else
-      evaluate_tool
-    fi
+    evaluate_call
     if [ -n "$REFUSE_REASON" ]; then
       log_record refuse policy "$REFUSE_REASON"
       json_reason block "Blocked by firstmate policy: $REFUSE_REASON"

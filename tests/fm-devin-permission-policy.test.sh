@@ -11,6 +11,7 @@
 # block, /tmp scratch writes, the outward actions that always escalate, the
 # read-only web lookups approved statically for any host and the downloads
 # that do something that always escalate, the judge prompt's own contents,
+# the freeform multi-target apply_patch input and fail-closed input shapes,
 # and the no-policy-file fallback.
 # The command shapes are synthetic, with neutral names, addresses, and
 # credential values.
@@ -106,6 +107,315 @@ hook() {
 }
 
 case_dir() { dirname "$(dirname "$1")"; }
+
+
+# Use the observed Devin envelope, including a literal string tool_input.
+hook_input() {  # <policy> <event> <tool> <JSON input> <id>; stderr must stay empty
+  local policy=$1 event=$2 tool=$3 input=$4 id=$5 payload error_file
+  error_file="$(case_dir "$policy")/hook-stderr"
+  payload=$(jq -nc --arg tool "$tool" --argjson input "$input" --arg id "$id" \
+    '{hook_event_name:"x",tool_name:$tool,tool_input:$input,tool_use_id:$id,session_id:"s1",prompt_id:"p1"}')
+  OUT=$(printf '%s' "$payload" | "$POLICY_SH" "$event" "$policy" 2>"$error_file")
+  RC=$?
+  [ ! -s "$error_file" ] || fail "$event $tool must not emit a jq or hook error: $(cat "$error_file")"
+}
+
+patch_hook() {  # <policy> <event> <patch> <id>
+  hook_input "$1" "$2" apply_patch "$(jq -nc --arg patch "$3" '$patch')" "$4"
+}
+
+test_apply_patch_write_targets() {
+  local policy dir wt patch target kind id=0
+  policy=$(new_case patch-targets)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/src"
+  ln -s /etc "$wt/escape"
+  for target in "$wt/src/new.txt" 'src/relative file.txt'; do
+    patch=$(printf '*** Begin Patch\n*** Add File: %s\n+PATCH_BODY_SENTINEL\n*** End Patch\n' "$target")
+    patch_hook "$policy" pre-tool-use "$patch" "patch-pre-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "an in-root patch must pass PreToolUse: $OUT"
+    patch_hook "$policy" permission-request "$patch" "patch-add-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "an in-root Add File must be approved: $OUT"
+    id=$((id + 1))
+  done
+  patch='*** Begin Patch
+*** Add File: src/one.txt
++*** Delete File: /etc/not-a-real-target
+*** Update File: src/two.txt
+*** Move to: src/renamed.txt
+@@ context
+-old
++new
+*** End of File
+*** Delete File: src/three.txt
+*** End Patch'
+  patch_hook "$policy" permission-request "$patch" patch-multi-safe
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail "an all-in-root multi-file patch must be approved: $OUT"
+  for kind in Add Update Delete; do
+    patch=$(printf '*** Begin Patch\n*** %s File: src/ordinary.txt\n' "$kind")
+    [ "$kind" != Add ] || patch="$patch"$'\n+ordinary'
+    [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
+    patch="$patch"$'\n*** End Patch'
+    patch_hook "$policy" permission-request "$patch" "patch-kind-$kind"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "an in-root $kind File must use the ordinary native-write approval: $OUT"
+    patch=$(printf '*** Begin Patch\n*** Add File: src/safe.txt\n+safe\n*** %s File: /etc/fm-patch-probe\n' "$kind")
+    [ "$kind" != Add ] || patch="$patch"$'\n+outside'
+    [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
+    patch="$patch"$'\n*** End Patch'
+    patch_hook "$policy" permission-request "$patch" "patch-outside-$kind"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/patch-outside-$kind.pending" ] \
+      || fail "a multi-file patch with an outside-root $kind target must escalate: $OUT"
+  done
+  for patch in \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: /etc/fm-patch-probe\n@@\n-old\n+new\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: /etc/fm-patch-probe\n*** Move to: src/new.txt\n@@\n-old\n+new\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: escape/fm-patch-probe\n+outside\n*** End Patch' \
+    "$(printf '*** Begin Patch\n*** Add File: src/padded.txt\n+%3000s\n*** Delete File: /etc/fm-patch-probe\n*** End Patch' '')"; do
+    patch_hook "$policy" permission-request "$patch" "patch-escape-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/patch-escape-$id.pending" ] \
+      || fail "both move operands and physical symlink escapes must be checked: $OUT"
+    id=$((id + 1))
+  done
+  for target in "$dir/data/t1/brief.md" "$policy"; do
+    patch=$(printf '*** Begin Patch\n*** Add File: src/safe.txt\n+safe\n*** Delete File: %s\n*** End Patch' "$target")
+    patch_hook "$policy" pre-tool-use "$patch" "patch-protected-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "a patch reaching protected instructions or wiring must be refused: $OUT"
+    patch=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: %s\n@@\n-old\n+new\n*** End Patch' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-protected-move-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "a protected Move to target must be refused: $OUT"
+    id=$((id + 1))
+  done
+  for target in .git/config .devin/hooks.json .claude/settings.json; do
+    patch=$(printf '*** Begin Patch\n*** Add File: %s\n+ordinary\n*** End Patch' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-config-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "patches must not auto-approve agent or git configuration: $OUT"
+    id=$((id + 1))
+  done
+  ! grep -qF PATCH_BODY_SENTINEL "$dir/state/devin-permission-log.jsonl" \
+    || fail 'patch bodies must not reach decision metadata'
+  pass 'fm-devin-permission-policy: every patch header uses native write roots, wiring protection, and physical paths'
+}
+
+
+
+# Executor header normalization must precede every policy check; patch paths
+# are literal operands, not shell words. Cover CRLF and empty additions too.
+test_apply_patch_executor_paths() {
+  local policy dir wt patch target kind suffix id=0
+  policy=$(new_case patch-executor-paths)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/src" "$wt/app/[slug]" "$wt/~"
+  ln -s /etc "$wt/escape"
+  # shellcheck disable=SC2016,SC2088 # Patch filenames contain literal dollar signs and tildes.
+  for target in 'app/[slug]/page.tsx' 'src/$value*?.txt' 'src/ leading space.txt' '~/new.txt' '~draft'; do
+    patch=$(printf '*** Begin Patch\n*** Add File: %s\n+ordinary\n*** End Patch' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-literal-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "literal patch paths must be approved without shell expansion: $OUT"
+    id=$((id + 1))
+  done
+  for kind in Update Delete; do
+    patch=$(printf '*** Begin Patch\n*** %s File: ~/old.txt\n' "$kind")
+    [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
+    patch="$patch"$'\n*** End Patch'
+    patch_hook "$policy" permission-request "$patch" "patch-tilde-$kind"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "literal tilde $kind targets must use ordinary write checks: $OUT"
+  done
+  patch=$'*** Begin Patch\n*** Update File: ~/old.txt\n*** Move to: ~draft\n@@\n-old\n+new\n*** End Patch'
+  patch_hook "$policy" permission-request "$patch" patch-tilde-move
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail "both operands of a literal tilde move must be approved: $OUT"
+  ln -s /etc "$wt/~escape"
+  ln -s "$dir/data/t1/brief.md" "$wt/~/brief-link"
+  patch=$'*** Begin Patch\n*** Add File: ~/brief-link\n*** End Patch'
+  patch_hook "$policy" permission-request "$patch" patch-tilde-brief
+  [ "$RC" = 2 ] || fail "literal tilde paths must retain protected brief checks: $OUT"
+  ln -s /etc "$wt/src/[outside]"
+  ln -s .env "$wt/src/[$]secret"
+  printf 'FIXTURE_KEY=ordinary\n' > "$wt/src/.env"
+  # shellcheck disable=SC2088 # Tilde-prefixed patch paths are literal, not home expansions.
+  for target in 'src/[outside]/probe.txt' 'src/[$]secret' 'app/[slug]/.env' '~escape/probe.txt' '~/.env' '~/../../outside.txt'; do
+    patch=$(printf '*** Begin Patch\n*** Add File: %s\n*** End Patch' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-literal-unsafe-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "literal paths must retain physical root and credential checks: $OUT"
+    id=$((id + 1))
+  done
+  # Both whole-patch CRLF and mixed line endings must leave target names intact.
+  for patch in \
+    $'*** Begin Patch\n*** Add File: src/empty.txt\n*** End Patch' \
+    $'\n\n*** Begin Patch\n*** Add File: src/leading.txt\n+ordinary\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/trailing.txt\n+ordinary\n*** End Patch\n\n\n' \
+    $'\t*** Begin Patch \t\r\n*** Add File: src/markers.txt\r\n+ordinary\r\n \t*** End Patch \t\r\n\r\n' \
+    $'\302\205\n*** Begin Patch\302\205\n*** Add File: src/unicode-markers.txt\n+ordinary\n*** End Patch\n\302\205' \
+    $'*** Begin Patch\n*** Add File: src/ordinary.txt \t\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/unicode.txt\302\205\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt \n*** Move to: src/new.txt \n@@\n-old\n+new\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n unchanged context\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n@@ first\n-old\n+new\n@@ second\n+\n*** End Patch' \
+    $'*** Begin Patch\r\n*** Add File: src/crlf.txt\r\n+ordinary\r\n*** End Patch\r\n' \
+    $'*** Begin Patch\r\n*** Add File: src/empty.txt\r\n*** Add File: src/second.txt\n+ordinary\r\n*** End Patch\r\n'; do
+    patch_hook "$policy" pre-tool-use "$patch" "patch-format-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "valid patch formatting must pass PreToolUse: $OUT"
+    patch_hook "$policy" permission-request "$patch" "patch-format-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "CRLF and empty Add File patches must be approved: $OUT"
+    id=$((id + 1))
+  done
+  for target in /etc/fm-patch-probe .env "$policy"; do
+    patch=$(printf '\n\n*** Begin Patch \t\n*** Add File: %s\n*** End Patch \t\n\n' "$target")
+    patch_hook "$policy" permission-request "$patch" "patch-outer-unsafe-$id"
+    if [ "$target" = "$policy" ]; then
+      [ "$RC" = 2 ] || fail "normalized marker whitespace must retain wiring protection: $OUT"
+    else
+      [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "normalized marker whitespace must retain root and credential checks: $OUT"
+    fi
+    id=$((id + 1))
+  done
+  # Header whitespace is stripped by the executor for every operation and move.
+  for suffix in ' ' $'\t' $'\302\205'; do
+    for target in .env "$dir/data/t1/brief.md" "$policy"; do
+      for kind in Add Update Delete Move; do
+        if [ "$kind" = Move ]; then
+          patch=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: %s%s\n@@\n-old\n+new\n*** End Patch' "$target" "$suffix")
+        else
+          patch=$(printf '*** Begin Patch\n*** %s File: %s%s\n' "$kind" "$target" "$suffix")
+          [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
+          patch="$patch"$'\n*** End Patch'
+        fi
+        patch_hook "$policy" pre-tool-use "$patch" "patch-whitespace-$id"
+        [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+          || fail "normalized credential and protected $kind targets must be refused: $OUT"
+        patch_hook "$policy" permission-request "$patch" "patch-whitespace-$id"
+        if [ "$target" = .env ]; then
+          [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "normalized credential targets must never be approved: $OUT"
+        else
+          [ "$RC" = 2 ] || fail "normalized protected targets must be refused: $OUT"
+        fi
+        id=$((id + 1))
+      done
+    done
+  done
+  for patch in \
+    $'*** Begin Patch\n*** Add File: escape \n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: escape \n@@\n-old\n+new\n*** End Patch' \
+    $'*** Begin Patch\r\n*** Add File: src/empty.txt\r\n*** Delete File: /etc/fm-patch-probe\r\n*** End Patch\r\n' \
+    $'*** Begin Patch\r\n*** Add File: .env\r\n*** End Patch\r\n'; do
+    patch_hook "$policy" permission-request "$patch" "patch-format-unsafe-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/patch-format-unsafe-$id.pending" ] \
+      || fail "whitespace, CRLF and empty additions must retain root and credential checks: $OUT"
+    id=$((id + 1))
+  done
+  pass 'fm-devin-permission-policy: executor whitespace, literal filenames, CRLF and empty additions retain target checks'
+}
+
+test_apply_patch_vetoes_and_input_shapes() {
+  local policy dir wt patch input tool target kind id=0
+  # shellcheck disable=SC2016 # Synthetic judge body, evaluated only by the fixture executable.
+  policy=$(new_case patch-vetoes 'echo called >> "$PATCH_JUDGE_CALLS"; echo "APPROVE: fixture"')
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  export PATCH_JUDGE_CALLS="$dir/judge-calls"
+  mkdir -p "$dir/config"
+  printf 'FIXTURE_KEY=PATCH_CREDENTIAL_SENTINEL\n' > "$wt/opaque-store"
+  ln -s opaque-store "$wt/store-link"
+  jq -n --arg path "$wt/opaque-store" '{version:1,revision:"patch-fixture",entries:[
+    {path:$path,scope:"file",kind:"credential",use_modes:[],provenance:"synthetic fixture"}]}' \
+    > "$dir/config/declared-credentials.json"
+  jq --arg config "$dir/config" '.config=$config | .credential_registry_required=true' "$policy" > "$policy.new"
+  mv "$policy.new" "$policy"
+  for patch in '' \
+    $'*** Begin Patch\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/safe.txt\n+safe' \
+    $'*** Begin Patch\n*** Move to: src/safe.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Unknown File: src/safe.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Delete File: src/safe.txt\n*** End Patch\ntrailing' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n+safe\n*** Move to: /etc/hidden\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\nnot a hunk\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n*** Add File: src/empty.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n*** Move to: src/new.txt\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n*** End of File\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@ first\n@@ second\n+new\n*** End Patch' \
+    $'*** Begin Patch\n*** Update File: src/safe.txt\n@@\n-old\n+new\n@@\n*** End Patch' \
+    $'*** Begin Patch\n*** Add File: src/ordinary.txt\n+ordinary\n*** Update File: src/safe.txt\n*** End Patch' \
+    $'\n*** Begin Patch \t\n*** Update File: src/safe.txt\n*** End Patch\n\n' \
+    $'\n*** Begin Patch\n*** Add File: src/safe.txt\n+safe\n*** End Patch\nextra\n\n' \
+    $'*** Begin Patch\n*** Add File: src/tab\tname\n+safe\n*** End Patch'; do
+    patch_hook "$policy" pre-tool-use "$patch" "patch-malformed-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "an unparsed patch must be refused before native permission rules: $OUT"
+    patch_hook "$policy" permission-request "$patch" "patch-malformed-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/patch-malformed-$id.pending" ] \
+      || fail "an unparsed patch must escalate rather than reach an approving judge: $OUT"
+    id=$((id + 1))
+  done
+  for input in null true 7 '[]' '{}'; do
+    hook_input "$policy" pre-tool-use apply_patch "$input" "patch-shape-$id"
+    [ "$RC" = 2 ] || fail "an unsupported patch input shape must fail closed: $input => $OUT"
+    hook_input "$policy" permission-request apply_patch "$input" "patch-shape-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "an unsupported patch input must not be approved: $OUT"
+    id=$((id + 1))
+  done
+  for input in null true false 7 '[]' '["ordinary"]' '"unsupported string"'; do
+    hook_input "$policy" pre-tool-use exec "$input" "exec-shape-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "non-object exec input must be refused before execution: $input => $OUT"
+    hook_input "$policy" permission-request exec "$input" "exec-shape-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/exec-shape-$id.pending" ] \
+      || fail "non-object exec input must escalate without judge approval: $input => $OUT"
+    id=$((id + 1))
+  done
+  input=$(jq -nc '"*** Begin Patch\n*** Add File: src/nu\u0000ll.txt\n+safe\n*** End Patch"')
+  hook_input "$policy" pre-tool-use apply_patch "$input" patch-nul
+  [ "$RC" = 2 ] || fail "a NUL in a patch path must not be sanitized into an approved path: $OUT"
+  for target in .env opaque-store store-link; do
+    for kind in Add Update Delete; do
+      patch=$(printf '*** Begin Patch\n*** Add File: src/safe.txt\n+safe\n*** %s File: %s\n' "$kind" "$target")
+      [ "$kind" != Add ] || patch="$patch"$'\n+PATCH_CREDENTIAL_SENTINEL'
+      [ "$kind" != Update ] || patch="$patch"$'\n@@\n-old\n+new'
+      patch="$patch"$'\n*** End Patch'
+      patch_hook "$policy" pre-tool-use "$patch" "patch-credential-$id"
+      [ "$RC" = 2 ] || fail "a credential $kind target anywhere in a patch must be refused: $OUT"
+      patch_hook "$policy" permission-request "$patch" "patch-credential-$id"
+      [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "a credential patch must bypass judge and cache approvals: $OUT"
+      id=$((id + 1))
+    done
+    for patch in \
+      "$(printf '*** Begin Patch\n*** Update File: src/safe.txt\n*** Move to: %s\n@@\n-old\n+new\n*** End Patch' "$target")" \
+      "$(printf '*** Begin Patch\n*** Update File: %s\n*** Move to: src/safe.txt\n@@\n-old\n+new\n*** End Patch' "$target")"; do
+      patch_hook "$policy" pre-tool-use "$patch" "patch-credential-move-$id"
+      [ "$RC" = 2 ] || fail "both sides of a credential move must be refused: $OUT"
+      id=$((id + 1))
+    done
+  done
+  for tool in exec read grep glob notebook_read write edit notebook_edit unknown; do
+    hook_input "$policy" pre-tool-use "$tool" '"unsupported string"' "string-$tool"
+    [ "$RC" = 2 ] || fail "string input for $tool must be refused, not mistaken for an empty safe call: $OUT"
+    hook_input "$policy" permission-request "$tool" '"unsupported string"' "string-$tool"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "string input for $tool must escalate without a jq crash: $OUT"
+    hook_input "$policy" post-tool-use "$tool" '"unsupported string"' "string-$tool"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "PostToolUse must accept string input without a jq crash: $OUT"
+    [ ! -f "$dir/state/t1.devin-permission-pending/string-$tool.pending" ] \
+      || fail "PostToolUse must retire the matching string-input escalation"
+  done
+  hook_input "$policy" permission-request exec '"unsupported string"' string-stop
+  hook_input "$policy" stop exec '"unsupported string"' string-stop
+  [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "Stop must accept string input without a jq crash: $OUT"
+  [ ! -f "$dir/state/t1.devin-permission-pending/string-stop.pending" ] || fail 'Stop must close the string-input escalation'
+  patch_hook "$policy" judge-probe malformed patch-probe
+  case "$OUT" in *'static=credential verdict=n/a'*) ;; *) fail "an unparsed probe must not run the judge: $OUT" ;; esac
+  [ ! -e "$PATCH_JUDGE_CALLS" ] || fail 'malformed, credential, and unsupported string inputs must never reach the judge'
+  ! grep -qF PATCH_CREDENTIAL_SENTINEL "$dir/state/devin-permission-log.jsonl" "$dir/state/t1.status" \
+    || fail 'credential patch contents must not enter metadata or escalations'
+  unset PATCH_JUDGE_CALLS
+  pass 'fm-devin-permission-policy: malformed patches, credential targets, and string input on every policy hook fail safely without jq errors'
+}
 
 test_refusal_list() {
   local policy cmd
@@ -2433,6 +2743,9 @@ test_refusal_leaves_safe_commands_alone
 test_recursive_rm_resolves_symlinked_components
 test_preallowed_git_forms_are_refused_before_they_run
 test_native_writes_resolve_symlinks
+test_apply_patch_write_targets
+test_apply_patch_executor_paths
+test_apply_patch_vetoes_and_input_shapes
 test_retire_closes_orphaned_escalations
 test_shared_credential_access
 test_retained_credential_identity

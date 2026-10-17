@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Shared metadata-only credential classifier. JSON on stdin, verdict on stdout.
 // Operations: read, write, copy, execute, load, metadata, exec-segment, native.
+// Native apply_patch fields are its freeform string; the verdict also returns
+// validated writeTargets for the adapter's ordinary write-root/wiring checks.
 // Inputs carry literal operands with roles/expansion/glob flags, effective cwd,
 // trusted userHome, recursion, trace, useGrants, and the firstmate-owned registry.
 // The registry is config/declared-credentials.json, read afresh on each call:
@@ -450,8 +452,66 @@ function segment(request) {
   return ranked(calls.map(c => classify_credential_access(c, state)));
 }
 
+// Parse the complete freeform patch, not just a prefix or the first filename.
+// Return every write operand, including both sides of a move; ambiguous input
+// never supplies a partial target list to either policy consumer.
+function patchTargets(patch) {
+  if (typeof patch !== "string" || patch.includes("\0")) throw new Error("patch");
+  // Match the executor's Rust trim() for the patch and boundary markers only;
+  // content lines retain their whitespace and diff prefixes.
+  const trim = value => value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  const lines = trim(patch).split(/\r?\n/);
+  const end = lines.length - 1, targets = [];
+  if (trim(lines[0]) !== "*** Begin Patch" || trim(lines[end]) !== "*** End Patch") throw new Error("patch");
+  const target = value => {
+    // apply_patch trims header line endings before extracting paths (including
+    // Move to). Match Rust trim_end Unicode whitespace, preserving leading spaces.
+    value = value.replace(/\p{White_Space}+$/u, "");
+    if (!value.trim() || /[\x00-\x1f\x7f]/.test(value)) throw new Error("path");
+    targets.push(value);
+  };
+  let i = 1;
+  while (i < end) {
+    const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(lines[i++]);
+    if (!header) throw new Error("header");
+    target(header[2]);
+    if (header[1] === "Delete") continue;
+    if (header[1] === "Add") {
+      while (i < end && lines[i].startsWith("+")) i++;
+      continue;
+    }
+    if (i < end && lines[i].startsWith("*** Move to: ")) target(lines[i++].slice("*** Move to: ".length));
+    let changes = 0, chunkStarted = false;
+    while (i < end && !/^\*\*\* (Add|Update|Delete) File: /.test(lines[i])) {
+      const line = lines[i++];
+      if (line === "*** End of File" && changes) break;
+      if (line !== "@@" && !line.startsWith("@@ ") && !/^[ +\-]/.test(line)) throw new Error("change");
+      if (line === "@@" || line.startsWith("@@ ")) {
+        if (chunkStarted && !changes) throw new Error("empty update chunk");
+        changes = 0;
+        chunkStarted = true;
+      } else {
+        changes++;
+      }
+    }
+    if (!changes) throw new Error("empty update");
+  }
+  if (!targets.length) throw new Error("empty patch");
+  return targets;
+}
+
 function native(request) {
-  const a = request.fields || {}, tool = request.tool;
+  const a = request.fields, tool = request.tool;
+  if (tool === "apply_patch") {
+    let writeTargets;
+    try { writeTargets = patchTargets(a); }
+    catch { return result("unresolved", "unparsed-apply-patch"); }
+    const verdict = classify_credential_access({ ...request, operation: "write",
+      operands: writeTargets.map(p => word(p, "native:patch-target")),
+      dynamicSelection: false });
+    return { ...verdict, writeTargets };
+  }
+  if (!a || typeof a !== "object" || Array.isArray(a)) return result("unresolved", "invalid-native-fields");
   const localUri = [a.Url, a.URL, a.url].find(u => typeof u === "string" && /^file:/i.test(u));
   if (localUri) {
     try { return classify_credential_access({ ...request, operation: "read", operands: [word(fileURLToPath(localUri), "native:local-uri")] }); }
