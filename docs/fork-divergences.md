@@ -217,10 +217,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### quota-routing-eligibility
 
-- Intent: a quota-ranked route is eligible only with a known in-range spendPriority, a runway that covers the task's completion horizon, and a quota row whose account membership matches the route, with Devin and agy routes ranked from their plan and catalog quota; `docs/configuration.md` dispatch profiles.
+- Intent: a quota-ranked route is eligible only with a known in-range spendPriority, a runway that covers the task's completion horizon, and a quota row whose account membership matches the route, with Devin and agy routes ranked from their plan and catalog quota, and only when the route's worker tool is installed at a location its launch resolver searches; `docs/configuration.md` dispatch profiles.
 - Class: intended.
-- Seam: the eligibility hunks in `bin/fm-quota-axi-lib.sh` (including its optional minimum-version argument), `bin/fm-quota-choose.sh`, `bin/fm-dispatch-resolve.sh`, `bin/fm-procevent-quota.sh` (an unknown reading is an error), and `bin/fm-agy-lib.sh`, the quota-array-dispatch skill and agy harness reference, `docs/configuration.md`, and the catalog evidence in fork-only `docs/verification/runtime-backends-fork.md` (shared).
-- Guard: `tests/fm-quota-choose.test.sh`; `tests/fm-dispatch-resolve.test.sh` runway, membership, and plan-allowance cases; `tests/fm-procevent-quota.test.sh`; the opt-in live guards fork-only `tests/fm-quota-agy-catalog-live-e2e.test.sh` and `tests/fm-quota-devin-catalog-live-e2e.test.sh`.
+- Seam: the eligibility hunks in `bin/fm-quota-axi-lib.sh` (including its optional minimum-version argument), `bin/fm-quota-choose.sh`, `bin/fm-dispatch-resolve.sh`, `bin/fm-procevent-quota.sh` (an unknown reading is an error), and `bin/fm-agy-lib.sh`, the installed-tool route gate and its launch-location table (`fm_control_harness_launch_candidates` and `fm_control_harness_executable` in `bin/fm-control-lib.sh`, the launch path in `bin/fm-cursor-lib.sh`, and `resolve_owned_harness_binary` in `bin/fm-spawn.sh`), the quota-array-dispatch skill and agy harness reference, `docs/configuration.md`, and the catalog evidence in fork-only `docs/verification/runtime-backends-fork.md` (shared).
+- Guard: `tests/fm-quota-choose.test.sh`; `tests/fm-dispatch-resolve.test.sh` runway, membership, plan-allowance, and installed-tool cases; `tests/fm-control.test.sh` `test_harness_executable_names`; `tests/fm-procevent-quota.test.sh`; the opt-in live guards fork-only `tests/fm-quota-agy-catalog-live-e2e.test.sh` and `tests/fm-quota-devin-catalog-live-e2e.test.sh`.
 - Upstream: excludes only a route whose runway is already exhausted, without the completion-horizon gate or account-membership matching, and has no Devin or agy plan quota.
 
 ### pr-readiness-gate
@@ -238,6 +238,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: `FM_AFK_CONTRACT_SPEND_DEFAULT` in `bin/fm-afk-contract.sh` (shared).
 - Guard: `tests/fm-afk-contract.test.sh` default announcement case.
 - Upstream: defaults to 4 concurrent workers, raised to the live count when higher; the fork keeps that floor rule and changes only the default.
+
+### ci-pass-gate
+
+- Intent: the branch ruleset requires one stable aggregate check, `ci-pass`, which passes only when every other CI job ran and succeeded, plus the separate PR text check.
+- Class: intended.
+- Seam: the `ci-pass` job in `.github/workflows/ci.yml`, the required-contexts line in `CONTRIBUTING.md`, the gate sentence in `docs/fm-test-portable-shards.md`, and the fast-tier and gate cases in `tests/fm-ci-workflow.test.sh` (shared).
+- Guard: `tests/fm-ci-workflow.test.sh` `test_ci_pass_needs_every_other_job`.
+- Upstream: has no aggregate gate job; each workflow job reports as its own check.
 
 ## Carried
 
@@ -407,7 +415,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### codex-catalog-effort
 
-- Intent: derive Codex maximum-effort support from the installed model catalog while preserving the fallback for unavailable catalogs.
+- Intent: derive Codex maximum-effort support, and a direct Codex profile's `ultra` effort, from the installed model catalog while preserving the fallback for unavailable catalogs.
 - Class: carried.
 - Seam: fork-only `bin/fm-codex-catalog-lib.sh`, plus `effort_flag_for_harness` in `bin/fm-spawn.sh`, the Codex maximum-effort validation in `bin/fm-bootstrap.sh` and `bin/fm-dispatch-resolve.sh`, its row in `docs/scripts.md`, and the effort row in `.agents/skills/harness-adapters/references/harness/codex.md` (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` catalog-supported, unsupported and unavailable-catalog cases.
@@ -538,4 +546,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - `codex-animation-port`: the fork's port of upstream #4297 (`tests/fixtures/codex-animation/`), which upstream replaced with #4532; the animation, painted-braille, and ghost extraction hunks in `bin/fm-composer-lib.sh`, their cases in `tests/fm-composer-ghost.test.sh` and `tests/fm-composer-lib.test.sh`, and the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`; kept for now at a known cost.
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
 - `pi-package-discovery`: fork-only `tests/pi-package.sh` lets the Pi SDK suites find a Homebrew Pi install; offer it upstream.
+- `hold-doc-layout`: `docs/captain-hold-lifecycle.md` keeps the fork's condensed layout around the hunks its entries own; realign the layout when convenient.
+- `codex-verification`: the Codex busy-negotiation sentence in `bin/fm-busy-lib.sh` keeps the fork's verification wording; realign when convenient.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.

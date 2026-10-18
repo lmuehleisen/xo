@@ -597,5 +597,6 @@ fi
 [ "$(fm_tmux_composer_state "$SESSION:cc-decoy")" = unknown ] \
   || fail "the reclassification and its ceiling must be gated on Command Code's own process identity"
 pass "commandcode composer: an identical screen stays unknown when the pane is not Command Code"
+
 cleanup_all
 trap - EXIT

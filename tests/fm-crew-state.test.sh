@@ -238,9 +238,8 @@ case "${1:-}" in
     if [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] || [ "${FM_FAKE_TMUX_WINDOW_GONE:-0}" = 1 ]; then
       printf 'other-window\n'
     else
-      sed -n 's/^window=[^:]*://p' "${FM_STATE_OVERRIDE:-}"/*.meta 2>/dev/null
+      sed -n 's/^window=[^:]*://p' "${FM_STATE_OVERRIDE:?}"/*.meta 2>/dev/null
     fi ;;
-
   display-message)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1
     printf '%%1\n' ;;

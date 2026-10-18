@@ -2198,10 +2198,7 @@ for (const message of [
   }
 }
 aborted = false;
-await fire("before_agent_start", {
-  messageType: "custom",
-  message: processingMsg,
-}, abortCtx);
+await fire("before_agent_start", { messageType: "custom", message: processingMsg }, abortCtx);
 await fire("agent_start", {}, defaultSessionCtx);
 const openedByRequest = await fire("context", { messages: [...history, processingMsg] }, abortCtx);
 if (!aborted) throw new Error("a dedicated processing turn with history was not aborted under the record");
