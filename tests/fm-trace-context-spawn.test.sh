@@ -40,14 +40,26 @@ case "$*" in
   # A relaunch waits for the adopted pane's shell to hold a steady prompt row.
   *"#{cursor_y}"*) printf '0\n'; exit 0 ;;
 esac
+window_file="$(dirname "$0")/.spawn-window"
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   capture-pane) printf '$ \n'; exit 0 ;;
   list-windows)
     [ -z "${FM_FAKE_DUPLICATE_WINDOW:-}" ] || printf '%s\n' "$FM_FAKE_DUPLICATE_WINDOW"
+    [ ! -s "$window_file" ] || cat "$window_file"
     exit 0
     ;;
-  has-session|new-session|new-window|kill-window) exit 0 ;;
+  new-window)
+    name=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -n ] && name=$arg
+      previous=$arg
+    done
+    printf '%s\n' "$name" > "$window_file"
+    exit 0 ;;
+  kill-window) : > "$window_file"; exit 0 ;;
+  has-session|new-session) exit 0 ;;
   send-keys)
     # A spawn types a short line sourcing its staged launch file, so the launch
     # is recognized from that file's contents as well as from a literal.
@@ -61,6 +73,7 @@ case "${1:-}" in
     if [ "${*: -1}" = Enter ] && [ -f "$FM_FAKE_LAUNCH_LOG.pending-command" ]; then
       mv "$FM_FAKE_LAUNCH_LOG.pending-command" "$FM_FAKE_LAUNCH_LOG.command"
     fi
+    case " $* " in *' -l '*) : > "$window_file.launch-pending" ;; esac
     if [ "${FM_FAKE_TRACEPARENT_SEND_FAIL:-0}" = 1 ]; then
       for a in "$@"; do
         case "$a" in
@@ -105,6 +118,14 @@ case "${1:-}" in
         esac
       done
     fi
+    case " $* " in
+      *' Enter '*|*' C-m '*)
+        if [ -e "$window_file.launch-pending" ]; then
+          : > "$window_file"
+          rm -f "$window_file.launch-pending"
+        fi
+        ;;
+    esac
     exit 0
     ;;
 esac

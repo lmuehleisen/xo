@@ -74,7 +74,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin kiro
+  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin kiro commandcode polytoken
 }
 
 # fm_control_harness_launch_candidates <harness>
@@ -84,7 +84,8 @@ fm_control_harnesses() {
 #   mapping. bin/fm-spawn.sh's resolve_kimi_binary and resolve_rovo_binary
 #   search exactly these candidates, bin/fm-spawn.sh resolves kiro's kiro-cli
 #   through it, and bin/fm-cursor-lib.sh fm_cursor_resolve_binary verifies the
-#   same cursor names and fallback paths before launch - an availability hit
+#   same cursor names and fallback paths before launch, as bin/fm-polytoken-lib.sh
+#   fm_polytoken_binary does for polytoken's - an availability hit
 #   here still proves nothing about identity, and spawn keeps that check.
 #   Every other verified harness launches under its own name from PATH only.
 #   bin/fm-dispatch-resolve.sh reads this table for its installed-tool
@@ -115,6 +116,12 @@ fm_control_harness_launch_candidates() {  # <harness>
       fi
       ;;
     kiro) printf 'kiro-cli\n' ;;
+    polytoken)
+      printf 'polytoken\n'
+      if [ -n "$home" ]; then
+        printf '%s\n' "$home/.local/bin/polytoken"
+      fi
+      ;;
     *) printf '%s\n' "${1-}" ;;
   esac
   return 0
@@ -145,8 +152,9 @@ fm_control_harness_supported() {  # <harness>
 # `pi-signed` are exact because a `pi*` prefix would swallow the signed adapter,
 # `omp` is exact because an `omp*` prefix would claim unrelated commands, `agy`
 # is exact for the same reason on an even shorter name, `kiro` is exact because
-# a `kiro*` prefix has no verified variant to admit, and an unrecognized value
-# returns nonzero rather than being guessed into a family.
+# a `kiro*` prefix has no verified variant to admit, `devin` and `commandcode`
+# are exact as well, and an unrecognized value returns nonzero rather than
+# being guessed into a family.
 fm_control_harness_family() {  # <recorded-harness>
   case "${1-}" in
     pi) printf 'pi' ;;
@@ -155,6 +163,8 @@ fm_control_harness_family() {  # <recorded-harness>
     agy) printf 'agy' ;;
     devin) printf 'devin' ;;
     kiro) printf 'kiro' ;;
+    commandcode) printf 'commandcode' ;;
+    polytoken) printf 'polytoken' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
     opencode*) printf 'opencode' ;;
@@ -170,8 +180,8 @@ fm_control_harness_family() {  # <recorded-harness>
 }
 
 # Which task kinds an adapter is verified to run. opencode, muse, gemini, rovo,
-# devin, and kiro are crewmate/scout adapters in the launch owner, which refuses a
-# --secondmate launch on any of them. The control
+# devin, kiro, commandcode, and polytoken are crewmate/scout adapters in the
+# launch owner, which refuses a --secondmate launch on any of them. The control
 # plane asks this BEFORE it stops anything, so an incompatible relaunch target is
 # refused while the current agent is still running rather than after it has
 # been stopped.
@@ -179,9 +189,26 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    opencode|muse|gemini|rovo|devin|kiro) [ "$kind" != secondmate ] || return 1 ;;
+    opencode|muse|gemini|rovo|devin|kiro|commandcode|polytoken) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
+}
+
+# Which transport a harness's interrupt verb rides: `rest` for a typed API
+# call, `key` for the keyplane sequence the tables below describe. polytoken
+# is the one rest adapter: its TUI has NO interrupt chord at all (verified
+# live on 0.8.19 through the full `print tui-command-actions` inventory:
+# `submit-prompt` is the only Enter action in Prompt scope, a single Escape
+# does nothing in Prompt scope, and Escape Escape opens the rewind picker),
+# so an interrupt MUST be POST /turn/cancel on the session daemon, and the
+# keyplane tables below deliberately refuse it so nothing can improvise a
+# key. Every other verified harness interrupts through the keyplane.
+fm_control_interrupt_transport() {  # <harness>
+  case "${1-}" in
+    polytoken) printf 'rest' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|devin|kiro|commandcode) printf 'key' ;;
+    *) return 1 ;;
+  esac
 }
 
 # The key that cancels a running turn. Escape for every adapter except grok,
@@ -197,18 +224,20 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # row with an idle composer and no repollution (verified live, kiro-cli 2.21.4).
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|rovo|agy|devin|kiro) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|rovo|agy|devin|kiro|commandcode) printf 'Escape' ;;
     grok) printf 'C-c' ;;
     *) return 1 ;;
   esac
 }
 
 # How many times the interrupt key must be delivered. OpenCode and Devin need a double
-# Escape; every other verified adapter interrupts on a single press.
+# Escape; every other verified adapter interrupts on a single press. Command Code
+# cancels a running turn on one Escape (verified live, Command Code 1.74.1), and a
+# second press is exactly what opens its rewind picker, so it gets one.
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode|devin) printf '2' ;;
-    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro) printf '1' ;;
+    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro|commandcode) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -227,7 +256,7 @@ fm_control_interrupt_repeat() {  # <harness>
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
     devin) printf '%s' 'esc again to interrupt' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro|commandcode) ;;
     *) return 1 ;;
   esac
 }
@@ -235,9 +264,13 @@ fm_control_interrupt_arm_signal() {  # <harness>
 # The minimum seconds between two presses of an armed interrupt: several times
 # Devin's observed idle double-tap window, well inside its three-second armed
 # window. A turn that ends between the presses therefore cannot pair them.
+# Command Code sends one press, so its gap is only the settle before the hazard
+# read below: long enough for a rewind picker a stray earlier Escape paired with
+# this press to render (its idle double-tap opened the picker at a 0.3 s gap and
+# did not at 0.6 s, Command Code 1.74.1).
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
-    devin) printf '0.5' ;;
+    devin|commandcode) printf '0.5' ;;
     claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro) printf '0.2' ;;
     *) return 1 ;;
   esac
@@ -248,9 +281,19 @@ fm_control_interrupt_press_gap() {  # <harness>
 # when the adapter has none. Devin's revert picker is recognized by either of
 # two independent rows, its `Revert to step:` title or its `↵ revert` footer,
 # and Escape cancels it without reverting (verified live, devin 3000.11.1).
+# Command Code opens its Rewind checkpoint picker on two Escapes within about
+# half a second on an idle agent, where Enter restores a checkpoint; it is
+# recognized by its `Select a checkpoint to restore your session` subtitle or its
+# `Press Enter to select · Esc to cancel` footer, and one Escape closes it
+# without restoring (verified live, Command Code 1.74.1).
 fm_control_interrupt_hazard_signal() {  # <harness>
   case "${1-}" in
     devin) printf '%s' 'Revert to step:|↵ revert' ;;
+    commandcode) printf '%s' 'Select a checkpoint to restore your session|Press Enter to select · Esc to cancel' ;;
+    # polytoken's interrupt rides the REST API, never keys, so no key can open
+    # a hazard surface on its path; the /quit exit opens only the slash palette,
+    # where Enter accepts the preselected /quit row (verified live).
+    polytoken) ;;
     claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro) ;;
     *) return 1 ;;
   esac
@@ -273,7 +316,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|kiro) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|kiro|commandcode) ;;
     *) return 1 ;;
   esac
 }
@@ -291,7 +334,7 @@ fm_control_interrupt_ack_source() {  # <harness>
     # kiro's stop hook fires on normal completion but, like claude's, not on a
     # manual Escape, and its `Cancelled ...` row is likewise rendered rather than
     # recorded, so fm-control invalidates the busy record without claiming cancellation.
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|kiro) printf 'none' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|kiro|commandcode) printf 'none' ;;
     *) return 1 ;;
   esac
 }
@@ -305,7 +348,7 @@ fm_control_exit_command() {  # <harness>
   case "${1-}" in
     claude|opencode|grok|kimi|cursor|muse|rovo|agy) printf '/exit' ;;
     devin) printf 'exit' ;;
-    codex|pi|pi-signed|omp|gemini|kiro) printf '/quit' ;;
+    codex|pi|pi-signed|omp|gemini|kiro|commandcode|polytoken) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
@@ -444,9 +487,11 @@ fm_control_endpoint_absence_verdict() {  # <backend> <target>
 # The per-task wiring artifacts a harness leaves behind, so a relaunch that
 # changes harness (or re-arms the same one with a fresh busy generation) can
 # clear the previous incarnation's wiring instead of leaving a stale hook
-# pointing at a retired generation. Prints zero or more absolute paths, one per
-# line: worktree-resident hook files and firstmate-owned state tokens only,
-# never a harness's own managed config.
+# pointing at a retired generation. Teardown's worktree return also reads this
+# table for Polytoken; both consumers preserve git-tracked Polytoken layers.
+# Prints zero or more absolute paths, one per line: worktree-resident
+# hook files and firstmate-owned state tokens only, never a harness's own
+# managed config.
 fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [kind]
   local harness=${1-} wt=${2-} state=${3-} id=${4-} kind=${5-} gen
   [ -n "$wt" ] && [ -n "$state" ] && [ -n "$id" ] || return 1
@@ -530,6 +575,50 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
       [ ! -f "$state/$id.busy-gen" ] || IFS= read -r gen < "$state/$id.busy-gen" || true
       case "$gen" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
       printf '%s\n' "$state/$id.kiro-home/turn-marker.$gen.json"
+      ;;
+    # commandcode leaves none: its tracked mod (bin/fm-commandcode-mod.ts) takes
+    # the generation from its own launch command, so the retired process
+    # takes its wiring with it.
+    # polytoken's per-task wiring spans the worktree's project hook and facet
+    # layers (the only hook and facet discovery a task controls, so a relaunch
+    # must retire them rather than leave a stale hook pointing at a retired
+    # busy generation), the generated no-argv busy writer the hooks reference,
+    # and the per-task config and sessions roots, which are DIRECTORIES and
+    # therefore ride fm_control_harness_wiring_dirs below rather than this
+    # file table. The worktree layers are the project's own discovery paths,
+    # so each is named only while it carries this task's generated content
+    # (the hooks reference this task's busy writer, the facet this task's
+    # inbox); a project's own hook layer or facet is never firstmate's to
+    # retire.
+    polytoken)
+      if grep -qsF "/$id.polytoken-busy.sh" "$wt/.polytoken/hooks.json"; then
+        printf '%s\n' "$wt/.polytoken/hooks.json"
+      fi
+      if grep -qsF "/$id.inbox" "$wt/.polytoken/facets/firstmate-worker.md"; then
+        printf '%s\n' "$wt/.polytoken/facets/firstmate-worker.md"
+      fi
+      printf '%s\n' "$state/$id.polytoken-busy.sh"
+      ;;
+  esac
+}
+
+# The firstmate-owned per-task DIRECTORIES a harness mints, one per line:
+# the same retirement contract as fm_control_harness_wiring_paths for
+# artifacts that are directory trees rather than single files. Consumers
+# remove these recursively; nothing here is ever a harness's own managed
+# config. polytoken's config dir holds the mirrored worker config (the
+# one launch-time autonomy surface, so a replacement must regenerate it
+# from the current operator config), and the sessions root holds the
+# versioned `<root>-v1` session tree the launch writes beside it, so both
+# the root and its versioned sibling are named.
+fm_control_harness_wiring_dirs() {  # <harness> <state-dir> <id>
+  local harness=${1-} state=${2-} id=${3-}
+  [ -n "$state" ] && [ -n "$id" ] || return 1
+  case "$harness" in
+    polytoken)
+      printf '%s\n' "$state/$id.polytoken-config"
+      printf '%s\n' "$state/$id.polytoken-sessions"
+      printf '%s\n' "$state/$id.polytoken-sessions-v1"
       ;;
   esac
 }

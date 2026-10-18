@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|commandcode|polytoken|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -175,7 +175,7 @@ harness_marker() {
   # identified, and any rule that must be RELIABLE under grok has to test the hook
   # markers too (see .claude/settings.json Stop entries, docs/turnend-guard.md).
   [ "${GROK_AGENT:-}" = "1" ] && { echo grok; return; }
-  # codex, opencode, kimi, muse, and devin publish no harness-identity marker at all, so
+  # codex, opencode, kimi, muse, devin, commandcode, and polytoken publish no harness-identity marker at all, so
   # they are never named here and are identified by ancestry alone. That is the
   # whole reason a foreign marker must not outrank ancestry: with markers winning
   # unconditionally, any retained CLAUDECODE would silently rename one of them.
@@ -277,12 +277,30 @@ harness_process_verdict() {  # <pid>
     # carry JETSKI_APP_DATA_DIR=antigravity-cli, which harness_marker reads; the
     # two layers agree on the same harness, so detect_own keeps either verdict.
     agy) echo "comm agy"; return ;;
+    # polytoken (Polytoken CLI) is a daemon-plus-TUI whose per-session daemon
+    # process name is exactly `polytoken` (verified live on 0.8.19: a TUI
+    # session's daemon runs as comm `polytoken` at ppid 1, and a shell tool
+    # subprocess's parent IS the daemon, so the walk from any real tool
+    # subprocess reaches it at hop one). Anchored, never *polytoken*, so
+    # unrelated commands containing that fragment cannot be misread as this
+    # harness. polytoken publishes no harness-identity marker of its own and
+    # does not clear inherited foreign markers (verified: AGENT=1,
+    # ORCA_AGENT_HOOK_ENV, and ORCA_OPENCODE_AGENT from the launching session
+    # reached a worker tool subprocess), so like kimi, muse, agy, and devin it
+    # is detected by ancestry alone, and bin/fm-spawn.sh clears the foreign
+    # markers at its launch boundary as defense in depth.
+    polytoken) echo "comm polytoken"; return ;;
     devin) echo "comm devin"; return ;;
     # Kiro's macOS process chain includes kiro-cli-chat (ACP and host) plus
     # kiro-cli; the upstream AL2 wrapper uses kiro-cli. Anchor both names rather
     # than searching argv for kiro. macOS exports KIRO_* variables, but the
     # markerless AL2 build still needs structural ancestry for identity.
     kiro-cli|kiro-cli-chat) echo "comm kiro"; return ;;
+    # Command Code runs as a node bundle that sets its own process title, so
+    # the kernel process name is exactly `command-code` (verified, Command Code
+    # 1.74.1: comm=command-code and the rewritten argv is the same word).
+    # Anchored, so an unrelated command containing that fragment never matches.
+    command-code) echo "comm commandcode"; return ;;
     node*|python*)
       # Bare interpreter: match the harness name in its script path.
       args=$(ps -o args= -p "$pid" 2>/dev/null)
@@ -441,7 +459,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|commandcode|polytoken)
       printf '%s\n' "$pin"
       ;;
     *)

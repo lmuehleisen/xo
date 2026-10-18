@@ -58,13 +58,13 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: no required pipeline; `no-mistakes` delivery tokens ship as `direct-PR` unless `config/no-mistakes` opts in; README "No required `no-mistakes`".
 - Class: intended.
-- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh` (including the `config/wait-no-turns` waiting section, which names no-mistakes wait commands only in a pipeline ship brief), `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` is deleted.
+- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh` (including the `config/wait-no-turns` waiting section, which names no-mistakes wait commands only in a pipeline ship brief), `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` (including the delivery sentence in the firstmate-self-repo skill) and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` is deleted.
 - Guard: `tests/fm-brief.test.sh` `test_no_mistakes_*` and `test_workers_wait_without_spending_turns`; `tests/fm-task-delivery.test.sh` `test_no_mistakes_*`; `tests/fm-bootstrap.test.sh` `test_no_mistakes_opt_in_reports_unavailable_cli`.
 - Upstream: requires the no-mistakes pipeline for every ship and enforces its minimum version at bootstrap.
 
 ### reviewed-worker-permissions
 
-- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode`, so Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, and Rovo keep upstream's bypass launch; README "Reviewed worker permissions".
+- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode`, so Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
 - Class: intended.
 - Seam: permission resolution and `launch_template` in `bin/fm-spawn.sh`, and `docs/configuration.md` (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
@@ -83,7 +83,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: agy crewmates and scouts in Auto use the policed permission layer and judge by default; `--no-agy-bypass` selects `--mode accept-edits`, and Manual keeps agy's default review mode.
 - Class: intended.
-- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including generation-bound approval evidence and cleanup audit, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
+- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including generation-bound approval evidence and cleanup audit, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
 - Guard: `tests/fm-agy-permission-policy.test.sh`; `tests/fm-agy-harness.test.sh`; the opt-in live guard `tests/fm-agy-bypass-live-e2e.test.sh`.
 - Upstream: its own agy adapter has no fork permission layer.
 
@@ -147,7 +147,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: the fork's prose describes the fork rather than upstream: README "Fork: what differs" and every fork wording in shared prose that states the behavior of another entry here, plus the inventory rows that register fork-only prose.
 - Class: intended.
-- Seam: any shared prose surface, including `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `VISION.md`, `docs/` (for example `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`), and skill prose under `.agents/skills/`, limited to hunks that describe another entry's behavior; fork-only records such as `docs/verification/runtime-backends-fork.md`; and the `docs/documentation-audiences.json` rows that classify fork-only surfaces such as this ledger and `docs/upstream-integration.md`, while any other hunk in these files is still classified on its own.
+- Seam: any shared prose surface, including `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `VISION.md`, `docs/` (for example `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`), and skill prose under `.agents/skills/`, limited to hunks that describe another entry's behavior, plus the Polytoken license comment in `bin/fm-spawn.sh`, which drops upstream's dated operator-decision note to keep the public surface free of operator-direction narrative; fork-only records such as `docs/verification/runtime-backends-fork.md`; and the `docs/documentation-audiences.json` rows that classify fork-only surfaces such as this ledger and `docs/upstream-integration.md`, while any other hunk in these files is still classified on its own.
 - Guard: none; the integration run's ledger-update step reviews these files against the fork each run.
 - Upstream: describes upstream's own tools, pipeline, and permission defaults.
 
@@ -233,11 +233,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### away-spend-default
 
-- Intent: an away posture with no stated spend cap allows 20 concurrent workers.
+- Intent: an away posture with no stated spend cap allows 20 concurrent workers, or the live worker count when that is higher.
 - Class: intended.
 - Seam: `FM_AFK_CONTRACT_SPEND_DEFAULT` in `bin/fm-afk-contract.sh` (shared).
 - Guard: `tests/fm-afk-contract.test.sh` default announcement case.
-- Upstream: defaults to 4 concurrent workers.
+- Upstream: defaults to 4 concurrent workers, raised to the live count when higher; the fork keeps that floor rule and changes only the default.
 
 ## Carried
 
@@ -272,6 +272,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts and prelaunch rollback in `bin/fm-spawn.sh` and records-only stale-claim retirement in `bin/fm-teardown.sh`.
 - Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's); `tests/fm-spawn-prelaunch-lease-return.test.sh`; `tests/fm-spawn-prelaunch-rollback.test.sh`.
 - Upstream: has its own slot-owner claims, with further work in open PRs; which design is better is unresolved; upstream #6213 lets a stale record retire records-only when its slot's claim names another task, which the fork does not take because it reads those claims, so a lease held by another holder still refuses here.
+  Upstream's Polytoken pool-restoring abort and its slot-claim tests are not taken either: the fork's generic prelaunch rollback returns the lease and retires every harness wiring directory `fm_control_harness_wiring_dirs` names, Polytoken's included.
 
 ### claude-trust-escape
 
@@ -299,11 +300,19 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### tmux-presence
 
-- Intent: exact tmux session inventory, now routed through upstream's window inventory.
+- Intent: tri-state tmux endpoint presence (present, missing, unreadable) for recovery, spawn, and teardown, plus immutable window identity, over upstream's exact window inventory.
 - Class: carried.
-- Seam: exact session/window inventory in the tmux backend, `bin/fm-backend.sh`, and `bin/fm-crew-state.sh`, plus immutable window identity recorded by `bin/fm-spawn.sh` and checked before endpoint cleanup in `bin/fm-teardown.sh` (shared).
+- Seam: `fm_backend_tmux_target_presence` and its consumers in the tmux backend, `bin/fm-backend.sh`, and `bin/fm-crew-state.sh`, plus immutable window identity recorded by `bin/fm-spawn.sh` and checked before endpoint cleanup in `bin/fm-teardown.sh` (shared).
 - Guard: `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-tmux-agent-liveness.test.sh` exact inventory cases; `tests/fm-teardown.test.sh` missing and replaced window cases.
-- Upstream: drop the remainder once upstream's inventory covers it.
+- Upstream: now ships exact-membership `fm_backend_tmux_target_exists`, including the rule that a pane suffix splits only from a window index, which the fork takes as its boolean probe; drop the remainder once upstream distinguishes an unreadable inventory from a missing endpoint and binds cleanup to window ids.
+
+### self-repo-gh-default-target
+
+- Intent: the firstmate-repository publication gate targets the repository `gh repo set-default` selected, so a fork that keeps the parent as a read-only `upstream` remote is gated on its own repository rather than the parent; README "Fork-aware self-repository gate".
+- Class: carried.
+- Seam: `fm_role_publication_target` in `bin/fm-role-lib.sh` and its target sentence in `docs/configuration.md` (shared).
+- Guard: `tests/fm-self-repo-role.test.sh` `test_check_gh_default_repo_selects_the_publication_target`.
+- Upstream: always takes the first of `upstream`, `github`, `origin`, so this fork's parent remote would be the target; a candidate contribution, dropped once upstream honors gh's default repository.
 
 ### rehold-reason
 

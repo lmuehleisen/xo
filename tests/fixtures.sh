@@ -124,6 +124,7 @@ case "$*" in
   *"#{pane_current_command}"*)
     [ -z "${FM_FAKE_TMUX_PANE_COMMAND:-}" ] || { printf '%s\n' "$FM_FAKE_TMUX_PANE_COMMAND"; exit 0; } ;;
 esac
+window_file="$(dirname "$0")/.spawn-window"
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   capture-pane)
@@ -160,6 +161,24 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_DUPLICATE_WINDOW:-}" ]; then
       printf '%s\n' "$FM_FAKE_DUPLICATE_WINDOW"
     fi
+    [ ! -s "$window_file" ] || cat "$window_file"
+    exit 0
+    ;;
+  new-window)
+    name=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -n ] && name=$arg
+      previous=$arg
+    done
+    printf '%s\n' "$name" > "$window_file"
+    [ -z "${FM_FAKE_TMUX_ENDPOINT_STATE:-}" ] || printf '%s\n' "$name" > "$FM_FAKE_TMUX_ENDPOINT_STATE"
+    # -P (alone or clustered, e.g. -dP) asks tmux to print the new window's
+    # immutable id, which fm_backend_tmux_create_task returns and fm-spawn
+    # persists as window_id= so teardown can bind its reap to that object.
+    for fm_fake_wid_arg in "$@"; do
+      case "$fm_fake_wid_arg" in -*P*) printf '@7\n'; break ;; esac
+    done
     exit 0
     ;;
   kill-window)
@@ -170,24 +189,11 @@ case "${1:-}" in
         survives) exit 1 ;;
       esac
     fi
-    exit 0 ;;
-  has-session|new-session|set-window-option) exit 0 ;;
-  new-window)
-    if [ -n "${FM_FAKE_TMUX_ENDPOINT_STATE:-}" ]; then
-      prev=
-      for arg in "$@"; do
-        if [ "$prev" = -n ]; then printf '%s\n' "$arg" > "$FM_FAKE_TMUX_ENDPOINT_STATE"; break; fi
-        prev=$arg
-      done
-    fi
-    # -P (alone or clustered, e.g. -dP) asks tmux to print the new window's
-    # immutable id, which fm_backend_tmux_create_task returns and fm-spawn
-    # persists as window_id= so teardown can bind its reap to that object.
-    for fm_fake_wid_arg in "$@"; do
-      case "$fm_fake_wid_arg" in -*P*) printf '@7\n'; break ;; esac
-    done
+    : > "$window_file"
     exit 0
     ;;
+  has-session|new-session|set-window-option) exit 0 ;;
+
   send-keys)
     if [ -n "${FM_FAKE_TMUX_BRIEF_STATE:-}" ]; then
       for arg in "$@"; do

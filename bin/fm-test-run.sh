@@ -303,7 +303,7 @@ family_for_basename() {
     fm-agy-permission-policy.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
-    fm-kimi-harness.test.sh|fm-devin-harness.test.sh|fm-muse-harness.test.sh|fm-rovo-harness.test.sh|fm-agy-harness.test.sh|fm-kiro-harness.test.sh|fm-omp-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
+    fm-kimi-harness.test.sh|fm-devin-harness.test.sh|fm-commandcode-harness.test.sh|fm-muse-harness.test.sh|fm-rovo-harness.test.sh|fm-agy-harness.test.sh|fm-kiro-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
     fm-calm-claude-mod.test.sh|\
@@ -376,7 +376,7 @@ family_for_basename() {
     fm-cursor-primary-live-e2e.test.sh|\
     fm-grok-stop-live-e2e.test.sh|fm-harness-adapter-instructions-live-e2e.test.sh|\
     fm-harness-liveness-drift-live-e2e.test.sh|\
-    fm-devin-signals-live-e2e.test.sh|fm-muse-signals-live-e2e.test.sh|fm-rovo-signals-live-e2e.test.sh|fm-agy-signals-live-e2e.test.sh|\
+    fm-devin-signals-live-e2e.test.sh|fm-commandcode-signals-live-e2e.test.sh|fm-muse-signals-live-e2e.test.sh|fm-rovo-signals-live-e2e.test.sh|fm-agy-signals-live-e2e.test.sh|fm-polytoken-signals-live-e2e.test.sh|\
     fm-kiro-signals-live-e2e.test.sh|\
     fm-launch-prompt-signals-live-e2e.test.sh|\
     fm-agy-primary-live-e2e.test.sh|fm-agy-observer-live-e2e.test.sh|\
@@ -592,9 +592,8 @@ portable_parallel_lane_weight() {
 
 # Portable parallel shard 1: LPT balance of the proven-isolated set over the
 # hints above. Stored order agrees with this lane's --list-scheduled output.
-# tests/fm-pi-primary-types.test.sh belongs to this lane because
-# this is the parallel job that installs the Pi package; moving it needs that
-# workflow step moved with it.
+# tests/fm-pi-primary-types.test.sh runs the production-consumer typecheck here;
+# its own header owns temporary dependency provisioning.
 list_portable_parallel_1() {
   cat <<'EOF'
 tests/fm-pr-merge.test.sh
@@ -771,6 +770,8 @@ tests/fm-claude-trust.test.sh 14726
 tests/fm-cmux-claude-composer-live-e2e.test.sh 89
 tests/fm-codex-continuity-live-e2e.test.sh 85
 tests/fm-codex-hook-layer-live-e2e.test.sh 66
+tests/fm-commandcode-harness.test.sh 8182
+tests/fm-commandcode-signals-live-e2e.test.sh 49
 tests/fm-composer-agy.test.sh 1202
 tests/fm-composer-codex-idle-live-e2e.test.sh 65
 tests/fm-composer-devin.test.sh 1117
@@ -812,6 +813,7 @@ tests/fm-harness-adapter-instructions-live-e2e.test.sh 87
 tests/fm-harness-adapter-references.test.sh 94
 tests/fm-harness-liveness-drift-live-e2e.test.sh 931
 tests/fm-harness-precedence.test.sh 4805
+tests/fm-herdr-groups.test.sh 5418
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh 89
 tests/fm-herdr-session-cleanup.test.sh 19448
 tests/fm-herdr-submit-confirm-live-e2e.test.sh 62
@@ -852,6 +854,8 @@ tests/fm-pi-seeded-home-trust-live-e2e.test.sh 2618
 tests/fm-pi-watch-extension.test.sh 58514
 tests/fm-pi-windows-shell-invocation.test.sh 5121
 tests/fm-pi-worker-publish-policy-live-e2e.test.sh 5946
+tests/fm-polytoken-harness.test.sh 21090
+tests/fm-polytoken-signals-live-e2e.test.sh 103
 tests/fm-pr-check-security.test.sh 308343
 tests/fm-pr-reviewers.test.sh 194
 tests/fm-pr-state-live-e2e.test.sh 68

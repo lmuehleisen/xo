@@ -45,17 +45,60 @@ The `--force` path remains the explicit captain-approved discard escape hatch.
 
 ## Cleanup never closes a captain call
 
-The policy prefers holding the very work item a question gates, so the backlog row a finished task's cleanup is about to close is routinely the captain's own call.
-`bin/fm-teardown.sh` therefore asks the read-only `open` subcommand before its automatic close: exit 0 means the row is still an open captain call (not Done, `hold_kind: captain`), 1 means it is not, and 2 means the answer could not be established, which teardown treats as a refusal before any destructive step rather than as permission to close.
-On 0 only the close changes: after cleanup and still under the task's own lock, teardown records one `Deliverable of the finished work: ...` line at the end of the task body, copies a supported pull request or canonical `data/<id>/report.md` into the row's structured artifact fields, and runs `tasks-axi reopen`, so the row returns to Queued with its hold intact and remains on the appropriate Captain's Call or Charted Next decision surface instead of reading as work still under way.
-Gerrit change URLs are retained as deliverable text rather than pull-request fields, and an answer before replay records the URL as a `Gerrit change <url>` close note.
-The pending-close record teardown already stages before destructive cleanup carries that intent as a `mode=retain` line, so an interrupted cleanup replays the retention at the next session start through the same record, validator, and lock as an ordinary close and never closes the row; if the captain answers before replay, `answer` validates that record and copies any supported retained pull request or report into the row before closing it, after which replay retires the record.
-Two retained-delivery gaps remain bounded by tasks-axi 0.2.6 and are recorded for separate upstream work rather than representing defects introduced by this branch.
-A retained local-only delivery cannot reach the row because `--note` exists on `tasks-axi done` but not on `tasks-axi update`, while the durable pending-close record carrying that note is retired when retention completes.
-A relocated retained report cannot reach the row because tasks-axi accepts only `data/<id>/report.md`: `done` reports `Task report link must be a data/<id>/report.md path`, and `update` reports `--report must be a data/<id>/report.md path`.
-When an interrupted retention leaves such a relocated report in the validated pending-close record, `answer` skips only that known-unsupported row artifact and closes normally, so the delivery remains absent from Recently Landed instead of wedging the captain's answer.
-A pending-close record that fails validation outright is a different case and still refuses the answer, but the refusal names the record and the validation reason so the captain can repair it rather than facing a bare failure.
-`--force` does not lift the deferral, because it authorizes discarding unlanded work, never the captain's question; only `answer` with the captain's words or a separately verified evidence-backed reconciliation resolves the call, by either closing the question or releasing the gated work.
+The policy prefers holding the very work item a question gates.
+So the backlog row a finished task's cleanup is about to close is routinely the captain's own call.
+
+`bin/fm-teardown.sh` therefore asks the read-only `open` subcommand before its automatic close:
+
+| `open` exit | Meaning | What teardown does |
+| --- | --- | --- |
+| 0 | The row is still an open captain call (not Done, `hold_kind: captain`). | Retains the row, as described below. |
+| 1 | The row is not an open captain call. | Proceeds with its automatic close. |
+| 2 | The answer could not be established. | Treats it as a refusal before any destructive step, never as permission to close. |
+
+### Retaining the row on exit 0
+
+On 0 only the close changes.
+After cleanup, and still under the task's own lock, teardown does three things:
+
+- It records one `Deliverable of the finished work: ...` line at the end of the task body.
+- It copies a supported pull request or canonical `data/<id>/report.md` into the row's structured artifact fields.
+  A Gerrit change or GitLab merge request URL is not a pull request tasks-axi accepts, so it appears only in the deliverable line.
+- It runs `tasks-axi reopen`.
+
+The row returns to Queued with its hold intact.
+It remains on the appropriate Captain's Call or Charted Next decision surface instead of reading as work still under way.
+
+### Interrupted cleanup
+
+Teardown already stages a pending-close record before destructive cleanup.
+That record carries the retention intent as a `mode=retain` line.
+An interrupted cleanup therefore replays the retention at the next session start through the same record, validator, and lock as an ordinary close, and never closes the row.
+
+If the captain answers before replay, `answer` validates that record and copies any supported retained pull request or report into the row before closing it.
+A retained Gerrit change or GitLab merge request URL is instead recorded as a `Gerrit change <url>` or `GitLab merge request <url>` note on that close.
+Replay then retires the record.
+
+### Known retained-delivery gaps
+
+Two retained-delivery gaps remain bounded by tasks-axi 0.2.6.
+They are recorded for separate upstream work rather than representing defects introduced by this branch.
+
+- A retained local-only delivery cannot reach the row.
+  `--note` exists on `tasks-axi done` but not on `tasks-axi update`, while the durable pending-close record carrying that note is retired when retention completes.
+- A relocated retained report cannot reach the row, because tasks-axi accepts only `data/<id>/report.md`.
+  `done` reports `Task report link must be a data/<id>/report.md path`, and `update` reports `--report must be a data/<id>/report.md path`.
+
+When an interrupted retention leaves such a relocated report in the validated pending-close record, `answer` skips only that known-unsupported row artifact and closes normally.
+The delivery then remains absent from Recently Landed instead of wedging the captain's answer.
+
+A pending-close record that fails validation outright is a different case, and it still refuses the answer.
+The refusal names the record and the validation reason, so the captain can repair it rather than facing a bare failure.
+
+### What `--force` does not lift
+
+`--force` does not lift the deferral, because it authorizes discarding unlanded work, never the captain's question.
+Only `answer` with the captain's words or evidence-backed `reconcile close` resolves the call, by either closing the question or releasing the gated work.
 `bin/fm-backlog-transition-lib.sh` owns the transition and its record, and `bin/fm-captain-hold.sh --help` owns the predicate's contract.
 
 ## Answer-time resolution through chat

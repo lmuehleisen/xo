@@ -39,12 +39,24 @@ make_spawn_fakebin() {
   fakebin=$(fm_test_make_spawn_fakebin "$dir")
   cat > "$fakebin/timeout" <<'SH'
 #!/usr/bin/env bash
-if [ "${1:-}" = -k ]; then shift 2; fi
+# Match GNU timeout's option shape from bin/fm-timeout-lib.sh fm_run_timed:
+# `timeout -k <grace> <secs> cmd...` or plain `timeout <secs> cmd...`.
+if [ "${1:-}" = -k ]; then
+  shift 2
+fi
 shift
 exec "$@"
 SH
   cat > "$fakebin/cursor-agent" <<'SH'
 #!/usr/bin/env bash
+# Launch resolution runs a bounded --help probe (bin/fm-cursor-lib.sh
+# fm_cursor_verify_executable) before accepting any candidate. Empty success
+# is not Cursor identity, so the fixture must mark itself the same way the
+# real CLI does or spawn falls through to a host agent / fails closed on CI.
+if [ "${1:-}" = --help ]; then
+  printf '%s\n' 'Start the Cursor Agent'
+  exit 0
+fi
 if [ "${1:-}" = --list-models ]; then
   [ "${FM_FAKE_CURSOR_LIST_STATUS:-0}" -eq 0 ] || exit "${FM_FAKE_CURSOR_LIST_STATUS}"
   printf '%b\n' "${FM_FAKE_CURSOR_MODELS:-Available models\ncursor-grok-4.5-high - Grok 4.5 High}"
@@ -141,11 +153,6 @@ task_inbox_export() {  # <home> <id>
   printf "export FM_TASK_INBOX='%s'; " "$state/$2.inbox"
 }
 
-ai_trailer_hooks_prefix() {  # <home> <id>
-  local state
-  state=$(CDPATH='' cd -- "$1/state" && pwd -P) || fail "cannot resolve state dir $1/state"
-  printf "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0='%s'; " "$state/$2.git-hooks"
-}
 
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
@@ -587,6 +594,92 @@ test_active_dispatch_profile_allows_positional_harness() {
   pass "active crew-dispatch profile allows the legacy positional harness form"
 }
 
+# Replacing inherited config rather than appending the hooks entry loses the
+# scoped HTTPS credential helper. Execute the real emitted launch and ask Git,
+# rather than inspecting command text, to catch that credential widening. Every
+# pane shell runs with its startup files pointed at the case directory, so a
+# developer's rc file cannot prompt, exec a multiplexer or export GIT_CONFIG_*.
+isolated_pane_env() {  # <assignment-or-command...>
+  env HOME="$CASE_DIR" ZDOTDIR="$CASE_DIR" XDG_CONFIG_HOME="$CASE_DIR" ENV= BASH_ENV= "$@"
+}
+
+test_launch_preserves_inherited_git_config() {
+  local rec id=git-config-append out status launch result pane_shell count launch_file expected prefix
+  rec=$(make_spawn_case "$id" codex "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness 'echo WORKER-RAN >&2; git config --get-all credential.helper; git config --get core.hooksPath')
+  status=$?
+  expect_code 0 "$status" "Git configuration probe should spawn: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  launch_file="$CASE_DIR/git-config-launch.sh"
+  printf '%s\n' "$launch" > "$launch_file"
+  expected=$'\n!gh auth git-credential\n'"$(cd "$HOME_DIR/state" && pwd -P)/$id.git-hooks"
+  for pane_shell in /bin/sh /bin/bash /bin/zsh; do
+    [ -x "$pane_shell" ] || continue
+    for count in 2 02; do
+      result=$(isolated_pane_env GIT_CONFIG_COUNT="$count" \
+        GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='' \
+        GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential' \
+        "$pane_shell" -c "$launch") || fail "Git configuration launch failed in $pane_shell"
+      [ "$result" = "$expected" ] \
+        || fail "launch dropped the inherited credential-helper entries in $pane_shell"
+    done
+    result=$(isolated_pane_env GIT_CONFIG_COUNT=bad "$pane_shell" -c "$launch" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "an invalid Git config count silently launched"
+    assert_not_contains "$result" WORKER-RAN "an invalid Git config count still started the worker in $pane_shell"
+    for count in bad 2147483647; do
+      # shellcheck disable=SC2016 # The child pane expands its own arguments and source status.
+      result=$(isolated_pane_env GIT_CONFIG_COUNT="$count" "$pane_shell" -i -c \
+        '. "$1"; fm_status=$?; [ "$fm_status" -ne 0 ] || exit 2; printf "\nSHELL-STILL-ALIVE\n"' _ "$launch_file" 2>&1)
+      status=$?
+      expect_code 0 "$status" "invalid count must preserve the interactive $pane_shell pane"
+      assert_contains "$result" 'error: ' "count refusal must remain visible in $pane_shell"
+      assert_contains "$result" SHELL-STILL-ALIVE "count refusal killed the interactive $pane_shell pane"
+      assert_not_contains "$result" WORKER-RAN "count refusal still started the worker in $pane_shell"
+    done
+  done
+  # A fish pane sources the same launch file, so fish runs the same append and
+  # refusal cases. Without fish, check the emitted launch prefix (the staged
+  # launch-file contract) for POSIX-only syntax fish cannot parse.
+  if command -v fish >/dev/null 2>&1; then
+    for count in 2 02; do
+      result=$(isolated_pane_env GIT_CONFIG_COUNT="$count" \
+        GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='' \
+        GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential' \
+        fish -c "source '$launch_file'") || fail "Git configuration launch failed in fish"
+      [ "$result" = "$expected" ] || fail "launch dropped the inherited credential-helper entries in fish"
+    done
+    result=$(isolated_pane_env GIT_CONFIG_COUNT=bad fish -c "source '$launch_file'" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "an invalid Git config count silently launched in fish"
+    assert_not_contains "$result" WORKER-RAN "an invalid Git config count still started the worker in fish"
+    for count in bad 2147483647; do
+      result=$(isolated_pane_env GIT_CONFIG_COUNT="$count" fish -i -c \
+        "source '$launch_file'; and exit 2; printf '\nSHELL-STILL-ALIVE\n'" 2>&1)
+      status=$?
+      expect_code 0 "$status" "invalid count must preserve the interactive fish pane"
+      assert_contains "$result" 'error: ' "count refusal must remain visible in fish"
+      assert_contains "$result" SHELL-STILL-ALIVE "count refusal killed the interactive fish pane"
+      assert_not_contains "$result" WORKER-RAN "count refusal still started the worker in fish"
+    done
+  else
+    prefix=$(fm_test_launch_git_prefix "$launch")
+    # shellcheck disable=SC2016 # These are literal shell tokens fish rejects.
+    case "$prefix" in
+      *'$('* | *'${'* | *'`'* | *'case '* | *'while '* | *'esac'* | *'done'*)
+        fail "the Git configuration launch prefix uses syntax fish cannot parse: $prefix" ;;
+    esac
+    # A token check cannot prove fish sources the launch, so report fish as
+    # skipped rather than letting the pass line claim it ran.
+    echo "skip: fish not found (fish pane launch); only a static syntax check ran"
+    pass "launch appends the hooks config while preserving inherited Git credentials in sh, bash and zsh"
+    return
+  fi
+  pass "launch appends the hooks config while preserving inherited Git credentials in every pane shell, fish included"
+}
+
 test_active_dispatch_profile_allows_raw_launch_command() {
   local rec id out status launch
   id=profile-raw-z15
@@ -604,7 +697,7 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   # The unverified-adapter escape hatch is still an agent this fleet launched,
   # so it carries the compact-adviser floor, the AI-trailer strip, and the
   # private tmux server; nothing else may rewrite the captain's own command.
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/$id.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" "$id")$(ai_trailer_hooks_prefix "$HOME_DIR" "$id")custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/$id.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" "$id")$(fm_test_launch_git_prefix "$launch")custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
   pass "active crew-dispatch profile allows the raw launch-command escape hatch"
 }
 
@@ -662,7 +755,7 @@ SH
   # Byte-exact like the other raw-launch pins in this file: the generic fleet
   # prefixes (private tmux server, compact-adviser switch, task inbox, AI-
   # trailer hooks, identity-marker scrub) wrap the command but never touch it.
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(ai_trailer_hooks_prefix "$HOME_DIR" raw-agy-z16)env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(fm_test_launch_git_prefix "$launch")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
     || fail "raw agy launch command changed"$'\n'"actual: $launch"
 
   # The claude case needs its own pane path: the first spawn's lease holds WT_DIR.
@@ -675,7 +768,7 @@ SH
   assert_contains "$out" "spawned raw-claude-z17 harness=claude" "raw claude launch did not record the claude harness name"
   assert_meta_profile "$HOME_DIR/state/raw-claude-z17.meta" claude default default
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(ai_trailer_hooks_prefix "$HOME_DIR" raw-claude-z17)env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(fm_test_launch_git_prefix "$launch")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
     || fail "raw claude launch command changed"$'\n'"actual: $launch"
 
   [ ! -s "$probe_log" ] || fail "raw launches executed the adapter binaries they name: $(cat "$probe_log")"
@@ -2901,7 +2994,7 @@ test_keep_ai_trailers_omits_attribution_settings_keeps_gate_hooks() {
   expect_code 0 "$status" "claude spawn with keep-ai-trailers should succeed"$'\n'"$out"
   launch=$(cat "$LAUNCH_LOG")
   assert_attribution_policy_absent "$launch" "opted-in claude"
-  assert_contains "$launch" 'GIT_CONFIG_KEY_0=core.hooksPath' \
+  assert_contains "$launch" "fm-git-strip-ai-trailers.sh' env-file" \
     "opted-in launch dropped the hooksPath that runs the publish gate"
   [ -d "$HOME_DIR/state/$id.git-hooks" ] \
     || fail "opted-in launch did not install the publish-gate hooks"
@@ -2931,7 +3024,7 @@ test_keep_ai_trailers_reaches_secondmate_crew_launches() {
   expect_code 0 "$status" "secondmate crew spawn should succeed"$'\n'"$out"
   launch=$(cat "$LAUNCH_LOG")
   assert_attribution_policy_absent "$launch" "secondmate crew claude"
-  assert_contains "$launch" 'GIT_CONFIG_KEY_0=core.hooksPath' \
+  assert_contains "$launch" "fm-git-strip-ai-trailers.sh' env-file" \
     "secondmate crew launch dropped the hooksPath that runs the publish gate"
   pass "keep-ai-trailers is inherited so a secondmate's crew launch keeps AI trailers"
 }
@@ -3206,6 +3299,7 @@ test_launch_environment_allowlist() {
 #!/bin/sh
 printf '%s\n' "${FM_TEST_AMBIENT_SENTINEL-unset}" "${FM_TEST_ALLOWED-unset}" \
   "${FM_TEST_EMPTY-unset}" "${FM_TEST_UNSET-unset}" "$HOME" "$PATH" "$TERM" "$TMUX" "$GOTMPDIR"
+printf 'hooksPath=%s\n' "$(git config --get core.hooksPath || :)"
 SH
     out=$(FM_TEST_AMBIENT_SENTINEL=synthetic-unrelated \
       run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
@@ -3231,6 +3325,8 @@ SH
       # The pane's TMUX stays in the floor, but a ship worker starts on its
       # private tmux server with TMUX unset (docs/tmux-backend.md).
       expected="$expected"$'\n'"$HOME_DIR/user-home"$'\n'"$pane_path"$'\nxterm\n\n/synthetic/gotmp'
+      # The strip-hook entry must also survive the env -i boundary.
+      expected="$expected"$'\n'"hooksPath=$(cd "$HOME_DIR/state" && pwd -P)/$id.git-hooks"
       [ "$result" = "$expected" ] || fail "allowlist=$setting worker environment mismatch: $result"
     done
     pass "allowlist=$setting preserves the operational floor and filters only when opted in"
@@ -3497,10 +3593,8 @@ SH
 # the expected launch reads the doorbell back from the actual launch and proves
 # it names a launch-brief record before comparing the rest byte-for-byte.
 claude_settings_json_arg() {  # <launch>
-  local command=$1
-  while [[ "$command" == export\ *\;* || "$command" == unset\ *\;* ]]; do
-    command=${command#*; }
-  done
+  local command
+  command=$(fm_test_launch_command "$1")
   eval "set -- $command"
   while [ "$#" -gt 0 ]; do
     if [ "$1" = --settings ]; then
@@ -3519,12 +3613,10 @@ claude_settings_json_arg() {  # <launch>
 }
 
 claude_launch_brief_arg() {  # <launch>
-  local command=$1
-  while [[ "$command" == export\ *\;* || "$command" == unset\ *\;* ]]; do
-    command=${command#*; }
-  done
+  local command
+  command=$(fm_test_launch_command "$1")
   (
-    eval "set -- ${command#*; }"
+    eval "set -- $command"
     eval "printf '%s' \"\${$#}\""
   )
 }
@@ -3547,7 +3639,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flags>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(ai_trailer_hooks_prefix "$2" "$3")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 # An upstream-only config/claude-permission-mode file is not read in this fork:
@@ -3609,6 +3701,7 @@ test_claude_worker_launch_covers_task_channel_dirs() {
 }
 
 test_opencode_exposes_firstmate_skills_in_launch_config
+test_launch_preserves_inherited_git_config
 test_worker_launch_delivers_role_scope
 test_dispatch_spawn_history
 test_no_profile_keeps_claude_profile_defaults
