@@ -229,7 +229,7 @@ fm_role_git_common_dir() {
 # order gh prefers, normalized to host/owner/repo or path:<abs>. Empty when the
 # repo has no such remote.
 fm_role_publication_target() {
-  local dir=$1 remote url= key value base= marked=0
+  local dir=$1 remote url='' key value base='' marked=0
   while read -r key value; do
     [ "$value" = base ] || continue
     remote=${key#remote.}
