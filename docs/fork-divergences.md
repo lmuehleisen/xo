@@ -241,10 +241,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### ci-pass-gate
 
-- Intent: the branch ruleset requires one stable aggregate check, `ci-pass`, which passes only when every other CI job ran and succeeded, plus the separate PR text check; like the fork's publish-identity job, it honors upstream's push-run opt-out `FM_CI_SKIP_PUSH`.
+- Intent: the branch ruleset requires one stable aggregate check, `ci-pass`, which passes only when every other CI job ran and succeeded, plus the separate PR text check; like the fork's publish-identity job, it honors upstream's push-run opt-out `FM_CI_SKIP_PUSH`, and it accepts the macOS job's skip only under upstream's `FM_CI_SKIP_MACOS` opt-out.
 - Class: intended.
 - Seam: the `ci-pass` job in `.github/workflows/ci.yml`, the required-contexts line in `CONTRIBUTING.md`, the gate sentence in `docs/fm-test-portable-shards.md`, and the fast-tier and gate cases in `tests/fm-ci-workflow.test.sh` (shared).
-- Guard: `tests/fm-ci-workflow.test.sh` `test_ci_pass_needs_every_other_job`.
+- Guard: `tests/fm-ci-workflow.test.sh` `test_ci_pass_needs_every_other_job` and `test_ci_pass_honors_the_macos_opt_out`.
 - Upstream: has no aggregate gate job; each workflow job reports as its own check.
 
 ## Carried

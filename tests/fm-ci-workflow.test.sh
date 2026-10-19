@@ -483,8 +483,44 @@ TABLE
   pass "ci-pass waits on every other CI job and still runs after a failed lane unless the push run is skipped"
 }
 
+# Run ci-pass's own aggregation step against synthetic needed-job results.
+ci_pass_step_rc() {  # <FM_CI_SKIP_MACOS> <macos-stock-bash result> [other job result]
+  local script
+  script=$(ruby -ryaml -e '
+puts YAML.load_file(ARGV[0]).fetch("jobs").fetch("ci-pass").fetch("steps").map { |s| s["run"] }.compact.join("\n")
+' "$CI_WORKFLOW") || return 2
+  NEEDS_JSON=$(printf '{"lint":{"result":"%s"},"macos-stock-bash":{"result":"%s"}}' "${3:-success}" "$2") \
+    SKIP_MACOS=$1 bash -c "$script" >/dev/null 2>&1
+}
+
+# The macOS opt-out skips that job by design, so ci-pass accepts its skip only
+# while the opt-out is set, and never relaxes any other job's result.
+test_ci_pass_honors_the_macos_opt_out() {
+  local skip_macos macos other expected rc
+  while read -r skip_macos macos other expected; do
+    [ "$skip_macos" != - ] || skip_macos=
+    rc=0
+    ci_pass_step_rc "$skip_macos" "$macos" "$other" || rc=$?
+    [ "$rc" -ne 2 ] || fail "could not read the ci-pass aggregation step"
+    case "$expected:$rc" in
+      pass:0 | refuse:[1-9]*) ;;
+      *) fail "ci-pass with FM_CI_SKIP_MACOS=$skip_macos, macos=$macos, lint=$other must $expected (rc=$rc)" ;;
+    esac
+  done <<'TABLE'
+-  success success pass
+-  skipped success refuse
+1  skipped success pass
+1  success success pass
+1  failure success refuse
+1  skipped skipped refuse
+1  skipped failure refuse
+TABLE
+  pass "ci-pass accepts only the macOS job's intentional skip under its opt-out"
+}
+
 test_ci_matrices_match_executable_partitions
 test_ci_pass_needs_every_other_job
+test_ci_pass_honors_the_macos_opt_out
 test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled

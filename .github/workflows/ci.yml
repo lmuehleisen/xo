@@ -613,14 +613,20 @@ jobs:
       - name: Require every needed job to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          SKIP_MACOS: ${{ vars.FM_CI_SKIP_MACOS }}
         run: |
           set -eu
           python3 -c '
           import json, os, sys
           needs = json.loads(os.environ["NEEDS_JSON"])
+          # The macOS opt-out skips that one job by design, so only then may it
+          # report skipped; every other result and job still needs success.
+          allowed = {}
+          if os.environ.get("SKIP_MACOS") == "1":
+              allowed["macos-stock-bash"] = {"success", "skipped"}
           bad = sorted(
               name for name, job in needs.items()
-              if job.get("result") != "success"
+              if job.get("result") not in allowed.get(name, {"success"})
           )
           if bad:
               for name in bad:
