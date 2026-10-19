@@ -3202,7 +3202,9 @@ test_pane_is_busy_herdr_native_busy_state() {
   local dir
   dir=$(make_supercase primary-herdr-busy)
   (
+    # shellcheck disable=SC2329 # The sourced pane_is_busy calls this scoped backend override.
     fm_backend_busy_state() { [ "$1" = herdr ] && [ "$2" = "default:w1:p2" ] || fail "unexpected busy_state args: $1 $2"; printf 'busy'; }
+    # shellcheck disable=SC2329 # Negative-call sentinel: native busy must bypass the sourced function's capture fallback.
     fm_backend_capture() { fail "capture should not be consulted when busy_state is conclusive"; }
     FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr \
       || fail "pane_is_busy should report busy from herdr's native busy_state"
