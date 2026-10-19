@@ -1212,7 +1212,7 @@ test_polytoken_post_launch_failure_preserves_uncertain_work() {
     esac
     rc=0
     retry=$(run_polytoken_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
-    [ "$rc" -ne 0 ] || fail "$mode: blind retry must not replace a retained task"
+    [ "$rc" -ne 0 ] || fail "$mode: blind retry must not replace a retained task: $retry"
     [ "$(grep -c '^get --lease ' "$FAKEBIN_DIR/treehouse-calls")" -eq 1 ] || fail "$mode: retry acquired over retained ownership"
     assert_polytoken_failed_owner_retained "$id"
   done
