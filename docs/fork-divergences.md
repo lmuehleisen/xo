@@ -451,7 +451,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: batch framing and complete-declaration validation in `bin/fm-config-inherit-lib.sh`, snapshot staging in `bin/fm-remote-inherit-push.sh`, batch dispatch through the existing item receiver in `bin/fm-remote-inherit.sh`, and partial-change reread nudges in `bin/fm-config-push.sh` and `bin/fm-bootstrap.sh`, sent as soon as a change is seen while upstream's write-ahead marker stays owed until a push converges; remote-job polling uses upstream defaults.
 - Guard: `tests/fm-shared-captain-inheritance.test.sh` batch byte, failure, quarantine, generation and topology cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` one-job transfer, partial-change reread, and watcher recovery with its unchanged bound.
-- Upstream: stages one remote job per inherited item; drop once equivalent batching preserves these convergence guarantees.
+- Upstream: stages one remote job per inherited item, up to `FM_REMOTE_INHERIT_PUSH_JOBS` at a time; drop once equivalent batching preserves these convergence guarantees.
 
 ### isolated-test-cleanup
 
