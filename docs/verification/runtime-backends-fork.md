@@ -175,10 +175,11 @@ Run with the mark-only parser on 2.1.278, the same guard fails with `not ok - th
 The Claude Code debug log names a loaded hooks module by plugin name through 2.1.276 and by its `plugin@source` label from 2.1.277, which the guard accepts in both forms.
 
 Claude Code folds a long typed burst, so an away-mode digest typed inline loses its header from the first character: it arrives wrapped as `<pasted_content>` or cut to its tail, and either shape reads as the captain returning.
-`escalate_flush` in `bin/fm-supervise-daemon.sh` therefore types any digest over `INJECT_INLINE_MAX_DEFAULT` (480 characters) as a pointer line naming a digest file.
+The typed-envelope carrier in `escalate_flush` uses `INJECT_INLINE_MAX_DEFAULT` (480 characters) as its threshold for a pointer line naming a digest file.
 On 2.1.281 a 501-character line typed mid-turn arrived intact, while a line of about 1,300 characters was folded mid-turn and lines of 2,800 to 3,200 characters were folded on an idle pane; on 2.1.280 folding began at about 950 characters on an idle pane.
 The daemon's Claude busy guard reads a Claude turn only when the daemon knows the primary harness, which the detached launch hands over as `FM_DAEMON_PRIMARY_HARNESS`.
-Since the integration of upstream `30ef650d`, a daemon that knows its primary is Claude Code types the owner's record-backed doorbell instead of the envelope, so the pointer bound above applies to typed-envelope primaries; the runs below predate that change and have not been repeated.
+Since the integration of upstream `30ef650d`, a daemon that knows its primary is Claude Code types the owner's record-backed doorbell instead of the envelope, and now stores the complete digest directly in that record without a second pointer file.
+The historical typed-envelope runs below establish the reason for that carrier's threshold; [the current live guard](runtime-backends.md#claude-record-backed-long-digests) refreshes the record-backed delivery and owned-input recovery evidence.
 
 Verified on 2026-09-23 on macOS with tmux 3.7c on a private socket, against Claude Code 2.1.281 with a tool-less Haiku stand-in:
 
@@ -193,7 +194,7 @@ ok - Claude Code 2.1.281 (Claude Code): a digest of more than 2,000 characters t
 ok - Claude Code 2.1.281 (Claude Code): a long digest arrives as a 336-character pointer line that classifies as away-supervisor, with every event in its file
 ok - Claude Code 2.1.281 (Claude Code): a mid-turn escalation defers on the Claude busy guard and arrives intact after the turn
 ```
-This guard is the refresh command after a Claude Code upgrade.
+The guard now refreshes the current record-backed carrier after a Claude Code upgrade.
 
 The same guard proves the daemon's recovery of a digest left in the composer (`recover_owned_input` in `bin/fm-supervise-daemon.sh`).
 Claude Code holds a marked digest under its review banner after the first Enter, with the composer reading pending and its rows, read across their wrap breaks, showing the typed digest without U+2063; one Ctrl+U deletes one wrapped row, so a two-row digest clears in two presses.
@@ -862,7 +863,7 @@ A single Escape renders `(esc again to interrupt)` for under 5 seconds, while bu
 Interruption prints `✱ Canceled. What should Devin do?` and leaves the composer empty.
 Interruption emits no `Stop` hook and leaves the busy state unchanged, matching the behavior of agy and Claude.
 Typing `/exit` or `exit` quits the session cleanly, firing `SessionEnd` (reason `prompt_input_exit`).
-Firstmate's control path (`fm_control_exit_command`) sends plain `exit`, not `/exit`: the slash form is ambiguous against Devin's `/revert <step>` fuzzy slash-command search and can open that menu instead of exiting, so the control path could not confirm the exit; plain `exit` has no such ambiguity.
+The earlier control path used plain `exit` to avoid `/exit` selecting Devin's `/revert <step>` fuzzy command search; [the current `/quit` refresh](runtime-backends.md#devin-exit-and-native-resume) verifies upstream's command through the control plane.
 On exit, Devin prints `Resume this session with devin -r <id>`, where `<id>` is a hyphenated word pair of the form `<word>-<word>`.
 
 ### Composer classification

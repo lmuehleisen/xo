@@ -291,7 +291,14 @@ publish_healthy_watcher_identity() { # <state> <home> <watch-script>
   touch "$state/.last-watcher-beat"
 }
 
+# Every remote leg here runs the real entrypoint and job worker on this
+# machine, which on a loaded runner can outlast the production per-mate
+# convergence budget; tests/fm-bootstrap-network-parallel.test.sh owns that
+# budget's behavior, so this suite gives convergence ample time.
+# Each inheritance push submits one batch to this fixture's remote job worker;
+# the network-parallel suite owns per-mate convergence and timeout behavior.
 remote_env() {
+  FM_SECONDMATE_CONVERGENCE_TIMEOUT="${FM_SECONDMATE_CONVERGENCE_TIMEOUT:-900}" \
   FM_HOME="$PARENT" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
   FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" \
@@ -1347,7 +1354,7 @@ if kill -0 "$watch_pid" 2>/dev/null; then
     esac
   done
   kill "$watch_pid" 2>/dev/null || true
-  fail "the watcher did not exit on its auto-relaunch wake within the bound"
+  fail "the watcher did not exit on its auto-relaunch wake within the bound: $(cat "$TMP_ROOT/watch-liveness.out" "$TMP_ROOT/watch-liveness.err" 2>/dev/null)"
 fi
 wait "$watch_pid" \
   || fail "the liveness watcher leg exited non-zero: $(cat "$TMP_ROOT/watch-liveness.err")"

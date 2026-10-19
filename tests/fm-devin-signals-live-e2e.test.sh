@@ -7,7 +7,7 @@
 # interrupt and exit operations use the real Firstmate control plane.
 # The isolated home carries a user Claude Code hook that must never fire, and
 # the worker's own commit must carry no Devin attribution.
-# Fork: the reviewed launch (smart mode, policy hooks) and plain exit; the
+# Fork: the reviewed launch (smart mode, policy hooks); the
 # user config turns Claude import off explicitly because the fork preserves
 # that choice (tests/fm-devin-permission-policy-live-e2e.test.sh keeps it on).
 # Every tmux call runs without TMUX/TMUX_PANE on this guard's own -S socket and
@@ -37,7 +37,7 @@ SOCKET="$LAB/tmux.sock"
 case "$SOCKET" in "$PWD"/*) SOCKET=${SOCKET#"$PWD"/} ;; esac
 cleanup() {
   env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$SOCKET" kill-server >/dev/null 2>&1 || true
-  rm -rf "$LAB"
+  fm_test_remove_tree "$LAB"
 }
 trap cleanup EXIT
 fail() { printf 'not ok - %s: %s\n' "$VERSION" "$1" >&2; exit 1; }
@@ -190,4 +190,4 @@ screen_text | grep -q 'smart mode on' || fail 'native resume dropped the reviewe
 # Exit via the actual table-backed control plane once more. The retired busy
 # generation remains absent, so control observes unknown and interrupts first.
 "$ROOT/bin/fm-control.sh" "$ID" exit > "$LAB/exit.log" 2>&1 || fail "resumed exit failed: $(cat "$LAB/exit.log")"
-pass "$VERSION: plain exit and native -r session resume in reviewed mode"
+pass "$VERSION: /quit and native -r session resume in reviewed mode"

@@ -10,9 +10,10 @@
 # signal/stale/heartbeat wakes cost zero firstmate context; routing is owned by
 # .agents/skills/afk/SKILL.md (Classification policy).
 # Escalated events reach the LLM as one pre-read digest per
-# batch window. A digest too long to type safely is written to a
+# batch window. A typed digest too long to send safely is written to a
 # state/.subsuper-digests/ file holding every buffered event verbatim, and only a
-# short pointer line naming it is typed (see escalate_flush).
+# short pointer line naming it is typed (see escalate_flush). Record-backed
+# primaries receive the complete digest directly in their operational record.
 #
 # PRESENCE-GATING (the /afk contract). The daemon is the away-mode engine: it
 # injects ONLY when the durable away-mode flag state/.afk is present. Invoking
@@ -165,7 +166,8 @@
 #                                   state/.subsuper-digests/ and only a short
 #                                   pointer line naming that file is typed
 #                                   (default 480); a pointer that cannot fit
-#                                   is not typed and the buffer is kept
+#                                   is not typed and the buffer is kept.
+#                                   Record-backed primaries do not use this cap.
 #          FM_LOG_MAX_BYTES / FM_LOG_KEEP_LINES / FM_CRASH_*  log + crash guards
 #          FM_STATE_OVERRIDE        alternate state dir (testing)
 #          Logs each wake and each delivered digest to state/.supervise-daemon.log
@@ -265,9 +267,8 @@ INJECT_SHOW_POLLS_DEFAULT=10
 INJECT_QUIET_GAP_DEFAULT=0.3
 INJECT_PROOF_POLLS_DEFAULT=20
 # Longest typed envelope, in characters, before escalate_flush types a pointer to
-# a digest file instead. It sits below the length at which Claude Code folds a
-# typed burst (docs/verification/runtime-backends.md "Claude Code operational
-# input"; tests/fm-afk-claude-long-digest-live-e2e.test.sh re-measures it).
+# a digest file instead. Record-backed primaries already type only a doorbell,
+# so the cap applies only to the typed-envelope carrier.
 # Digest files older than DIGEST_RETAIN_DAYS are pruned at the next long flush.
 INJECT_INLINE_MAX_DEFAULT=480
 DIGEST_RETAIN_DAYS=7
@@ -570,6 +571,11 @@ unknown_wake_acknowledge_flushed() {  # <state> <buffer>
 
 # --- stale marker + escalation buffer (stateful, but via explicit state dir) -
 # Marker:   state/.subsuper-stale-<key>   contains the epoch first seen idle.
+# Dialog:   state/.subsuper-dialog-<key>   the blocking-dialog name copied off a
+#           self-handled stale wake, so the persistence line can still say it.
+#           A terminal status still clears the stale marker, and this file goes
+#           with it. The watcher also removes it when the pane no longer shows
+#           the dialog.
 # Buffer:   state/.subsuper-escalations    one distilled line per escalation.
 # Seen:     state/.subsuper-seen-status-<task>  last reported file signature and
 #           classified byte offset, so failures and events do not re-fire while
@@ -587,7 +593,21 @@ stale_marker_record() {  # <window> <state>  — create if absent
 stale_marker_remove() {  # <window> <state>
   local win=$1 state=$2 key
   key=$(_stale_key "$(window_to_task "$win" "$state")")
-  rm -f "$state/.subsuper-stale-$key"
+  rm -f "$state/.subsuper-stale-$key" "$state/.subsuper-dialog-$key"
+}
+
+# The name a stale detail carried after "blocked-on-prompt: ". The trailing
+# parenthesis from the reason's one parenthetical is not part of the name.
+stale_dialog_name() {  # <stale-detail>
+  local detail=$1 name
+  case "$detail" in
+    *'blocked-on-prompt: '*) ;;
+    *) return 1 ;;
+  esac
+  name=${detail##*blocked-on-prompt: }
+  name=${name%)}
+  [ -n "$name" ] || return 1
+  printf '%s' "$name"
 }
 
 # Pause marker: state/.subsuper-paused-<key> holds the epoch a declared wait (a
@@ -616,10 +636,11 @@ clear_pause_tracking() {  # <window> <state>
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-stale-$key" \
+    "$state/.subsuper-dialog-$key" \
     "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key" \
     "$state/.writing-since-$watcher_key" "$state/.writing-resurfaced-$watcher_key" \
-    "$state/.waiting-resurfaced-$watcher_key"
+    "$state/.waiting-resurfaced-$watcher_key" "$state/.guard-deferrals-$watcher_key"
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
@@ -834,11 +855,8 @@ _utf8_prefix() {  # <text> <max-bytes> <out-var>
 #
 # A digest whose typed envelope would exceed FM_INJECT_INLINE_MAX is written to
 # a durable file under state/.subsuper-digests/ and only a short pointer line is
-# typed. The primary's composer folds a long literal burst: Claude Code wraps it
-# in <pasted_content> or submits only its tail, so the operational header no
-# longer starts the message and the escalation reads as the captain returning.
-# A line well under that threshold arrives intact, idle or mid-turn, and fits
-# every transport's single-argument limit.
+# typed. A record-backed primary already receives only a doorbell, so its full
+# digest goes directly into the operational record without this extra file.
 escalate_flush() {  # <state>
   local state=$1 buf n msg dir file max encoded rc=0 sum
   buf="$state/.subsuper-escalations"
@@ -872,7 +890,8 @@ escalate_flush() {  # <state>
   max=${FM_INJECT_INLINE_MAX:-$INJECT_INLINE_MAX_DEFAULT}
   case "$max" in ''|*[!0-9]*) max=$INJECT_INLINE_MAX_DEFAULT ;; esac
   fm_operational_input_encode away-supervisor "$(_collapse_newlines "$msg")" encoded || return 1
-  if [ "${#encoded}" -gt "$max" ]; then
+  if ! fm_operational_harness_needs_record "$(fm_daemon_primary_harness)" \
+    && [ "${#encoded}" -gt "$max" ]; then
     # Content-addressed, so a deferred flush retried with the same buffer
     # rewrites the same file instead of leaving a duplicate behind.
     dir="$state/.subsuper-digests"
@@ -1272,7 +1291,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, run the catch-all status scan in
 #     the block below and escalate what it finds; that block owns its file set.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs marker_epoch until bounded_until pause_reason
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs marker_epoch until bounded_until pause_reason dialog_name persisted
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1315,7 +1334,7 @@ housekeeping() {  # <state>
     win=$(window_for_task "$key" "$state" 2>/dev/null || true)
     if [ -z "$win" ]; then
       # Window gone (task torn down): drop the marker, nothing to escalate.
-      rm -f "$marker"; continue
+      rm -f "$marker" "$state/.subsuper-dialog-$key"; continue
     fi
     task=$(window_to_task "$win" "$state")
     last=$(status_declared_wait_line "$state/$task.status")
@@ -1327,11 +1346,19 @@ housekeeping() {  # <state>
     [ "$age" -ge "${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}" ] || continue
     stale_window_is_busy "$win" "$state"
     case "$?" in
-      0) rm -f "$marker" ;;
-      2) rm -f "$marker" ;;
-      *) if escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"; then
-           stale_marker_remove "$win" "$state"
-         fi ;;
+      0) rm -f "$marker" "$state/.subsuper-dialog-$key" ;;
+      2) rm -f "$marker" "$state/.subsuper-dialog-$key" ;;
+      *)
+        dialog_name=$(cat "$state/.subsuper-dialog-$key" 2>/dev/null || true)
+        if [ -n "$dialog_name" ]; then
+          persisted="stale persisted ${age}s (possible wedge, blocked-on-prompt: $dialog_name): $win"
+        else
+          persisted="stale persisted ${age}s (possible wedge): $win"
+        fi
+        if escalate_add "$state" "$persisted"; then
+          stale_marker_remove "$win" "$state"
+        fi
+        ;;
     esac
   done
 
@@ -1866,11 +1893,9 @@ inject_msg() {  # <message> [state] [buffered-lines buffered-cksum]
   body=$msg
   msg=$encoded
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
-  # BACKEND-AWARE (previously a raw `tmux display-message` pane-exists probe):
-  # dispatches through bin/fm-backend.sh so a herdr supervisor pane is checked
-  # via the herdr adapter instead of always assuming tmux. Falls back to tmux
-  # when unset (sourced/test contexts that never ran fm_super_main's startup
-  # discovery), matching this function's pre-existing default assumption.
+  # Dispatch through bin/fm-backend.sh so each supervisor pane is checked by
+  # its backend. Falls back to tmux when unset (sourced/test contexts that never
+  # ran fm_super_main's startup discovery), matching this function's default.
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
   fm_backend_target_exists "$backend" "$target" \
     || { INJECT_LAST_FAILURE="supervisor target $target not found on $backend"; return 1; }
@@ -2024,7 +2049,7 @@ is_wake_reason() {  # <reason>
 # is populated, suppression markers commit, and the digest names the decision
 # instead of "unknown wake:".
 handle_wake() {  # <reason> <state>
-  local reason=$1 state=$2 decision action distilled task last stale_detail
+  local reason=$1 state=$2 decision action distilled task last stale_detail dialog_name=''
   local capture="$state/.subsuper-classified-end.$$" span_record='' span_rc='' endpoint ident rest sig marker
   local kind="" arg="" classification_failed=0 span_failure_repeat=0
   : > "$capture" || return 1
@@ -2045,6 +2070,7 @@ handle_wake() {  # <reason> <state>
               decision="escalate|${reason#stale: }" ;;
     stale:*)  kind=stale; arg="${reason#stale: }"; stale_detail="${arg#"$arg"}"
               case "$arg" in *" ("*) stale_detail="${arg#*" ("}"; arg="${arg%% \(*}" ;; esac
+              dialog_name=$(stale_dialog_name "$stale_detail") || dialog_name=''
               task=$(window_to_task "$arg" "$state")
               if [ -n "$task" ]; then
                 span_record=$(status_span_first_actionable_record "$state/$task.status" \
@@ -2099,6 +2125,15 @@ handle_wake() {  # <reason> <state>
   esac
   action=${decision%%|*}
   distilled=${decision#*|}
+  # A status escalation is built from the status log, which does not carry
+  # the parenthetical, so the name is added to that line here. A self-handled
+  # stale copies the name only when it keeps the persistence marker, below.
+  if [ "$kind" = stale ] && [ "$action" = escalate ] && [ -n "$dialog_name" ]; then
+    case "$distilled" in
+      *"blocked-on-prompt: $dialog_name"*) ;;
+      *) distilled="$distilled (blocked-on-prompt: $dialog_name)" ;;
+    esac
+  fi
   [ "$kind" = signal ] && sync_pause_markers_from_signal "$state" "$arg"
   if [ "$kind" = stale ] && [ "$action" = escalate ]; then
     task=$(window_to_task "$arg" "$state")
@@ -2156,6 +2191,11 @@ handle_wake() {  # <reason> <state>
         else
           pause_marker_remove "$arg" "$state"
           stale_marker_record "$arg" "$state"
+          # The distilled line drops the parenthetical. Housekeeping builds the
+          # persistence line from this file, not from the wake it just absorbed.
+          if [ -n "$dialog_name" ]; then
+            printf '%s' "$dialog_name" > "$state/.subsuper-dialog-$(_stale_key "$task")" || return 1
+          fi
         fi
       fi
       log "self-handle: $reason -> $distilled"
@@ -2329,10 +2369,8 @@ fm_super_main() {
   local TARGET="$FM_SUPERVISOR_TARGET"
 
   # --- validate supervisor target at startup (a missing target is a typo) ---
-  # Dispatches through bin/fm-backend.sh instead of a raw `tmux display-message`
-  # probe, so a herdr supervisor pane is checked via the herdr adapter; for
-  # backend=tmux this runs the exact same `tmux display-message -p -t "$TARGET"
-  # '#{pane_id}'` call as before.
+  # Dispatch through bin/fm-backend.sh so each supervisor pane is checked by
+  # its backend.
   if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
     echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
     log "startup failed: target '$TARGET' not found (backend=$BACKEND)"

@@ -46,6 +46,7 @@ make_settle_fakebin() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+window_file="${FM_FAKE_PANE_COUNTFILE:?FM_FAKE_PANE_COUNTFILE unset}.window"
 case "$*" in
   *"#{pane_current_command}"*) printf 'bash\n'; exit 0 ;;
   *"#{cursor_y}"*) printf '1\n'; exit 0 ;;
@@ -70,8 +71,18 @@ case "$*" in
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|new-window|kill-window) exit 0 ;;
+  list-windows) [ ! -s "$window_file" ] || cat "$window_file"; exit 0 ;;
+  new-window)
+    name=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -n ] && name=$arg
+      previous=$arg
+    done
+    printf '%s\n' "$name" > "$window_file"
+    exit 0 ;;
+  kill-window) : > "$window_file"; exit 0 ;;
+  has-session|new-session) exit 0 ;;
   capture-pane)
     printf '$ %s\n' "$(cat "$FM_FAKE_PANE_COUNTFILE.pending" 2>/dev/null)"
     exit 0 ;;
@@ -489,6 +500,27 @@ test_real_treehouse_lease_preserves_process_free_detached_work() {
 
 test_dropped_cd_enter
 test_exhausted_cd_enter
+test_unborn_head_project_is_refused_at_once() {
+  local rec id out status started elapsed
+  id=settle-unborn-head-z5
+  rec=$(make_settle_case settle-unborn "$id" 0)
+  read_settle_record "$rec"
+  PROJ_DIR="$TMP_ROOT/settle-unborn/unborn-project"
+  git init -q "$PROJ_DIR"
+
+  started=$SECONDS
+  out=$(run_settle_spawn "$id")
+  status=$?
+  elapsed=$((SECONDS - started))
+  expect_code 1 "$status" "spawn into a project with no commit should be refused"
+  assert_contains "$out" "unborn HEAD" "the refusal did not name the unborn HEAD cause"
+  assert_contains "$out" "make one commit" "the refusal did not name the remedy"
+  [ "$elapsed" -lt 30 ] || fail "refusal took ${elapsed}s instead of failing before the treehouse wait"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
+  [ -z "$(git -C "$PROJ_DIR" rev-list --all 2>/dev/null)" ] || fail "spawn committed into the project"
+  pass "a project with an unborn HEAD is refused at once with its cause named"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_read
 test_real_pane_survives_lease_child_exit
@@ -499,5 +531,6 @@ test_pool_claim_with_unknown_project_refuses_before_get
 test_post_acquisition_collision_never_returns_the_slot
 test_two_spawns_serialize_acquisition_across_homes
 test_real_treehouse_lease_preserves_process_free_detached_work
+test_unborn_head_project_is_refused_at_once
 
 echo "# all fm-spawn-worktree-settle tests passed"

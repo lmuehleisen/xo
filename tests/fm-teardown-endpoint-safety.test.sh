@@ -861,29 +861,35 @@ test_forced_secondmate_teardown_refuses_child_slot_leased_elsewhere() {
   pass "fm-teardown: forced secondmate teardown refuses before touching a child slot leased to another holder"
 }
 
-make_stale_claim_case() {  # <name> <old-landed> <current-landed>
-  local dir old=claim-old new=claim-current id
+make_stale_claim_case() {  # <name> <old-landed> <current-landed> [<old-prefix> [<current-prefix>]]
+  local dir old=claim-old new=claim-current id old_branch new_branch
   dir=$(make_case "$1")
+  old_branch="${4:-fm/}$old"
+  new_branch="${5:-${4:-fm/}}$new"
   mark_case_as_treehouse_pool "$dir"
   rm "$dir/worktree/sentinel"
   git -C "$dir/project" branch -M main
   git clone --quiet --bare "$dir/project" "$dir/origin.git"
   git -C "$dir/project" remote add origin "$dir/origin.git"
-  git -C "$dir/worktree" checkout -qb "fm/$old"
+  git -C "$dir/worktree" checkout -qb "$old_branch"
   printf 'old claimant work\n' > "$dir/worktree/old-work"
   git -C "$dir/worktree" add old-work
   git -C "$dir/worktree" -c user.name=test -c user.email=t@t commit -qm old
-  [ "$2" != yes ] || git -C "$dir/worktree" push -q origin "fm/$old"
-  git -C "$dir/worktree" checkout -qb "fm/$new" main
+  [ "$2" != yes ] || git -C "$dir/worktree" push -q origin "$old_branch"
+  git -C "$dir/worktree" checkout -qb "$new_branch" main
   printf 'current claimant work\n' > "$dir/worktree/current-work"
   git -C "$dir/worktree" add current-work
   git -C "$dir/worktree" -c user.name=test -c user.email=t@t commit -qm current
-  [ "$3" != yes ] || git -C "$dir/worktree" push -q origin "fm/$new"
+  [ "$3" != yes ] || git -C "$dir/worktree" push -q origin "$new_branch"
   for id in "$old" "$new"; do
     fm_write_meta "$dir/home/state/$id.meta" "window=firstmate:fm-$id" \
       "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" \
       "kind=ship" "mode=direct-PR"
   done
+  if [ "$#" -ge 4 ]; then
+    printf 'branch=%s\n' "$old_branch" >> "$dir/home/state/$old.meta"
+    printf 'branch=%s\n' "$new_branch" >> "$dir/home/state/$new.meta"
+  fi
   cat > "$dir/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 exit 1
@@ -972,6 +978,81 @@ test_stale_claim_never_borrows_another_claimants_landed_head() {
   assert_stale_claim_preserved "$dir" "$before"
   assert_present "$dir/worktree/detached-work" "detached unlanded work was lost"
   pass "stale recovery refuses unlanded work from either claimant and preserves clean detached unlanded HEADs"
+}
+
+test_stale_claim_uses_each_recorded_custom_branch() {
+  local dir before old_ref current_ref out pair rc
+  dir=$(make_stale_claim_case custom-branches yes yes codex/ feature/workers/)
+  before=$(git -C "$dir/worktree" rev-parse HEAD)
+  old_ref=$(git -C "$dir/worktree" rev-parse refs/heads/codex/claim-old)
+  current_ref=$(git -C "$dir/worktree" symbolic-ref HEAD)
+  out=$(run_stale_claim_case "$dir" 2>&1) || fail "custom-prefix stale claim refused: $out"
+  assert_absent "$dir/home/state/claim-old.meta" "custom-prefix stale claim was not retired"
+  assert_present "$dir/home/state/claim-current.meta" "custom-prefix current claim was retired"
+  [ "$(git -C "$dir/worktree" rev-parse HEAD)" = "$before" ] || fail "custom-prefix retirement changed HEAD"
+  [ "$(git -C "$dir/worktree" symbolic-ref HEAD)" = "$current_ref" ] || fail "custom-prefix retirement detached the owner"
+  [ "$(git -C "$dir/worktree" rev-parse refs/heads/codex/claim-old)" = "$old_ref" ] || fail "custom-prefix retirement deleted the old branch"
+  ! grep -Eq 'treehouse <return>|kill-window' "$dir/runtime.log" || fail "custom-prefix retirement reached destructive cleanup"
+
+  for pair in 'no yes' 'yes no'; do
+    # shellcheck disable=SC2086 # two intentional fixture booleans
+    dir=$(make_stale_claim_case "custom-unlanded-${pair// /-}" $pair codex/ feature/workers/)
+    before=$(git -C "$dir/worktree" rev-parse HEAD)
+    if out=$(run_stale_claim_case "$dir" 2>&1); then rc=0; else rc=$?; fi
+    [ "$rc" -ne 0 ] || fail "custom-prefix retirement borrowed another claimant's landed work"
+    assert_contains "$out" unlanded "custom-prefix unlanded refusal omitted its cause"
+    assert_stale_claim_preserved "$dir" "$before"
+  done
+
+  dir=$(make_stale_claim_case custom-current-owner yes yes codex/ feature/workers/)
+  git -C "$dir/worktree" checkout -q codex/claim-old
+  before=$(git -C "$dir/worktree" rev-parse HEAD)
+  if out=$(run_stale_claim_case "$dir" 2>&1); then rc=0; else rc=$?; fi
+  [ "$rc" -ne 0 ] || fail "custom-prefix current owner retired its own claim as stale"
+  assert_contains "$out" 'still owns the checked-out branch' "custom-prefix ownership refusal missing"
+  assert_stale_claim_preserved "$dir" "$before"
+  pass "stale recovery uses each recorded custom branch for ownership and independent landed-work proof"
+}
+
+test_stale_claim_preserves_invalid_or_ambiguous_recorded_branches() {
+  local dir id form before out rc meta
+  for id in claim-old claim-current; do
+    for form in empty invalid shorthand duplicate missing; do
+      dir=$(make_stale_claim_case "branch-$id-$form" yes yes codex/)
+      meta="$dir/home/state/$id.meta"
+      case "$form" in
+        empty) printf 'branch=\n' > "$dir/branch" ;;
+        invalid) printf 'branch=codex/bad..branch\n' > "$dir/branch" ;;
+        shorthand) printf 'branch=@{-1}\n' > "$dir/branch" ;;
+        duplicate) printf 'branch=codex/missing\nbranch=codex/%s\n' "$id" > "$dir/branch" ;;
+        missing) printf 'branch=codex/missing\n' > "$dir/branch" ;;
+      esac
+      sed '/^branch=/d' "$meta" > "$meta.tmp"
+      cat "$dir/branch" >> "$meta.tmp"
+      mv "$meta.tmp" "$meta"
+      cp "$meta" "$dir/meta.before"
+      before=$(git -C "$dir/worktree" rev-parse HEAD)
+      if out=$(run_stale_claim_case "$dir" 2>&1); then rc=0; else rc=$?; fi
+      [ "$rc" -ne 0 ] || fail "stale retirement accepted $id's $form recorded branch"
+      if [ "$form" != missing ]; then
+        assert_contains "$out" 'recorded branch' "malformed branch refusal omitted its cause"
+      fi
+      assert_stale_claim_preserved "$dir" "$before"
+      cmp -s "$meta" "$dir/meta.before" || fail "branch refusal changed $id's record"
+    done
+  done
+
+  dir=$(make_stale_claim_case ambiguous-custom-owner yes yes codex/)
+  fm_write_meta "$dir/home/state/claim-third.meta" "window=firstmate:fm-claim-third" \
+    "endpoint_task_id=claim-third" "worktree=$dir/worktree" "project=$dir/project" \
+    "kind=ship" "mode=direct-PR" "branch=codex/claim-current"
+  before=$(git -C "$dir/worktree" rev-parse HEAD)
+  if out=$(run_stale_claim_case "$dir" 2>&1); then rc=0; else rc=$?; fi
+  [ "$rc" -ne 0 ] || fail "stale retirement accepted two recorded owners of the current branch"
+  assert_contains "$out" 'exactly one other claimant' "ambiguous custom-prefix owner refusal missing"
+  assert_stale_claim_preserved "$dir" "$before"
+  assert_present "$dir/home/state/claim-third.meta" "ambiguous branch refusal lost another claim"
+  pass "stale recovery preserves malformed, duplicate, missing and ambiguously owned recorded branches"
 }
 
 test_stale_claim_refuses_live_dirty_and_forced_recovery() {
@@ -1716,6 +1797,8 @@ test_secondmate_home_leased_to_another_holder_refuses
 test_secondmate_home_leased_to_its_own_id_returns
 test_stopped_landed_stale_claim_retires_without_touching_the_slot
 test_stale_claim_never_borrows_another_claimants_landed_head
+test_stale_claim_uses_each_recorded_custom_branch
+test_stale_claim_preserves_invalid_or_ambiguous_recorded_branches
 test_stale_claim_refuses_live_dirty_and_forced_recovery
 test_stale_claim_serializes_with_other_claimants_relaunch
 test_stale_claim_uses_its_own_content_without_a_remote_branch

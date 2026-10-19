@@ -41,6 +41,8 @@ REMOTE=$(secondmate_registry_field "$DATA/secondmates.md" "$ID" remote 2>/dev/nu
 [ "$REMOTE" = 1 ] || die "secondmate $ID is not a remote route"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-inherit-push.XXXXXX") || die "cannot create inheritance staging directory"
 trap 'rm -rf -- "$TMP"' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 EMPTY="$TMP/empty"
 : > "$EMPTY"
 EMPTY_HASH=$(sha256_file "$EMPTY") || die "cannot hash empty inheritance payload"
@@ -62,6 +64,10 @@ stage_item() { # <relative-path>
     esac
   fi
   case "$rel" in
+    config/firstmate-role)
+      source="$TMP/firstmate-role.resolved"
+      fm_role_inherit_payload "$FM_HOME" "$CONFIG" "$source" || die "cannot resolve the primary role"
+      ;;
     config/*) source="$CONFIG/${rel#config/}" ;;
     data/*) source="$DATA/${rel#data/}" ;;
   esac

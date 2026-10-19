@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/fm-afk-inject-e2e.test.sh - private-socket end-to-end test for the afk
-# daemon's injection path. It covers three operator-visible injection contracts:
+# daemon's injection path. It covers the operator-visible injection contracts:
 #
 #   Scenario A (human-partial-input): a partial line is typed into the
 #     supervisor pane with NO Enter, then an escalation fires. The daemon must
@@ -11,9 +11,13 @@
 #     The daemon must retry Enter (NOT retype the digest) and deliver exactly
 #     ONE clean submission: no concatenation, no duplicate.
 #
-#   Scenario C (normal digest): no human input and no swallowed Enter.
+#   Scenario C (delayed digest): no human input and no swallowed Enter, but
+#     the transport takes longer than the old six-second assertion allowed.
 #     A captain-relevant status must deliver exactly ONE sentinel-prefixed,
 #     single-line digest with no duplicate or spurious user submission.
+#
+#   Scenario D (record carrier): a marker-stripping primary receives one plain
+#     doorbell naming its own marked operational record.
 #
 # Isolation: all test tmux runs on a dedicated socket (tmux -L afk-e2e-<pid>).
 # A tmux shim first on PATH redirects the daemon's bare `tmux` calls to the
@@ -154,11 +158,21 @@ chmod +x "$LOOP_SCRIPT"
   "bash '$LOOP_SCRIPT' '$LOG_FILE'" Enter
 sleep 1  # let the loop start and settle
 
-# tmux shim: redirects bare `tmux` to the private socket. Optionally swallows
-# the first Enter (file-based flag) for Scenario B.
+# tmux shim: redirects bare `tmux` to the private socket. Scenario B swallows
+# the first Enter; Scenario C delays one literal send beyond six seconds.
 TMUX_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-shim.XXXXXX")
 cat > "$TMUX_SHIM_DIR/tmux" <<SHIM
 #!/usr/bin/env bash
+if [ "\${1:-}" = "send-keys" ] && [ -f "$STATE_DIR/.delay-next-text" ]; then
+  for _arg in "\$@"; do
+    if [ "\$_arg" = -l ]; then
+      rm -f "$STATE_DIR/.delay-next-text"
+      : > "$STATE_DIR/.delay-started"
+      sleep 8
+      break
+    fi
+  done
+fi
 if [ "\${1:-}" = "send-keys" ] && [ -f "$STATE_DIR/.swallow-enter" ]; then
   shift
   _args=()
@@ -236,8 +250,27 @@ reset_state() {
          "$STATE_DIR"/.seen-* \
          "$STATE_DIR"/.heartbeat-streak \
          "$STATE_DIR"/.swallow-enter \
+         "$STATE_DIR"/.delay-* \
          2>/dev/null || true
   : > "$LOG_FILE"
+  : > "$STATE_DIR/.supervise-daemon.log"
+}
+
+# Wait for this scenario's observed guard/delivery result, not an assumption
+# about watcher startup, terminal reads, or host scheduling latency.
+wait_for_daemon_log() {  # <literal-message> <scenario>
+  local message=$1 scenario=$2 i=0
+  while [ "$i" -lt 150 ]; do
+    grep -Fq "$message" "$STATE_DIR/.supervise-daemon.log" && return 0
+    kill -0 "$DAEMON_PID" 2>/dev/null || break
+    sleep 0.2
+    i=$((i + 1))
+  done
+  printf '%s\n' "$scenario: submitted content:" >&2
+  cat "$LOG_FILE" >&2
+  printf '%s\n' "$scenario: daemon diagnostics:" >&2
+  tail -30 "$STATE_DIR/.supervise-daemon.log" "$STATE_DIR/daemon.err" >&2
+  fail "$scenario: did not observe '$message' within 30s"
 }
 
 # --- pane_input_pending environment self-check ------------------------------
@@ -298,8 +331,8 @@ test_scenario_a() {
   # real watcher child.
   echo "done: PR https://example.test/pr/100" > "$STATE_DIR/fake-c1.status"
 
-  # Wait for the watcher to detect the change and the daemon to attempt inject.
-  sleep 6
+  # Wait for the real watcher to trigger an injection that protects the draft.
+  wait_for_daemon_log 'inject deferred: supervisor composer not confirmed-empty' 'Scenario A'
 
   # Assert: the digest was NOT injected while the pane had pending input.
   if grep -q 'Supervisor escalate' "$LOG_FILE"; then
@@ -316,8 +349,7 @@ test_scenario_a() {
   "$REAL_TMUX" -L "$SOCKET" send-keys -t "$SUPERVISOR_PANE" Enter
   sleep 0.5
 
-  # Wait for the daemon to retry injection (housekeeping tick = 1s).
-  sleep 6
+  wait_for_daemon_log 'inject delivered (1 event(s), ' 'Scenario A'
 
   # Assert: human text was submitted alone (as a user message).
   grep -q 'human draft text' "$LOG_FILE" \
@@ -367,9 +399,8 @@ test_scenario_b() {
   # Write a captain-relevant status to trigger a real escalation.
   echo "done: PR https://example.test/pr/200" > "$STATE_DIR/fake-c1.status"
 
-  # Wait for the daemon to process the escalation and attempt inject (with the
-  # swallowed Enter, the retry path fires).
-  sleep 8
+  wait_for_daemon_log 'inject delivered (1 event(s), ' 'Scenario B'
+  [ ! -e "$STATE_DIR/.swallow-enter" ] || fail "Scenario B: the first Enter was not swallowed"
 
   # Assert: exactly ONE terminal-safe marker in the log (no duplicate, no loss).
   local marker_count
@@ -399,19 +430,22 @@ test_scenario_b() {
   pass "Scenario B: swallowed Enter produces exactly one clean digest"
 }
 
-# --- Scenario C: normal status, single clean digest -------------------------
+# --- Scenario C: delayed status delivery, single clean typed digest ---------
 # No human input, no swallowed Enter: a captain-relevant status must produce
 # exactly ONE sentinel-prefixed, single-line digest, submitted once. This owns
 # the marker + single-line + no-duplicate operator contract that the deleted
-# fake-tmux units used to assert via internal send-keys counts.
+# fake-tmux units used to assert via internal send-keys counts. Delaying the
+# transport past the old fixed sleep makes its premature assertion reproducible.
 
 test_scenario_c() {
   reset_state
   afk_enter "$STATE_DIR"
-  start_daemon
+  touch "$STATE_DIR/.delay-next-text"
+  start_daemon unknown
 
   echo "done: PR https://example.test/pr/300" > "$STATE_DIR/fake-c1.status"
-  sleep 6
+  wait_for_daemon_log 'inject delivered (1 event(s), ' 'Scenario C'
+  [ -e "$STATE_DIR/.delay-started" ] || fail "Scenario C: the transport delay was not exercised"
 
   # Exactly one terminal-safe marker in the submitted log (no duplicate, no loss).
   local marker_count
@@ -446,7 +480,7 @@ test_scenario_c() {
     && fail "Scenario C: a delivered digest also logged a failure"
 
   stop_daemon
-  pass "Scenario C: a normal captain status injects exactly one clean single-line sentinel digest"
+  pass "Scenario C: a delayed captain status injects exactly one clean single-line sentinel digest"
 }
 
 # --- Scenario D: a marker-stripping primary gets a record-backed doorbell ----
@@ -461,7 +495,7 @@ test_scenario_d() {
   start_daemon claude
 
   echo "done: PR https://example.test/pr/400" > "$STATE_DIR/fake-c1.status"
-  sleep 6
+  wait_for_daemon_log 'inject delivered (1 event(s), ' 'Scenario D'
 
   local submitted_count doorbell record
   submitted_count=$(grep -c '' "$LOG_FILE" || true)

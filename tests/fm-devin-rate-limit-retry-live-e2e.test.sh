@@ -9,7 +9,7 @@
 #      (Devin's model limit cannot be forced) drives a real fm-send retry that
 #      the worker acknowledges through its inbox; the retry turn's Stop resets
 #      the count.
-#   3. The generated SessionEnd leaves no sentinel behind after plain exit.
+#   3. The generated SessionEnd leaves no sentinel behind after /quit.
 # The injected line is labeled `fm-live-guard` and lives only in the isolated
 # home's log. The log format, cap, spacing, and lock cases stay pinned by
 # tests/fm-devin-rate-limit-retry.test.sh.
@@ -92,5 +92,5 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 ! pgrep -f "fm-devin-rate-limit-retry.sh watch $H/state $ID " >/dev/null \
-  || fail 'a retry sentinel survived plain exit'
-pass "$VERSION: plain exit leaves no retry sentinel"
+  || fail 'a retry sentinel survived /quit'
+pass "$VERSION: /quit leaves no retry sentinel"

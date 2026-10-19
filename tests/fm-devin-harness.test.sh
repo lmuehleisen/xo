@@ -31,8 +31,8 @@ pass "Devin native identity; anchored liveness"
 [ "$(fm_control_interrupt_key devin)" = Escape ] || fail 'wrong interrupt key'
 [ "$(fm_control_interrupt_repeat devin)" = 2 ] || fail 'Devin needs double Escape'
 [ -z "$(fm_control_interrupt_clear_key devin)" ] || fail 'Devin must not erase a composer draft'
-# Fork: plain `exit`, live-verified; `/exit` fuzzy-matches `/revert`.
-[ "$(fm_control_exit_command devin)" = exit ] || fail 'wrong exit command'
+# `/quit` avoids the `/exit` fuzzy match against `/revert`.
+[ "$(fm_control_exit_command devin)" = /quit ] || fail 'wrong exit command'
 fm_control_harness_supports_kind devin ship || fail 'ship refused'
 fm_control_harness_supports_kind devin scout || fail 'scout refused'
 ! fm_control_harness_supports_kind devin secondmate || fail 'secondmate accepted'

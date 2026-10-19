@@ -181,7 +181,15 @@ case "${1:-}" in
     [ "$_print" = 1 ] && printf 'fakepane\n'
     exit 0 ;;
   list-windows)
-    [ -n "${FM_FAKE_TMUX_WINDOW:-}" ] && printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
+    _window=${FM_FAKE_TMUX_WINDOW:-firstmate:supervisor}
+    case "$*" in
+      *'#{session_name}:#{window_name}'*) printf '%s\n' "$_window" ;;
+      *'#{window_id}'*'#{window_index}'*'#{window_name}'*)
+        printf '@0|0|%s\n' "${_window#*:}" ;;
+      *'#{window_id}'*) printf '@0\n' ;;
+      *'#{window_index}'*) printf '0\n' ;;
+      *) printf '%s\n' "${_window#*:}" ;;
+    esac
     exit 0 ;;
   list-panes)
     # The exact pane inventory the presence probe reads for an index or pane-id
@@ -324,7 +332,13 @@ case "${1:-}" in
         ;;
     esac
     exit 0 ;;
-  list-windows) printf 'win\n'; exit 0 ;;
+  list-windows)
+    case "$*" in
+      *'#{window_id}'*'#{window_index}'*'#{window_name}'*)
+        printf '@0|0|supervisor\n@1|1|win\n' ;;
+      *) printf 'supervisor\nwin\n' ;;
+    esac
+    exit 0 ;;
   list-panes)
     # The pane inventory the presence probe reads for the supervisor target.
     case " $* " in

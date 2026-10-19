@@ -15,7 +15,7 @@ Verified for crewmate and scout work only, never a secondmate or primary.
 | Busy state | `devin-hook`: `UserPromptSubmit` opens a turn (busy); `Stop` and `SessionEnd` close it (idle). `SessionStart` is omitted to avoid false busy on resume. Double-Escape interruption emits no `Stop`, so `bin/fm-control.sh` invalidates the interrupted incarnation to `unknown` rather than claiming idle. |
 | Rendered tail | Delivery guard only, via either of two independent signals: `esc (twice\|again) to interrupt` or the `❭ Guide Devin while it works` working composer. Not a worker-state source. |
 | Turn end | Native `Stop` hook in the private config touches `$TURNEND` only after its generation-bound idle apply succeeds, so a stale incarnation's `Stop` wakes nothing. |
-| Exit | Firstmate sends plain `exit`, one Enter (`fm_control_exit_command`). `/exit` is documented as an equivalent alias but is ambiguous against Devin's `/revert <step>` fuzzy slash-command search and can open that menu instead of exiting; plain `exit` has no such ambiguity. |
+| Exit | Firstmate sends `/quit` with one Enter (`fm_control_exit_command`), matching upstream and avoiding `/exit` selecting `/revert <step>` in fuzzy command search; `docs/verification/runtime-backends.md` under "Devin exit and native resume" records the current live refresh. |
 | Interrupt | Double `Escape` (repeat 2) cancels the running turn, but the control plane sends the second press only after the first renders `esc again to interrupt` and at least 0.5 seconds later: a fast idle pair opens Devin's `/revert` picker, where Enter reverts file changes. An idle agent gets one press and `cancel=not-running`; a picker a mistimed press opened is closed with one `Escape`, and `exit` refuses while one is open. Devin prints `✱ Canceled. What should Devin do?` and leaves the composer empty. `bin/fm-control-lib.sh` owns the arm signal, press gap, and picker signature, taken from upstream's 2026-09-22 live evidence on devin 3000.11.1. |
 | Resume | `devin -c` / `--continue` for the most recent session, or `devin -r <SESSION_ID>` / `--resume <SESSION_ID>`. Session IDs are hyphenated word pairs (`<word>-<word>`). |
 | Models | `--model <model>`. An omitted or `default` model launches `--model swe-2-max`, the worker default; an explicit model passes through unchanged. The launch footer (`SWE-2 Max`), not task metadata, is the runtime evidence. |
@@ -131,7 +131,7 @@ The idle placeholder `Ask Devin to build features, fix bugs, or work on your cod
 While Devin is busy thinking, the delivery token `(esc twice to interrupt)` (or `(esc again to interrupt)`) appears on the status line.
 `bin/fm-composer-lib.sh`'s `FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT` matches either signal to confirm submitted keystrokes.
 Typing `!` on an empty composer enters bash mode; typing `exit` quits the session.
-`/exit` is documented as an equivalent alias, but Firstmate never sends it: it is ambiguous against Devin's `/revert <step>` fuzzy slash-command search (see Exit mechanics below), so `fm_control_exit_command` sends plain `exit` for devin.
+Firstmate sends `/quit` because `/exit` can select Devin's `/revert <step>` fuzzy command search.
 
 ## Live verification evidence
 
@@ -145,6 +145,6 @@ These facts were verified on macOS with Devin CLI 3000.10.21 (`devin 3000.10.21 
 - Interruption emits no `Stop` event, so the busy state conservatively stays busy.
 - `/exit` or `exit` followed by `Enter` fires `SessionEnd` (reason `prompt_input_exit`) and ends the process in a single-command session.
 - `/exit` can open Devin's `/revert <step>` fuzzy slash-command search menu instead of exiting, which leaves the control path unable to confirm the exit.
-- Devin's own docs (`essential-commands.mdx`, `reference/commands.mdx`) document plain `exit` (no `/` prefix) as an equivalent alias that does not open that search, so `fm_control_exit_command` returns plain `exit` for devin (`bin/fm-control-lib.sh`), and every other verified harness keeps its documented exit command.
+- Plain `exit` was the earlier verified workaround; the current `/quit` command and its refresh guard are recorded in `../../../../../docs/verification/runtime-backends.md` under "Devin exit and native resume".
 
 `../../../../../docs/verification/runtime-backends-fork.md` records the devin 3000.11.3 evidence from 2026-09-25: that a turn ending on an error fires no hook ("Turn-ending errors and the rate-limit retry"), that the private config binds the reviewed wiring ("Private config layering"), and the generated launch end to end, covering ancestry-only identity from a tool subprocess, the SWE-2 Max footer, reviewed smart and normal launches with their policy hooks, a real acknowledged rate-limit retry, and native resume in reviewed mode ("Verification suite").

@@ -69,6 +69,10 @@ ln -s "$STANDIN_BIN" "$LAB/bin/notaharness"
 ln -s "$STANDIN_BIN" "$LAB/bin/omp"
 ln -s "$STANDIN_BIN" "$LAB/bin/ompd"
 ln -s "$STANDIN_BIN" "$LAB/bin/comp"
+# Command Code sets its process title to the bare word `command-code`; the decoy
+# merely contains it.
+ln -s "$STANDIN_BIN" "$LAB/bin/command-code"
+ln -s "$STANDIN_BIN" "$LAB/bin/command-code-helper"
 # muse's installed binary is muse-bin-<version>: the launcher execs it, so the
 # version is the LIVE process name and it changes on every auto-update. Unlike
 # Claude Code's version-named binary there is no `muse` path component to fall
@@ -235,6 +239,14 @@ for decoy in legacy agyrate; do
     || fail "'$decoy' merely contains 'agy' and must not classify as a live agent pane"
 done
 pass "tmux liveness: unrelated agy-containing command names stay ambiguous"
+
+new_window command-code "$LAB/bin/command-code" 900
+wait_for_state "$SESSION:command-code" alive \
+  || fail "Command Code's anchored process name must classify alive"
+new_window decoy-command-code-helper "$LAB/bin/command-code-helper" 900
+wait_for_state "$SESSION:decoy-command-code-helper" ambiguous \
+  || fail "'command-code-helper' merely contains Command Code's name and must not classify as a live agent pane"
+pass "tmux liveness: Command Code's anchored process name classifies alive; a containing name stays ambiguous"
 
 # --- a version name blinds one source ---------------------------------------
 # Giving a genuine harness-named executable the version-string argv[0] that
@@ -457,12 +469,24 @@ window_index=$("$REAL_TMUX" -L "$SOCKET" display-message -p -t "=$SESSION:=fm-pr
   || fail "could not read the present window's index"
 fm_backend_target_exists tmux "$pane_id" || fail "a live pane id (the supervisor's \$TMUX_PANE shape) must read as existing"
 fm_backend_target_exists tmux "$SESSION:$window_index" || fail "a live window index must read as existing"
-fm_backend_target_exists tmux "$SESSION:fm-present.0" || fail "a live pane-qualified window must read as existing"
+fm_backend_target_exists tmux "$SESSION:$window_index.0" || fail "a live pane-qualified window index must read as existing"
 if fm_backend_target_exists tmux "%999999" 2>"$LAB/presence.err"; then
   fail "an unknown pane id must not read as existing"
 fi
 [ ! -s "$LAB/presence.err" ] || fail "the presence probe must answer an unknown pane id cleanly under set -u: $(cat "$LAB/presence.err")"
-pass "tmux presence: pane ids, window indexes, and pane-qualified windows are checked against the same inventory"
+pass "tmux presence: pane ids, window indexes, and pane-qualified window indexes are checked against the same inventory"
+
+# A pane suffix splits only from a window index: a gone dotted task window must
+# not resolve as a pane of its live undotted neighbor in either probe.
+new_window fm-v1 "$SLEEP_BIN" 900
+"$REAL_TMUX" -L "$SOCKET" display-message -p -t "=$SESSION:=fm-v1" '#{pane_index}' | grep -qx 0 \
+  || fail "precondition: the undotted neighbor's first pane is not pane 0, so the case below proves nothing"
+if fm_backend_target_exists tmux "$SESSION:fm-v1.0"; then
+  fail "a gone dotted window must not read as existing beside its undotted neighbor"
+fi
+[ "$(fm_backend_tmux_target_presence "$SESSION:fm-v1.0")" = missing ] \
+  || fail "the tri-state presence must read a gone dotted window missing beside its undotted neighbor"
+pass "tmux presence: a gone dotted window reads absent beside its undotted neighbor"
 
 window_id=$("$REAL_TMUX" -L "$SOCKET" display-message -p -t "=$SESSION:=fm-present" '#{window_id}') \
   || fail "could not read the present window's id"
@@ -520,6 +544,59 @@ fi
   || fail "the recovery classifier must read the recorded window missing after a restart"
 fm_backend_target_exists tmux "$SESSION:main" || fail "the recreated session's own window must read as existing"
 pass "tmux presence: a same-name session recreated after a server restart does not revive recorded windows"
+
+# Command Code parks its terminal cursor below its footer and draws its own
+# reverse-video cursor cell, with its placeholder in a truecolor too bright for
+# the fleet-wide ghost ceiling (verified live, Command Code 1.74.1).
+commandcode_screen() {  # <composer-row-kind idle|typed>
+  local rule e
+  e=$(printf '\033')
+  rule=$(printf '\342\224\200%.0s' $(seq 1 40))
+  printf '\n  done\n\n%s[38;2;138;148;168m%s\n' "$e" "$rule"
+  if [ "$1" = idle ]; then
+    printf '%s[39m\342\235\257 %s[7mA%s[0m%s[38;2;138;148;168msk your question...%s[39m\n' "$e" "$e" "$e" "$e" "$e"
+  else
+    printf '%s[39m\342\235\257 half typed captain text%s[7m %s[0m\n' "$e" "$e" "$e"
+  fi
+  printf '%s[38;2;138;148;168m%s\n%s[39m  ? for shortcuts\n\n\n' "$e" "$rule" "$e"
+}
+open_commandcode_pane() {  # <window> <binary> <idle|typed>
+  local window=$1 binary=$2 kind=$3 i=0
+  new_window "$window" bash -c "$(declare -f commandcode_screen); commandcode_screen '$kind'; exec '$binary' 900"
+  while [ "$i" -lt 100 ]; do
+    case "$("$REAL_TMUX" -L "$SOCKET" capture-pane -p -t "$SESSION:$window" 2>/dev/null)" in
+      *'? for shortcuts'*) return 0 ;;
+    esac
+    sleep 0.1
+    i=$((i + 1))
+  done
+  fail "pane $window never rendered its composer"
+}
+
+open_commandcode_pane cc-idle "$LAB/bin/command-code" idle
+[ "$(cursor_anchored_verdict "$SESSION:cc-idle")" = unknown ] \
+  || fail "the cursor-anchored source must be blind on a Command Code screen, or this case proves nothing about the fallback"
+case "$(fm_tmux_composer_identity "$SESSION:cc-idle")" in
+  commandcode$'\t'*) ;;
+  *) fail "a pane whose foreground process is command-code must identify as Command Code" ;;
+esac
+[ "$(fm_tmux_composer_state "$SESSION:cc-idle")" = empty ] \
+  || fail "an idle Command Code composer must read empty, or no steer can ever be delivered"
+pass "commandcode composer: an idle pane reads empty although its cursor row is blind and its placeholder is bright"
+
+open_commandcode_pane cc-typed "$LAB/bin/command-code" typed
+[ "$(fm_tmux_composer_state "$SESSION:cc-typed")" = pending ] \
+  || fail "real unsubmitted text in a Command Code composer must read pending"
+pass "commandcode composer: typed text still reads pending"
+
+# The SAME idle screen, with only the foreground process identity changed.
+open_commandcode_pane cc-decoy "$LAB/bin/command-code-helper" idle
+if fm_tmux_composer_identity "$SESSION:cc-decoy" >/dev/null; then
+  fail "a pane running command-code-helper must not identify as Command Code"
+fi
+[ "$(fm_tmux_composer_state "$SESSION:cc-decoy")" = unknown ] \
+  || fail "the reclassification and its ceiling must be gated on Command Code's own process identity"
+pass "commandcode composer: an identical screen stays unknown when the pane is not Command Code"
 
 cleanup_all
 trap - EXIT

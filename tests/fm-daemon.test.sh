@@ -1680,9 +1680,39 @@ test_escalate_batches_into_one_digest() {
   pass "multiple escalations flush as a single batched digest"
 }
 
-# The pointer bound protects every primary that receives the typed envelope, so
-# these cases pin a marker-preserving primary; a Claude Code primary receives the
-# same digest or pointer inside a record-backed doorbell instead.
+test_escalate_long_record_digest_needs_no_pointer() {
+  local dir state fakebin sent capture i long typed record kind
+  dir=$(make_supercase long-record-digest)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  capture="$dir/pane.txt"; printf '\342\235\257 \n' > "$capture"
+  long=$(printf 'x%.0s' $(seq 1 300))
+  for i in 1 2 3 4 5 6 7 8; do escalate_add "$state" "task-$i.status: blocked: event $i $long"; done
+  afk_enter "$state"
+  # A cap too small even for a pointer cannot block a record-backed primary.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 FM_DAEMON_PRIMARY_HARNESS=claude \
+    FM_INJECT_INLINE_MAX=40 escalate_flush "$state" || fail "long record-backed digest did not deliver"
+  typed=$(grep -v '\[ENTER\]' "$sent")
+  fm_operational_doorbell_path "$typed" record || fail "long digest did not type one operational doorbell: $typed"
+  [ "${#typed}" -lt 600 ] || fail "long digest typed an unexpectedly long doorbell"
+  printf '%s' "$typed" | FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-operational-input.sh" doorbell-kind > "$dir/kind" \
+    || fail "long digest doorbell did not classify"
+  kind=$(cat "$dir/kind")
+  [ "$kind" = away-supervisor ] || fail "long digest doorbell classified as $kind"
+  for i in 1 2 3 4 5 6 7 8; do
+    grep -F "task-$i.status: blocked: event $i $long" "$record" >/dev/null \
+      || fail "operational record does not directly contain event $i"
+  done
+  [ ! -e "$state/.subsuper-digests" ] || fail "a record-backed digest created a redundant pointer file"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "delivered record-backed events stayed buffered"
+  [ ! -e "$state/.subsuper-escalations.since" ] || fail "delivered record-backed buffer kept its age sidecar"
+  [ ! -e "$state/.subsuper-inject-owned" ] || fail "proven record-backed delivery kept its owned-input record"
+  [ "$(grep -c '\[ENTER\]' "$sent")" -eq 1 ] || fail "long record-backed digest submitted more than once"
+  pass "a record-backed primary receives the complete long digest directly behind one short doorbell, regardless of the typed-envelope cap"
+}
+
+# The pointer bound applies only to primaries that receive the typed envelope.
 test_escalate_long_digest_types_a_pointer() {
   local dir state fakebin sent capture i long typed file n
   dir=$(make_supercase long-digest)
@@ -2534,6 +2564,7 @@ test_normal_flush_clears_stale_wedge_marker() {
 # argument can carry. The fake tmux refuses any literal send above that.
 test_oversized_digest_is_bounded_and_kept_durable() {
   local dir state fakebin sent raw digest full i item line
+  local FM_DAEMON_PRIMARY_HARNESS=codex
   dir=$(make_bordered_case digest-oversized)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
@@ -2570,6 +2601,7 @@ test_oversized_digest_is_bounded_and_kept_durable() {
 
 test_inject_send_failure_logs_stage_stderr_and_bytes() {
   local dir state fakebin sent log item
+  local FM_DAEMON_PRIMARY_HARNESS=codex
   dir=$(make_bordered_case digest-send-failure)
   state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/daemon.log"
   sent="$dir/sent.log"; : > "$sent"
@@ -2627,6 +2659,7 @@ test_inject_enter_failure_logs_confirmation_stage() {
 
 test_bounded_digest_full_text_kept_after_typing() {
   local dir state fakebin sent log item digest full
+  local FM_DAEMON_PRIMARY_HARNESS=codex
   dir=$(make_bordered_case digest-kept-after-typing)
   state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/daemon.log"
   sent="$dir/sent.log"; : > "$sent"
@@ -3169,7 +3202,9 @@ test_pane_is_busy_herdr_native_busy_state() {
   local dir
   dir=$(make_supercase primary-herdr-busy)
   (
+    # shellcheck disable=SC2329 # The sourced pane_is_busy calls this scoped backend override.
     fm_backend_busy_state() { [ "$1" = herdr ] && [ "$2" = "default:w1:p2" ] || fail "unexpected busy_state args: $1 $2"; printf 'busy'; }
+    # shellcheck disable=SC2329 # Negative-call sentinel: native busy must bypass the sourced function's capture fallback.
     fm_backend_capture() { fail "capture should not be consulted when busy_state is conclusive"; }
     FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr \
       || fail "pane_is_busy should report busy from herdr's native busy_state"
@@ -3371,6 +3406,7 @@ test_housekeeping_herdr_idle_busy_record_clears_stale
 test_housekeeping_herdr_resumed_stale_cleared
 test_housekeeping_orca_persistent_stale_resolves_terminal
 test_escalate_batches_into_one_digest
+test_escalate_long_record_digest_needs_no_pointer
 test_escalate_long_digest_types_a_pointer
 test_escalate_pointer_line_is_bounded
 test_escalate_batch_age_uses_first_append
@@ -3477,3 +3513,119 @@ test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
 test_inject_msg_defers_on_dead_shell_unknown
 test_inject_msg_defers_on_unrecognized_composer_state
+
+# The Claude background-task exit picker names itself on the stale reason.
+# Away mode self-handles the first sight, so the name has to be saved and
+# then appear on the persistence line. A wedge reason that also carries
+# demand-deep-inspection must still escalate, with the name after that clause,
+# and a declared wait must still take the pause cadence.
+test_dialog_name_survives_away_self_handle() {
+  local dir state fakebin win pane key reason
+  dir=$(make_supercase dialog-name-persists)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  win="sess:fm-picker-ship"
+  pane="$dir/pane.txt"
+  printf 'idle on the picker\n' > "$pane"
+  fm_write_meta "$state/picker-ship.meta" "window=$win" "backend=tmux"
+  printf 'working: parked between turns\n' > "$state/picker-ship.status"
+  reason="stale: $win (blocked-on-prompt: Claude background-task exit picker)"
+  LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  key=$(printf '%s' picker-ship | tr ':/.' '___')
+  [ "$(cat "$state/.subsuper-dialog-$key" 2>/dev/null || true)" = 'Claude background-task exit picker' ] \
+    || fail "a self-handled dialog stale did not save the name: $(cat "$state/.subsuper-dialog-$key" 2>/dev/null)"
+  [ -e "$state/.subsuper-stale-$key" ] || fail "a self-handled dialog stale did not record the persistence marker"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "a first-sight dialog stale escalated instead of waiting: $(cat "$state/.subsuper-escalations")"
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 housekeeping "$state"
+  grep -F 'stale persisted' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the persistence line was not escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  grep -F 'blocked-on-prompt: Claude background-task exit picker' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the persistence line dropped the dialog name: $(cat "$state/.subsuper-escalations")"
+  grep -F 'possible wedge' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the persistence line dropped the wedge wording: $(cat "$state/.subsuper-escalations")"
+  [ ! -e "$state/.subsuper-dialog-$key" ] || fail "the saved dialog name outlived the persistence escalation"
+  pass "a dialog name on a first-sight stale reaches the away persistence line"
+}
+
+test_dialog_name_after_demand_deep_inspection_still_escalates() {
+  local dir state win reason i
+  dir=$(make_supercase dialog-name-combined)
+  state="$dir/state"
+  win="sess:fm-picker-ship"
+  fm_write_meta "$state/picker-ship.meta" "window=$win" "backend=tmux"
+  printf 'working: parked between turns\n' > "$state/picker-ship.status"
+  for i in 1 2; do
+    reason="stale: $win (idle 250s, possible wedge, escalation $i, demand-deep-inspection: same pane has wedge-escalated $i times in a row - do not re-absorb on the run-step/pane state alone, blocked-on-prompt: Claude background-task exit picker)"
+    : > "$dir/daemon.log"
+    LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+    grep -F "${reason#stale: }" "$state/.subsuper-escalations" >/dev/null \
+      || fail "escalation $i lost the combined dialog reason: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  done
+  [ "$(grep -c 'blocked-on-prompt: Claude background-task exit picker' "$state/.subsuper-escalations")" -eq 2 ] \
+    || fail "the ladder did not escalate both combined reasons: $(cat "$state/.subsuper-escalations")"
+  grep -F 'demand-deep-inspection:' "$state/.subsuper-escalations" >/dev/null \
+    || fail "the combined reason dropped demand-deep-inspection"
+  grep -F 'demand-deep-inspection: same pane has wedge-escalated 2 times in a row - do not re-absorb on the run-step/pane state alone, blocked-on-prompt: Claude background-task exit picker)' \
+    "$state/.subsuper-escalations" >/dev/null \
+    || fail "the dialog name was not after demand-deep-inspection: $(cat "$state/.subsuper-escalations")"
+  printf 'paused: awaiting an external dependency\n' > "$state/picker-ship.status"
+  : > "$state/.subsuper-escalations"
+  reason="stale: $win (idle 250s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone, blocked-on-prompt: Claude background-task exit picker)"
+  LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a declared wait with the dialog suffix escalated as a wedge: $(cat "$state/.subsuper-escalations")"
+  pass "a dialog name after demand-deep-inspection still escalates, and a declared wait still pauses"
+}
+
+# /exit on a finished worker with a background shell is what opens the picker,
+# so the status is already `done:` and already escalated when the stale wake
+# arrives. That wake self-handles exactly as a plain stale does: no persistence
+# marker, and no later wedge.
+test_seen_terminal_dialog_stale_clears_like_a_plain_stale() {
+  local dir state win key reason
+  dir=$(make_supercase dialog-name-terminal)
+  state="$dir/state"
+  win="sess:fm-picker-done"
+  fm_write_meta "$state/picker-done.meta" "window=$win" "backend=tmux"
+  printf 'done: shipped the change\n' > "$state/picker-done.status"
+  seen_through "$state" picker-done
+  key=$(printf '%s' picker-done | tr ':/.' '___')
+  LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" handle_wake "stale: $win" "$state"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "a seen terminal stale with no dialog recorded a wedge marker"
+  reason="stale: $win (blocked-on-prompt: Claude background-task exit picker)"
+  LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  grep -F 'stale + terminal (already escalated by signal)' "$dir/daemon.log" >/dev/null \
+    || fail "the fixture did not take the seen terminal self-handle path: $(cat "$dir/daemon.log")"
+  [ ! -e "$state/.subsuper-dialog-$key" ] \
+    || fail "a seen terminal dialog stale kept the saved name"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "a seen terminal dialog stale recorded a wedge marker"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a seen terminal dialog stale escalated: $(cat "$state/.subsuper-escalations")"
+  pass "a seen terminal status on the picker clears like a plain stale"
+}
+
+# The first stale wake after a new `done:` escalates from the status log, and
+# that one line is all the captain gets, so it has to carry the name too.
+test_dialog_name_joins_unseen_status_escalation() {
+  local dir state win
+  dir=$(make_supercase dialog-name-unseen)
+  state="$dir/state"
+  win="sess:fm-picker-new"
+  fm_write_meta "$state/picker-new.meta" "window=$win" "backend=tmux"
+  printf 'done: shipped the change\n' > "$state/picker-new.status"
+  LOG="$dir/daemon.log" FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 \
+    handle_wake "stale: $win (blocked-on-prompt: Claude background-task exit picker)" "$state"
+  grep -F 'done: shipped the change' "$state/.subsuper-escalations" \
+    | grep -F 'blocked-on-prompt: Claude background-task exit picker' >/dev/null \
+    || fail "an unseen status escalation dropped the dialog name: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  pass "a dialog name joins the escalation of an unseen status"
+}
+
+test_dialog_name_survives_away_self_handle
+test_seen_terminal_dialog_stale_clears_like_a_plain_stale
+test_dialog_name_joins_unseen_status_escalation
+test_dialog_name_after_demand_deep_inspection_still_escalates

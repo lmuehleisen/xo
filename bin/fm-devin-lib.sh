@@ -9,8 +9,6 @@
 # bin/fm-devin-permission-policy.sh owns the permission policy, and
 # bin/fm-devin-rate-limit-retry.sh owns the rate-limit retry.
 #
-#   resolve_devin_binary
-#       prints the absolute devin executable, or refuses when none is on PATH
 #   fm_devin_permission_flags <crew-permission-mode>
 #       prints the launch permission flags for auto or manual
 #   fm_devin_launch_model <model>
@@ -36,32 +34,6 @@
 # remove_devin_managed_wiring reads the harness through bin/fm-teardown.sh's
 # meta_value, and the ownership proof reads bin/fm-control-lib.sh's
 # fm_control_harness_family.
-
-# devin ships as a standalone CLI executable. It is resolved to an absolute path
-# once here so the pane launches the same executable this spawn checked, and a
-# missing install refuses BEFORE any endpoint or worktree exists rather than
-# leaving a pane at a "command not found" shell.
-resolve_devin_binary() {
-  local candidate dir
-  candidate=$(command -v devin 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    case "$candidate" in
-    /*)
-      printf '%s\n' "$candidate"
-      return 0
-      ;;
-    *)
-      dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
-      if [ -n "$dir" ]; then
-        printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-        return 0
-      fi
-      ;;
-    esac
-  fi
-  echo "error: devin executable not found on PATH; install the Devin CLI or select a different verified harness" >&2
-  return 1
-}
 
 # devin (Devin CLI): auto selects --permission-mode smart, which uses a
 # fast model to judge safety and auto-approves workspace edits while
