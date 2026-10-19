@@ -279,11 +279,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: preserve each task's checkout across process death through a durable Treehouse lease and per-task receipt.
 - Class: carried; replacing this ownership model would require equivalent checkout preservation and recovery proof.
-- Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts, prelaunch rollback and launched-Polytoken recovery records in `bin/fm-spawn.sh`, records-only stale-claim retirement in `bin/fm-teardown.sh`, and the lease fakes and per-spawn slots that upstream adapter suites such as `tests/fm-commandcode-harness.test.sh` and `tests/fm-polytoken-harness.test.sh` need.
-- Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's); `tests/fm-spawn-prelaunch-lease-return.test.sh`; `tests/fm-spawn-prelaunch-rollback.test.sh`; `tests/fm-polytoken-harness.test.sh` launched-failure ownership cases; `tests/fm-teardown-endpoint-safety.test.sh` recorded-branch and stale-claim cases.
+- Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts and prelaunch rollback in `bin/fm-spawn.sh`, records-only stale-claim retirement in `bin/fm-teardown.sh`, and the lease fakes and per-spawn slots that upstream adapter suites such as `tests/fm-commandcode-harness.test.sh` and `tests/fm-polytoken-harness.test.sh` need.
+- Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's); `tests/fm-spawn-prelaunch-lease-return.test.sh`; `tests/fm-spawn-prelaunch-rollback.test.sh`; `tests/fm-polytoken-harness.test.sh` lease compatibility cases; `tests/fm-teardown-endpoint-safety.test.sh` recorded-branch and stale-claim cases.
 - Upstream: binds slot-owner claims to process lifetimes, permitting clean slots to be reused after their owner dies; the durable lease instead protects a task's existing checkout until explicit guarded return.
   Upstream #6213 permits records-only retirement when a slot claim names another task; the fork requires independent landed, endpoint, recorded-branch and current-owner proof, and still refuses a lease held by another holder.
-  Generic rollback returns a provably unstarted clean lease, but a launched Polytoken prompt may already have changed the checkout, so a readiness failure preserves metadata, credentials, wiring and the lease for guarded recovery rather than returning the pool slot.
+  Generic prelaunch rollback returns a provably unstarted clean lease; post-launch adapter cleanup otherwise follows upstream and retains unresolved lease receipts for explicit recovery.
 
 ### claude-trust-escape
 

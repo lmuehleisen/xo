@@ -545,7 +545,6 @@ case "\$subcmd" in
   new)
     mkdir -p "\$PTFAKE_SESSDIR" "\$PTFAKE_SESSDIR-v1/0czfake-echo"
     printf '{"fixture":true}\n' > "\$PTFAKE_SESSDIR-v1/0czfake-echo/credential.json"
-    [ "\${PTFAKE_WORKER_WRITE:-0}" != 1 ] || printf 'worker progress\n' > worker-change.txt
     # Simulate the daemon's hook firing: the generated busy writer runs with
     # the event on the environment and no arguments, exactly as a real
     # handler does, unless the case pins the no-hook knob.
@@ -561,13 +560,11 @@ case "\$subcmd" in
     exit 0
     ;;
   sessions)
-    [ "\${PTFAKE_NO_SESSION:-0}" != 1 ] || { printf '[]\n'; exit 0; }
     printf '[{"session_id":"0czfake-echo","pid":12345,"port":49999,"project_path":"%s","credential_file_path":"%s","model":"zai/glm-5.3-flash"}]' \\
       "\${PTFAKE_PANE_PATH:?}" "\${PTFAKE_SESSDIR:?}-v1/0czfake-echo/credential.json"
     exit 0
     ;;
   reap)
-    [ "\${PTFAKE_REAP_FAIL:-0}" != 1 ] || exit 1
     printf 'reaped\n'
     exit 0
     ;;
@@ -820,7 +817,6 @@ window_file="$(dirname "$0")/.spawn-window"
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows)
-    [ ! -f "$(dirname "$0")/.close-unknown" ] || exit 1
     [ ! -s "$window_file" ] || cat "$window_file"
     exit 0
     ;;
@@ -835,9 +831,7 @@ case "${1:-}" in
     exit 0
     ;;
   kill-window)
-    [ "${PTFAKE_CLOSE_MODE:-closed}" != live ] || exit 1
     : > "$window_file"
-    [ "${PTFAKE_CLOSE_MODE:-closed}" != unknown ] || touch "$(dirname "$0")/.close-unknown"
     exit 0
     ;;
   has-session|new-session) exit 0 ;;
@@ -874,16 +868,6 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  cat > "$fakebin/mv" <<'SH'
-#!/usr/bin/env bash
-if [ "${PTFAKE_BIND_FAIL:-0}" = 1 ]; then
-  for arg in "$@"; do
-    case "$arg" in *.meta.polytoken.*) exit 1 ;; esac
-  done
-fi
-exec /bin/mv "$@"
-SH
-  chmod +x "$fakebin/mv"
   touch "$home/state/.last-watcher-beat"
   : > "$case_dir/launch.log"
   : > "$case_dir/launch-line.log"
@@ -1143,20 +1127,7 @@ test_polytoken_whitespace_state_dir_refuses() {
   pass "fm-spawn: a whitespace-bearing state dir refuses polytoken wiring before writing any"
 }
 
-assert_polytoken_failed_owner_retained() {  # <id>
-  local id=$1 path
-  for path in "$HOME_DIR/state/$id.meta" "$HOME_DIR/state/$id.treehouse-lease" \
-    "$HOME_DIR/state/$id.busy-gen" "$HOME_DIR/state/$id.polytoken-busy.sh" \
-    "$HOME_DIR/state/$id.polytoken-config/config.yaml" \
-    "$HOME_DIR/state/$id.polytoken-sessions-v1/0czfake-echo/credential.json" \
-    "$WT_DIR/.polytoken/hooks.json" "$WT_DIR/.polytoken/facets/firstmate-worker.md"; do
-    [ -f "$path" ] || fail "a launched failure lost its recovery artifact: $path"
-  done
-  [ -d "$HOME_DIR/state/$id.polytoken-sessions" ] || fail "a launched failure lost its sessions root"
-  assert_no_grep 'return ' "$FAKEBIN_DIR/treehouse-calls" "a possibly used slot must not be returned or reset"
-}
-
-test_polytoken_readiness_failure_retains_its_owner() {
+test_polytoken_readiness_failure_fails_loudly_and_cleans_up() {
   local id rec out rc status tmux_calls
   id="pt-noready-z6-$$"
   rec=$(make_polytoken_spawn_case noready "$id")
@@ -1177,46 +1148,49 @@ test_polytoken_readiness_failure_retains_its_owner() {
     "a failed readiness gate must close the endpoint it launched"
   assert_contains "$(cat "$CASE_DIR/launch.log")" "reap 0czfake-echo --force" \
     "a failed readiness gate must reap the session daemon it discovered"
-  assert_polytoken_failed_owner_retained "$id"
-  assert_grep 'polytoken_session=0czfake-echo' "$HOME_DIR/state/$id.meta" \
-    "a timeout must bind the discovered session for recovery"
-  assert_contains "$out" 'retained for guarded recovery or cleanup' "the retained owner needs an actionable diagnostic"
+  [ ! -e "$HOME_DIR/state/$id.polytoken-config" ] \
+    || fail "the failed gate must retire the per-task config dir"
+  [ ! -e "$HOME_DIR/state/$id.polytoken-sessions" ] \
+    || fail "the failed gate must retire the sessions root"
+  [ ! -e "$HOME_DIR/state/$id.polytoken-sessions-v1" ] \
+    || fail "the failed gate must retire the versioned sessions sibling"
+  [ ! -e "$WT_DIR/.polytoken/hooks.json" ] \
+    || fail "the failed gate must retire the worktree hook layer"
   assert_not_contains "$out" "spawned $id" "a failed gate must not report a successful spawn"
-  pass "fm-spawn: a failed Polytoken gate closes its endpoint and retains its task, lease and control artifacts"
+  pass "fm-spawn: a failed readiness gate fails loudly, reaps, and retires its wiring"
 }
 
-test_polytoken_post_launch_failure_preserves_uncertain_work() {
-  local mode id rec out retry rc
-  for mode in binding reap live unknown undiscovered; do
-    id="pt-failed-$mode-$$"
-    rec=$(make_polytoken_spawn_case "failed-$mode" "$id")
-    read_polytoken_spawn_record "$rec"
-    rc=0
-    out=$(PTFAKE_BIND_FAIL="$([ "$mode" = binding ] && printf 1 || printf 0)" \
-      PTFAKE_NO_HOOK="$([ "$mode" = binding ] && printf 0 || printf 1)" \
-      PTFAKE_WORKER_WRITE=1 PTFAKE_REAP_FAIL="$([ "$mode" = reap ] && printf 1 || printf 0)" \
-      PTFAKE_NO_SESSION="$([ "$mode" = undiscovered ] && printf 1 || printf 0)" \
-      PTFAKE_CLOSE_MODE="$mode" FM_POLYTOKEN_READY_POLLS=2 FM_POLYTOKEN_POLL_INTERVAL=0 \
-      run_polytoken_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
-    [ "$rc" -ne 0 ] || fail "$mode: an unconfirmed launch must fail"
-    assert_polytoken_failed_owner_retained "$id"
-    [ "$(cat "$WT_DIR/worker-change.txt")" = 'worker progress' ] || fail "$mode: worker progress was discarded"
-    case "$mode" in
-      binding)
-        assert_contains "$out" 'session binding could not be recorded' 'binding failure was not exercised'
-        assert_no_grep 'polytoken_session=' "$HOME_DIR/state/$id.meta" 'failed publication must preserve the original record'
-        ;;
-      reap) assert_contains "$out" 'could not be reaped' 'reap failure was not reported' ;;
-      live|unknown) assert_contains "$out" 'shutdown is unconfirmed' 'uncertain closure was not reported' ;;
-      undiscovered) assert_no_grep 'reap 0czfake-echo' "$CASE_DIR/launch.log" 'an undiscovered session must not be guessed' ;;
-    esac
-    rc=0
-    retry=$(run_polytoken_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
-    [ "$rc" -ne 0 ] || fail "$mode: blind retry must not replace a retained task: $retry"
-    [ "$(grep -c '^get --lease ' "$FAKEBIN_DIR/treehouse-calls")" -eq 1 ] || fail "$mode: retry acquired over retained ownership"
-    assert_polytoken_failed_owner_retained "$id"
-  done
-  pass "fm-spawn: Polytoken binding, reap and closure failures preserve progress and refuse a blind retry"
+# Upstream removes the provisional task record after a failed gate. The fork's
+# durable provider lease survives endpoint closure, with its acquisition
+# receipt retained for inspection before any retry may acquire another slot.
+test_polytoken_post_launch_failure_retains_its_lease_receipt() {
+  local id rec out rc receipt retry
+  id="pt-noready-lease-z9-$$"
+  rec=$(make_polytoken_spawn_case noready-lease "$id")
+  read_polytoken_spawn_record "$rec"
+  receipt="$HOME_DIR/state/$id.treehouse-lease"
+  rc=0
+  out=$(PTFAKE_NO_HOOK=1 FM_POLYTOKEN_READY_POLLS=2 FM_POLYTOKEN_POLL_INTERVAL=0 \
+    run_polytoken_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "a launch that never starts processing its brief must fail the spawn"
+  assert_contains "$out" "did not start processing its brief" "the readiness failure message changed"
+  assert_contains "$(cat "$CASE_DIR/tmux-calls.log")" "kill-window" \
+    "the failed gate must close the endpoint holding the slot"
+  assert_absent "$HOME_DIR/state/$id.meta" "the failed launch must not leave its task record"
+  assert_present "$receipt" "the failed launch must retain its durable lease receipt"
+  [ "$(cat "$receipt")" = "$WT_DIR" ] || fail "the receipt must retain the exact acquired worktree"
+  grep -qxF "get --lease --lease-holder $HOME_DIR:$id" "$FAKEBIN_DIR/treehouse-calls" ||
+    fail "the fixture did not exercise durable lease acquisition"
+  assert_no_grep 'return ' "$FAKEBIN_DIR/treehouse-calls" "postlaunch failure must not return or reset a possibly used slot"
+  rc=0
+  retry=$(run_polytoken_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "the unresolved receipt must refuse a blind retry: $retry"
+  assert_contains "$retry" 'unresolved lease receipt' "the retry must require inspection of its prior acquisition"
+  [ "$(grep -c '^get --lease ' "$FAKEBIN_DIR/treehouse-calls")" -eq 1 ] ||
+    fail "the unresolved receipt allowed a second acquisition: $retry"
+  [ "$(cat "$receipt")" = "$WT_DIR" ] || fail "the refused retry changed its lease receipt"
+  assert_no_grep 'return ' "$FAKEBIN_DIR/treehouse-calls" "a blind retry must not release the retained lease"
+  pass "fm-spawn: upstream Polytoken cleanup retains the durable lease receipt and refuses a blind retry"
 }
 
 test_polytoken_spawn_arms_the_busy_contract() {
@@ -1266,6 +1240,6 @@ test_polytoken_unlisted_model_refuses_before_pane_creation
 test_polytoken_secondmate_is_refused
 test_polytoken_existing_project_hook_layer_refuses
 test_polytoken_whitespace_state_dir_refuses
-test_polytoken_readiness_failure_retains_its_owner
-test_polytoken_post_launch_failure_preserves_uncertain_work
+test_polytoken_readiness_failure_fails_loudly_and_cleans_up
+test_polytoken_post_launch_failure_retains_its_lease_receipt
 test_polytoken_spawn_arms_the_busy_contract
