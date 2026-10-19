@@ -950,7 +950,6 @@ make_remote_leg_ssh_stub() { # <w> -> echoes the fakebin dir
   cat > "$fb/fake-ssh" <<'SH'
 #!/usr/bin/env bash
 set -u
-cat > /dev/null
 while [ "$#" -gt 0 ]; do
   case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
 done
@@ -962,6 +961,8 @@ remote_home=$(decode "$home_b64")
 rargs=()
 while IFS= read -r -d '' a; do rargs+=("$a"); done < <(decode "$argv_b64")
 cmd=${rargs[0]}
+# Only the fork's inheritance batch carries its wire format on stdin.
+[ "$cmd" = fm-remote-inherit.sh ] || cat > /dev/null
 [ "$cmd" != fm-remote-doctor.sh ] || exit 0
 # An older remote Firstmate copy rejects a command shape it does not know with
 # the usage status, which is exactly what a parent-targeted sync meets there.

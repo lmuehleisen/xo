@@ -155,6 +155,12 @@ spawn_case() {  # <id> <model> <effort>
   FM_FAKE_LAUNCH_LOG="$case_dir/$1.launch" fm_test_run_spawn "$home" "$wt" "$fakebin" "$1" "$proj" \
     --scout --harness commandcode --model "$2" --effort "$3" 2>&1
 }
+# The fork claims each leased slot for the task holding it, so every later
+# spawn takes a fresh slot.
+next_slot() {  # <id>
+  wt="$case_dir/wt-$1"
+  git -C "$proj" worktree add --quiet -b "commandcode-$1" "$wt"
+}
 out=$(spawn_case cc-low deepseek/deepseek-v4.1-flash low) || fail "spawn failed: $out"
 launch=$(cat "$case_dir/cc-low.launch")
 gen=$(cat "$home/state/cc-low.busy-gen")
@@ -171,9 +177,11 @@ assert_contains "$launch" 'encode launch-brief' 'typed launch envelope lost'
 mkdir -p "$wt/.commandcode/taste" && : > "$wt/.commandcode/taste/taste.md"
 [ -z "$(git -C "$wt" status --porcelain -- .commandcode)" ] || fail 'Command Code taste state is visible to git'
 rm -rf "$wt/.commandcode"
+next_slot cc-xhigh
 out=$(spawn_case cc-xhigh deepseek/deepseek-v4.1-flash xhigh) || fail "spawn failed: $out"
 case "$(cat "$case_dir/cc-xhigh.launch")" in *--effort*) fail 'an unaccepted effort reached argv' ;; esac
 assert_grep 'effort=xhigh' "$home/state/cc-xhigh.meta" 'effort not recorded'
+next_slot cc-other
 out=$(spawn_case cc-other moonshotai/kimi-k3 low) || fail "spawn failed: $out"
 case "$(cat "$case_dir/cc-other.launch")" in *--effort*) fail 'an unverified model received an effort flag' ;; esac
 if out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" cc-sm "$proj" --secondmate --harness commandcode 2>&1)

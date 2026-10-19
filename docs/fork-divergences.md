@@ -123,7 +123,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: explicit `local-only` ships start from local `main` or `master` with no remote, refusing dirty or divergent bases; README "Remote-less local work".
 - Class: intended.
-- Seam: pool-base handling in `bin/fm-spawn.sh` and its `local_default_branch` helper in `bin/fm-ff-lib.sh` (shared).
+- Seam: pool-base handling in `bin/fm-spawn.sh` and its `local_default_branch` helper in `bin/fm-ff-lib.sh` (shared), plus the fixture origins that the non-local-only cases in `tests/fm-spawn-orca-worktree.test.sh` need (shared).
 - Guard: `tests/fm-spawn-pool-base-freshen.test.sh` `test_originless_pool_launches_without_a_freshness_fetch` and `test_originless_dirty_pool_refuses_without_discarding_work`.
 - Upstream: launches an originless pooled slot on whatever commit it holds, without starting from local `main` or `master` or refusing a divergent base; its refusal of `--base-branch` on an originless slot is taken.
 
@@ -171,7 +171,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: Devin and agy are routine worker runtimes.
 - Class: intended.
-- Seam: fork-only `bin/fm-devin-lib.sh`, `bin/fm-agy-lib.sh`, `bin/fm-agy-hook.sh`, `.agents/hooks.json` (agy primary hooks), `docs/supervision-protocols/agy.md`, `tests/fm-tmux-submit-busy-agy.test.sh`, and `tests/agy-primary-live-probe.py`, plus the shared adapter hunks in `bin/fm-harness.sh`, `bin/fm-dispatch-resolve.sh` (the agy and Devin effort table), `bin/fm-secondmate-liveness-lib.sh` (agy among the verified secondmate harnesses), `bin/fm-composer-lib.sh`, `bin/fm-busy-lib.sh`, `bin/fm-control-lib.sh`, `bin/fm-session-lock-lib.sh`, and `bin/fm-supervision-instructions.sh`.
+- Seam: fork-only `bin/fm-devin-lib.sh`, `bin/fm-agy-lib.sh`, `bin/fm-agy-hook.sh`, `.agents/hooks.json` (agy primary hooks), `docs/supervision-protocols/agy.md`, `tests/fm-tmux-submit-busy-agy.test.sh`, and `tests/agy-primary-live-probe.py`, plus the shared adapter hunks in `bin/fm-harness.sh`, `bin/fm-dispatch-resolve.sh` (the agy and Devin effort table), `bin/fm-secondmate-liveness-lib.sh` (agy among the verified secondmate harnesses), `bin/fm-composer-lib.sh`, `bin/fm-busy-lib.sh`, `bin/fm-control-lib.sh`, `bin/fm-session-lock-lib.sh`, and `bin/fm-supervision-instructions.sh`, and the launch prefix in `bin/fm-spawn.sh` that unsets the agy identity marker, joined into Polytoken's own env boundary because that launch opens with a shell loop.
 - Guard: `tests/fm-devin-harness.test.sh`; `tests/fm-agy-harness.test.sh`; `tests/fm-composer-agy.test.sh`; `tests/fm-dispatch-resolve.test.sh`; `tests/fm-tmux-submit-busy-agy.test.sh`; the opt-in live guards `tests/fm-agy-primary-live-e2e.test.sh` and `tests/fm-agy-observer-live-e2e.test.sh`.
 - Upstream: ships its own Devin and agy adapters; how much of the fork's mechanics to keep is the open question in the carried entries below.
 
@@ -277,7 +277,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: durable Treehouse task leases; the fork dropped upstream's slot-claim files.
 - Class: carried, open convergence question; not decided.
-- Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts and prelaunch rollback in `bin/fm-spawn.sh` and records-only stale-claim retirement in `bin/fm-teardown.sh`.
+- Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts and prelaunch rollback in `bin/fm-spawn.sh` and records-only stale-claim retirement in `bin/fm-teardown.sh`, and the lease fakes and per-spawn slots that upstream adapter suites such as `tests/fm-commandcode-harness.test.sh` and `tests/fm-polytoken-harness.test.sh` need.
 - Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's); `tests/fm-spawn-prelaunch-lease-return.test.sh`; `tests/fm-spawn-prelaunch-rollback.test.sh`.
 - Upstream: has its own slot-owner claims, with further work in open PRs; which design is better is unresolved; upstream #6213 lets a stale record retire records-only when its slot's claim names another task, which the fork does not take because it reads those claims, so a lease held by another holder still refuses here.
   Upstream's Polytoken pool-restoring abort and its slot-claim tests are not taken either: the fork's generic prelaunch rollback returns the lease and retires every harness wiring directory `fm_control_harness_wiring_dirs` names, Polytoken's included.
@@ -519,10 +519,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### codex-double-chevron
 
-- Intent: Codex 0.160's `»` live composer prompt reads as empty only when it holds no input.
+- Intent: Codex 0.160's `»` live composer prompt reads as empty only when it holds no input; it counts only in the first column, so Command Code's indented `» permission bypass on` footer is never a composer.
 - Class: carried.
 - Seam: the Codex prompt glyphs in `bin/fm-composer-lib.sh` (shared).
-- Guard: `tests/fm-composer-lib.test.sh` `test_matrix_codex_double_chevron`.
+- Guard: `tests/fm-composer-lib.test.sh` `test_matrix_codex_double_chevron`; the separated-shape cases in `tests/fm-commandcode-harness.test.sh`.
 - Upstream: does not recognize `»`; drop once it does.
 
 ### ci-shard-split

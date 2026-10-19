@@ -146,6 +146,15 @@ SH
   printf '%s\n' "$fb"
 }
 
+# orca_project <dir>: a fixture project with a local bare origin. This fork
+# freshens an origin-less pool copy only for an explicit local-only ship
+# (docs/fork-divergences.md remote-less-local-only), so a case that launches
+# under another mode needs an origin to refresh from.
+orca_project() {
+  fm_git_init_commit "$1"
+  fm_git_add_origin "$1" "$1.origin.git"
+}
+
 test_orca_fresh_spawn_enters_the_worktree_it_created() {
   local case_dir home id=orca-fresh-a1 fb out status wt_recorded
   case_dir="$TMP_ROOT/fresh"
@@ -254,7 +263,7 @@ test_orca_launch_uses_controlled_tmux_environment() {
       *) printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist" ;;
     esac
     [ "$setting" != missing ] || printf 'FM_TEST_ABSENT\n' >> "$home/config/launch-env-allowlist"
-    fm_git_init_commit "$case_dir/project"
+    orca_project "$case_dir/project"
     cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -396,7 +405,7 @@ test_orca_spawn_waits_for_a_slow_pane_before_a_later_failure() {
   printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$home/data/backlog.md"
   printf 'backend = "markdown"\n\n[markdown]\npath = "data/backlog.md"\n' > "$home/.tasks.toml"
   "$real_axi" add "$id" "item for $id" --kind ship --file "$home/data/backlog.md" >/dev/null
-  fm_git_init_commit "$case_dir/project"
+  orca_project "$case_dir/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -444,7 +453,7 @@ test_orca_unrun_launch_file_is_reclaimed() {
   printf 'manual\n' > "$home/config/backlog-backend"
   printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
   printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-  fm_git_init_commit "$case_dir/project"
+  orca_project "$case_dir/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -486,7 +495,7 @@ test_orca_pane_wins_launch_file_race_at_deadline() {
   printf 'manual\n' > "$home/config/backlog-backend"
   printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
   printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-  fm_git_init_commit "$case_dir/project"
+  orca_project "$case_dir/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -537,7 +546,7 @@ test_orca_launch_file_delete_failure_keeps_terminal() {
   printf 'manual\n' > "$home/config/backlog-backend"
   printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
   printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-  fm_git_init_commit "$case_dir/project"
+  orca_project "$case_dir/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -585,7 +594,7 @@ test_orca_interrupted_spawn_reclaims_launch_file() {
       printf 'manual\n' > "$home/config/backlog-backend"
       printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
       printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-      fm_git_init_commit "$case_dir/project"
+      orca_project "$case_dir/project"
       cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -670,7 +679,7 @@ test_orca_interrupted_spawn_before_send_removes_launch_file() {
     printf 'manual\n' > "$home/config/backlog-backend"
     printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
     printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-    fm_git_init_commit "$case_dir/project"
+    orca_project "$case_dir/project"
     cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -768,7 +777,7 @@ test_orca_allowlist_without_source_warns() {
     else
       : > "$home/config/launch-env-allowlist"
     fi
-    fm_git_init_commit "$case_dir/project"
+    orca_project "$case_dir/project"
     cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
