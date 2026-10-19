@@ -659,7 +659,6 @@ test_partial_push_failure_keeps_the_reread_owed() {
     FM_FAKE_SSH_LOG="$CF_LOG" \
     FM_FAKE_ITEM_PUSHED=config/item-a \
     FM_FAKE_ITEM_FAIL=config/item-b \
-    FM_REMOTE_INHERIT_PUSH_JOBS=1 \
     FM_INHERITABLE_CONFIG='item-a item-b' \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
     "$ROOT/bin/fm-bootstrap.sh" 2>&1
@@ -701,7 +700,7 @@ assert_owed_reread_survives_unchanged_retry() {  # <script> <why>
 test_config_push_partial_failure_keeps_the_reread_owed() {
   local out rc
   convergence_fixture "$TMP_ROOT/config-push-partial-owed" sm:host-sm
-  out=$(FM_REMOTE_INHERIT_PUSH_JOBS=1 FM_FAKE_ITEM_PUSHED=config/item-a \
+  out=$(FM_FAKE_ITEM_PUSHED=config/item-a \
     FM_FAKE_ITEM_FAIL=config/item-b run_nudge_convergence fm-config-push.sh); rc=$?
   expect_code 1 "$rc" "a push that fails after applying an item must fail: $out"
   assert_contains "$out" 'pushed: config/item-a' "the applied item must still be reported: $out"

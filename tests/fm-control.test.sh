@@ -50,7 +50,7 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
     pi) printf '/quit\tEscape\t1\t\n' ;;
     pi-signed) printf '/quit\tEscape\t1\t\n' ;;
     omp) printf '/quit\tEscape\t1\t\n' ;;
-    devin) printf 'exit\tEscape\t2\t\n' ;;
+    devin) printf '/quit\tEscape\t2\t\n' ;;
     kiro) printf '/quit\tEscape\t1\t\n' ;;
     commandcode) printf '/quit\tEscape\t1\t\n' ;;
     grok) printf '/exit\tC-c\t1\t\n' ;;
@@ -391,7 +391,7 @@ test_devin_idle_interrupt_sends_one_press() {
   pass "fm-control Devin interrupt: an idle agent gets one Escape and reports not-running"
 }
 
-test_devin_exit_after_turn_ended_types_exit_once() {
+test_devin_exit_after_turn_ended_types_quit_once() {
   local dir out rc
   dir=$(new_case devin-exit-race)
   add_task "$dir" t1 devin
@@ -401,7 +401,7 @@ test_devin_exit_after_turn_ended_types_exit_once() {
   expect_code 0 "$rc" "exiting a Devin whose turn already ended should succeed"$'\n'"$out"
   [ "$(keys_sent "$dir")" = Escape ] \
     || fail "exit on a Devin whose turn already ended must send one Escape, got: $(keys_sent "$dir")"
-  [ "$(literals "$dir")" = exit ] || fail "exit should type the fork's plain exit once, got: $(literals "$dir")"
+  [ "$(literals "$dir")" = /quit ] || fail "exit should type /quit once, got: $(literals "$dir")"
   pass "fm-control Devin exit: a busy record whose turn already ended never opens the revert picker"
 }
 
@@ -1283,7 +1283,7 @@ test_interrupt_sends_each_harness_verified_key
 test_devin_interrupt_invalidates_busy
 test_kiro_interrupt_invalidates_busy
 test_devin_idle_interrupt_sends_one_press
-test_devin_exit_after_turn_ended_types_exit_once
+test_devin_exit_after_turn_ended_types_quit_once
 test_devin_interrupt_dismisses_revert_picker
 test_devin_stuck_picker_refuses_and_exit_types_nothing
 test_opencode_interrupts_twice_and_others_once

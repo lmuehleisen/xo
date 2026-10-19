@@ -1680,9 +1680,39 @@ test_escalate_batches_into_one_digest() {
   pass "multiple escalations flush as a single batched digest"
 }
 
-# The pointer bound protects every primary that receives the typed envelope, so
-# these cases pin a marker-preserving primary; a Claude Code primary receives the
-# same digest or pointer inside a record-backed doorbell instead.
+test_escalate_long_record_digest_needs_no_pointer() {
+  local dir state fakebin sent capture i long typed record kind
+  dir=$(make_supercase long-record-digest)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  capture="$dir/pane.txt"; printf '\342\235\257 \n' > "$capture"
+  long=$(printf 'x%.0s' $(seq 1 300))
+  for i in 1 2 3 4 5 6 7 8; do escalate_add "$state" "task-$i.status: blocked: event $i $long"; done
+  afk_enter "$state"
+  # A cap too small even for a pointer cannot block a record-backed primary.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 FM_DAEMON_PRIMARY_HARNESS=claude \
+    FM_INJECT_INLINE_MAX=40 escalate_flush "$state" || fail "long record-backed digest did not deliver"
+  typed=$(grep -v '\[ENTER\]' "$sent")
+  fm_operational_doorbell_path "$typed" record || fail "long digest did not type one operational doorbell: $typed"
+  [ "${#typed}" -lt 600 ] || fail "long digest typed an unexpectedly long doorbell"
+  printf '%s' "$typed" | FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-operational-input.sh" doorbell-kind > "$dir/kind" \
+    || fail "long digest doorbell did not classify"
+  kind=$(cat "$dir/kind")
+  [ "$kind" = away-supervisor ] || fail "long digest doorbell classified as $kind"
+  for i in 1 2 3 4 5 6 7 8; do
+    grep -F "task-$i.status: blocked: event $i $long" "$record" >/dev/null \
+      || fail "operational record does not directly contain event $i"
+  done
+  [ ! -e "$state/.subsuper-digests" ] || fail "a record-backed digest created a redundant pointer file"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "delivered record-backed events stayed buffered"
+  [ ! -e "$state/.subsuper-escalations.since" ] || fail "delivered record-backed buffer kept its age sidecar"
+  [ ! -e "$state/.subsuper-inject-owned" ] || fail "proven record-backed delivery kept its owned-input record"
+  [ "$(grep -c '\[ENTER\]' "$sent")" -eq 1 ] || fail "long record-backed digest submitted more than once"
+  pass "a record-backed primary receives the complete long digest directly behind one short doorbell, regardless of the typed-envelope cap"
+}
+
+# The pointer bound applies only to primaries that receive the typed envelope.
 test_escalate_long_digest_types_a_pointer() {
   local dir state fakebin sent capture i long typed file n
   dir=$(make_supercase long-digest)
@@ -2534,6 +2564,7 @@ test_normal_flush_clears_stale_wedge_marker() {
 # argument can carry. The fake tmux refuses any literal send above that.
 test_oversized_digest_is_bounded_and_kept_durable() {
   local dir state fakebin sent raw digest full i item line
+  local FM_DAEMON_PRIMARY_HARNESS=codex
   dir=$(make_bordered_case digest-oversized)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
@@ -2570,6 +2601,7 @@ test_oversized_digest_is_bounded_and_kept_durable() {
 
 test_inject_send_failure_logs_stage_stderr_and_bytes() {
   local dir state fakebin sent log item
+  local FM_DAEMON_PRIMARY_HARNESS=codex
   dir=$(make_bordered_case digest-send-failure)
   state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/daemon.log"
   sent="$dir/sent.log"; : > "$sent"
@@ -2627,6 +2659,7 @@ test_inject_enter_failure_logs_confirmation_stage() {
 
 test_bounded_digest_full_text_kept_after_typing() {
   local dir state fakebin sent log item digest full
+  local FM_DAEMON_PRIMARY_HARNESS=codex
   dir=$(make_bordered_case digest-kept-after-typing)
   state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/daemon.log"
   sent="$dir/sent.log"; : > "$sent"
@@ -3371,6 +3404,7 @@ test_housekeeping_herdr_idle_busy_record_clears_stale
 test_housekeeping_herdr_resumed_stale_cleared
 test_housekeeping_orca_persistent_stale_resolves_terminal
 test_escalate_batches_into_one_digest
+test_escalate_long_record_digest_needs_no_pointer
 test_escalate_long_digest_types_a_pointer
 test_escalate_pointer_line_is_bounded
 test_escalate_batch_age_uses_first_append

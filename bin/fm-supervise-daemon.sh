@@ -10,9 +10,10 @@
 # signal/stale/heartbeat wakes cost zero firstmate context; routing is owned by
 # .agents/skills/afk/SKILL.md (Classification policy).
 # Escalated events reach the LLM as one pre-read digest per
-# batch window. A digest too long to type safely is written to a
+# batch window. A typed digest too long to send safely is written to a
 # state/.subsuper-digests/ file holding every buffered event verbatim, and only a
-# short pointer line naming it is typed (see escalate_flush).
+# short pointer line naming it is typed (see escalate_flush). Record-backed
+# primaries receive the complete digest directly in their operational record.
 #
 # PRESENCE-GATING (the /afk contract). The daemon is the away-mode engine: it
 # injects ONLY when the durable away-mode flag state/.afk is present. Invoking
@@ -165,7 +166,8 @@
 #                                   state/.subsuper-digests/ and only a short
 #                                   pointer line naming that file is typed
 #                                   (default 480); a pointer that cannot fit
-#                                   is not typed and the buffer is kept
+#                                   is not typed and the buffer is kept.
+#                                   Record-backed primaries do not use this cap.
 #          FM_LOG_MAX_BYTES / FM_LOG_KEEP_LINES / FM_CRASH_*  log + crash guards
 #          FM_STATE_OVERRIDE        alternate state dir (testing)
 #          Logs each wake and each delivered digest to state/.supervise-daemon.log
@@ -265,9 +267,8 @@ INJECT_SHOW_POLLS_DEFAULT=10
 INJECT_QUIET_GAP_DEFAULT=0.3
 INJECT_PROOF_POLLS_DEFAULT=20
 # Longest typed envelope, in characters, before escalate_flush types a pointer to
-# a digest file instead. It sits below the length at which Claude Code folds a
-# typed burst (docs/verification/runtime-backends.md "Claude Code operational
-# input"; tests/fm-afk-claude-long-digest-live-e2e.test.sh re-measures it).
+# a digest file instead. Record-backed primaries already type only a doorbell,
+# so the cap applies only to the typed-envelope carrier.
 # Digest files older than DIGEST_RETAIN_DAYS are pruned at the next long flush.
 INJECT_INLINE_MAX_DEFAULT=480
 DIGEST_RETAIN_DAYS=7
@@ -854,11 +855,8 @@ _utf8_prefix() {  # <text> <max-bytes> <out-var>
 #
 # A digest whose typed envelope would exceed FM_INJECT_INLINE_MAX is written to
 # a durable file under state/.subsuper-digests/ and only a short pointer line is
-# typed. The primary's composer folds a long literal burst: Claude Code wraps it
-# in <pasted_content> or submits only its tail, so the operational header no
-# longer starts the message and the escalation reads as the captain returning.
-# A line well under that threshold arrives intact, idle or mid-turn, and fits
-# every transport's single-argument limit.
+# typed. A record-backed primary already receives only a doorbell, so its full
+# digest goes directly into the operational record without this extra file.
 escalate_flush() {  # <state>
   local state=$1 buf n msg dir file max encoded rc=0 sum
   buf="$state/.subsuper-escalations"
@@ -892,7 +890,8 @@ escalate_flush() {  # <state>
   max=${FM_INJECT_INLINE_MAX:-$INJECT_INLINE_MAX_DEFAULT}
   case "$max" in ''|*[!0-9]*) max=$INJECT_INLINE_MAX_DEFAULT ;; esac
   fm_operational_input_encode away-supervisor "$(_collapse_newlines "$msg")" encoded || return 1
-  if [ "${#encoded}" -gt "$max" ]; then
+  if ! fm_operational_harness_needs_record "$(fm_daemon_primary_harness)" \
+    && [ "${#encoded}" -gt "$max" ]; then
     # Content-addressed, so a deferred flush retried with the same buffer
     # rewrites the same file instead of leaving a duplicate behind.
     dir="$state/.subsuper-digests"

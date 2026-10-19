@@ -67,7 +67,7 @@ devin_lab_cleanup() {
   if [ "$rc" -ne 0 ] && [ -n "${DEVIN_LAB_KEEP:-}" ]; then
     printf 'Devin lab evidence retained: %s\n' "$LAB" >&2
   else
-    rm -rf "$LAB"
+    fm_test_remove_tree "$LAB"
   fi
 }
 

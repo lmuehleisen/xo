@@ -339,16 +339,12 @@ fm_control_interrupt_ack_source() {  # <harness>
   esac
 }
 
-# The command that exits the agent from its own composer. devin's `/exit`
-# slash form is ambiguous against its `/revert <step>` fuzzy command search
-# and can open that menu instead of exiting, so the verified exit cannot
-# complete; devin's own docs document plain `exit` (no `/` prefix) as
-# an equivalent, unambiguous alias, so devin alone uses that form.
+# The command that exits the agent from its own composer. Devin uses `/quit`
+# because `/exit` can select `/revert <step>` in its fuzzy command search.
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
     claude|opencode|grok|kimi|cursor|muse|rovo|agy) printf '/exit' ;;
-    devin) printf 'exit' ;;
-    codex|pi|pi-signed|omp|gemini|kiro|commandcode|polytoken) printf '/quit' ;;
+    codex|pi|pi-signed|omp|gemini|kiro|commandcode|polytoken|devin) printf '/quit' ;;
     *) return 1 ;;
   esac
 }

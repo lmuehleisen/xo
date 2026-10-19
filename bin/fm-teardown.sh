@@ -168,8 +168,8 @@
 # task's unlanded work, never another task's work. For a legacy collision,
 # --retire-stale-claim is a separate record-only migration: a Treehouse ship's
 # endpoint and every other claimant must be recovery-grade dead or missing,
-# each claimant's conventional fm/<task-id> local branch must independently pass
-# the committed-work landed proof using freshly fetched remote refs, and the
+# each claimant's recorded branch (legacy fm/<task-id> when absent) must
+# independently pass the committed-work landed proof using freshly fetched remote refs, and the
 # clean checked-out branch must identify exactly one OTHER claimant. A missing
 # branch, detached HEAD, non-ship claimant, or ambiguous ownership refuses.
 # The stale claimant's shared HEAD is never its landed evidence: an earlier
@@ -2679,8 +2679,27 @@ stale_claim_branch_landed() {
   fi
 }
 
+stale_claim_recorded_branch() {  # <meta> <id>
+  local meta=$1 id=$2 branch validated
+  if grep -q '^branch=' "$meta"; then
+    branch=$(fm_backend_meta_exact_value "$meta" branch) || {
+      echo "REFUSED: claimant $id has an empty or ambiguous recorded branch; preserve every claim." >&2
+      return 1
+    }
+  else
+    branch="fm/$id"
+  fi
+  # Validate a literal branch name, rejecting checkout shorthand expansion.
+  if ! validated=$(git -C "$WT" check-ref-format --branch "$branch" 2>/dev/null) \
+     || [ "$validated" != "$branch" ]; then
+    echo "REFUSED: claimant $id has an invalid recorded branch; preserve every claim." >&2
+    return 1
+  fi
+  printf '%s' "$branch"
+}
+
 validate_stale_claim_retirement() {
-  local slot current dirty own_branch="fm/$ID" other other_id other_kind lock field path owner_count=0
+  local slot current dirty own_branch other other_id other_kind other_branch lock field path owner_count=0
   local -a claims
   [ "$KIND" = ship ] && [ "$BACKEND" != orca ] || {
     echo "REFUSED: stale-claim retirement requires a Treehouse ship task." >&2
@@ -2693,6 +2712,7 @@ validate_stale_claim_retirement() {
     return 1
   }
   claims=("${FM_WORKTREE_CLAIMS[@]}")
+  own_branch=$(stale_claim_recorded_branch "$META" "$ID") || return 1
   current=$(git -C "$WT" symbolic-ref --quiet HEAD) || {
     echo "REFUSED: shared worktree $WT has a detached HEAD; claimant ownership is ambiguous." >&2
     return 1
@@ -2723,7 +2743,8 @@ validate_stale_claim_retirement() {
       return 1
     }
     stale_claim_endpoint_stopped "$other" "$other_id" || return 1
-    [ "$current" != "refs/heads/fm/$other_id" ] || owner_count=$((owner_count + 1))
+    other_branch=$(stale_claim_recorded_branch "$other" "$other_id") || return 1
+    [ "$current" != "refs/heads/$other_branch" ] || owner_count=$((owner_count + 1))
   done
   [ "$owner_count" = 1 ] || {
     echo "REFUSED: the checked-out branch does not identify exactly one other claimant; preserve every claim." >&2
@@ -2737,7 +2758,8 @@ validate_stale_claim_retirement() {
   fi
   for other in "${claims[@]}"; do
     other_id=${other##*/}; other_id=${other_id%.meta}
-    if ! stale_claim_branch_landed "fm/$other_id" "$other"; then
+    other_branch=$(stale_claim_recorded_branch "$other" "$other_id") || return 1
+    if ! stale_claim_branch_landed "$other_branch" "$other"; then
       echo "REFUSED: claimant $other_id's branch is missing or unlanded; preserve every claim." >&2
       return 1
     fi

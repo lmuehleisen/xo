@@ -260,27 +260,30 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 ### devin-adapter-mechanics
 
 - Intent: the fork's own Devin adapter, which predates upstream's; converged onto upstream's private config writer and its common portable suite and live guard (the change that added `tests/fm-devin-fork-harness.test.sh`).
-- Class: carried; after that convergence the remaining fork mechanics are plain `exit`, the SWE-2 Max default, the full-frame composer selector, and legacy worktree-wiring cleanup.
-- Seam: fork-only `bin/fm-devin-lib.sh`, `bin/fm-composer-devin-lib.sh`, and `tests/devin-live-helpers.sh`; in shared files, the lines marked `Fork` in `tests/fm-devin-harness.test.sh` and `tests/fm-devin-signals-live-e2e.test.sh`, and the Devin selector's source line and calls in `bin/fm-composer-lib.sh`.
+- Class: carried; the remaining fork mechanics are the SWE-2 Max default, preservation of the user's Claude configuration import choice, the full-frame composer selector, and legacy worktree-wiring cleanup.
+- Seam: fork-only `bin/fm-devin-lib.sh`, `bin/fm-composer-devin-lib.sh`, and `tests/devin-live-helpers.sh`; the Devin launch and resolver calls in `bin/fm-spawn.sh`, the fork adaptations in `tests/fm-devin-harness.test.sh` and `tests/fm-devin-signals-live-e2e.test.sh`, and the Devin selector's source line and calls in `bin/fm-composer-lib.sh`.
 - Guard: `tests/fm-devin-harness.test.sh`; `tests/fm-devin-fork-harness.test.sh`; `tests/fm-composer-devin.test.sh`; `tests/fm-control-relaunch-bindings.test.sh` (relaunch away from Devin retires only firstmate-owned wiring); the opt-in live guards `tests/fm-devin-signals-live-e2e.test.sh` and `tests/fm-devin-rate-limit-retry-live-e2e.test.sh`.
-- Upstream: exits with `/quit`, reads the composer through the generic glyph rules, and recognizes only `esc twice`; the full-frame selector and the `esc again` signal are candidates to offer upstream.
+- Upstream: the fork now uses upstream's executable resolver and `/quit` exit command; upstream otherwise uses its native default model, disables Claude configuration import, reads the composer through generic glyph rules, and recognizes only `esc twice`.
+  Keep the stronger frame reader and both interrupt signals until upstream can classify the same cursorless and interrupted screens; retire legacy cleanup only when no supported task can retain the older worktree wiring.
 
 ### agy-adapter-mechanics
 
-- Intent: the fork's first-class agy adapter.
-- Class: carried, open convergence question under investigation; not decided.
+- Intent: agy primary and local secondmate support, native lifecycle hooks, physical directory grants, and model-aware effort support.
+- Class: carried; these are functional additions to upstream's worker adapter.
 - Seam: fork-only `bin/fm-agy-lib.sh`, and the large fork diff in shared `tests/fm-agy-harness.test.sh`.
 - Guard: `tests/fm-agy-harness.test.sh`.
-- Upstream: ships its own agy adapter; converging onto it while keeping `agy-permission-posture` is the open question.
+- Upstream: ships a worker-only adapter without equivalent native hook wiring or all the fork's directory and effort mappings; the fork already uses its bounded shared catalog probing.
+  Drop each remaining seam when upstream supports its behavior, keeping the separately intended `agy-permission-posture` entry.
 
 ### worktree-leases
 
-- Intent: durable Treehouse task leases; the fork dropped upstream's slot-claim files.
-- Class: carried, open convergence question; not decided.
-- Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts and prelaunch rollback in `bin/fm-spawn.sh` and records-only stale-claim retirement in `bin/fm-teardown.sh`, and the lease fakes and per-spawn slots that upstream adapter suites such as `tests/fm-commandcode-harness.test.sh` and `tests/fm-polytoken-harness.test.sh` need.
-- Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's); `tests/fm-spawn-prelaunch-lease-return.test.sh`; `tests/fm-spawn-prelaunch-rollback.test.sh`.
-- Upstream: has its own slot-owner claims, with further work in open PRs; which design is better is unresolved; upstream #6213 lets a stale record retire records-only when its slot's claim names another task, which the fork does not take because it reads those claims, so a lease held by another holder still refuses here.
-  Upstream's Polytoken pool-restoring abort and its slot-claim tests are not taken either: the fork's generic prelaunch rollback returns the lease and retires every harness wiring directory `fm_control_harness_wiring_dirs` names, Polytoken's included.
+- Intent: preserve each task's checkout across process death through a durable Treehouse lease and per-task receipt.
+- Class: carried; replacing this ownership model would require equivalent checkout preservation and recovery proof.
+- Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts, prelaunch rollback and launched-Polytoken recovery records in `bin/fm-spawn.sh`, records-only stale-claim retirement in `bin/fm-teardown.sh`, and the lease fakes and per-spawn slots that upstream adapter suites such as `tests/fm-commandcode-harness.test.sh` and `tests/fm-polytoken-harness.test.sh` need.
+- Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's); `tests/fm-spawn-prelaunch-lease-return.test.sh`; `tests/fm-spawn-prelaunch-rollback.test.sh`; `tests/fm-polytoken-harness.test.sh` launched-failure ownership cases; `tests/fm-teardown-endpoint-safety.test.sh` recorded-branch and stale-claim cases.
+- Upstream: binds slot-owner claims to process lifetimes, permitting clean slots to be reused after their owner dies; the durable lease instead protects a task's existing checkout until explicit guarded return.
+  Upstream #6213 permits records-only retirement when a slot claim names another task; the fork requires independent landed, endpoint, recorded-branch and current-owner proof, and still refuses a lease held by another holder.
+  Generic rollback returns a provably unstarted clean lease, but a launched Polytoken prompt may already have changed the checkout, so a readiness failure preserves metadata, credentials, wiring and the lease for guarded recovery rather than returning the pool slot.
 
 ### claude-trust-escape
 
@@ -303,8 +306,9 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: recover a stranded steering doorbell.
 - Class: carried.
 - Seam: steering doorbell delivery in `bin/fm-send.sh`, `bin/fm-task-inbox-lib.sh`, `bin/fm-remote-secondmate-control.sh`, `bin/fm-watch.sh`, and `bin/fm-composer-lib.sh` (shared).
-- Guard: none.
-- Upstream: overlaps upstream PR #4485; drop once that lands equivalently.
+- Guard: `tests/fm-task-inbox.test.sh` stranded, exact-row, provenance and retry cases; `tests/fm-send-inbox.test.sh` stranded-delivery cases.
+- Upstream: #4485 was superseded by merged #5374, but its whitespace-compacting match is broader than the fork's exact owned-doorbell match.
+  Keep the stricter match and bounded retry until upstream preserves user drafts and the same provenance checks; a blank or unreadable composer alone is not proof that an owned doorbell remains there.
 
 ### tmux-presence
 
@@ -344,7 +348,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: `bin/fm-claude-stop-autoarm.sh`, `bin/fm-wake-lib.sh`, `bin/fm-watch-arm.sh`, `bin/fm-supervise-daemon.sh`, `bin/fm-afk-launch.sh`, `bin/fm-afk-start.sh`, `bin/fm-tmux-lib.sh`, `bin/fm-composer-lib.sh`, `bin/backends/tmux.sh`, `bin/fm-spawn.sh`, `bin/fm-test-run.sh`, and the `StopFailure` hook registration in `.claude/settings.json`, limited to the hunks those PRs added (shared).
 - Guard: `tests/fm-claude-stop-autoarm.test.sh`; `tests/fm-turnend-guard.test.sh`; `tests/fm-watch-arm.test.sh`; `tests/fm-daemon.test.sh`; `tests/fm-afk-launch.test.sh`; `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-tmux-submit-busy.test.sh`; `tests/fm-control-relaunch.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; the opt-in live guards `tests/fm-claude-stopfailure-live-e2e.test.sh` and `tests/fm-afk-claude-long-digest-live-e2e.test.sh`.
-- Upstream: delivers every away escalation to a Claude Code primary as a record-backed doorbell (upstream #5664), which the fork takes, so the pointer only shortens what a typed-envelope primary receives; upstream bounds the digest at 8 KiB with a full-text file instead (upstream #5554), which the fork does not take; `tests/fm-afk-claude-long-digest-live-e2e.test.sh` still measures the typed Claude path and needs re-pointing before its next run.
+- Upstream: delivers every away escalation to a Claude Code primary as a record-backed doorbell (upstream #5664), which the fork takes without an additional digest-pointer file; only typed-envelope carriers retain the fork's 480-character pointer threshold.
+  The Claude live guard verifies complete record-backed payload delivery; upstream's separate 8 KiB digest cap (upstream #5554) remains unapplied to typed-envelope carriers.
   The upstream lost-hand-back notice is retained; the fork resets its failure episode only after a rewake commits, so a failed hand-back keeps the once-per-episode notice.
 
 ### away-inject-delivery-proof
@@ -525,6 +530,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-composer-lib.test.sh` `test_matrix_codex_double_chevron`; the separated-shape cases in `tests/fm-commandcode-harness.test.sh`.
 - Upstream: does not recognize `»`; drop once it does.
 
+### codex-composer-extraction
+
+- Intent: distinguish animation and ghost decoration from draft text while preserving exact composer text for owned-input recovery.
+- Class: carried; the original busy-animation motivation was superseded, but the extraction behavior remains independently necessary.
+- Seam: animation, painted-braille, and ghost extraction in `bin/fm-composer-lib.sh`; `tests/fixtures/codex-animation/`; the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`.
+- Guard: `tests/fm-composer-ghost.test.sh`; `tests/fm-composer-lib.test.sh` animation and painted-braille cases.
+- Upstream: replaced #4297 with #4532; retire these extraction seams only when its reader preserves draft characters and excludes decoration in the same cases.
+
 ### ci-shard-split
 
 - Intent: portable serial CI runs as eleven shards, with the supervision-host suite split into attended, away, and recovery suites, so each shard stays inside the CI job limit.
@@ -535,7 +548,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ## Incidental
 
-- `codex-animation-port`: the fork's port of upstream #4297 (`tests/fixtures/codex-animation/`), which upstream replaced with #4532; the animation, painted-braille, and ghost extraction hunks in `bin/fm-composer-lib.sh`, their cases in `tests/fm-composer-ghost.test.sh` and `tests/fm-composer-lib.test.sh`, and the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`; kept for now at a known cost.
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
 - `pi-package-discovery`: fork-only `tests/pi-package.sh` lets the Pi SDK suites find a Homebrew Pi install; offer it upstream.
 - `hold-doc-layout`: `docs/captain-hold-lifecycle.md` keeps the fork's condensed layout around the hunks its entries own; realign the layout when convenient.

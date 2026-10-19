@@ -680,7 +680,9 @@
 # `polytoken sessions --format json`. The license dialog is a BLOCKER by captain
 # decision (2026-10-07): `--accept-license-terms` is never passed, and the
 # readiness gate fails loudly on any first-start dialog the launch cannot get
-# past. bin/fm-polytoken-lib.sh owns every generated artifact and the verified
+# past. Once launch delivery begins, a failure retains the task record, lease,
+# session files and wiring for guarded recovery: --prompt may already have run.
+# bin/fm-polytoken-lib.sh owns every generated artifact and the verified
 # facts; .agents/skills/harness-adapters/references/harness/polytoken.md owns the
 # knowledge record. polytoken is crewmate/scout only and is refused for
 # --secondmate, like agy and devin.
@@ -3951,7 +3953,10 @@ esac
 
 [ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__DEVINBIN__*)
-  DEVIN_BIN=$(resolve_devin_binary) || exit 1
+  DEVIN_BIN=$(resolve_pi_executable devin) || {
+    echo "error: devin executable not found on PATH; install the Devin CLI or select a different verified harness" >&2
+    exit 1
+  }
   ;;
 esac
 
@@ -5971,19 +5976,33 @@ spawn_record_polytoken_session() {
 }
 
 polytoken_spawn_fail() {  # <detail>
+  # --prompt may have started work even if its hook or session binding failed.
+  # Preserve its owner before cleanup can fail or be interrupted; endpoint
+  # absence and an unchanged worktree cannot prove the daemon did no work.
+  SPAWN_FRESH_COMMIT_PENDING=0
+  RELAUNCH_REPLACEMENT_PENDING=0
   printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
-  echo "error: $1; inspect window $T" >&2
-  # A failed gate leaves nothing running or recorded: reap this launch's exact
-  # session daemon (scoped to this task's sessions root), retire the per-task
-  # wiring (the sessions roots, config dir, worktree hook layer, facet, and
-  # busy writer), then close the endpoint exactly like the agy gate.
+  # Keep discovered control coordinates durable even when the readiness hook
+  # never arrived. A failed publication still leaves the task's credential
+  # roots and original metadata available for explicit recovery.
   if [ -n "$POLYTOKEN_SESSION_ID" ]; then
-    "$POLYTOKEN_BIN" --config-dir "$(fm_polytoken_config_dir "$STATE_REAL" "$ID")" \
+    if ! spawn_record_polytoken_session; then
+      echo "warning: Polytoken session $POLYTOKEN_SESSION_ID could not be bound to $STATE/$ID.meta; its session and credential files are retained under $STATE_REAL/$ID.polytoken-sessions*" >&2
+    fi
+    if ! "$POLYTOKEN_BIN" --config-dir "$(fm_polytoken_config_dir "$STATE_REAL" "$ID")" \
       reap "$POLYTOKEN_SESSION_ID" --force \
-      --sessions-dir "$(fm_polytoken_sessions_root "$STATE_REAL" "$ID")" >/dev/null 2>&1 || true
+      --sessions-dir "$(fm_polytoken_sessions_root "$STATE_REAL" "$ID")" >/dev/null 2>&1; then
+      echo "warning: Polytoken session $POLYTOKEN_SESSION_ID could not be reaped; its daemon may still be running" >&2
+    fi
   fi
-  clear_relaunch_harness_wiring polytoken "$WT" "$STATE_REAL" "$ID" || true
   spawn_delivery_endpoint_cleanup
+  if spawn_endpoint_proven_absent; then
+    SPAWN_ENDPOINT_CLOSED=1
+    echo "error: $1; endpoint is closed; task record $STATE/$ID.meta, lease and wiring are retained for guarded recovery or cleanup" >&2
+  else
+    SPAWN_ENDPOINT_CLOSED=0
+    echo "error: $1 and endpoint shutdown is unconfirmed; task record $STATE/$ID.meta, lease and wiring are retained for recovery" >&2
+  fi
 }
 
 if [ "$RELAUNCH" -eq 1 ] && [ "$BACKEND" = orca ]; then
@@ -7718,6 +7737,11 @@ SPAWN_PRELAUNCH_ENDPOINT=0
 SPAWN_PRELAUNCH_LEASE=0
 SPAWN_PRELAUNCH_WIRING=0
 SPAWN_LAUNCH_SENT=1
+# Polytoken submits its prompt as part of this command, so any delivery result
+# from here can hide a running daemon. A failed gate must retain its task owner.
+if [ "$HARNESS" = polytoken ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  SPAWN_FRESH_COMMIT_PENDING=0
+fi
 # errexit is on here: a failed send still exits, and Orca source mode first
 # removes the credential-bearing file the pane never received.
 if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
@@ -7914,7 +7938,9 @@ else
   fi
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
-  if [ "$RELAUNCH" -eq 0 ]; then
+  if [ "$HARNESS" = polytoken ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+    echo "error: Polytoken task $ID may have processed its brief but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); task record $STATE/$ID.meta, lease and wiring are retained - reconcile the backlog before guarded recovery or cleanup" >&2
+  elif [ "$RELAUNCH" -eq 0 ]; then
     if spawn_fresh_commit_rollback; then
       echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its record was removed so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
     else

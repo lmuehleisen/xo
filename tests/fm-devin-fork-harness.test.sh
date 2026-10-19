@@ -314,6 +314,22 @@ EOF
   pass "fm-spawn.sh: missing devin binary refuses before spawn"
 }
 
+test_devin_relative_path_resolves_before_worktree_entry() {
+  local fields case_dir home proj wt fakebin id out
+  fields=$(make_spawn_case relative-bin)
+  IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$fields
+EOF
+  mkdir "$case_dir/relative-tools"
+  mv "$fakebin/devin" "$case_dir/relative-tools/devin"
+  out=$(cd "$case_dir" && FM_TEST_PATH_OVERRIDE="relative-tools:$fakebin:$PATH" \
+    run_devin_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout) ||
+    fail "a PATH-relative executable must launch through its absolute path: $out"
+  assert_contains "$(cat "$home/launch.log")" "'$case_dir/relative-tools/devin' --permission-mode smart" \
+    "the launch must pin the absolute executable before entering the task worktree"
+  pass "fm-spawn.sh: Devin resolves a PATH-relative executable to its absolute launch path"
+}
+
 test_devin_launch_shape_and_model_handling() {
   local fields case_dir home proj wt fakebin id launch
   fields=$(make_spawn_case shape)
@@ -1084,6 +1100,7 @@ test_devin_manual_uses_normal_and_never_bypass
 test_devin_absent_setting_defaults_to_smart
 test_devin_invalid_setting_refuses
 test_devin_missing_binary_refuses
+test_devin_relative_path_resolves_before_worktree_entry
 test_devin_launch_shape_and_model_handling
 test_devin_hooks_generation_validation_and_execution
 test_devin_private_config_preserves_user_config

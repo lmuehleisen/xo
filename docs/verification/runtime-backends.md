@@ -8,6 +8,53 @@ Exact task chronology, branch names, temporary homes, local paths, process ids, 
 This fork's own evidence - its reviewed launches, remote-less dispatch, task leases, tmux shell submission, Claude Code operational input, composer refresh, stranded-doorbell recovery, merge-grant gate, and its agy and Devin adapters - lives in [runtime-backends-fork.md](runtime-backends-fork.md).
 The shared credential classifier's real Devin and agy pre-tool veto evidence is recorded in [Shared credential hook veto](runtime-backends-fork.md#shared-credential-hook-veto).
 
+## Devin exit and native resume
+
+Verified on 2026-10-19 on macOS with `devin 3000.11.92 (7f4e64980e22)` and tmux, using the generated reviewed launch in an isolated home and private server.
+The shared control plane now uses upstream's `/quit` command.
+The live guard exercises real prompt processing, native Stop, durable steering acknowledgement, the idle Escape and revert-picker safeguards, interruption without a false idle claim, exit, and native `-r` resume followed by another exit.
+
+Refresh command:
+
+```sh
+FM_DEVIN_SIGNALS_LIVE=1 bash bin/fm-test-run.sh tests/fm-devin-signals-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - devin 3000.11.92 (7f4e64980e22): spawn brief, model, reviewed mode, trust, identity and native Stop
+ok - devin 3000.11.92 (7f4e64980e22): no Claude Code hook ran and the worker commit carries no attribution
+ok - devin 3000.11.92 (7f4e64980e22): real fm-send doorbell read and acknowledged
+ok - devin 3000.11.92 (7f4e64980e22): idle interrupt sends one press; an open revert picker blocks exit and is closed without reverting
+ok - devin 3000.11.92 (7f4e64980e22): double Escape cancels, preserves agent, and invalidates busy state
+ok - devin 3000.11.92 (7f4e64980e22): /quit and native -r session resume in reviewed mode
+```
+
+## Claude record-backed long digests
+
+Verified on 2026-10-19 on macOS arm64 with Claude Code `2.1.303 (Claude Code)`, tmux `3.8`, and Bash `3.2.57`.
+The guard uses an isolated marked home, private tmux socket, safe mode, ordinary permissions, and only path-scoped Read.
+It confirms actual model reads and receipt tokens, rather than inferring consumption from an empty composer.
+Cleanup left no test session processes, temporary home, or temporary workspace trust entry.
+
+Exact live command:
+
+```sh
+FM_TEST_SKIP_ORPHAN_REAP=1 FM_AFK_CLAUDE_DIGEST_LIVE_E2E=1 bash tests/fm-afk-claude-long-digest-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - Claude Code 2.1.303 (Claude Code): one short doorbell classifies as away-supervisor and the model reads all eight events directly from its long operational record
+ok - Claude Code 2.1.303 (Claude Code): an owned long-digest doorbell left without Enter is recovered and consumed exactly once
+ok - Claude Code 2.1.303 (Claude Code): stale owned input is cleared without submission and the fresh long record is consumed despite a 40-character typed-envelope cap
+```
+
+`bash tests/fm-daemon.test.sh` passed 152 cases and `bash tests/fm-afk-inject-delivery-proof.test.sh` passed 10 cases with the same orphan-reap isolation setting.
+Those portable regressions also preserve the typed-envelope carrier's pointer threshold and positive delivery proof.
+
 ## Polytoken worker lifecycle
 
 Verified on 2026-10-14 with Polytoken 0.9.0 on macOS arm64 using the tmux worker path.
