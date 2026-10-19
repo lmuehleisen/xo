@@ -342,8 +342,9 @@ test_matrix_codex_double_chevron() {
   for caps in "$CAPS_TMUX" "$CAPS_STYLED" "$CAPS_STYLED_NOID"; do
     assert_screen "codex 0.160 idle double chevron" empty "$caps" $'banner\n»' 1
     assert_screen "codex 0.160 typed double chevron" pending "$caps" $'banner\n» fix the bug' 1
+    assert_screen "indented double chevron footer" unknown "$caps" $'banner\n  » permission bypass on' 1
   done
-  pass "Codex's double chevron proves empty only when it holds no real input"
+  pass "Codex's double chevron proves empty only when it holds no real input, and only in the first column"
 }
 
 test_matrix_muse_truecolor_glyph_survives_signal_loss() {

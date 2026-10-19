@@ -1261,7 +1261,10 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
     if [ "$top" -lt 0 ] && fm_composer_leading_shell_glyph_var glyph "$trimmed" \
        && ! _fm_composer_row_is_pi_status "$trimmed"; then
       FM_COMPOSER_SCAN_SHELL_ROW=$row
-    elif fm_composer_leading_agent_glyph_var glyph "$trimmed"; then
+    elif fm_composer_leading_agent_glyph_var glyph "$trimmed" \
+       && { [ "$glyph" != '»' ] || [ -z "$indent" ]; }; then
+      # Codex draws its live `»` prompt in the first column; Command Code's
+      # indented `» permission bypass on` footer is furniture, not a composer.
       FM_COMPOSER_SCAN_BARE_ROW=$row
     fi
     # Cursor safety: a cursor sitting on a structural edge row is never an
