@@ -7385,9 +7385,13 @@ claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse | rovo 
   ;;
 esac
 # Preserve identity when an Agy primary launches another harness; Agy itself
-# re-establishes its own marker after this boundary.
+# re-establishes its own marker after this boundary. Polytoken's launch opens
+# with a shell loop, so the unset joins its own env boundary instead.
 if [ "$RAW_LAUNCH" -eq 0 ]; then
-  LAUNCH="env -u JETSKI_APP_DATA_DIR $LAUNCH"
+  case "$HARNESS" in
+  polytoken) LAUNCH=${LAUNCH/ env -u CLAUDECODE / env -u JETSKI_APP_DATA_DIR -u CLAUDECODE } ;;
+  *) LAUNCH="env -u JETSKI_APP_DATA_DIR $LAUNCH" ;;
+  esac
 fi
 # Crewmate panes are created by a long-lived tmux/herdr daemon that does not
 # inherit firstmate's current environment, so a bare `claude` in the pane falls
