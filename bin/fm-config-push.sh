@@ -160,24 +160,21 @@ while IFS='|' read -r id home _window meta; do
       remote_converged=0
       errors=1
     fi
-    if [ "$remote_rc" -eq 255 ] || printf '%s\n' "$remote_out" | grep -Eq '^(pushed|removed):'; then
+    remote_changed=0
+    if printf '%s\n' "$remote_out" | grep -Eq '^(pushed|removed):'; then remote_changed=1; fi
+    if [ "$remote_rc" -eq 255 ] || [ "$remote_changed" -eq 1 ]; then
       remote_nudge=1
     fi
-    if [ "$remote_rc" -eq 255 ]; then
+    if [ "$remote_rc" -eq 255 ] && [ "$remote_changed" -eq 0 ]; then
       # Completion is unknown, so the batch may still land after this run: the
       # write-ahead marker keeps the reread owed until a completed push sends it.
       :
     elif [ "$remote_nudge" -eq 1 ]; then
-      # A partial batch still nudges for the items it changed; the retained
-      # marker then owes only the retry, not another reread.
+      # A partial batch still nudges for the items it changed; until a push
+      # converges, the write-ahead marker keeps the reread owed for the retry.
       if FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
         "$SCRIPT_DIR/fm-send.sh" "fm-$id" "$FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE" >/dev/null 2>&1; then
-        if [ "$remote_converged" -eq 1 ]; then
-          rm -f -- "$remote_marker"
-        else
-          fm_secondmate_nudge_write "$STATE" "$id" "$home" "" remote \
-            "$FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE" 1 0 || echo "  config-reread: retry marker update failed"
-        fi
+        [ "$remote_converged" -eq 0 ] || rm -f -- "$remote_marker"
         echo "  config-reread: sent"
       else
         echo "  config-reread: send failed; retry retained"

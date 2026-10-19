@@ -706,6 +706,9 @@ EOF
     if [ "$harness" = opencode ]; then
       # shellcheck disable=SC2016 # The stub must expand its own positional argument.
       printf '#!/bin/sh\n[ "${1:-}" != --version ] || printf "opencode v2.0.18\\n"\nexit 0\n' > "$fakebin/$harness"
+    elif [ "$harness" = cursor-agent ]; then
+      # Cursor resolution trusts only an executable whose --help names the agent.
+      printf '#!/bin/sh\necho "Start the Cursor Agent"\n' > "$fakebin/$harness"
     else
       printf '#!/bin/sh\nexit 0\n' > "$fakebin/$harness"
     fi

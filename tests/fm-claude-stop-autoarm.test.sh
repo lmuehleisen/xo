@@ -2571,13 +2571,21 @@ test_stopfailure_defers_to_live_continuity() {
   dir=$(make_primary_dir "$TMP_ROOT/sf-open-claim")
   : > "$dir/state/task.meta"
   write_failure_transcript "$dir/state/transcript.jsonl" overloaded "overloaded"
-  sleep 60 &
-  pid=$!
-  record_autoarm_v2_claim "$dir" 464 "$pid" arming "$pid" || fail "could not record a v2 claim"
   touch "$dir/state/.last-watcher-beat"
-  out=$(run_stopfailure "$dir" "$(stopfailure_payload "$dir/state/transcript.jsonl" overloaded "overloaded")"); status=$?
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  # The claim owner is a child of the lock-holding session, as a real Stop
+  # cycle's hook is; a claim its session cannot reach is not open.
+  printf '%s\n' "$(stopfailure_payload "$dir/state/transcript.jsonl" overloaded "overloaded")" > "$dir/state/sf-payload"
+  out=$(run_session "$dir" '
+    sleep 60 &
+    owner=$!
+    identity=$(. "$FM_HOME/bin/fm-wake-lib.sh"; fm_pid_identity "$owner") || exit 97
+    printf "epoch=464 owner_pid=%s outcome=arming updated_at=1\n%s\n" "$owner" "$identity" \
+      > "$FM_HOME/state/.claude-autoarm-epoch"
+    $SF_HOOK < "$FM_HOME/state/sf-payload"
+    rc=$?
+    kill "$owner" 2>/dev/null
+    exit "$rc"'); status=$?
+  [ "$status" -ne 97 ] || fail "could not record a v2 claim for the session-owned sleeper"
   expect_code 0 "$status" "a live Stop-owned cycle already owns continuity"
   [ -z "$out" ] || fail "deferring to a live cycle produced output: $out"
   [ "$(epoch_field "$dir" epoch)" = 464 ] || fail "the StopFailure hook superseded a live open Stop-owned claim"

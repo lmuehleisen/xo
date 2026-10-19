@@ -4554,7 +4554,9 @@ test_allow_no_pipeline_merges_only_a_null_head_pipeline() {
 test_allow_no_pipeline_is_attended_only_and_gitlab_only() {
   local case_dir rc head
   case_dir=$(make_gitlab_case gitlab-no-pipeline-away pipeline=null)
-  write_away_record "$case_dir" --words 'merge task-x1'
+  # The fork's away authority needs a merge grant (or yolo) before any waiver
+  # is weighed, so grant the task to reach the attended-only refusal.
+  write_away_record "$case_dir" --words 'merge task-x1 when green' --grant task-x1
   set +e
   run_pr_merge "$case_dir" task-x1 "$MR_URL" --allow-no-pipeline \
     > "$case_dir/stdout" 2> "$case_dir/stderr"

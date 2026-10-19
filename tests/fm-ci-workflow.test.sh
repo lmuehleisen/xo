@@ -452,8 +452,6 @@ jobs = YAML.load_file(ARGV[0]).fetch("jobs")
 gate = jobs.fetch("ci-pass")
 raise "ci-pass must be named ci-pass so the ruleset requires one stable check" \
   unless gate.fetch("name") == "ci-pass"
-raise "ci-pass must run even when a needed job fails" \
-  unless gate["if"].to_s.strip == "always()"
 needs = Array(gate["needs"]).map(&:to_s).sort
 expected = (jobs.keys.map(&:to_s) - ["ci-pass"]).sort
 raise "ci-pass.needs misses jobs: #{(expected - needs).join(" ")}" unless (expected - needs).empty?
@@ -469,7 +467,20 @@ raise "ci-pass must read the needed jobs' results, or a no-op gate would pass" \
 raise "ci-pass must fail unless each needed result is success" \
   unless surface.include?("success")
 RUBY
-  pass "ci-pass waits on every other CI job and runs under always()"
+  local event skip_push expected actual
+  while read -r event skip_push expected; do
+    [ "$skip_push" != - ] || skip_push=
+    actual=$(job_runs_under ci-pass "$event" "$skip_push" '' failure) \
+      || fail "could not resolve the ci-pass condition for $event FM_CI_SKIP_PUSH=$skip_push"
+    [ "$actual" = "$expected" ] \
+      || fail "after a failed lane, ci-pass on $event with FM_CI_SKIP_PUSH=$skip_push must resolve $expected, got $actual"
+  done <<'TABLE'
+pull_request - true
+pull_request 1 true
+push         - true
+push         1 false
+TABLE
+  pass "ci-pass waits on every other CI job and still runs after a failed lane unless the push run is skipped"
 }
 
 test_ci_matrices_match_executable_partitions

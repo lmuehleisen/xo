@@ -4580,9 +4580,9 @@ if [ "$KIND" = ship ]; then
   # as an upstream-consent= token on that same line; like mode and forge, the
   # brief and the spawn flag must agree so the worker's contract and the task
   # record carry the same authority.
-  BRIEF_CONSENT=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]upstream-consent=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
+  BRIEF_CONSENT=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]upstream-consent=\([^ ]*\).*$/\1/p' "$SOURCE_BRIEF" | head -n 1)
   if [ "$BRIEF_CONSENT" != "$UPSTREAM_CONSENT" ]; then
-    echo "error: upstream-consent mismatch for $ID: $BRIEF records upstream-consent=${BRIEF_CONSENT:-none} but this spawn passed ${UPSTREAM_CONSENT:-none}; correct the flag or re-scaffold the brief so the worker's contract and the task record agree" >&2
+    echo "error: upstream-consent mismatch for $ID: $SOURCE_BRIEF records upstream-consent=${BRIEF_CONSENT:-none} but this spawn passed ${UPSTREAM_CONSENT:-none}; correct the flag or re-scaffold the brief so the worker's contract and the task record agree" >&2
     exit 1
   fi
   # The registered forge is the captain's confirmed binding (bin/fm-project-mode.sh)

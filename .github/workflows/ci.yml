@@ -535,6 +535,7 @@ jobs:
   publish-identity:
     name: Publish identity and leak check
     runs-on: ubuntu-latest
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -605,7 +606,9 @@ jobs:
       - macos-stock-bash
       - publish-identity
       - invariants
-    if: always()
+    # always() so a failed lane still reaches this gate; a push run the fork
+    # opt-out skips has no lanes to aggregate, so the gate skips with it.
+    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
     steps:
       - name: Require every needed job to succeed
         env:

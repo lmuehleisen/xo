@@ -1778,7 +1778,9 @@ fi
 if [ "${FM_FAKE_GOAL_CLOSE_FAIL:-0}" = 1 ]; then
   case "${1:-}" in
     kill-window) exit 1 ;;
-    list-windows) [ ! -f "$dir/optin-launched" ] || { printf 'inventory unavailable\n' >&2; exit 1; } ;;
+    # Fail the inventory only once the close was attempted: the launch's own
+    # Enter needs exact window membership before the opt-in can run at all.
+    list-windows) [ ! -f "$dir/endpoint-kill-attempted" ] || { printf 'inventory unavailable\n' >&2; exit 1; } ;;
   esac
 fi
 prior_ack() {

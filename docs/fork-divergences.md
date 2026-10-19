@@ -241,7 +241,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### ci-pass-gate
 
-- Intent: the branch ruleset requires one stable aggregate check, `ci-pass`, which passes only when every other CI job ran and succeeded, plus the separate PR text check.
+- Intent: the branch ruleset requires one stable aggregate check, `ci-pass`, which passes only when every other CI job ran and succeeded, plus the separate PR text check; like the fork's publish-identity job, it honors upstream's push-run opt-out `FM_CI_SKIP_PUSH`.
 - Class: intended.
 - Seam: the `ci-pass` job in `.github/workflows/ci.yml`, the required-contexts line in `CONTRIBUTING.md`, the gate sentence in `docs/fm-test-portable-shards.md`, and the fast-tier and gate cases in `tests/fm-ci-workflow.test.sh` (shared).
 - Guard: `tests/fm-ci-workflow.test.sh` `test_ci_pass_needs_every_other_job`.
@@ -429,14 +429,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-muse-harness.test.sh` `test_spawn_maps_effort_and_model`.
 - Upstream: maps `max` onto Muse `ultra` from the 0.1.0 vocabulary with no version or catalog gate; drop when upstream adopts the native `max` mapping with equivalent gates.
 
-### pi-custom-run-events
-
-- Intent: Pi 1.2.0 custom-triggered runs still mark the processing turn for away-mode cancellation but never enter captain dialog mirroring or consume a user wake, while Pi 1.1.0 user events without a message type keep working.
-- Class: carried.
-- Seam: the `before_agent_start` handlers in `.pi/extensions/fm-branch-supervision.ts` and `.pi/extensions/fm-primary-pi-watch.ts` (shared); the queued processing content stays queued there for upstream's later `message_start` match.
-- Guard: `tests/fm-pi-branch-extension.test.sh` custom-triggered mirror and processing-abort cases, and `tests/fm-pi-watch-extension.test.sh` custom-run wake case.
-- Upstream: reads `event.prompt` on every run; drop when upstream handles custom-triggered run events equivalently.
-
 ### raw-launch-verbatim
 
 - Intent: an explicit raw command avoids adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
@@ -457,8 +449,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: converge all declared inherited material in one remote job while retaining per-item validation and partial-failure recovery.
 - Class: carried.
-- Seam: batch framing and complete-declaration validation in `bin/fm-config-inherit-lib.sh`, snapshot staging in `bin/fm-remote-inherit-push.sh`, batch dispatch through the existing item receiver in `bin/fm-remote-inherit.sh`, and partial-change reread nudges in `bin/fm-config-push.sh` and `bin/fm-bootstrap.sh`; remote-job polling uses upstream defaults.
-- Guard: `tests/fm-shared-captain-inheritance.test.sh` batch byte, failure, quarantine, generation and topology cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` one-job transfer and watcher recovery with its unchanged bound.
+- Seam: batch framing and complete-declaration validation in `bin/fm-config-inherit-lib.sh`, snapshot staging in `bin/fm-remote-inherit-push.sh`, batch dispatch through the existing item receiver in `bin/fm-remote-inherit.sh`, and partial-change reread nudges in `bin/fm-config-push.sh` and `bin/fm-bootstrap.sh`, sent as soon as a change is seen while upstream's write-ahead marker stays owed until a push converges; remote-job polling uses upstream defaults.
+- Guard: `tests/fm-shared-captain-inheritance.test.sh` batch byte, failure, quarantine, generation and topology cases; `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` one-job transfer, partial-change reread, and watcher recovery with its unchanged bound.
 - Upstream: stages one remote job per inherited item; drop once equivalent batching preserves these convergence guarantees.
 
 ### isolated-test-cleanup
@@ -548,4 +540,5 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - `pi-package-discovery`: fork-only `tests/pi-package.sh` lets the Pi SDK suites find a Homebrew Pi install; offer it upstream.
 - `hold-doc-layout`: `docs/captain-hold-lifecycle.md` keeps the fork's condensed layout around the hunks its entries own; realign the layout when convenient.
 - `codex-verification`: the Codex busy-negotiation sentence in `bin/fm-busy-lib.sh` keeps the fork's verification wording; realign when convenient.
+- `pi-custom-run-cases`: the custom-triggered run cases in `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-watch-extension.test.sh` outlived their dropped entry and now pin upstream's own handling; realign when convenient.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.

@@ -637,7 +637,7 @@ secondmate_sync() {
   secondmate_sync_remote_one() {  # <id> <home> <remote-host>
     local id=$1 _home=$2 remote_host=$3
     local sync_out='' sync_rc inherit_out='' inherit_rc nudge_needed remote_marker remote_pending converged out remote_lock remote_generation
-    local budget deadline left unknown=0
+    local budget deadline left unknown=0 changed=0
     budget=$(remote_convergence_budget)
     deadline=$(( $(date +%s) + budget ))
     remote_lock=$(fm_remote_inherit_transaction_lock_path "$STATE" "$id" 2>/dev/null || true)
@@ -679,7 +679,8 @@ secondmate_sync() {
     else
       sync_rc=$?
     fi
-    if fm_secondmate_remote_sync_changed "$sync_out" || [ "$sync_rc" -eq 255 ]; then nudge_needed=1; fi
+    if fm_secondmate_remote_sync_changed "$sync_out"; then changed=1; fi
+    if [ "$changed" -eq 1 ] || [ "$sync_rc" -eq 255 ]; then nudge_needed=1; fi
     [ "$sync_rc" -ne 255 ] || unknown=1
     if fm_timed_out "$sync_rc"; then
       echo "SECONDMATE_SYNC: secondmate $id: skipped: remote tracked-file sync failed on $remote_host: no answer within the ${budget}s per-mate convergence budget"
@@ -701,7 +702,8 @@ secondmate_sync() {
       inherit_rc=$?
     fi
     # Items a failed push applied before it stopped changed the home too.
-    if [ "$inherit_rc" -eq 255 ] || printf '%s\n' "${inherit_out:-}" | grep -Eq '^(pushed|removed):'; then nudge_needed=1; fi
+    if printf '%s\n' "${inherit_out:-}" | grep -Eq '^(pushed|removed):'; then changed=1; fi
+    if [ "$changed" -eq 1 ] || [ "$inherit_rc" -eq 255 ]; then nudge_needed=1; fi
     [ "$inherit_rc" -ne 255 ] || unknown=1
     if fm_timed_out "$inherit_rc"; then
       echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance failed on $remote_host: no answer within the ${budget}s per-mate convergence budget"
@@ -713,19 +715,14 @@ secondmate_sync() {
       converged=0
     fi
     # A failed batch can still publish valid siblings; reread those changes
-    # immediately, keeping the marker for the retry. A step whose completion is
-    # unknown (cut off by the budget, or exit 255) may still change the home
-    # after this run, so its reread stays owed and is sent only once an attempt
-    # completes.
-    if [ "$nudge_needed" -eq 1 ] && [ "$unknown" -eq 0 ]; then
+    # immediately. Until an attempt converges, the write-ahead marker keeps the
+    # reread owed for the retry. A step whose completion is unknown (cut off by
+    # the budget, or exit 255) may still change the home after this run, so
+    # with no change seen yet its reread waits for an attempt that completes.
+    if [ "$nudge_needed" -eq 1 ] && { [ "$unknown" -eq 0 ] || [ "$changed" -eq 1 ]; }; then
       if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
         "$SCRIPT_DIR/fm-send.sh" "fm-$id" "$REMOTE_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
-        if [ "$converged" -eq 1 ]; then
-          rm -f "$remote_marker"
-        elif ! secondmate_write_nudge_marker "$id" "$_home" "" remote \
-          "$REMOTE_SECOND_MATE_NUDGE_MESSAGE" 1 0; then
-          echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot record remote retry marker"
-        fi
+        [ "$converged" -eq 0 ] || rm -f "$remote_marker"
         [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" != 1 ] || echo "BOOTSTRAP_INFO: nudged remote fm-$id after inherited-material propagation"
       else
         echo "NUDGE_SECONDMATES: secondmate $id: send failed: $(first_line "$out")"
