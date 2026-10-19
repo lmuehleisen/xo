@@ -432,8 +432,9 @@ EOF
 # install_item_ssh <fakebin>: a fake ssh for the convergence path. Every
 # remote command logs START and END lines; an inheritance item sleeps
 # FM_FAKE_ITEM_SLEEP and answers "unchanged: <item>", or fails when it is
-# FM_FAKE_ITEM_FAIL. A tracked-file sync on FM_FAKE_SYNC_HANG_HOST never
-# answers within the test's budget.
+# FM_FAKE_ITEM_FAIL. The fork's one-job batch answers each of its records the
+# same way, in order, as bin/fm-remote-inherit.sh batch does. A tracked-file
+# sync on FM_FAKE_SYNC_HANG_HOST never answers within the test's budget.
 install_item_ssh() {
   local fakebin=$1
   cat > "$fakebin/fake-ssh" <<'SH'
@@ -456,9 +457,37 @@ print("\n".join((parts + ["", "", ""])[:3]))' "$argv_b64")
 command_name=$(printf '%s\n' "$cmd" | sed -n '1p')
 subcommand=$(printf '%s\n' "$cmd" | sed -n '2p')
 item_rel=$(printf '%s\n' "$cmd" | sed -n '3p')
-cat > /dev/null
+payload=$(cat)
 printf 'START %s %s %s %s\n' "$host" "$command_name" "$subcommand" "$item_rel" >> "$log"
 case "$command_name:$subcommand" in
+  fm-remote-inherit.sh:batch)
+    # Siblings continue past a failed record; an unknown item loses the job.
+    records=$(printf '%s\n' "$payload" | awk -F '\t' 'NF == 5 { print $1 "\t" $2 }')
+    if printf '%s\n' "$records" | cut -f2 | grep -Fqx -- "${FM_FAKE_ITEM_UNKNOWN:-none}"; then
+      sleep 0.2
+      exit 255
+    fi
+    sleep "${FM_FAKE_ITEM_SLEEP:-0}"
+    rc=0
+    while IFS=$'\t' read -r record rel; do
+      [ -n "$rel" ] || continue
+      if [ "$record" = error ]; then
+        printf 'error: %s: primary source failed validation; destination preserved\n' "$rel" >&2
+        rc=1
+      elif [ "$rel" = "${FM_FAKE_ITEM_FAIL:-none}" ]; then
+        printf 'error: synthetic refusal of %s\n' "$rel" >&2
+        rc=1
+      elif [ "$rel" = "${FM_FAKE_ITEM_PUSHED:-none}" ]; then
+        printf 'pushed: %s\n' "$rel"
+      else
+        printf 'unchanged: %s\n' "$rel"
+      fi
+    done <<EOF
+$records
+EOF
+    printf 'END %s %s %s %s\n' "$host" "$command_name" "$subcommand" "$item_rel" >> "$log"
+    exit "$rc"
+    ;;
   fm-remote-secondmate-control.sh:sync)
     if [ "$host" = "${FM_FAKE_SYNC_HANG_HOST:-none}" ]; then
       sleep 120
@@ -537,57 +566,33 @@ run_inherit_push() {  # <id> <generation> -> stdout+stderr; status of the push
     "$ROOT/bin/fm-remote-inherit-push.sh" "$@" 2>&1
 }
 
-max_inherit_overlap() {  # <log>: the most inheritance items in flight at once
-  awk '
-    $1 == "START" && $3 == "fm-remote-inherit.sh" { n++; if (n > max) max = n }
-    $1 == "END" && $3 == "fm-remote-inherit.sh" { n-- }
-    END { print max + 0 }
-  ' "$1"
-}
-
-test_inherit_push_overlaps_items_and_replays_in_order() {
+# The fork sends every declared item in one remote job (docs/fork-divergences.md
+# remote-inheritance-batch) instead of upstream's concurrent per-item jobs.
+test_inherit_push_sends_one_job_and_replays_in_order() {
   local out rc order
-  convergence_fixture "$TMP_ROOT/push-overlap" sm:host-sm
-  out=$(FM_FAKE_ITEM_SLEEP=0.4 run_inherit_push sm 1); rc=$?
+  convergence_fixture "$TMP_ROOT/push-batch" sm:host-sm
+  out=$(FM_FAKE_ITEM_SLEEP=0.2 run_inherit_push sm 1); rc=$?
   expect_code 0 "$rc" "a clean push should succeed: $out"
-  [ "$(max_inherit_overlap "$CF_LOG")" -ge 2 ] \
-    || fail "inheritance items did not overlap"$'\n'"$(cat "$CF_LOG")"
-  [ "$(max_inherit_overlap "$CF_LOG")" -le 4 ] \
-    || fail "more than the default four inheritance items were in flight"$'\n'"$(cat "$CF_LOG")"
+  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh ' "$CF_LOG")" -eq 1 ] \
+    || fail "the push did not carry every item in one remote job"$'\n'"$(cat "$CF_LOG")"
   order=$(printf '%s\n' "$out" | sed -n 's/^unchanged: //p' | tr '\n' ' ')
   [ "$order" = "config/item-a config/item-b config/item-c config/item-d config/item-e config/item-f data/captain-shared.md " ] \
     || fail "the push output was not replayed in allowlist order: $order"$'\n'"$out"
-
-  : > "$CF_LOG"
-  out=$(FM_FAKE_ITEM_SLEEP=0.2 FM_REMOTE_INHERIT_PUSH_JOBS=1 run_inherit_push sm 2); rc=$?
-  expect_code 0 "$rc" "a one-at-a-time push should succeed: $out"
-  [ "$(max_inherit_overlap "$CF_LOG")" -eq 1 ] \
-    || fail "FM_REMOTE_INHERIT_PUSH_JOBS=1 must send one item at a time"$'\n'"$(cat "$CF_LOG")"
-  pass "remote inheritance push: items overlap up to the bound and replay in allowlist order"
+  pass "remote inheritance push: every item travels in one job and replays in allowlist order"
 }
 
-test_inherit_push_failure_stops_new_sends() {
+test_inherit_push_failure_keeps_siblings() {
   local out rc
   convergence_fixture "$TMP_ROOT/push-failure" sm:host-sm
-  out=$(FM_FAKE_ITEM_FAIL=config/item-c FM_REMOTE_INHERIT_PUSH_JOBS=1 run_inherit_push sm 1); rc=$?
+  out=$(FM_FAKE_ITEM_FAIL=config/item-c run_inherit_push sm 1); rc=$?
   [ "$rc" -ne 0 ] || fail "a failed item must fail the push: $out"
   assert_contains "$out" "error: synthetic refusal of config/item-c" "the failed item's own error must be reported"
-  assert_contains "$out" "unchanged: config/item-b" "items sent before the failure are still reported"
-  if grep -q 'START .* config/item-d' "$CF_LOG"; then
-    fail "an item after the failed one was still sent"$'\n'"$(cat "$CF_LOG")"
-  fi
-  assert_not_contains "$out" "config/item-d" "no item after the failure may be reported as sent"
-
-  : > "$CF_LOG"
-  out=$(FM_FAKE_ITEM_FAIL=config/item-a FM_FAKE_ITEM_SLEEP=2 run_inherit_push sm 2); rc=$?
-  [ "$rc" -ne 0 ] || fail "a failed first item must fail a concurrent push: $out"
-  if grep -q 'START .* data/captain-shared.md' "$CF_LOG"; then
-    fail "a concurrent push kept starting items after the first item failed"$'\n'"$(cat "$CF_LOG")"
-  fi
-  pass "remote inheritance push: a failed item fails the push and no later item is started"
+  assert_contains "$out" "unchanged: config/item-b" "items before the failure are still reported"
+  assert_contains "$out" "unchanged: config/item-d" "items after the failure still converge in the same job"
+  pass "remote inheritance push: a failed item fails the push while its siblings still converge"
 }
 
-test_inherit_push_local_refusal_sends_nothing() {
+test_inherit_push_local_refusal_preserves_only_that_item() {
   local out rc
   convergence_fixture "$TMP_ROOT/push-refusal" sm:host-sm
   # item-a is ordinary and comes first; only item-e is unsafe.
@@ -595,10 +600,14 @@ test_inherit_push_local_refusal_sends_nothing() {
   printf 'local\n' > "$CF_HOME/config/item-e"
   ln "$CF_HOME/config/item-e" "$TMP_ROOT/push-refusal/item-e.extra-link"
   out=$(run_inherit_push sm 1); rc=$?
-  [ "$rc" -ne 0 ] || fail "a hardlinked source must refuse the push: $out"
+  [ "$rc" -ne 0 ] || fail "a hardlinked source must fail the push: $out"
   assert_contains "$out" "inherited source is hardlinked" "the refusal names the unsafe source"
-  [ ! -s "$CF_LOG" ] || fail "a local refusal must send nothing, even items before it"$'\n'"$(cat "$CF_LOG")"
-  pass "remote inheritance push: a local refusal is decided before any item is sent"
+  assert_contains "$out" "error: config/item-e: primary source failed validation; destination preserved" \
+    "the unsafe item must reach the remote only as a preserving error record"
+  assert_contains "$out" "unchanged: config/item-a" "safe items still converge beside the refused one"
+  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh ' "$CF_LOG")" -eq 1 ] \
+    || fail "a local refusal must still send one job"$'\n'"$(cat "$CF_LOG")"
+  pass "remote inheritance push: a local refusal preserves only that item and still sends the rest"
 }
 
 test_convergence_budget_isolates_a_hung_mate() {
@@ -787,9 +796,9 @@ SH
 test_remote_probe_scheduling_keeps_per_mate_lines parallel
 test_remote_probe_scheduling_keeps_per_mate_lines fallback
 test_remote_inheritance_failure_names_its_own_error_not_an_unchanged_item
-test_inherit_push_overlaps_items_and_replays_in_order
-test_inherit_push_failure_stops_new_sends
-test_inherit_push_local_refusal_sends_nothing
+test_inherit_push_sends_one_job_and_replays_in_order
+test_inherit_push_failure_keeps_siblings
+test_inherit_push_local_refusal_preserves_only_that_item
 test_convergence_budget_isolates_a_hung_mate
 test_partial_push_failure_keeps_the_reread_owed
 test_config_push_partial_failure_keeps_the_reread_owed
