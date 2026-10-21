@@ -102,6 +102,8 @@ hook() {
      workspacePaths:[$wt],
      toolCall:{name:$t, args:(
        (if $t == "run_command" then {CommandLine:$a, Cwd:$wt}
+        elif $t == "read_file" or $t == "write_file" or $t == "edit_file"
+          then {Path:$a, Content:"x"}
         elif $t == "write_to_file" or $t == "replace_file_content" or $t == "view_file"
           then {AbsolutePath:$a, Content:"x"}
         elif $t == "search_web" or $t == "read_url_content" then {Query:$a}
@@ -228,6 +230,36 @@ EOF
   denied "$OUT" "held for firstmate" \
     || fail "a credential read must escalate to firstmate, got: $OUT"
   pass "fm-agy-permission-policy: non-command tools map onto the shared policy's file and read rules"
+}
+
+test_current_native_file_contract() {
+  local policy dir wt tool target
+  policy=$(new_case current-native 'printf "APPROVE: fixture judge must not bypass static guards\n"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/src" "$wt/.agents" "$dir/state/t1.agy-hooks"
+  printf 'PUBLIC\n' > "$wt/src/public.txt"
+  printf 'HARMLESS_SENTINEL\n' > "$wt/vendor.env"
+  ln -s /etc "$wt/escape"
+  for tool in read_file write_file edit_file; do
+    hook "$policy" pre-tool-use "$tool" "$wt/src/public.txt"
+    abstained "$OUT" || fail "$tool must use its actual Path for an in-task operation: $OUT"
+    hook "$policy" pre-tool-use "$tool" "$wt/vendor.env"
+    denied "$OUT" 'held for firstmate' || fail "$tool must retain the credential hold for Path: $OUT"
+    hook "$policy" pre-tool-use "$tool" src/public.txt
+    denied "$OUT" 'absolute Path' || fail "$tool must refuse an unproven relative Path base: $OUT"
+    hook "$policy" pre-tool-use "$tool" '' 1 '{"AbsolutePath":"/etc/hosts","Path":null}'
+    denied "$OUT" 'absolute Path' || fail "$tool must not substitute a legacy field for a missing Path: $OUT"
+  done
+  for tool in write_file edit_file; do
+    for target in /etc/fm-agy-fixture "$wt/escape/fm-agy-fixture" "$wt/.agents/fixture" "$dir/state/t1.agy-hooks/fixture" "$dir/data/t1/brief.md"; do
+      hook "$policy" pre-tool-use "$tool" "$target"
+      denied "$OUT" || fail "$tool must refuse a forbidden Path even with an approving judge: $OUT"
+    done
+    hook "$policy" pre-tool-use "$tool" /etc/fm-agy-fixture 1 "{\"AbsolutePath\":\"$wt/src/public.txt\"}"
+    denied "$OUT" 'outside the task write roots' || fail "$tool must check Path rather than a conflicting legacy field: $OUT"
+  done
+  pass 'fm-agy-permission-policy: current native Path tools preserve credential, physical-root, wiring and absolute-target guards'
 }
 
 test_file_tool_writes_resolve_physically() {
@@ -2105,6 +2137,7 @@ test_armed_heartbeat_proves_wiring
 test_refusal_list_denies
 test_refusal_leaves_safe_commands_alone
 test_non_command_tool_mapping
+test_current_native_file_contract
 test_file_tool_writes_resolve_physically
 test_fetch_dest_writes_resolve_physically
 test_file_tool_protected_and_config_paths

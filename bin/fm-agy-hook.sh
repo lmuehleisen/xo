@@ -190,7 +190,7 @@ observe_tool_call() {
     --arg task "$id" --arg event "$event" '
     def s(n): (. // "") | tostring | .[0:n];
     (.toolCall.args // {}) as $a
-    | ([$a.CommandLine, $a.TargetFile, $a.AbsolutePath, $a.FilePath, $a.File,
+    | ([$a.CommandLine, $a.Path, $a.TargetFile, $a.AbsolutePath, $a.FilePath, $a.File,
         $a.DirectoryPath, $a.Url, $a.Query, $a.SearchPath, $a.query, $a.url]
        | map(select(type == "string" and . != "")) | .[0] // "") as $input
     | {
