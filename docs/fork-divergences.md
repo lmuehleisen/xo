@@ -163,7 +163,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: pushes, commit messages, and public PR text pass a configurable publish gate, with a larger body cap only for verified upstream integration records; `docs/configuration.md` "Publish guard".
 - Class: intended.
-- Seam: fork-only `bin/fm-publish-gate.sh`, `bin/fm-publish-judge.sh`, `bin/fm-gh-publish-policy.mjs`, `bin/fm-gh-publish-exec.mjs`, `bin/fm-git-publish-exec.mjs`, `bin/fm-no-mistakes-body.mjs`, `bin/fm-install-gitleaks.sh`, and `.github/workflows/pr-text.yml`, plus the `publish-identity` job in `.github/workflows/ci.yml`, the publish-policy hunks in `bin/fm-arm-pretool-check.sh` (shared), where a command the publish policy must see fails closed, the nested publish-guard inheritance in `bin/fm-config-inherit-lib.sh` and `bin/fm-remote-inherit.sh`, and the gate hunks in `bin/fm-git-strip-ai-trailers.sh` and `bin/fm-spawn.sh` (shared), where `config/keep-ai-trailers` skips only the trailer strip and the per-task hooks stay installed so the gate still runs.
+- Seam: fork-only `bin/fm-publish-gate.sh`, `bin/fm-publish-judge.sh`, `bin/fm-gh-publish-policy.mjs`, `bin/fm-gh-publish-exec.mjs`, `bin/fm-git-publish-exec.mjs`, `bin/fm-no-mistakes-body.mjs`, `bin/fm-install-gitleaks.sh`, and `.github/workflows/pr-text.yml`, plus the `publish-identity` job in `.github/workflows/ci.yml`, the publish-policy hunks in `bin/fm-arm-pretool-check.sh` (shared), where a command the publish policy must see fails closed, the nested publish-guard inheritance in `bin/fm-config-inherit-lib.sh` and `bin/fm-remote-inherit.sh`, and the gate hunks in `bin/fm-git-strip-ai-trailers.sh` and `bin/fm-spawn.sh` (shared), where `config/keep-ai-trailers` skips only the trailer strip and the per-task hooks stay installed so the gate still runs, plus the neutral marked-cwd fixture in `tests/fm-backend-paseo.test.sh`.
 - Guard: fork-only `tests/fm-publish-gate.test.sh`, `tests/fm-publish-judge.test.sh`, and `tests/fm-spawn-identity-pin.test.sh`; the keep-ai-trailers cases in `tests/fm-spawn-dispatch-profile.test.sh`; the publish fail-closed cases in `tests/fm-arm-pretool-check.test.sh`; fork-only `tests/fm-pi-worker-publish-policy-live-e2e.test.sh`.
 - Upstream: has no publish gate, and `config/keep-ai-trailers` removes the per-task hooks entirely.
 
@@ -526,7 +526,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: distinguish animation and ghost decoration from draft text while preserving exact composer text for owned-input recovery.
 - Class: carried; the original busy-animation motivation was superseded, but the extraction behavior remains independently necessary.
-- Seam: animation, painted-braille, and ghost extraction in `bin/fm-composer-lib.sh`; `tests/fixtures/codex-animation/`; the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`.
+- Seam: animation, painted-braille, and ghost extraction in `bin/fm-composer-lib.sh`; `tests/fixtures/codex-animation/`; the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh` and the same reader assertions in `tests/fm-backend-zellij.test.sh`.
 - Guard: `tests/fm-composer-ghost.test.sh`; `tests/fm-composer-lib.test.sh` animation and painted-braille cases.
 - Upstream: replaced #4297 with #4532; retire these extraction seams only when its reader preserves draft characters and excludes decoration in the same cases.
 
@@ -534,15 +534,43 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: portable serial CI runs as eleven shards, with the supervision-host suite split into attended, away, and recovery suites, so each shard stays inside the CI job limit.
 - Class: carried.
-- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, plus the shard matrix in `.github/workflows/ci.yml`, shard weights in `bin/fm-test-run.sh`, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
+- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, plus the shard matrix in `.github/workflows/ci.yml`, shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
 - Guard: `tests/fm-test-run.test.sh` shard cases; every integration ports upstream's new supervision-host tests into the split suites.
 - Upstream: runs nine serial shards and one supervision-host suite; drop once upstream shards equivalently.
+
+### pi-saved-trust-denial
+
+- Intent: a seeded Pi secondmate launch preserves a saved project-trust denial instead of overriding it with `--approve`.
+- Class: carried.
+- Seam: `pi_seeded_home_trust_allows_approve` and its selected trust-store launch environment in `bin/fm-spawn.sh`, plus the corresponding Pi trust evidence in `docs/verification/runtime-backends.md` (shared).
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` seeded-home trust cases; live, `tests/fm-pi-seeded-home-trust-live-e2e.test.sh`.
+- Upstream: approves a seeded secondmate home without reading its saved denial; drop once its launch preserves the same trust decision.
+
+### wedge-channel-diagnostics
+
+- Intent: a failed configured wedge-alarm channel reports a bounded redacted reason and falls back to the platform notification when every configured channel fails.
+- Class: carried.
+- Seam: `wedge_alarm_via_command`, `wedge_alarm_notify`, their failure helpers and marker projection in `bin/fm-supervise-daemon.sh` (shared).
+- Guard: `tests/fm-daemon.test.sh` command-channel failure, working-channel and fallback cases.
+- Upstream: logs an exit code and does not project the channel failure or try the same fallback; drop once equivalent diagnostics and fallback land.
+
+### teardown-restore-status
+
+- Intent: failed process-event restoration remains distinguishable from a completed teardown that lost its returned pool slot.
+- Class: carried.
+- Seam: `TEARDOWN_PROCEVENT_RESTORE_FAILED=5` and its exit-status header in `bin/fm-teardown.sh` (shared).
+- Guard: `tests/fm-secondmate-safety.test.sh` direct and recursive restoration-failure cases.
+- Upstream: uses status 4 for both outcomes; drop once it provides distinct statuses through recursive teardown.
 
 ## Incidental
 
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
-- `pi-package-discovery`: fork-only `tests/pi-package.sh` lets the Pi SDK suites find a Homebrew Pi install; offer it upstream.
+- `pi-package-discovery`: fork-only `tests/pi-package.sh` and its callers in `tests/fm-calm-pi-extension.test.sh`, `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-branch-live-e2e.test.sh` let SDK suites find a Homebrew Pi install; offer the discovery helper upstream and realign when taken.
 - `hold-doc-layout`: `docs/captain-hold-lifecycle.md` keeps the fork's condensed layout around the hunks its entries own; realign the layout when convenient.
 - `codex-verification`: the Codex busy-negotiation sentence in `bin/fm-busy-lib.sh` keeps the fork's verification wording; realign when convenient.
 - `pi-custom-run-cases`: the custom-triggered run cases in `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-watch-extension.test.sh` outlived their dropped entry and now pin upstream's own handling; realign when convenient.
+- `pi-compatibility-notes`: Pi 1.0.3 provider, thinking, TUI and trust-dialog observations in the Pi harness reference, `bin/fm-busy-lib.sh` and `docs/verification/runtime-backends.md`, plus the regular-TUI fixture in `tests/fm-calm-pi-extension.test.sh`; consolidate into the upstream reference when it covers those versions.
+- `test-fixture-portability`: host-independent PATH and process-holder fixtures in `tests/fm-on.test.sh`, `tests/fm-remote-doctor.test.sh` and `tests/fm-remote-herdr-guard.test.sh`, Git-version-neutral hook refusal checks in `tests/fm-git-strip-ai-trailers.test.sh`, and condition-based waits in `tests/fm-watch-arm.test.sh`, `tests/fm-remote-job.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh` and `tests/fm-herdr-groups.test.sh`, including the latter's physical temporary-socket path; realign when upstream fixtures preserve the same assertions on supported hosts.
+- `fixture-diagnostics`: failure-only output improvements in `tests/fm-gotmp.test.sh`, `tests/fm-remote-secondmate-lifecycle-e2e.test.sh`, `tests/fm-spawn-pool-base-freshen.test.sh`, `tests/fm-remote-job-launchagent.test.sh` and `tests/fm-calm-pi-extension.test.sh`, plus whitespace-only layout in `tests/fm-remote-doctor.test.sh`; offer the fixes upstream and realign when taken.
+- `fixture-assertions`: the Gemini no-key routing baseline in `tests/fm-bootstrap.test.sh` and the bounded-lint environment assertion in `tests/fm-ci-workflow.test.sh`; realign these equivalent test descriptions when convenient.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.
