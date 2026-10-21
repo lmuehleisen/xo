@@ -21,7 +21,7 @@ agy updates itself often and without asking, so treat every version-scoped fact 
 | Interrupt | Single `Escape`, which prints `Interrupted · What should Antigravity CLI do instead?` and leaves the composer EMPTY, so no clear key is needed. |
 | Resume | `agy -c` / `--continue` for the most recent conversation, or `agy --conversation=<uuid>` from the id printed at exit. |
 | Models | `--model <model>`, checked against `agy models` before launch; effort is also encoded as a model-id suffix - see "Model and effort". |
-| Effort | Firstmate emits `--effort low|medium|high` only; requested `xhigh` and `max` cap at `high`. See "Model and effort". |
+| Effort | Firstmate emits `--effort low\|medium\|high` only; requested `xhigh` and `max` cap at `high`. See "Model and effort". |
 | Marker | `JETSKI_APP_DATA_DIR=antigravity-cli` on tool subprocesses, alongside `ANTIGRAVITY_LS_VERSION=cli-<version>`, `ANTIGRAVITY_PROJECT_ID`, `ANTIGRAVITY_TRAJECTORY_ID`, `ANTIGRAVITY_LS_ADDRESS`, and `ANTIGRAVITY_SOURCE_METADATA`. agy does NOT set `GEMINI_CLI`. |
 | Composer | `>` between solid rules and the native footer; `../../../../../bin/fm-composer-lib.sh` owns shape and placeholder classification. |
 | Skill | `/<skill>`; typing `/` opens a filtered command menu and ONE Enter selects and submits. |

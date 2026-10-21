@@ -244,6 +244,8 @@ test_current_native_file_contract() {
   for tool in read_file write_file edit_file; do
     hook "$policy" pre-tool-use "$tool" "$wt/src/public.txt"
     abstained "$OUT" || fail "$tool must use its actual Path for an in-task operation: $OUT"
+    jq -es --arg tool "$tool" 'last | .tool == $tool and .decision == "approve"' "$dir/state/agy-permission-log.jsonl" >/dev/null \
+      || fail "$tool must retain its native name in the policy receipt"
     hook "$policy" pre-tool-use "$tool" "$wt/vendor.env"
     denied "$OUT" 'held for firstmate' || fail "$tool must retain the credential hold for Path: $OUT"
     hook "$policy" pre-tool-use "$tool" src/public.txt

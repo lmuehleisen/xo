@@ -349,7 +349,7 @@ write_armed() {
 
 evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
-  local fields credential_tool=$TOOL
+  local fields credential_tool=$TOOL native_tool=$TOOL
   case "$TOOL" in
     read_file|write_file|edit_file)
       # Current agy file tools use Path, not the legacy CamelCase fields.
@@ -368,7 +368,9 @@ evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
       ;;
     *) fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive,Url,URL,Query}') ;;
   esac
-  TOOL=$credential_tool credential_native "$fields" "$WORKTREE"
+  TOOL=$credential_tool
+  credential_native "$fields" "$WORKTREE"
+  TOOL=$native_tool
   case "$TOOL" in
     read_file|view_file|grep_search|list_dir|search_web|read_url_content)
       ;;
