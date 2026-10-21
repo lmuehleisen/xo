@@ -926,7 +926,7 @@ test_verified_versions_and_grants_digest_verbs() {
   local versions digest dir
   versions=$("$POLICY_SH" verified-versions 2>/dev/null)
   case "$versions" in
-    '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0') ;;
+    '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4') ;;
     *) fail "verified-versions must list the live-verified agy set, got: $versions" ;;
   esac
   dir="$TMP_ROOT/verbs"
@@ -1776,6 +1776,10 @@ PY
   abstained "$OUT" || fail "own brain listing must run under read exclusions: $OUT"
   hook "$policy" pre-tool-use view_file "$skill" 3
   abstained "$OUT" || fail "brief-directed skill read must run under read exclusions: $OUT"
+  hook "$policy" pre-tool-use read_file "$brain/.system_generated/steps/22/content.md" 40
+  abstained "$OUT" || fail "current native own-brain read must retain the exemption: $OUT"
+  hook "$policy" pre-tool-use read_file "$skill" 41
+  abstained "$OUT" || fail "current native brief-directed read must retain the exemption: $OUT"
   [ ! -e "$PROMPT_CAPTURE" ] || fail "exempt reads must not spend a judge call"
 
   hook "$policy" pre-tool-use view_file "$HOME/.gemini/antigravity-cli/brain/c2/content.md" 4
@@ -1788,6 +1792,10 @@ PY
   denied "$OUT" || fail "a path the directing line excludes must stay under read scope: $OUT"
   hook "$policy" pre-tool-use view_file "$dir/data/excluded/records.csv" 8
   denied "$OUT" || fail "a directed read outside firstmate's skills tree must stay under read scope: $OUT"
+  hook "$policy" pre-tool-use read_file "$HOME/.gemini/antigravity-cli/brain/c2/content.md" 42
+  denied "$OUT" || fail "current native foreign-brain reads must retain read scope: $OUT"
+  hook "$policy" pre-tool-use read_file "$brain/.env" 43
+  denied "$OUT" 'held for firstmate' || fail "current native own-brain credentials must retain the veto: $OUT"
 
   rm -f "$PROMPT_CAPTURE"
   hook "$policy" pre-tool-use run_command "sed -n '1,5p' $brain/.system_generated/steps/22/content.md" 9

@@ -91,9 +91,9 @@
 #
 # Tool mapping: run_command maps onto the shared exec analysis with
 # CommandLine and Cwd; read_file, view_file, grep_search, and list_dir are the read
-# class, and a view_file or list_dir of the worker's own agy brain directory
+# class, and a native file read or list_dir of the worker's own agy brain directory
 # (~/.gemini/antigravity-cli/brain/<conversationId>, its fetched-page store)
-# or a view_file of a file the brief directs it to read stays approved under
+# or a native file read of a file the brief directs it to read stays approved under
 # brief read exclusions, credential checks first; write_file, edit_file,
 # write_to_file and replace_file_content are the write class against
 # the task worktree and scratch roots; search_web and read_url_content are
@@ -176,7 +176,7 @@ if [ "$EVENT" = verified-versions ]; then
   # armed line; a version without that evidence stays out. Keep this an
   # explicit list, never a minimum or a range: a range would admit the next
   # release unproven, which is the failure this gate exists to prevent.
-  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0\n'
+  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4\n'
   exit 0
 fi
 if [ "$EVENT" = grants-digest ]; then
