@@ -35,8 +35,9 @@ export FM_BACKEND=tmux
 
 # The code root under test is this checkout, so self-repo detection reaches it
 # through the shared git common dir. Its publication target is derived, never
-# assumed: a checkout without an upstream/github/origin remote resolves to the
-# undeterminable path and the scope-bound cases adapt.
+# assumed: a checkout with neither a gh-resolved=base remote nor an
+# upstream/github/origin remote resolves to the undeterminable path and the
+# scope-bound cases adapt.
 PUB_TARGET=$(fm_role_publication_target "$ROOT")
 ORIGIN_URL=$(git -C "$ROOT" remote get-url upstream 2>/dev/null) \
   || ORIGIN_URL=$(git -C "$ROOT" remote get-url github 2>/dev/null) \
@@ -276,32 +277,47 @@ test_check_fork_lineage_reaches_the_gate() {
   pass "fm-role.sh check: repository lineage, not remotes, identifies firstmate across forks"
 }
 
-# A fork that keeps the parent as a read-only upstream remote publishes where
-# `gh repo set-default` points: the one remote marked gh-resolved=base wins over
-# the upstream/github/origin order, and an ambiguous mark falls back to it.
-test_check_gh_default_repo_selects_the_publication_target() {
-  local root fork_home parent_home out rc
-  root=$(make_lineage_root default-root https://github.com/someone/firstmate-fork)
-  git -C "$root" remote add upstream https://github.com/kunchenguid/firstmate
-  fork_home=$(make_role_home default-fork 'maintainer github.com/someone/firstmate-fork')
-  parent_home=$(make_role_home default-parent 'maintainer github.com/kunchenguid/firstmate')
-  out=$(check_as "$root" "$fork_home" "$root"); rc=$?
-  expect_code 1 "$rc" "without a gh default, upstream must stay the publication target (got: $out)"
+# A fetch-only parent remote must not override gh's explicitly selected fork.
+# Without the selection marker the existing upstream/github/origin order holds.
+test_check_gh_resolved_base_selects_fork() {
+  local fork user_home fork_home out rc
+  fork=$(make_lineage_root resolved-fork https://github.com/someone/firstmate-fork)
+  git -C "$fork" remote add upstream https://github.com/kunchenguid/firstmate
+  user_home=$(make_role_home resolved-user)
+  fork_home=$(make_role_home resolved-maint 'maintainer github.com/someone/firstmate-fork')
+
+  out=$(check_as "$fork" "$fork_home" "$fork"); rc=$?
+  expect_code 1 "$rc" "without a marker the fork scope must not cover upstream (got: $out)"
   assert_contains "$out" "no publication authority for github.com/kunchenguid/firstmate" \
-    "the unmarked refusal must name the upstream target"
+    "without a marker upstream must remain the publication target"
+  out=$(check_as "$fork" "$user_home" "$fork" upstream-consent github.com/kunchenguid/firstmate); rc=$?
+  expect_code 0 "$rc" "without a marker consent for upstream must authorize (got: $out)"
 
-  git -C "$root" config remote.origin.gh-resolved base
-  out=$(check_as "$root" "$fork_home" "$root"); rc=$?
-  expect_code 0 "$rc" "the gh default remote must be the publication target (got: $out)"
-  out=$(check_as "$root" "$parent_home" "$root"); rc=$?
-  expect_code 1 "$rc" "a parent scope must not cover a fork whose gh default is the fork (got: $out)"
-  assert_contains "$out" "no publication authority for github.com/someone/firstmate-fork" \
-    "the refusal must name the gh default target"
+  git -C "$fork" config remote.origin.gh-resolved base
+  out=$(check_as "$fork" "$fork_home" "$fork"); rc=$?
+  expect_code 0 "$rc" "the selected fork maintainer scope must authorize (got: $out)"
+  out=$(check_as "$fork" "$user_home" "$fork" upstream-consent github.com/someone/firstmate-fork); rc=$?
+  expect_code 0 "$rc" "consent for the selected fork must authorize (got: $out)"
+  out=$(check_as "$fork" "$user_home" "$fork" upstream-consent github.com/kunchenguid/firstmate); rc=$?
+  expect_code 1 "$rc" "parent consent must not cover the selected fork (got: $out)"
 
-  git -C "$root" config remote.upstream.gh-resolved base
-  out=$(check_as "$root" "$fork_home" "$root"); rc=$?
-  expect_code 1 "$rc" "two gh default marks must fall back to the upstream order (got: $out)"
-  pass "fm-role.sh check: the gh default repository selects the publication target"
+  git -C "$fork" remote rename origin publishing
+  out=$(check_as "$fork" "$fork_home" "$fork"); rc=$?
+  expect_code 0 "$rc" "the base marker must work on a custom remote name (got: $out)"
+  git -C "$fork" config remote.publishing.gh-resolved head
+  out=$(check_as "$fork" "$fork_home" "$fork"); rc=$?
+  expect_code 1 "$rc" "a non-base marker must not select the fork (got: $out)"
+  assert_contains "$out" "no publication authority for github.com/kunchenguid/firstmate" \
+    "a non-base marker must preserve upstream precedence"
+
+  git -C "$fork" config remote.publishing.gh-resolved base
+  git -C "$fork" remote set-url publishing "$TMP_ROOT/unreadable-target"
+  out=$(check_as "$fork" "$user_home" "$fork" upstream-consent github.com/kunchenguid/firstmate); rc=$?
+  expect_code 1 "$rc" "an unreadable selected target must not fall back to authorized upstream (got: $out)"
+  git -C "$fork" config --unset remote.publishing.url
+  out=$(check_as "$fork" "$user_home" "$fork" upstream-consent github.com/kunchenguid/firstmate); rc=$?
+  expect_code 1 "$rc" "a selected remote without a URL must not fall back to authorized upstream (got: $out)"
+  pass "fm-role.sh check: gh-resolved base selects the exact fork target, otherwise legacy precedence holds"
 }
 
 # Lineage that cannot be determined refuses, and a firstmate-lineage project
@@ -709,7 +725,7 @@ test_check_maintainer_scope_authorizes
 test_check_wrong_scope_and_remote_presence_do_not_authorize
 test_check_equivalent_remote_spellings_are_one_repo
 test_check_fork_lineage_reaches_the_gate
-test_check_gh_default_repo_selects_the_publication_target
+test_check_gh_resolved_base_selects_fork
 test_check_undeterminable_lineage_and_target_refuse
 test_check_task_consent_authorizes_one_task
 test_secondmate_cannot_self_grant

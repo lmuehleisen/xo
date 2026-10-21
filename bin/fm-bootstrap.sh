@@ -909,6 +909,7 @@ gitleaks_install_dir() {
 manual_install_url() {
   case "$1" in
     herdr) echo "https://herdr.dev" ;;
+    paseo) echo "https://paseo.sh" ;;
     cursor-agent) echo "https://cursor.com/cli" ;;
     *) return 1 ;;
   esac

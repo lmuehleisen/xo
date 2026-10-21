@@ -1,11 +1,9 @@
 ---
 name: bearings
 description: >-
-  Generate a "pick up where I left off" fleet digest from firstmate's live fleet state.
-  Use when the captain invokes /ops or its /bearings alias, or asks for an ops or bearings report, morning brief, status report, catch-up, "where did I leave off", or "what's in the works".
-  Plain /ops is chat-only by default, /ops file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /ops lavish additionally builds the fleet board, static unless the home's or the request's Lavish mode opens it in Lavish; live PR enrichment remains opt-in and composes with the other modes.
-  Also use on a contributions check wake or when filing work linked to an upstream issue.
-  Also load this skill's board-wake handling when a procevent lavish wake's source id matches the source id of the stable bearings board path.
+  Generate a "pick up where I left off" fleet digest.
+  Use when the captain invokes /ops or its /bearings alias (plain, file, or lavish), or asks for an ops or bearings report, morning brief, status report, catch-up, "where did I leave off", or "what's in the works".
+  Also use on a contributions check wake, when filing work linked to an upstream issue, and on a procevent lavish wake whose source id is the bearings board's.
 user-invocable: true
 metadata:
   internal: true

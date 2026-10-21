@@ -318,14 +318,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-tmux-agent-liveness.test.sh` exact inventory cases; `tests/fm-teardown.test.sh` missing and replaced window cases.
 - Upstream: now ships exact-membership `fm_backend_tmux_target_exists`, including the rule that a pane suffix splits only from a window index, which the fork takes as its boolean probe; drop the remainder once upstream distinguishes an unreadable inventory from a missing endpoint and binds cleanup to window ids.
 
-### self-repo-gh-default-target
-
-- Intent: the firstmate-repository publication gate targets the repository `gh repo set-default` selected, so a fork that keeps the parent as a read-only `upstream` remote is gated on its own repository rather than the parent; README "Fork-aware self-repository gate".
-- Class: carried.
-- Seam: `fm_role_publication_target` in `bin/fm-role-lib.sh` and its target sentence in `docs/configuration.md` (shared).
-- Guard: `tests/fm-self-repo-role.test.sh` `test_check_gh_default_repo_selects_the_publication_target`.
-- Upstream: always takes the first of `upstream`, `github`, `origin`, so this fork's parent remote would be the target; a candidate contribution, dropped once upstream honors gh's default repository.
-
 ### rehold-reason
 
 - Intent: preserve a captain-hold reason on re-hold, including trailing newlines, newline-only reasons and quoted metadata.

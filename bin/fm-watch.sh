@@ -51,7 +51,9 @@
 #                          that can account for its quiet - a `paused:` external
 #                          wait or a verified `captain-held` transfer its worker
 #                          declared, a backlog captain hold on its task, or,
-#                          where config/wedge-defer-parked-gate
+#                          where config/wedge-defer-worker-wait arms it, its own
+#                          still-open newest `blocked:` or `needs-decision:`
+#                          line, or, where config/wedge-defer-parked-gate
 #                          arms it, a validation gate of its own awaiting a
 #                          supervisor decision nobody has answered yet - is
 #                          deferred to that same long recheck cadence instead
@@ -1289,6 +1291,14 @@ wait_record() {  # <kind> <subject> <whom> <action> <age-record>
 # timer only through pause_state_class answering `working`, so its crew state is
 # a running step, never a parked gate.
 #
+# Where the home creates config/wedge-defer-worker-wait, the status line also
+# explains the quiet when its newest event is the worker's own still-open
+# `blocked:` or `needs-decision:` line (status_worker_wait_verb in
+# fm-classify-lib.sh owns which lines count and what ends them). That line
+# already woke firstmate, so the lane is owed firstmate's answer rather than a
+# wedge alarm, and the recheck names the verb's own clearing action. Absent the
+# flag no read is spent and the lane keeps the unchanged ladder.
+#
 # The second record is OFF unless the home creates config/wedge-defer-parked-gate,
 # and that one guard is what makes an unconfigured home's behaviour identical to
 # having no second record at all: it is read before the fold, so no fold or
@@ -1324,8 +1334,8 @@ wait_record() {  # <kind> <subject> <whom> <action> <age-record>
 #     crewmate's OWN next move;
 #   - the crewmate parked at a human-owed gate and went quiet before escalating
 #     it at all: nobody was ever told, so there is no wait to defer to.
-# A `blocked` record does not count: a blocker is not an unanswered gate decision
-# and a different action clears it. A gate awaiting the CREWMATE's own answer is
+# A `blocked` record does not count here: a blocker is not an unanswered gate
+# decision and a different action clears it. A gate awaiting the CREWMATE's own answer is
 # deliberately NOT evidence either: a crewmate that goes quiet before answering
 # its own gate is exactly the wedge this ladder exists to catch, so those keep
 # the unchanged schedule, reason and demand-deep-inspection wording.
@@ -1340,7 +1350,7 @@ wait_record() {  # <kind> <subject> <whom> <action> <age-record>
 # window per STALE_ESCALATE_SECS, never on an ordinary poll.
 WEDGE_BACKLOG_HOLD_KIND='captain hold'
 wedge_wait_evidence() {  # <task> -> one wait_record on stdout
-  local task=$1 last until statusf run
+  local task=$1 last until statusf run verb
   [ -n "$task" ] || return 1
   statusf="$STATE/$task.status"
   last=$(status_declared_wait_line "$statusf")
@@ -1358,6 +1368,16 @@ wedge_wait_evidence() {  # <task> -> one wait_record on stdout
   if task_captain_call_open "$task"; then
     wait_record "$WEDGE_BACKLOG_HOLD_KIND" 'awaiting the captain - held in the backlog' \
       captain 'answer the held decision or release the hold' ''
+    return 0
+  fi
+  if [ -e "$CONFIG/wedge-defer-worker-wait" ] && verb=$(status_worker_wait_verb "$statusf"); then
+    if [ "$verb" = blocked ]; then
+      wait_record 'declared blocker' 'awaiting firstmate - its own newest line reports a blocker' \
+        supervisor 'clear the reported blocker and close it with fm-send --resolve-key' "$statusf"
+    else
+      wait_record 'declared decision' 'awaiting firstmate - its own newest line asks for a decision' \
+        supervisor 'answer the reported decision with fm-send --resolve-key' "$statusf"
+    fi
     return 0
   fi
   [ -e "$CONFIG/wedge-defer-parked-gate" ] || return 1
@@ -2122,6 +2142,9 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   elif captain_call_stale_bound "$key" "$task"; then
     bounded=0
     throttled=0
+  elif [ -z "$STALE_WAIT_DECLARATION" ] && unknown_alive_stale_bound "$win" "$task"; then
+    bounded=0
+    throttled=0
   elif [ -n "$STALE_WAIT_DECLARATION" ]; then
     bounded=0
   fi
@@ -2152,6 +2175,50 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
     return 0
   fi
   wake "$reason"
+}
+
+# Bound repeat first-sight alarms only when the semantic busy reader cannot
+# classify the pane, the recovery-grade endpoint probe confirms its agent is
+# still alive, AND the pane shows progress evidence inside one
+# STALE_ESCALATE_SECS window: its own status log written within it, or its own
+# task worktree written within it (crew_worktree_written_since, the same probe,
+# prune list and depth the wedge timer's write deferral uses). An unknown-but-
+# alive pane with neither keeps surfacing on every new hash exactly as any
+# not-provably-working stale does, so a wedged pane that still animates is never
+# silenced by liveness alone. The first inconclusive sight remains actionable.
+# Exact idle, dead, missing, unreadable, and ambiguous endpoints retain their
+# existing paths, and an already-classified quiet pane still reaches
+# wedge_timer_check.
+unknown_alive_stale_bound() {  # <window> <task>
+  local win=$1 task=$2 meta verdict agent_alive
+  [ -n "$task" ] || return 1
+  meta="$STATE/$task.meta"
+  if [ -f "$meta" ]; then
+    verdict=$(fm_busy_classify_meta "$meta" "$task" "$STATE")
+  else
+    verdict=$(fm_busy_classify "$(window_backend "$win")" "$win" "$(window_harness "$win")" \
+      "$task" "$STATE")
+  fi
+  [ "${verdict%% *}" = unknown ] || return 1
+  agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
+  [ "$agent_alive" = alive ] || return 1
+  unknown_alive_progressing "$task" || return 1
+  STALE_WAIT_DECLARATION="unknown-alive:$task:$(window_backend "$win"):$win:$verdict"
+  stale_wait_throttled "$(window_key "$win")" "$STALE_WAIT_DECLARATION"
+}
+
+unknown_alive_progressing() {  # <task>
+  local task=$1 anchor cutoff stamp rc=1
+  [ "$(age_of "$STATE/$task.status")" -lt "$STALE_ESCALATE_SECS" ] && return 0
+  cutoff=$(( $(date +%s) - STALE_ESCALATE_SECS ))
+  stamp=$(TZ=UTC0 date -d "@$cutoff" +%Y%m%d%H%M.%S 2>/dev/null) \
+    || stamp=$(TZ=UTC0 date -r "$cutoff" +%Y%m%d%H%M.%S 2>/dev/null) \
+    || return 1
+  anchor=$(mktemp "$STATE/.unknown-alive-anchor.XXXXXX") || return 1
+  TZ=UTC0 touch -t "$stamp" "$anchor" \
+    && crew_worktree_written_since "$task" "$STATE" "$anchor" && rc=0
+  rm -f "$anchor"
+  return "$rc"
 }
 
 # Check and heartbeat cadence must survive actionable exits and restarts: the
