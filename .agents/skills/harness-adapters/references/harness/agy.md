@@ -1,6 +1,6 @@
 # agy (Antigravity CLI)
 
-Google's Antigravity CLI, verified end to end on 2026-09-10 with agy 1.2.0 on macOS.
+Google's Antigravity CLI, with worker and primary compatibility refreshed on 2026-10-21 with agy 1.4.4.
 Verified for interactive primary, secondmate, crewmate, and scout work.
 `../../../../../bin/fm-spawn.sh` owns the concrete launch and grant mechanics, through the fork-only `../../../../../bin/fm-agy-lib.sh` it sources.
 agy updates itself often and without asking, so treat every version-scoped fact here as refreshable rather than settled, and re-run the live guard after an upgrade.
@@ -21,7 +21,7 @@ agy updates itself often and without asking, so treat every version-scoped fact 
 | Interrupt | Single `Escape`, which prints `Interrupted · What should Antigravity CLI do instead?` and leaves the composer EMPTY, so no clear key is needed. |
 | Resume | `agy -c` / `--continue` for the most recent conversation, or `agy --conversation=<uuid>` from the id printed at exit. |
 | Models | `--model <model>`, checked against `agy models` before launch; effort is also encoded as a model-id suffix - see "Model and effort". |
-| Effort | Firstmate emits `--effort low|medium|high` only; `xhigh` is refused and agy 1.2.11 also accepts `max`. See "Model and effort". |
+| Effort | Firstmate emits `--effort low\|medium\|high` only; requested `xhigh` and `max` cap at `high`. See "Model and effort". |
 | Marker | `JETSKI_APP_DATA_DIR=antigravity-cli` on tool subprocesses, alongside `ANTIGRAVITY_LS_VERSION=cli-<version>`, `ANTIGRAVITY_PROJECT_ID`, `ANTIGRAVITY_TRAJECTORY_ID`, `ANTIGRAVITY_LS_ADDRESS`, and `ANTIGRAVITY_SOURCE_METADATA`. agy does NOT set `GEMINI_CLI`. |
 | Composer | `>` between solid rules and the native footer; `../../../../../bin/fm-composer-lib.sh` owns shape and placeholder classification. |
 | Skill | `/<skill>`; typing `/` opens a filtered command menu and ONE Enter selects and submits. |
@@ -122,7 +122,9 @@ An approval lands in the per-task verdict cache for ordinary calls; for a never-
 Markers deliberately survive `Stop` - nothing in a bypassed session is still waiting, so the marker means "firstmate still owes this call a decision" and closes only on approve, decline, a retried call's PostToolUse, or `retire`.
 
 File-tool writes are checked against the resolved physical path, and a target under `.agents/`, `.git/`, or firstmate's own worker wiring is refused outright.
-Under bypass a statically visible exec write or removal outside the task write roots is refused rather than judged - there is no native prompt behind the judge to correct a bad verdict - while credential reads are refused rather than escalated.
+agy 1.4.4 emits `read_file`, `write_file`, and `edit_file` with an absolute `Path`; the adapter checks that operand through the same credential and write-root policy as the legacy file tools.
+The observer records the path without file or replacement contents.
+Under bypass a statically visible exec write or removal outside the task write roots is refused rather than judged - there is no native prompt behind the judge to correct a bad verdict - while credential reads hold for firstmate.
 Static analysis cannot classify every command a worker can compose, so a command it cannot see into goes to the judge; this layer reduces risk and is not a security boundary.
 Under a brief's read exclusions, a file-tool read of the worker's own brain directory (`~/.gemini/antigravity-cli/brain/<conversationId>`, where agy stores fetched pages) or of a firstmate skill file the brief says to read and follow still runs without a judge call, and the judge is told both; the adapter's header owns the rule.
 
@@ -180,8 +182,8 @@ The adapter therefore emits at most one: a model id already carrying a level win
 Before any endpoint exists, spawn checks the selected model against a bounded `agy models` listing: a listed id or a supported base-plus-level alias launches, anything else refuses with the concrete reason, and a listing that fails, is empty, or times out launches the model unvalidated with a notice.
 `../../../../../bin/fm-spawn.sh`'s header owns the bound and the exact acceptance rule.
 
-Firstmate's `xhigh` is above agy's ceiling - `--effort xhigh` is refused with `invalid --effort "xhigh" (valid: low, medium, high, max)` on agy 1.2.11 - so it caps onto `high` rather than being dropped, per `../common/model-and-effort.md`.
-Firstmate's `max` caps onto `high` too; agy 1.2.11's own `max` level is not yet adopted.
+Firstmate retains its verified `xhigh` and `max` mapping onto `high`, per `../common/model-and-effort.md`.
+agy 1.4.4's help advertises both native levels, but the adapter has not adopted them; its current catalog-backed launch validation still uses low, medium, and high.
 The requested level stays recorded in task metadata.
 
 ## Interruptions Firstmate cannot suppress

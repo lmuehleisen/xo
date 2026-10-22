@@ -255,7 +255,7 @@ pass 'agy: production hooks in the separately granted directory settle a real tu
 # --- 2. accept-edits auto-approves a file edit ------------------------------
 
 "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l \
-  'Using your file writing tool, create edit-probe.txt containing EDIT_OK.'
+  "Using your native file writing tool, create the absolute file $WORKSPACE/edit-probe.txt containing EDIT_OK. Do not use the shell."
 "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter
 wait_for_turn || fail "agy did not finish the accept-edits file write turn"
 [ -f "$WORKSPACE/edit-probe.txt" ] \

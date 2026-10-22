@@ -1895,6 +1895,12 @@ test_agy_worker_tool_observer() {
   printf '%s' "$line" | jq -e '.tool == "write_to_file" and .input == "/tmp/secret.go" and .cwd == ""' >/dev/null \
     || fail "file-tool line wrong: $line"
   case "$line" in *TOP-SECRET*) fail 'observer logged file contents' ;; esac
+  out=$(obs_event PreToolUse '.toolCall={name:"edit_file",args:{Path:"/tmp/current.go",Target:"TOP-SECRET-OLD",Replacement:"TOP-SECRET-NEW"}}')
+  [ -z "$out" ] || fail "current file-tool observer emitted stdout: $out"
+  line=$(tail -1 "$log")
+  printf '%s' "$line" | jq -e '.tool == "edit_file" and .input == "/tmp/current.go"' >/dev/null \
+    || fail "current file-tool line wrong: $line"
+  case "$line" in *TOP-SECRET*) fail 'observer logged replacement contents' ;; esac
   out=$(obs_event PreToolUse '.toolCall={name:"read_url_content",args:{Url:"https://example.invalid/x"}}')
   [ -z "$out" ] || fail "web-tool observer emitted stdout: $out"
   printf '%s' "$(tail -1 "$log")" | jq -e '.input == "https://example.invalid/x"' >/dev/null \

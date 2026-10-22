@@ -90,11 +90,12 @@
 # prompt behind this layer to catch what it lets through.
 #
 # Tool mapping: run_command maps onto the shared exec analysis with
-# CommandLine and Cwd; view_file, grep_search, and list_dir are the read
-# class, and a view_file or list_dir of the worker's own agy brain directory
+# CommandLine and Cwd; read_file, view_file, grep_search, and list_dir are the read
+# class, and a native file read or list_dir of the worker's own agy brain directory
 # (~/.gemini/antigravity-cli/brain/<conversationId>, its fetched-page store)
-# or a view_file of a file the brief directs it to read stays approved under
-# brief read exclusions, credential checks first; write_to_file and replace_file_content are the write class against
+# or a native file read of a file the brief directs it to read stays approved under
+# brief read exclusions, credential checks first; write_file, edit_file,
+# write_to_file and replace_file_content are the write class against
 # the task worktree and scratch roots; search_web and read_url_content are
 # read-only web lookups; manage_task kill requires firstmate approval until
 # native ownership is verified; every other tool name is residue for the judge.
@@ -175,7 +176,7 @@ if [ "$EVENT" = verified-versions ]; then
   # armed line; a version without that evidence stays out. Keep this an
   # explicit list, never a minimum or a range: a range would admit the next
   # release unproven, which is the failure this gate exists to prevent.
-  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0\n'
+  printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4\n'
   exit 0
 fi
 if [ "$EVENT" = grants-digest ]; then
@@ -285,15 +286,18 @@ TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='
   | (.stepIdx | if type == "number" then . else "" end | tostring) as $step
   | (.toolCall.args // {}) as $a
   | ($a | del(.Content?, .NewContent?, .OldString?, .NewString?, .Text?,
-             .CodeContent?, .Contents?)) as $cacheargs
+             .CodeContent?, .Contents?, .Target?, .Replacement?)) as $cacheargs
   | [ (.toolCall.name | s),
       (if $conv != "" and $step != "" then "\($conv)-s\($step)" else "" end | s),
       ($conv | s),
       ($step | s),
       ($a.CommandLine | s),
       ($a.Cwd | s),
-      ([$a.TargetFile, $a.AbsolutePath, $a.FilePath, $a.File]
-       | map(select(type == "string" and . != "")) | .[0] // "" | s),
+      (if .toolCall.name == "read_file" or .toolCall.name == "write_file" or .toolCall.name == "edit_file"
+       then $a.Path | s
+       else [$a.TargetFile, $a.AbsolutePath, $a.FilePath, $a.File]
+         | map(select(type == "string" and . != "")) | .[0] // "" | s
+       end),
       (($a) | tojson | .[0:2000] | s),
       (($cacheargs) | tojson | s)
     ] | join("\u0000") + "\u0000"' 2>/dev/null)
@@ -345,13 +349,32 @@ write_armed() {
 
 evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
-  local fields
-  fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive,Url,URL,Query}')
-  credential_native "$fields" "$WORKTREE"
+  local fields credential_tool=$TOOL native_tool=$TOOL
   case "$TOOL" in
-    view_file|grep_search|list_dir|search_web|read_url_content)
+    read_file|write_file|edit_file)
+      # Current agy file tools use Path, not the legacy CamelCase fields.
+      # Granted hook directories are also workspaces, so a relative target
+      # has no proven task-root base. Require the actual absolute operand.
+      case "$FILE_PATH" in
+        /*) ;;
+        *) refuse "$TOOL requires an absolute Path"; return 0 ;;
+      esac
+      fields=$(printf '%s' "$PAYLOAD" | jq -c '{AbsolutePath:.toolCall.args.Path}')
+      case "$TOOL" in
+        read_file) credential_tool=view_file ;;
+        write_file) credential_tool=write_to_file ;;
+        edit_file) credential_tool=replace_file_content ;;
+      esac
       ;;
-    write_to_file|replace_file_content)
+    *) fields=$(printf '%s' "$PAYLOAD" | jq -c '.toolCall.args // {} | {TargetFile,AbsolutePath,FilePath,File,SearchPath,DirectoryPath,RootDirectory,Input,Recursive,Url,URL,Query}') ;;
+  esac
+  TOOL=$credential_tool
+  credential_native "$fields" "$WORKTREE"
+  TOOL=$native_tool
+  case "$TOOL" in
+    read_file|view_file|grep_search|list_dir|search_web|read_url_content)
+      ;;
+    write_file|edit_file|write_to_file|replace_file_content)
       local abs rel
       [ -n "$FILE_PATH" ] || { no_approve "$TOOL without a file path"; return 0; }
       # Whether agy's file tools expand a leading ~ is unverified; under
@@ -430,7 +453,7 @@ declined_key_file() {  # cache entry marking a call firstmate declined
 own_read() {
   local target abs d
   case "$TOOL" in
-    view_file) target=$FILE_PATH ;;
+    read_file|view_file) target=$FILE_PATH ;;
     list_dir) target=$(printf '%s' "$PAYLOAD" | jq -r '.toolCall.args.DirectoryPath // ""' 2>/dev/null) ;;
     *) return 1 ;;
   esac
@@ -441,7 +464,7 @@ own_read() {
     [ "$abs" = "$FM_POLICY_OWN_OUTPUT_DIR" ] && return 0
     strictly_inside "$abs" "$FM_POLICY_OWN_OUTPUT_DIR" && return 0
   fi
-  [ "$TOOL" = view_file ] || return 1
+  case "$TOOL" in read_file|view_file) ;; *) return 1 ;; esac
   while IFS= read -r d; do
     [ -n "$d" ] && [ "$d" = "$abs" ] && return 0
   done <<<"$(brief_directed_reads)"
@@ -453,7 +476,7 @@ apply_read_constraints() {
   [ -n "$READ_CONSTRAINTS" ] || return 0
   own_read && return 0
   case "$TOOL" in
-    run_command|view_file|grep_search|list_dir|search_web|read_url_content)
+    run_command|read_file|view_file|grep_search|list_dir|search_web|read_url_content)
       no_approve "brief read exclusions require scope review"
       # Never reuse an approval from before an exclusion was added/changed.
       CACHE_INPUT="$CACHE_INPUT"$'\n'"$READ_CONSTRAINTS"
