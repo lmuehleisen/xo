@@ -31,6 +31,7 @@
     "docs/zellij-backend.md",
     "docs/orca-backend.md",
     "docs/cmux-backend.md",
+    "docs/paseo-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -138,10 +139,6 @@
     },
     {
       "path": ".agents/skills/captain-hold-lifecycle/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/decision-hold-lifecycle/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -434,6 +431,10 @@
     },
     {
       "path": "docs/orca-backend.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/paseo-backend.md",
       "audience": "operator-current"
     },
     {

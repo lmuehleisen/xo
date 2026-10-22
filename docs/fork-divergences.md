@@ -58,7 +58,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: no required pipeline; `no-mistakes` delivery tokens ship as `direct-PR` unless `config/no-mistakes` opts in; README "No required `no-mistakes`".
 - Class: intended.
-- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh` (including the `config/wait-no-turns` waiting section, which names no-mistakes wait commands only in a pipeline ship brief), `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` (including the delivery sentence in the firstmate-self-repo skill) and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` is deleted.
+- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh` (including the `config/wait-no-turns` waiting section, which names no-mistakes wait commands only in a pipeline ship brief), `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` (including the delivery sentence in the firstmate-self-repo skill) and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` and its `tests/fm-no-mistakes-required.test.sh` compliance test are deleted.
 - Guard: `tests/fm-brief.test.sh` `test_no_mistakes_*` and `test_workers_wait_without_spending_turns`; `tests/fm-task-delivery.test.sh` `test_no_mistakes_*`; `tests/fm-bootstrap.test.sh` `test_no_mistakes_opt_in_reports_unavailable_cli`.
 - Upstream: requires the no-mistakes pipeline for every ship and enforces its minimum version at bootstrap.
 
@@ -147,7 +147,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: the fork's prose describes the fork rather than upstream: README "Fork: what differs" and every fork wording in shared prose that states the behavior of another entry here, plus the inventory rows that register fork-only prose.
 - Class: intended.
-- Seam: any shared prose surface, including `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `VISION.md`, `docs/` (for example `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`), and skill prose under `.agents/skills/`, limited to hunks that describe another entry's behavior, plus the Polytoken license comment in `bin/fm-spawn.sh`, which drops upstream's dated operator-decision note to keep the public surface free of operator-direction narrative; fork-only records such as `docs/verification/runtime-backends-fork.md`; and the `docs/documentation-audiences.json` rows that classify fork-only surfaces such as this ledger and `docs/upstream-integration.md`, while any other hunk in these files is still classified on its own.
+- Seam: any shared prose surface, including `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `VISION.md`, `docs/` (for example `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`), and skill prose under `.agents/skills/`, limited to hunks that describe another entry's behavior, plus the Polytoken license comment in `bin/fm-spawn.sh`, which drops upstream's dated operator-decision note to keep the public surface free of operator-direction narrative; fork-only records such as `docs/verification/runtime-backends-fork.md`, replacing upstream-only `docs/verification/agy.md` and `docs/verification/devin.md` evidence that describes different adapter behavior; and the `docs/documentation-audiences.json` rows that classify fork-only surfaces such as this ledger and `docs/upstream-integration.md`, while any other hunk in these files is still classified on its own.
 - Guard: none; the integration run's ledger-update step reviews these files against the fork each run.
 - Upstream: describes upstream's own tools, pipeline, and permission defaults.
 
@@ -163,7 +163,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: pushes, commit messages, and public PR text pass a configurable publish gate, with a larger body cap only for verified upstream integration records; `docs/configuration.md` "Publish guard".
 - Class: intended.
-- Seam: fork-only `bin/fm-publish-gate.sh`, `bin/fm-publish-judge.sh`, `bin/fm-gh-publish-policy.mjs`, `bin/fm-gh-publish-exec.mjs`, `bin/fm-git-publish-exec.mjs`, `bin/fm-no-mistakes-body.mjs`, `bin/fm-install-gitleaks.sh`, and `.github/workflows/pr-text.yml`, plus the `publish-identity` job in `.github/workflows/ci.yml`, the publish-policy hunks in `bin/fm-arm-pretool-check.sh` (shared), where a command the publish policy must see fails closed, the nested publish-guard inheritance in `bin/fm-config-inherit-lib.sh` and `bin/fm-remote-inherit.sh`, and the gate hunks in `bin/fm-git-strip-ai-trailers.sh` and `bin/fm-spawn.sh` (shared), where `config/keep-ai-trailers` skips only the trailer strip and the per-task hooks stay installed so the gate still runs.
+- Seam: fork-only `bin/fm-publish-gate.sh`, `bin/fm-publish-judge.sh`, `bin/fm-gh-publish-policy.mjs`, `bin/fm-gh-publish-exec.mjs`, `bin/fm-git-publish-exec.mjs`, `bin/fm-no-mistakes-body.mjs`, `bin/fm-install-gitleaks.sh`, and `.github/workflows/pr-text.yml`, plus the `publish-identity` job in `.github/workflows/ci.yml`, the publish-policy hunks in `bin/fm-arm-pretool-check.sh` (shared), where a command the publish policy must see fails closed, the nested publish-guard inheritance in `bin/fm-config-inherit-lib.sh` and `bin/fm-remote-inherit.sh`, and the gate hunks in `bin/fm-git-strip-ai-trailers.sh` and `bin/fm-spawn.sh` (shared), where `config/keep-ai-trailers` skips only the trailer strip and the per-task hooks stay installed so the gate still runs, plus the neutral marked-cwd fixture in `tests/fm-backend-paseo.test.sh`.
 - Guard: fork-only `tests/fm-publish-gate.test.sh`, `tests/fm-publish-judge.test.sh`, and `tests/fm-spawn-identity-pin.test.sh`; the keep-ai-trailers cases in `tests/fm-spawn-dispatch-profile.test.sh`; the publish fail-closed cases in `tests/fm-arm-pretool-check.test.sh`; fork-only `tests/fm-pi-worker-publish-policy-live-e2e.test.sh`.
 - Upstream: has no publish gate, and `config/keep-ai-trailers` removes the per-task hooks entirely.
 
@@ -318,14 +318,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-tmux-agent-liveness.test.sh` exact inventory cases; `tests/fm-teardown.test.sh` missing and replaced window cases.
 - Upstream: now ships exact-membership `fm_backend_tmux_target_exists`, including the rule that a pane suffix splits only from a window index, which the fork takes as its boolean probe; drop the remainder once upstream distinguishes an unreadable inventory from a missing endpoint and binds cleanup to window ids.
 
-### self-repo-gh-default-target
-
-- Intent: the firstmate-repository publication gate targets the repository `gh repo set-default` selected, so a fork that keeps the parent as a read-only `upstream` remote is gated on its own repository rather than the parent; README "Fork-aware self-repository gate".
-- Class: carried.
-- Seam: `fm_role_publication_target` in `bin/fm-role-lib.sh` and its target sentence in `docs/configuration.md` (shared).
-- Guard: `tests/fm-self-repo-role.test.sh` `test_check_gh_default_repo_selects_the_publication_target`.
-- Upstream: always takes the first of `upstream`, `github`, `origin`, so this fork's parent remote would be the target; a candidate contribution, dropped once upstream honors gh's default repository.
-
 ### rehold-reason
 
 - Intent: preserve a captain-hold reason on re-hold, including trailing newlines, newline-only reasons and quoted metadata.
@@ -466,6 +458,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-test-fixture-cleanup.test.sh`; `tests/fm-live-lab.test.sh`.
 - Upstream: lacks the same fixture-root guard and missing-directory socket protection; drop once equivalent.
 
+### checkpoint-portable-timeout
+
+- Intent: a foreground checkpoint preserves its deadline status and watcher cleanup independently of the timeout executable selected by PATH.
+- Class: carried.
+- Seam: Perl-first bounded execution, signal disposition, process-group isolation, cancellation forwarding and child-status handling in `bin/fm-watch-checkpoint.sh`, with their regression cases in `tests/fm-watch-checkpoint.test.sh` (shared).
+- Guard: `tests/fm-watch-checkpoint.test.sh`; `tests/fm-fleet-ledger.test.sh`; `tests/fm-contributions.test.sh`.
+- Upstream: prefers PATH's timeout executable and its Perl fallback lacks equivalent signal and process-group handling; drop once upstream preserves the same deadline, cancellation, cleanup and child-signal contracts.
+
 ### herdr-server-stdio
 
 - Intent: a detached Herdr server does not retain a remote caller's output descriptors through a waiting shell wrapper.
@@ -534,7 +534,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: distinguish animation and ghost decoration from draft text while preserving exact composer text for owned-input recovery.
 - Class: carried; the original busy-animation motivation was superseded, but the extraction behavior remains independently necessary.
-- Seam: animation, painted-braille, and ghost extraction in `bin/fm-composer-lib.sh`; `tests/fixtures/codex-animation/`; the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh`.
+- Seam: animation, painted-braille, and ghost extraction in `bin/fm-composer-lib.sh`; `tests/fixtures/codex-animation/`; the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh` and the same reader assertions in `tests/fm-backend-zellij.test.sh`.
 - Guard: `tests/fm-composer-ghost.test.sh`; `tests/fm-composer-lib.test.sh` animation and painted-braille cases.
 - Upstream: replaced #4297 with #4532; retire these extraction seams only when its reader preserves draft characters and excludes decoration in the same cases.
 
@@ -542,15 +542,43 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: portable serial CI runs as eleven shards, with the supervision-host suite split into attended, away, and recovery suites, so each shard stays inside the CI job limit.
 - Class: carried.
-- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, plus the shard matrix in `.github/workflows/ci.yml`, shard weights in `bin/fm-test-run.sh`, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
+- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, plus the shard matrix in `.github/workflows/ci.yml`, shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
 - Guard: `tests/fm-test-run.test.sh` shard cases; every integration ports upstream's new supervision-host tests into the split suites.
 - Upstream: runs nine serial shards and one supervision-host suite; drop once upstream shards equivalently.
+
+### pi-saved-trust-denial
+
+- Intent: a seeded Pi secondmate launch preserves a saved project-trust denial instead of overriding it with `--approve`.
+- Class: carried.
+- Seam: `pi_seeded_home_trust_allows_approve` and its selected trust-store launch environment in `bin/fm-spawn.sh`, plus the corresponding Pi trust evidence in `docs/verification/runtime-backends.md` (shared).
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` seeded-home trust cases; live, `tests/fm-pi-seeded-home-trust-live-e2e.test.sh`.
+- Upstream: approves a seeded secondmate home without reading its saved denial; drop once its launch preserves the same trust decision.
+
+### wedge-channel-diagnostics
+
+- Intent: a failed configured wedge-alarm channel reports a bounded redacted reason and falls back to the platform notification when every configured channel fails.
+- Class: carried.
+- Seam: `wedge_alarm_via_command`, `wedge_alarm_notify`, their failure helpers and marker projection in `bin/fm-supervise-daemon.sh` (shared).
+- Guard: `tests/fm-daemon.test.sh` command-channel failure, working-channel and fallback cases.
+- Upstream: logs an exit code and does not project the channel failure or try the same fallback; drop once equivalent diagnostics and fallback land.
+
+### teardown-restore-status
+
+- Intent: failed process-event restoration remains distinguishable from a completed teardown that lost its returned pool slot.
+- Class: carried.
+- Seam: `TEARDOWN_PROCEVENT_RESTORE_FAILED=5` and its exit-status header in `bin/fm-teardown.sh` (shared).
+- Guard: `tests/fm-secondmate-safety.test.sh` direct and recursive restoration-failure cases.
+- Upstream: uses status 4 for both outcomes; drop once it provides distinct statuses through recursive teardown.
 
 ## Incidental
 
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
-- `pi-package-discovery`: fork-only `tests/pi-package.sh` lets the Pi SDK suites find a Homebrew Pi install; offer it upstream.
+- `pi-package-discovery`: fork-only `tests/pi-package.sh` and its callers in `tests/fm-calm-pi-extension.test.sh`, `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-branch-live-e2e.test.sh` let SDK suites find a Homebrew Pi install; offer the discovery helper upstream and realign when taken.
 - `hold-doc-layout`: `docs/captain-hold-lifecycle.md` keeps the fork's condensed layout around the hunks its entries own; realign the layout when convenient.
 - `codex-verification`: the Codex busy-negotiation sentence in `bin/fm-busy-lib.sh` keeps the fork's verification wording; realign when convenient.
 - `pi-custom-run-cases`: the custom-triggered run cases in `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-watch-extension.test.sh` outlived their dropped entry and now pin upstream's own handling; realign when convenient.
+- `pi-compatibility-notes`: Pi 1.0.3 provider, thinking, TUI and trust-dialog observations in the Pi harness reference, `bin/fm-busy-lib.sh` and `docs/verification/runtime-backends.md`, plus the regular-TUI fixture in `tests/fm-calm-pi-extension.test.sh`; consolidate into the upstream reference when it covers those versions.
+- `test-fixture-portability`: host-independent PATH and process-holder fixtures in `tests/fm-on.test.sh`, `tests/fm-remote-doctor.test.sh` and `tests/fm-remote-herdr-guard.test.sh`, Git-version-neutral hook refusal checks in `tests/fm-git-strip-ai-trailers.test.sh`, the open but unwritable stdout fixture in `tests/fm-public-followup.test.sh`, and condition-based waits in `tests/fm-watch-arm.test.sh`, `tests/fm-remote-job.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh` and `tests/fm-herdr-groups.test.sh`, including the latter's physical temporary-socket path; realign when upstream fixtures preserve the same assertions on supported hosts.
+- `fixture-diagnostics`: failure-only output improvements in `tests/fm-gotmp.test.sh`, `tests/fm-remote-secondmate-lifecycle-e2e.test.sh`, `tests/fm-spawn-pool-base-freshen.test.sh`, `tests/fm-remote-job-launchagent.test.sh` and `tests/fm-calm-pi-extension.test.sh`, plus whitespace-only layout in `tests/fm-remote-doctor.test.sh`; offer the fixes upstream and realign when taken.
+- `fixture-assertions`: the Gemini no-key routing baseline in `tests/fm-bootstrap.test.sh` and the bounded-lint environment assertion in `tests/fm-ci-workflow.test.sh`; realign these equivalent test descriptions when convenient.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.

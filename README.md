@@ -39,7 +39,6 @@ Use this repository when cloning for these changes; the upstream project overvie
   agy crewmates and scouts in Auto use the policy layer and judge by default; `--no-agy-bypass` selects `accept-edits`, while Manual keeps agy's review mode. Devin workers stay in reviewed mode behind their own hook, never in bypass.
 - **Direct Kiro workers:** installed `kiro-cli` runs interactive V2 crewmates and scouts with isolated configuration and native busy-state hooks.
 - **Remote-less local work:** explicit `local-only` ship tasks can start from local `main` or `master` without a remote, while rejecting dirty or divergent task bases.
-- **Fork-aware self-repository gate:** the [Firstmate role](docs/configuration.md#firstmate-role-configfirstmate-role) gate targets the repository `gh repo set-default` selected, so a checkout that keeps the parent as a read-only `upstream` remote is gated on this fork; a home that ships changes here writes `maintainer github.com/<owner>/<repo>` for this fork into `config/firstmate-role`.
 - **Away watchdog outside tmux:** while away, a detached watchdog alarms through the [wedge-alarm channels](docs/wedge-alarm.md) if the fleet's tmux server or the away watcher stops, and the return brief names what stopped and when.
 - **Durable approval waits:** completed ship work awaiting merge approval remains tracked and visible in Ops, with quiet supervision after the finished worker is verified stopped.
 
@@ -82,7 +81,7 @@ Launching a supported harness inside it for your primary session instantiates yo
 - **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes XO only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
 - **Optional Relay** - opt in with one local `.env` pairing token so firstmate can answer your public mentions on X and Discord alike, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-Relay behavior; a final reply promised in a thread becomes durable state that is reconciled from disk, so a restart or a compacted conversation cannot lose it; dry-run preview records would-be replies and dismissals locally before go-live.
 - **Strict project boundary** - XO is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
-- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
+- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca/paseo when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
 
 Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
 
@@ -175,7 +174,7 @@ Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning
 
 ### More backends
 
-Setup guides for tmux (the default) and every other supported backend (herdr, zellij, Orca, cmux) are linked in [Documentation](#documentation) below.
+Setup guides for tmux (the default) and every other supported backend (herdr, zellij, Orca, cmux, Paseo) are linked in [Documentation](#documentation) below.
 
 ## How It Works
 
@@ -262,6 +261,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/zellij-backend.md](docs/zellij-backend.md) - current setup and limits for the experimental Zellij backend.
 - [docs/orca-backend.md](docs/orca-backend.md) - current setup and limits for the experimental Orca backend.
 - [docs/cmux-backend.md](docs/cmux-backend.md) - current setup, socket security, and limits for the experimental cmux backend.
+- [docs/paseo-backend.md](docs/paseo-backend.md) - current setup, terminal-name routing, and limits for the experimental Paseo backend.
 - [docs/codex-app-backend.md](docs/codex-app-backend.md) - the current blocked Codex App backend boundary and rollout contract.
 - [docs/verification/runtime-backends.md](docs/verification/runtime-backends.md) - active maintainer verification for runtime backend guarantees.
 - [docs/gerrit-forge-integration.md](docs/gerrit-forge-integration.md) - maintainer architecture for the forge axis: why change-shaped review is not a forge variant, the mode/forge/shape composition test, and where responsibility for forge mechanics sits.
