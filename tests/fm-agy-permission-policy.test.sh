@@ -102,6 +102,8 @@ hook() {
      workspacePaths:[$wt],
      toolCall:{name:$t, args:(
        (if $t == "run_command" then {CommandLine:$a, Cwd:$wt}
+        elif $t == "read_file" or $t == "write_file" or $t == "edit_file"
+          then {Path:$a, Content:"x"}
         elif $t == "write_to_file" or $t == "replace_file_content" or $t == "view_file"
           then {AbsolutePath:$a, Content:"x"}
         elif $t == "search_web" or $t == "read_url_content" then {Query:$a}
@@ -228,6 +230,38 @@ EOF
   denied "$OUT" "held for firstmate" \
     || fail "a credential read must escalate to firstmate, got: $OUT"
   pass "fm-agy-permission-policy: non-command tools map onto the shared policy's file and read rules"
+}
+
+test_current_native_file_contract() {
+  local policy dir wt tool target
+  policy=$(new_case current-native 'printf "APPROVE: fixture judge must not bypass static guards\n"')
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/src" "$wt/.agents" "$dir/state/t1.agy-hooks"
+  printf 'PUBLIC\n' > "$wt/src/public.txt"
+  printf 'HARMLESS_SENTINEL\n' > "$wt/vendor.env"
+  ln -s /etc "$wt/escape"
+  for tool in read_file write_file edit_file; do
+    hook "$policy" pre-tool-use "$tool" "$wt/src/public.txt"
+    abstained "$OUT" || fail "$tool must use its actual Path for an in-task operation: $OUT"
+    jq -es --arg tool "$tool" 'last | .tool == $tool and .decision == "approve"' "$dir/state/agy-permission-log.jsonl" >/dev/null \
+      || fail "$tool must retain its native name in the policy receipt"
+    hook "$policy" pre-tool-use "$tool" "$wt/vendor.env"
+    denied "$OUT" 'held for firstmate' || fail "$tool must retain the credential hold for Path: $OUT"
+    hook "$policy" pre-tool-use "$tool" src/public.txt
+    denied "$OUT" 'absolute Path' || fail "$tool must refuse an unproven relative Path base: $OUT"
+    hook "$policy" pre-tool-use "$tool" '' 1 '{"AbsolutePath":"/etc/hosts","Path":null}'
+    denied "$OUT" 'absolute Path' || fail "$tool must not substitute a legacy field for a missing Path: $OUT"
+  done
+  for tool in write_file edit_file; do
+    for target in /etc/fm-agy-fixture "$wt/escape/fm-agy-fixture" "$wt/.agents/fixture" "$dir/state/t1.agy-hooks/fixture" "$dir/data/t1/brief.md"; do
+      hook "$policy" pre-tool-use "$tool" "$target"
+      denied "$OUT" || fail "$tool must refuse a forbidden Path even with an approving judge: $OUT"
+    done
+    hook "$policy" pre-tool-use "$tool" /etc/fm-agy-fixture 1 "{\"AbsolutePath\":\"$wt/src/public.txt\"}"
+    denied "$OUT" 'outside the task write roots' || fail "$tool must check Path rather than a conflicting legacy field: $OUT"
+  done
+  pass 'fm-agy-permission-policy: current native Path tools preserve credential, physical-root, wiring and absolute-target guards'
 }
 
 test_file_tool_writes_resolve_physically() {
@@ -894,7 +928,7 @@ test_verified_versions_and_grants_digest_verbs() {
   local versions digest dir
   versions=$("$POLICY_SH" verified-versions 2>/dev/null)
   case "$versions" in
-    '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0') ;;
+    '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4') ;;
     *) fail "verified-versions must list the live-verified agy set, got: $versions" ;;
   esac
   dir="$TMP_ROOT/verbs"
@@ -1744,6 +1778,10 @@ PY
   abstained "$OUT" || fail "own brain listing must run under read exclusions: $OUT"
   hook "$policy" pre-tool-use view_file "$skill" 3
   abstained "$OUT" || fail "brief-directed skill read must run under read exclusions: $OUT"
+  hook "$policy" pre-tool-use read_file "$brain/.system_generated/steps/22/content.md" 40
+  abstained "$OUT" || fail "current native own-brain read must retain the exemption: $OUT"
+  hook "$policy" pre-tool-use read_file "$skill" 41
+  abstained "$OUT" || fail "current native brief-directed read must retain the exemption: $OUT"
   [ ! -e "$PROMPT_CAPTURE" ] || fail "exempt reads must not spend a judge call"
 
   hook "$policy" pre-tool-use view_file "$HOME/.gemini/antigravity-cli/brain/c2/content.md" 4
@@ -1756,6 +1794,10 @@ PY
   denied "$OUT" || fail "a path the directing line excludes must stay under read scope: $OUT"
   hook "$policy" pre-tool-use view_file "$dir/data/excluded/records.csv" 8
   denied "$OUT" || fail "a directed read outside firstmate's skills tree must stay under read scope: $OUT"
+  hook "$policy" pre-tool-use read_file "$HOME/.gemini/antigravity-cli/brain/c2/content.md" 42
+  denied "$OUT" || fail "current native foreign-brain reads must retain read scope: $OUT"
+  hook "$policy" pre-tool-use read_file "$brain/.env" 43
+  denied "$OUT" 'held for firstmate' || fail "current native own-brain credentials must retain the veto: $OUT"
 
   rm -f "$PROMPT_CAPTURE"
   hook "$policy" pre-tool-use run_command "sed -n '1,5p' $brain/.system_generated/steps/22/content.md" 9
@@ -2105,6 +2147,7 @@ test_armed_heartbeat_proves_wiring
 test_refusal_list_denies
 test_refusal_leaves_safe_commands_alone
 test_non_command_tool_mapping
+test_current_native_file_contract
 test_file_tool_writes_resolve_physically
 test_fetch_dest_writes_resolve_physically
 test_file_tool_protected_and_config_paths
