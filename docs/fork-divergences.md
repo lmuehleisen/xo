@@ -458,6 +458,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-test-fixture-cleanup.test.sh`; `tests/fm-live-lab.test.sh`.
 - Upstream: lacks the same fixture-root guard and missing-directory socket protection; drop once equivalent.
 
+### checkpoint-portable-timeout
+
+- Intent: a foreground checkpoint preserves its deadline status and watcher cleanup independently of the timeout executable selected by PATH.
+- Class: carried.
+- Seam: Perl-first bounded execution, signal disposition, process-group isolation, cancellation forwarding and child-status handling in `bin/fm-watch-checkpoint.sh`, with their regression cases in `tests/fm-watch-checkpoint.test.sh` (shared).
+- Guard: `tests/fm-watch-checkpoint.test.sh`; `tests/fm-fleet-ledger.test.sh`; `tests/fm-contributions.test.sh`.
+- Upstream: prefers PATH's timeout executable and its Perl fallback lacks equivalent signal and process-group handling; drop once upstream preserves the same deadline, cancellation, cleanup and child-signal contracts.
+
 ### herdr-server-stdio
 
 - Intent: a detached Herdr server does not retain a remote caller's output descriptors through a waiting shell wrapper.
@@ -570,7 +578,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - `codex-verification`: the Codex busy-negotiation sentence in `bin/fm-busy-lib.sh` keeps the fork's verification wording; realign when convenient.
 - `pi-custom-run-cases`: the custom-triggered run cases in `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-watch-extension.test.sh` outlived their dropped entry and now pin upstream's own handling; realign when convenient.
 - `pi-compatibility-notes`: Pi 1.0.3 provider, thinking, TUI and trust-dialog observations in the Pi harness reference, `bin/fm-busy-lib.sh` and `docs/verification/runtime-backends.md`, plus the regular-TUI fixture in `tests/fm-calm-pi-extension.test.sh`; consolidate into the upstream reference when it covers those versions.
-- `test-fixture-portability`: host-independent PATH and process-holder fixtures in `tests/fm-on.test.sh`, `tests/fm-remote-doctor.test.sh` and `tests/fm-remote-herdr-guard.test.sh`, Git-version-neutral hook refusal checks in `tests/fm-git-strip-ai-trailers.test.sh`, and condition-based waits in `tests/fm-watch-arm.test.sh`, `tests/fm-remote-job.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh` and `tests/fm-herdr-groups.test.sh`, including the latter's physical temporary-socket path; realign when upstream fixtures preserve the same assertions on supported hosts.
+- `test-fixture-portability`: host-independent PATH and process-holder fixtures in `tests/fm-on.test.sh`, `tests/fm-remote-doctor.test.sh` and `tests/fm-remote-herdr-guard.test.sh`, Git-version-neutral hook refusal checks in `tests/fm-git-strip-ai-trailers.test.sh`, the open but unwritable stdout fixture in `tests/fm-public-followup.test.sh`, and condition-based waits in `tests/fm-watch-arm.test.sh`, `tests/fm-remote-job.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh` and `tests/fm-herdr-groups.test.sh`, including the latter's physical temporary-socket path; realign when upstream fixtures preserve the same assertions on supported hosts.
 - `fixture-diagnostics`: failure-only output improvements in `tests/fm-gotmp.test.sh`, `tests/fm-remote-secondmate-lifecycle-e2e.test.sh`, `tests/fm-spawn-pool-base-freshen.test.sh`, `tests/fm-remote-job-launchagent.test.sh` and `tests/fm-calm-pi-extension.test.sh`, plus whitespace-only layout in `tests/fm-remote-doctor.test.sh`; offer the fixes upstream and realign when taken.
 - `fixture-assertions`: the Gemini no-key routing baseline in `tests/fm-bootstrap.test.sh` and the bounded-lint environment assertion in `tests/fm-ci-workflow.test.sh`; realign these equivalent test descriptions when convenient.
 - Test adaptations in upstream-owned suites are not entries of their own; they ride under the entry whose behavior they pin, and the classification step flags any that pin nothing.

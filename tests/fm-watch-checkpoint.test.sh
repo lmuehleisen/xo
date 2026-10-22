@@ -90,6 +90,116 @@ PL
   pass "Perl fallback honors the cleanup bound before escalating an INT-ignoring direct watcher"
 }
 
+# Whichever timeout PATH names first must not bound the watcher, and a caller
+# that ignores INT must not disarm the watcher's own INT cleanup.
+test_quiet_checkpoint_ignores_path_timeout_and_inherited_int_ignore() {
+  local home tool real status
+  home=$(make_home path-timeout)
+  mkdir -p "$home/stub-bin"
+  # An incompatible stand-in: it refuses to bound the watcher itself and
+  # passes the watcher's own bounded checks to the host's real tool.
+  for tool in timeout gtimeout; do
+    real=$(command -v "$tool") || continue
+    # shellcheck disable=SC2016 # expands in the stub.
+    printf '#!/bin/sh\ncase " $* " in *"/fm-watch.sh "*) : > "$FM_HOME/stub-timeout-used"; exit 125 ;; esac\nexec "%s" "$@"\n' \
+      "$real" > "$home/stub-bin/$tool"
+    chmod +x "$home/stub-bin/$tool"
+  done
+  status=0
+  PATH="$home/stub-bin:$PATH" FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    perl -e '$SIG{INT} = "IGNORE"; exec @ARGV' "$CHECKPOINT" --seconds 1 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+  expect_code 124 "$status" "quiet checkpoint exit beside a PATH timeout under an INT-ignoring caller"
+  assert_contains "$(cat "$home/out.txt")" "checkpoint: no actionable wake within 1s" "quiet checkpoint line missing"
+  assert_absent "$home/stub-timeout-used" "the checkpoint bounded its watcher with the timeout PATH named first"
+  assert_absent "$home/state/.watch.lock/pid" "an inherited INT ignore kept the watcher from releasing its lock"
+  pass "a quiet checkpoint ignores PATH's timeout and still cleans up under a caller that ignores INT"
+}
+
+test_watcher_signal_death_before_the_deadline_is_not_quiet() {
+  local home status
+  home=$(make_home signal-death)
+  mkdir -p "$home/root/bin"
+  cp "$CHECKPOINT" "$home/root/bin/fm-watch-checkpoint.sh"
+  cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$home/root/bin/fm-supervision-engine-lib.sh"
+  # shellcheck disable=SC2016 # expands in the fixture watcher.
+  printf '#!/usr/bin/env bash\nkill -KILL $$\n' > "$home/root/bin/fm-watch.sh"
+  chmod +x "$home/root/bin/fm-watch-checkpoint.sh" "$home/root/bin/fm-watch.sh"
+  status=0
+  FM_HOME="$home" "$home/root/bin/fm-watch-checkpoint.sh" --seconds 5 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+  expect_code 137 "$status" "checkpoint exit for a watcher KILLed before the deadline"
+  assert_not_contains "$(cat "$home/out.txt")" "checkpoint: no actionable wake" \
+    "a watcher KILLed before the deadline was reported as a quiet checkpoint"
+  pass "a watcher killed by a signal before the deadline reports that signal, not success or a quiet checkpoint"
+}
+
+stop_fixture_watcher() {  # <pid>: stop this test's own watcher after a failure
+  kill -TERM "$1" 2>/dev/null || true
+  sleep 3
+  kill -KILL "$1" 2>/dev/null || true
+}
+
+wait_for_pid_exit() {  # <pid> <tenths>
+  local i=0
+  while kill -0 "$1" 2>/dev/null; do
+    [ "$i" -lt "$2" ] || return 1
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+# A harness may cancel a foreground checkpoint by KILLing its whole process
+# group; the bound must survive that and still stop the watcher cleanly.
+test_bound_outlives_a_group_kill_of_its_caller() {
+  local home checkpoint_pid watcher_pid
+  home=$(make_home group-kill)
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    perl -e 'setpgrp(0, 0); exec @ARGV' "$CHECKPOINT" --seconds 3 >"$home/out.txt" 2>"$home/err.txt" &
+  checkpoint_pid=$!
+  wait_for_checkpoint_lock "$home" || {
+    kill -KILL -- "-$checkpoint_pid" 2>/dev/null || true
+    wait "$checkpoint_pid" 2>/dev/null || true
+    fail "group-kill checkpoint did not take the watcher lock"
+  }
+  watcher_pid=$(cat "$home/state/.watch.lock/pid")
+  kill -KILL -- "-$checkpoint_pid"
+  wait "$checkpoint_pid" 2>/dev/null || true
+  wait_for_pid_exit "$watcher_pid" 150 || {
+    stop_fixture_watcher "$watcher_pid"
+    fail "a group kill of the checkpoint's caller left its watcher running past the bound"
+  }
+  assert_absent "$home/state/.watch.lock/pid" "the watcher did not release its lock at the bound after its caller's group was killed"
+  pass "the checkpoint bound outlives a group kill of its caller and still stops the watcher cleanly"
+}
+
+test_term_to_the_bound_reaches_the_watcher() {
+  local home checkpoint_pid watcher_pid wrapper_pid status
+  home=$(make_home term-forward)
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 30 >"$home/out.txt" 2>"$home/err.txt" &
+  checkpoint_pid=$!
+  wait_for_checkpoint_lock "$home" || {
+    kill "$checkpoint_pid" 2>/dev/null || true
+    wait "$checkpoint_pid" 2>/dev/null || true
+    fail "term-forward checkpoint did not take the watcher lock"
+  }
+  watcher_pid=$(cat "$home/state/.watch.lock/pid")
+  wrapper_pid=$(ps -A -o pid= -o ppid= | awk -v parent="$checkpoint_pid" '$2 == parent { print $1; exit }')
+  [ -n "$wrapper_pid" ] || {
+    stop_fixture_watcher "$watcher_pid"
+    fail "could not find the checkpoint's bounding process"
+  }
+  kill -TERM "$wrapper_pid"
+  status=0
+  wait "$checkpoint_pid" || status=$?
+  wait_for_pid_exit "$watcher_pid" 50 || {
+    stop_fixture_watcher "$watcher_pid"
+    fail "a TERM to the checkpoint's bound did not reach its watcher"
+  }
+  expect_code 143 "$status" "checkpoint exit after its bound forwarded a TERM"
+  assert_absent "$home/state/.watch.lock/pid" "a forwarded TERM did not let the watcher release its lock"
+  pass "a TERM delivered to the checkpoint's bound is forwarded to the watcher, which releases its lock"
+}
+
 test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
   local home out err status marker
   home=$(make_home announced-recovery)
@@ -346,6 +456,10 @@ test_real_host_checkpoint_ends_quietly_at_its_bound() {
 
 test_quiet_checkpoint_exits_124_cleanly
 test_perl_timeout_fallback_honors_cleanup_bound_before_escalating
+test_quiet_checkpoint_ignores_path_timeout_and_inherited_int_ignore
+test_watcher_signal_death_before_the_deadline_is_not_quiet
+test_bound_outlives_a_group_kill_of_its_caller
+test_term_to_the_bound_reaches_the_watcher
 test_announced_recovery_is_not_reannounced_by_next_checkpoint
 test_never_announced_recovery_is_announced_once
 test_queue_append_during_checkpoint_still_resurfaces

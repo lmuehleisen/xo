@@ -75,37 +75,58 @@ ERR=$(mktemp "${TMPDIR:-/tmp}/fm-watch-checkpoint.err.XXXXXX") || {
 }
 trap 'rm -f "$OUT" "$ERR"' EXIT
 
+# The bounded run gives the checkpoint what it relied on from GNU timeout, on
+# every host: the command starts with the stop signals at their default
+# disposition even under a caller that ignores INT; this wrapper leaves the
+# caller's process group, so a group kill aimed at the caller cannot remove the
+# bound; a TERM, INT, or HUP delivered to the wrapper is forwarded to the
+# command's group and starts the same escalation; and a command killed by
+# signal n reports 128+n. Reaching the deadline reports 124, including when its
+# KILL escalation has to fire.
 run_with_perl_timeout() {  # <seconds> <signal> <kill-after-seconds> <command...>
   perl -e '
-    use POSIX qw(:sys_wait_h);
+    use POSIX qw(:sys_wait_h setpgid);
     my $seconds = shift;
     my $signal = shift;
     my $kill_after = shift;
-    my $pid = fork;
-    die "fork failed\n" unless defined $pid;
-    if (!$pid) {
-      setpgrp(0, 0);
+    setpgid(0, 0);
+    my ($pid, $pending, $stopping, $timed_out) = (0, "", 0, 0);
+    sub finish {
+      exit 124 if $timed_out;
+      exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+    }
+    my $stop = sub {
+      my $sig = shift;
+      kill $sig, -$pid;
+      alarm($kill_after) if $kill_after && !$stopping;
+      $stopping = 1;
+    };
+    $SIG{ALRM} = sub {
+      if ($stopping && $kill_after) {
+        kill "KILL", -$pid;
+        waitpid $pid, 0;
+        finish();
+      }
+      $timed_out = 1;
+      $stop->($signal);
+    };
+    for my $sig (qw(TERM INT HUP)) {
+      $SIG{$sig} = sub { if ($pid) { $stop->($sig) } else { $pending = $sig } };
+    }
+    my $child = fork;
+    die "fork failed\n" unless defined $child;
+    if (!$child) {
+      $SIG{$_} = "DEFAULT" for qw(TERM INT HUP), $signal;
+      setpgid(0, 0);
       exec @ARGV;
       die "exec failed: $!\n";
     }
-    my $timed_out = 0;
-    local $SIG{ALRM} = sub {
-      if ($timed_out) {
-        kill "KILL", -$pid;
-        waitpid $pid, 0;
-        exit 124;
-      }
-      $timed_out = 1;
-      kill $signal, -$pid;
-      alarm($kill_after) if $kill_after;
-    };
-    alarm $seconds;
+    setpgid($child, $child);
+    $pid = $child;
+    $stop->($pending) if $pending;
+    alarm $seconds unless $stopping && $kill_after;
     while (1) {
-      my $waited = waitpid $pid, WNOHANG;
-      if ($waited == $pid) {
-        alarm 0;
-        exit($timed_out ? 124 : ($? >> 8));
-      }
+      finish() if waitpid($pid, WNOHANG) == $pid;
       select undef, undef, undef, 0.05;
     }
   ' "$@"
@@ -124,20 +145,22 @@ run_bounded() {  # <seconds> <signal> <kill-after-seconds> <command...>
     [ "$cleanup_lock_bound" -gt "$kill_after" ] || cleanup_lock_bound=$kill_after
     kill_after=$cleanup_lock_bound
   fi
-  if command -v timeout >/dev/null 2>&1; then
+  # Whichever timeout PATH names first is not a contract: uutils timeout, for
+  # one, KILLs the watcher before its INT cleanup can release the lock.
+  if command -v perl >/dev/null 2>&1; then
+    run_with_perl_timeout "$seconds" "$signal" "$kill_after" "$@"
+  elif command -v timeout >/dev/null 2>&1; then
     if [ "$kill_after" -gt 0 ]; then
       timeout --signal="$signal" --kill-after="${kill_after}s" "$seconds" "$@"
     else
       timeout --signal="$signal" "$seconds" "$@"
     fi
-  elif command -v gtimeout >/dev/null 2>&1; then
+  else
     if [ "$kill_after" -gt 0 ]; then
       gtimeout --signal="$signal" --kill-after="${kill_after}s" "$seconds" "$@"
     else
       gtimeout --signal="$signal" "$seconds" "$@"
     fi
-  else
-    run_with_perl_timeout "$seconds" "$signal" "$kill_after" "$@"
   fi
 }
 

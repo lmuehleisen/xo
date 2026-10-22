@@ -224,11 +224,13 @@ test_cleanup_guard_refuses_unsafe_roots() {
   mkdir -p "$copy/project/nested-tmp"
   # The trap pattern with its root already emptied the way a failed library
   # can leave it, sourcing only the guard so the library cannot rescue it.
+  # Canonicalizing an emptied root with cd lands on the current directory
+  # where cd treats an empty operand as ".", which Bash 5.3 rejects instead,
+  # so the probe takes that physical directory explicitly.
   cat > "$copy/tests/guard-probe.test.sh" <<'PROBE'
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/tmproot-guard.sh"
-EMPTY_ROOT=
-EMPTY_ROOT=$(cd "$EMPTY_ROOT" && pwd)
+EMPTY_ROOT=$(pwd -P)
 CHECKOUT_PARENT=$(cd .. && pwd)
 trap 'fm_test_rm_tmproot "${EMPTY_ROOT:-}"; fm_test_rm_tmproot "$CHECKOUT_PARENT"; fm_test_rm_tmproot ""; fm_test_rm_tmproot project/..' EXIT
 PROBE
