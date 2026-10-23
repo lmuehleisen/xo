@@ -227,6 +227,10 @@ test_matrix_claude_named_session_titled_rule() {
   # composer, even with a live idle pi identity.
   assert_screen "titled pair over a blank row is not pi" unknown "$CAPS_STYLED" \
     "transcript"$'\n'"$titled"$'\n\n'"$rule"$'\n footer' '' "$pi_idle"
+  assert_screen "titled pair over a blank cursor row is not pi" unknown "$CAPS_TMUX" \
+    "transcript"$'\n'"$titled"$'\n\n'"$rule"$'\n footer' 2 "$pi_idle"
+  assert_screen "titled pair over a blank row is not polytoken" unknown "$CAPS_STYLED" \
+    "transcript"$'\n'"$titled"$'\n\n'"$rule"$'\n footer' '' $'polytoken\tidle'
   pass "matrix: a named claude session's titled top rule proves its composer; pi stays unchanged"
 }
 

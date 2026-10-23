@@ -1146,6 +1146,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   FM_COMPOSER_SCAN_LEFTBAR_END=-1
   FM_COMPOSER_SCAN_PI_PAIR_FOUND=0
   FM_COMPOSER_SCAN_PI_PAIR_VALID=0
+  FM_COMPOSER_SCAN_PI_PAIR_TITLED=0
   FM_COMPOSER_SCAN_PI_TITLE_INVALID=0
   FM_COMPOSER_SCAN_PI_OPEN=-1
   FM_COMPOSER_SCAN_PI_CLOSE=-1
@@ -1211,8 +1212,10 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       if [ "$pi_open" -ge 0 ]; then
         FM_COMPOSER_SCAN_PI_PAIR_FOUND=1
+        FM_COMPOSER_SCAN_PI_PAIR_TITLED=0
         FM_COMPOSER_SCAN_PI_TITLE_INVALID=0
         if [ -n "$pi_title_spaces" ]; then
+          FM_COMPOSER_SCAN_PI_PAIR_TITLED=1
           pi_close_spaces="$indent${trimmed//─/ }"
           if [ "$pi_title_spaces" != "$pi_close_spaces" ]; then
             FM_COMPOSER_SCAN_PI_TITLE_INVALID=1
@@ -2810,8 +2813,11 @@ _fm_composer_pi_verdict() {  # <screen> <styled> <has_identity> <identity>
   # polytoken keeps the strict unknown - its composer really is empty
   # mid-turn (Enter queues, verified live), but the unknown keeps the
   # busy-queue conversion honest through the submit cores.
+  # A named Claude rule can bound its glyph composer, but cannot prove Pi's
+  # blank separated input even when its width matches the closing rule.
   if { [ "$agent" != pi ] && [ "$agent" != polytoken ]; } \
-    || [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" != 1 ]; then
+    || [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" != 1 ] \
+    || [ "$FM_COMPOSER_SCAN_PI_PAIR_TITLED" = 1 ]; then
     printf 'unknown'
     return 0
   fi
