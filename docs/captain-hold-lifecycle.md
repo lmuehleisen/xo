@@ -34,6 +34,7 @@ A hold whose `--until` date has passed keeps those annotations while tasks-axi r
 The `complete` subcommand unions the reviewed captain-held task ids into `decision_keys=` and appends `decisions_reviewed=1` while originating task metadata is live.
 A post-teardown visual review can complete against the surviving report and durable tasks without recreating volatile task metadata.
 It accepts `--none` as an explicit semantic inventory result, refused while the origin still has a lifecycle-open keyed status decision, and verifies every listed task against tasks-axi before recording completion.
+An answered entry that markdown Done retention moved into the configured Done archive still counts, while an archived close with no recorded answer does not.
 An origin cannot inventory itself except for a completed ship's own durable approval hold; a later worker event disallows that exception.
 Other historical self-inventories require a separate held task with `--origin`, replacement of only the invalid entry in the final `decision_keys=` line, and another `complete` call.
 An entry associated with another origin is refused, while legacy entries without an origin are accepted on durability evidence and named in the output.

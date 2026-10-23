@@ -34,7 +34,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: GitHub operations use plain `gh`; README "No required `gh-axi`".
 - Class: intended.
-- Seam: `bin/fm-pr-merge.sh`, `bin/fm-bootstrap.sh`, and the `gh-axi` wording in `bin/fm-brief.sh`, `bin/fm-dod-lib.sh`, `bin/fm-project-mode.sh`, `bin/fm-teardown.sh`, the timing-artifact download in `docs/fm-test-portable-shards.md`, and the bearings, bootstrap-diagnostics, project-management, and secondmate-provisioning skills (shared); upstream's optional, inert `gh-axi` fallback in `fm_pr_github_read_record` is deliberately kept.
+- Seam: `bin/fm-pr-merge.sh`, `bin/fm-bootstrap.sh`, and the `gh-axi` wording in `bin/fm-brief.sh`, `bin/fm-dod-lib.sh`, `bin/fm-project-mode.sh`, `bin/fm-teardown.sh`, the timing-artifact download in `docs/fm-test-portable-shards.md`, and the bearings, bootstrap-diagnostics, project-management, and secondmate-provisioning skills (shared); upstream's optional, inert `gh-axi` fallback in `fm_pr_github_read_record` is deliberately kept; the shared branch-to-PR lookup used by teardown and the optional health monitor uses plain `gh` JSON.
 - Guard: `tests/fm-bootstrap.test.sh` `test_dropped_tools_are_not_required`.
 - Upstream: requires `gh-axi`.
 
@@ -64,11 +64,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### reviewed-worker-permissions
 
-- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode`, so Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
+- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
 - Class: intended.
 - Seam: permission resolution and `launch_template` in `bin/fm-spawn.sh`, and `docs/configuration.md` (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
-- Upstream: bypasses permissions by default, with automatic review as a Claude-only opt-in through `config/claude-permission-mode`; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
+- Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
 
 ### codex-reviewed-launch
 
@@ -77,7 +77,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: the Codex arms of `launch_template` in `bin/fm-spawn.sh` (shared) print the selected permission flags in place of upstream's `--dangerously-bypass-approvals-and-sandbox`; an alternative would keep the template lines byte-identical to upstream and substitute the flags at launch time instead.
   The automatic-review brief also carries sandbox retry guidance from `fm_brief_codex_reviewed_sandbox` in `bin/fm-dod-lib.sh`, added by `bin/fm-spawn.sh` and described in the Codex harness reference (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_codex_secondmate_launch_keeps_the_hook_layer`, and the sandbox-guidance cases.
-- Upstream: launches Codex with `--dangerously-bypass-approvals-and-sandbox` and has no Codex permission option; an equivalent upstream option would reduce this entry to a default value.
+- Upstream: launches Codex with `--dangerously-bypass-approvals-and-sandbox` by default and offers `config/codex-approval-mode=approve-for-me`; XO keeps `config/crew-permissions` as its single setting, including manual review and the task sandbox guidance.
 
 ### agy-permission-posture
 
@@ -195,9 +195,9 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: crew dispatch configuration chooses each lane's model classes, live worker caps, shared cap groups, and unmetered ranking priority while code chooses the provider route by quota; the resolver can use an OpenRouter transport and records private call history; `docs/configuration.md` "Lanes and model classes".
 - Class: intended.
-- Seam: fork-only `bin/fm-dispatch-lanes-lib.sh`, `bin/fm-dispatch-history-lib.sh`, and `docs/examples/crew-dispatch-lanes.json`, plus the lane hunks in `bin/fm-dispatch-resolve.sh` (`--lane`, `--exclude-family`, `--data-tag`, lane evaluation, live caps, unmetered ranking, the OpenRouter transport, and call history), the transport evidence in `docs/verification/dispatch-resolve.md`, the history write in `bin/fm-spawn.sh`, `bin/fm-bootstrap.sh` (lane validation and verbose facts), and `bin/fm-spawn.sh` (`model_family=` meta), the lane prose in `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`, the lane procedure and trigger in `.agents/skills/quota-array-dispatch/SKILL.md` and `.agents/skills/agent-skill-trigger-index/SKILL.md`, the template row in `docs/documentation-audiences.json`, and the library's guard selection in `bin/fm-test-run.sh` (shared).
+- Seam: fork-only `bin/fm-dispatch-lanes-lib.sh`, `bin/fm-dispatch-history-lib.sh`, and `docs/examples/crew-dispatch-lanes.json`, plus the lane hunks in `bin/fm-dispatch-resolve.sh` (`--lane`, `--exclude-family`, `--data-tag`, lane evaluation, live caps, unmetered ranking, the OpenRouter transport, and call history), the explicit-provider OpenRouter Decisions transport alongside the home-only implicit fallback and the transport evidence in `docs/verification/dispatch-resolve.md`, the history write in `bin/fm-spawn.sh`, `bin/fm-bootstrap.sh` (lane validation and verbose facts), and `bin/fm-spawn.sh` (`model_family=` meta), the lane prose in `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`, the lane procedure and trigger in `.agents/skills/quota-array-dispatch/SKILL.md` and `.agents/skills/agent-skill-trigger-index/SKILL.md`, the template row in `docs/documentation-audiences.json`, and the library's guard selection in `bin/fm-test-run.sh` (shared).
 - Guard: `tests/fm-dispatch-resolve.test.sh` lane, cap, unmetered-ranking, OpenRouter, and history cases; `tests/fm-bootstrap.test.sh` lane validation rows, lane verbose facts, and `test_crew_dispatch_lanes_template_is_valid`; `tests/fm-spawn-dispatch-profile.test.sh` `test_lane_route_records_model_family` and the history cases.
-- Upstream: rules name concrete profiles or profile arrays only, with no model classes, lanes, experiments, data policies, or second-opinion family exclusion.
+- Upstream: rules name concrete profiles or profile arrays only, with no model classes, lanes, experiments, data policies, or second-opinion family exclusion; its explicit provider/model transport is taken alongside the fork's existing implicit home-key opt-in.
 
 ### opencode-v2-workers
 
@@ -205,7 +205,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: intended.
 - Seam: fork-only `.opencode/plugins/lib/fm-process.js`, `.opencode/plugins/lib/fm-v2-plugin.js`, `tests/opencode-v2-live.sh`, and `tests/opencode-v2-herdr-live.sh`, plus the OpenCode hunks in `bin/fm-spawn.sh`, `bin/fm-composer-lib.sh`, `bin/fm-control.sh`, `bin/fm-control-lib.sh`, `bin/fm-harness.sh`, `bin/fm-busy-event.sh` (`--if-seq`), `bin/fm-busy-lib.sh`, `bin/fm-remote-doctor.sh`, `bin/fm-remote-entrypoint.sh`, `bin/fm-remote-secondmate-control.sh`, and `.opencode/plugins/fm-primary-turnend-guard.js`, the OpenCode harness reference, its evidence in `docs/verification/runtime-backends.md` and `docs/verification/supervision.md`, and the "OpenCode V1" primary wording in shared docs (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_opencode_*` cases; `tests/fm-control-relaunch.test.sh` `test_opencode_*` cases; `tests/fm-spawn-prelaunch-rollback.test.sh` `test_opencode_*` cases; `tests/fm-composer-lib.test.sh` `test_matrix_opencode_leftbar_signals`; `tests/fm-busy-adapter-wiring.test.sh` `test_opencode_plugin_semantic_lifecycle` and `test_secondmate_opencode_is_refused_without_busy_wiring`; `tests/fm-busy-state.test.sh` sequence cases; `tests/fm-remote-doctor.test.sh`; live, `tests/fm-opencode-primary-live-e2e.test.sh`, which drives `tests/opencode-v2-live.sh`.
-- Upstream: supports OpenCode 1.x only; an upstream V2 adapter would let the fork converge on it.
+- Upstream: now supports both OpenCode major versions and V2 primary plugins; XO retains its verified worker-only V2 adapter, private plugin configuration, shutdown-aware session identity, bare launch with guarded brief delivery, and deferred V2 primary/secondmate boundary until those guarantees have equivalent proof.
 
 ### native-launch-optins
 
