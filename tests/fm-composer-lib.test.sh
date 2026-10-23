@@ -366,6 +366,60 @@ test_matrix_muse_truecolor_glyph_survives_signal_loss() {
   pass "matrix: muse's ⟩ reads empty everywhere and survives losing the styled-glyph signal"
 }
 
+test_matrix_muse_labelled_rule_pair() {
+  # Current muse draws its composer as a `❯` row between a top rule labelled
+  # `Voice input (⌥ + v to start)` and a plain closing rule, with its
+  # model/effort/cwd footer below (Herdr ANSI captures of idle muse-wonder-1.0
+  # and muse-spark-1.3 panes, 2026-10-23, 177 columns, CRLF rows). The label
+  # kept the top rule from opening the pair, so the closing rule read as a
+  # lower unmatched separator and both idle panes read `unknown`, refusing
+  # every guarded exit and relaunch.
+  local dim cr label top bottom footer glyph idle hint typed wrapped plain
+  local short relabel blank scrollback
+  dim="${ESC}[0m${ESC}[2m${ESC}[38;2;103;108;116m"
+  cr=$'\r'
+  label="${ESC}[0m${ESC}[38;2;138;144;152mVoice input (⌥ + v to start)"
+  top="${dim}── ${label}${dim} $(_grok_rule 145)${ESC}[0m"
+  bottom="${dim}$(_grok_rule 177)${ESC}[0m"
+  footer="${ESC}[0m${ESC}[38;2;103;108;116m  ${ESC}[0m${ESC}[38;2;90;160;255mmuse-wonder-1.0${ESC}[0m${ESC}[38;2;138;144;152m · ~/wt · ${ESC}[0m${ESC}[38;2;243;139;168mYOLO${ESC}[0m"
+  glyph="${ESC}[0m${ESC}[38;2;90;160;255m❯ ${ESC}[0m"
+  idle="model failed: 429$cr"$'\n'"$top$cr"$'\n'"$glyph$cr"$'\n'"$bottom$cr"$'\n'"$footer$cr"
+  hint="${glyph}${ESC}[38;2;103;108;116mAsk to monitor a running build or log and get pinged on changes${ESC}[0m"
+  assert_screen "muse idle on herdr" empty "$CAPS_STYLED" "$idle" '' probe-absent
+  assert_screen "muse idle on zellij" empty "$CAPS_STYLED_NOID" "$idle"
+  assert_screen "muse idle on tmux" empty "$CAPS_TMUX" "$idle" 2 probe-absent
+  plain=$(printf '%s\n' "$idle" | fm_composer_strip_ansi)
+  assert_screen "muse idle on cmux/orca" empty "$CAPS_PLAIN" "$plain"
+  # The dim idle suggestion is stripped; unstyled, it cannot be told from text.
+  assert_screen "muse idle suggestion on herdr" empty "$CAPS_STYLED" \
+    "$top"$'\n'"$hint"$'\n'"$bottom"$'\n'"$footer" '' probe-absent
+  plain=$(printf '%s\n' "$top" "$hint" "$bottom" "$footer" | fm_composer_strip_ansi)
+  assert_screen "muse idle suggestion on cmux/orca" unknown "$CAPS_PLAIN" "$plain"
+  # Typed text renders in the bright foreground and stays pending, wrapped too.
+  typed="${glyph}${ESC}[38;2;204;211;219mfinish the handoff${ESC}[0m"
+  assert_screen "muse typed on herdr" pending "$CAPS_STYLED" \
+    "$top"$'\n'"$typed"$'\n'"$bottom"$'\n'"$footer" '' probe-absent
+  assert_screen "muse typed on tmux" pending "$CAPS_TMUX" \
+    "$top"$'\n'"$typed"$'\n'"$bottom"$'\n'"$footer" 1 probe-absent
+  wrapped="$top"$'\n'"$typed"$'\n'"${ESC}[38;2;204;211;219m  and report back${ESC}[0m"$'\n'"$bottom"$'\n'"$footer"
+  assert_screen "muse wrapped draft on herdr" pending "$CAPS_STYLED" "$wrapped" '' probe-absent
+  # Width is proven: a labelled rule narrower than its closing rule refuses.
+  short="${dim}── ${label}${dim} $(_grok_rule 140)${ESC}[0m"
+  assert_screen "muse labelled rule width mismatch" unknown "$CAPS_STYLED_NOID" \
+    "$short"$'\n'"$glyph"$'\n'"$bottom"$'\n'"$footer"
+  # Only the exact label opens the pair.
+  relabel="${dim}── ${ESC}[0m${ESC}[38;2;138;144;152mVoice input (recording)${dim} $(_grok_rule 150)${ESC}[0m"
+  assert_screen "muse changed label" unknown "$CAPS_STYLED_NOID" \
+    "$relabel"$'\n'"$glyph"$'\n'"$bottom"$'\n'"$footer"
+  # No glyph row is no proof, whatever identity is reported.
+  blank="$top"$'\n\n'"$bottom"$'\n'"$footer"
+  assert_screen "muse labelled rule over a blank row" unknown "$CAPS_STYLED" "$blank" '' "$(printf 'muse\tidle')"
+  # A pair stranded above later output and a lower unmatched rule is stale.
+  scrollback="$top"$'\n'"$glyph"$'\n'"$bottom"$'\nlater output\n'"$bottom"
+  assert_screen "muse pair in scrollback" unknown "$CAPS_STYLED_NOID" "$scrollback"
+  pass "matrix: current muse's labelled rule pair proves an idle composer empty and a draft pending"
+}
+
 test_matrix_cursor_reverse_video_placeholder_remnant() {
   # Real idle cursor-agent (2026.08.11-e8db854), captured byte-for-byte from a
   # live pane: the `→ ` glyph and the placeholder tail are dim (SGR 2), but the
@@ -1718,6 +1772,7 @@ test_composer_footer_zone_refuses_rather_than_allows
 test_matrix_codex_dim_hint_row
 test_matrix_codex_double_chevron
 test_matrix_muse_truecolor_glyph_survives_signal_loss
+test_matrix_muse_labelled_rule_pair
 test_matrix_cursor_reverse_video_placeholder_remnant
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap
 test_matrix_omp_status_row_bounds_bare_composer
