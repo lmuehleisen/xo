@@ -511,7 +511,7 @@ EOF
 
 run_agy_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
   local home=$1 proj=$2 wt=$3 fakebin=$4 id=$5
-  local model=gemini-3.8-flash-low effort= tier=agy judge_model= judge_bin arg previous=
+  local model=gemini-3.8-flash-low effort='' tier=agy judge_model='' judge_bin arg previous=''
   shift 5
   for arg in "$@"; do
     case "$previous" in
@@ -579,7 +579,7 @@ EOF
   run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout >/dev/null
   launch=$(cat "$home/launch.log")
   case "$launch" in
-    *--mode*) fail "manual must leave agy in its default review mode: $launch" ;;
+    *'--mode '*) fail "manual must leave agy in its default review mode: $launch" ;;
   esac
   case "$launch" in
     *--dangerously-skip-permissions*)
