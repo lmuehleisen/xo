@@ -78,6 +78,8 @@
 #                different, self-proving thing: real claude 2.x draws exactly
 #                that (`─` rule, `❯`+NBSP, `─` rule), so the glyph inside the
 #                pair carries the shape and no identity is needed.
+#                Current muse draws the same self-proving pair under its own
+#                labelled top rule (FM_COMPOSER_MUSE_VOICE_LABEL below).
 #   agy        - a `>` row between solid rules, followed immediately by its
 #                shortcuts/cancel footer and model cell. The full structure,
 #                never a bare shell glyph, proves this input region. Agy's
@@ -1106,6 +1108,23 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <indent>
   return 0
 }
 
+# Muse Code's composer top rule carries this voice-input label at its LEFT end,
+# `── Voice input (⌥ + v to start) ───…`, over a `❯` row and a plain closing
+# rule with the model/effort/cwd footer below. Only this
+# exact label opens a pair: a changed label leaves the closing rule unmatched,
+# and the verdict stays a refusal.
+FM_COMPOSER_MUSE_VOICE_LABEL='Voice input (⌥ + v to start)'
+
+# _fm_composer_muse_voice_rule_row: 0 when the trimmed row is Muse's labelled
+# top rule: a two-dash lead, the exact label, then a solid separator run. Like
+# the titled rule, the scan lets it OPEN a pair but never close one, and proves
+# its width against the closing rule; `⌥` (U+2325) is one terminal column.
+_fm_composer_muse_voice_rule_row() {  # <trimmed-row>
+  local row=$1
+  case "$row" in "── $FM_COMPOSER_MUSE_VOICE_LABEL "*) ;; *) return 1 ;; esac
+  _fm_composer_pi_separator_row "${row#"── $FM_COMPOSER_MUSE_VOICE_LABEL "}"
+}
+
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
@@ -1215,11 +1234,14 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       pi_lines=0
       pi_glyph_row=-1
       pi_glyph=''
-    elif _fm_composer_titled_rule_row "$trimmed" "$indent"; then
+    elif _fm_composer_titled_rule_row "$trimmed" "$indent" \
+       || _fm_composer_muse_voice_rule_row "$trimmed"; then
       # Prove the named rule's width against its closing rule. The truncation
       # ellipsis is one column; other non-ASCII titles remain unproved rather
       # than guessing their terminal width. Retain the one-column title pad.
+      # Muse's `⌥` is blanked only inside its exact label.
       pi_title_spaces="$indent${trimmed//─/ }"
+      pi_title_spaces=${pi_title_spaces/"$FM_COMPOSER_MUSE_VOICE_LABEL"/${FM_COMPOSER_MUSE_VOICE_LABEL//⌥/ }}
       pi_title_spaces=${pi_title_spaces//…/ }
       pi_title_spaces=$(printf '%s' "$pi_title_spaces" | LC_ALL=C sed 's/[!-~]/ /g')
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
