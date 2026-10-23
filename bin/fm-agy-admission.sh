@@ -31,10 +31,10 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 EVIDENCE="$SCRIPT_DIR/fm-agy-admission.py"
 mode=${1:-}
 shift || exit 2
-[ "$#" -eq 6 ] && { [ "$mode" = ensure ] || [ "$mode" = manual-baseline ]; } || {
+if [ "$#" -ne 6 ] || { [ "$mode" != ensure ] && [ "$mode" != manual-baseline ]; }; then
   sed -n '4,5s/^# *//p' "${BASH_SOURCE[0]}" >&2
   exit 2
-}
+fi
 umask 077
 mkdir -p "$STATE"
 STATE=$(cd "$STATE" && pwd -P)

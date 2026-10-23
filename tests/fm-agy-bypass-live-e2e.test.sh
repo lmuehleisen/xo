@@ -228,8 +228,10 @@ cat > "$CASE_STATE/dead-judge" <<'SH'
 exec sleep 10
 SH
 chmod +x "$CASE_STATE/dead-judge"
-jq --arg bin "$CASE_STATE/dead-judge" '.judge_bin=$bin' "$CASE_POLICY" > "$CASE_POLICY.tmp" \
-  && mv "$CASE_POLICY.tmp" "$CASE_POLICY" || fail 'could not select the deterministic stalled judge'
+if ! jq --arg bin "$CASE_STATE/dead-judge" '.judge_bin=$bin' "$CASE_POLICY" > "$CASE_POLICY.tmp" \
+  || ! mv "$CASE_POLICY.tmp" "$CASE_POLICY"; then
+  fail 'could not select the deterministic stalled judge'
+fi
 GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$CASE_STATE" "$CASE_ID") || fail 'could not arm worker state'
 "$ROOT/bin/fm-agy-hook.sh" install-worker "$CASE_STATE" "$CASE_ID" "$GEN" "$CASE_WS" "$CASE_POLICY" \
   || fail 'could not install the bypass worker hooks'

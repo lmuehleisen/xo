@@ -56,7 +56,7 @@ SH
 }
 
 admit() {  # [ensure|manual-baseline] [model]
-  FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE="$HOME_DIR/state" \
+  FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE="$HOME_DIR/state" \
     FM_ADMISSION_FIXTURE_LOG="$CASE/attempts" \
     bash "$CODE/bin/fm-agy-admission.sh" "${1:-ensure}" "$BINARY" "${2-fixture-model}" '' \
     agy fixture-judge "$BINARY" 2> "$CASE/admission.stderr"
