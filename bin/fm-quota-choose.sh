@@ -302,7 +302,7 @@ else
           ($quota_lines | map(decoded_row)) as $rows |
           ($attention_rows | attention_entries($k)) as $attention_entries |
           if (($attention_entries | valid_attention_entries) | not) then error("invalid attention identities")
-          elif any($rows[]; length != 8 + $k) then error("invalid quota rows")
+          elif any($rows[]; length != 8 + $k + $pressure_col) then error("invalid quota rows")
           else
             {
               schemaVersion: schema_of($k),
