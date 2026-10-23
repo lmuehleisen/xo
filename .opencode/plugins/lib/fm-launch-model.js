@@ -13,34 +13,38 @@ export async function installLaunchModelCheck(ctx, { expected, evidence, launchT
   expected = expected && expected !== "default" ? expected.split("#")[0] : "default";
   let sessionID;
   let verified = false;
-  let discovery = "unavailable";
-  const publish = (phase, observed, detail) => {
+  let discovery = "pending";
+  const publish = (phase, observed, detail, source = "startup") => {
     const record = { phase, expected, observed, discovery, sessionID, detail,
-      source: phase === "verified" ? "session.context" : "startup" };
+      source };
     writeFileSync(`${evidence}.tmp`, JSON.stringify(record) + "\n", { mode: 0o600 });
     renameSync(`${evidence}.tmp`, evidence);
   };
-  const refuse = (observed, detail) => {
-    publish("refused", observed, detail);
+  const refuse = (observed, detail, source = "session.context") => {
+    publish("refused", observed, detail, source);
     throw new Error(`OpenCode launch model verification failed: expected=${expected} observed=${observed}; ${detail}`);
   };
-  try {
-    const models = await ctx.model.list();
-    if (Array.isArray(models) && models.length > 0 && models.every(identity)) {
-      discovery = expected === "default" || models.some((model) => identity(model) === expected)
-        ? "supported" : "unsupported";
-    }
-  } catch {
-    // A failed catalog read is uncertainty, not proof a model is unsupported.
-  }
-  if (discovery === "unsupported") {
-    publish("refused", "unavailable", "expected model is absent from the native model catalog; select a currently listed model");
-    return;
-  }
-  await ctx.session.hook("prompt", (event) => {
+  await ctx.session.hook("prompt", async (event) => {
     // Bind the client-selected worker session, never another same-directory
     // root or a child using a different model. Admission precedes resolution.
-    if (sessionID === undefined && event.prompt.text === launchText) sessionID = event.sessionID;
+    if (sessionID !== undefined || event.prompt.text !== launchText) return;
+    sessionID = event.sessionID;
+    discovery = "unavailable";
+    try {
+      // Admission runs after location plugins settle. A setup-time snapshot
+      // can omit models registered by later plugins and cannot prove absence.
+      const { data: models } = await ctx.model.list();
+      if (Array.isArray(models) && models.length > 0 && models.every(identity)) {
+        discovery = expected === "default" || models.some((model) => identity(model) === expected)
+          ? "supported" : "unsupported";
+      }
+    } catch {
+      // A failed catalog read is uncertainty, not unsupported proof.
+    }
+    if (discovery === "unsupported") {
+      refuse("unavailable", "expected model is absent from the native model catalog; select a currently listed model", "model.list");
+    }
+    publish("pending", "unavailable", "awaiting the worker session's native agent-loop request", "session.prompt");
   });
   await ctx.session.hook("context", (event) => {
     if (verified || sessionID === undefined || event.sessionID !== sessionID) return;
@@ -49,7 +53,7 @@ export async function installLaunchModelCheck(ctx, { expected, evidence, launchT
     if (expected !== "default" && observed !== expected) {
       refuse(observed, "native agent-loop model differs from the requested model; inspect the retained launch diagnostics");
     }
-    publish("verified", observed, "native agent-loop model resolved before inference");
+    publish("verified", observed, "native agent-loop model resolved before inference", "session.context");
     verified = true;
   });
   publish("ready", "unavailable", "awaiting the worker session's native agent-loop request");

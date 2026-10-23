@@ -14,6 +14,8 @@ LAB_HOME_HELPER=${LAB_HOME_HELPER:-$ROOT/bin/fm-lab-home.sh}
 HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name "${FM_OPENCODE_LAB_LABEL:-opencode-v2-live}")
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-opencode-herdr.XXXXXX")
 export FM_HOME="$LAB/home" FM_ROOT_OVERRIDE="$ROOT"
+export XDG_CONFIG_HOME="$LAB/config" XDG_DATA_HOME="$LAB/data"
+export XDG_STATE_HOME="$LAB/runtime" XDG_CACHE_HOME="$LAB/cache"
 LAB_TMUX_DIR=
 IDS=()
 cleanup() {
@@ -77,6 +79,11 @@ unset HERDR_ENV HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH 
 VERSION=$(opencode --version)
 MODEL=${FM_OPENCODE_LIVE_MODEL:-opencode/muse-spark-1.3-contributor-free}
 case "$MODEL" in opencode/*free*|opencode/*contributor*) ;; *) fail 'Herdr live guard requires a free/contributor model' ;; esac
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  # shellcheck source=tests/opencode-model-live.sh
+  . "$ROOT/tests/opencode-model-live.sh"
+  oc_model_live_prepare
+fi
 STATUS=$(PATH="$ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" status --json)
 printf '%s\n' "$STATUS" > "$LAB/version.txt"
 HERDR_SOCKET_PATH=$(printf '%s' "$STATUS" | jq -r '.server.socket')
@@ -132,14 +139,12 @@ prepare "$ID"
 for i in $(seq 1 30); do printf 'Probe note %s: no additional action.\n' "$i" >> "$FM_HOME/data/$ID/brief.md"; done
 spawn "$ID"
 TARGET=$(target "$ID")
-wait_text "$FM_HOME/state/$ID.status" 'brief processed' "$TARGET"
-wait_idle "$ID" "$TARGET"
 if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
-  # shellcheck source=tests/opencode-model-live.sh
-  . "$ROOT/tests/opencode-model-live.sh"
   oc_model_live_checks "$FM_OC_FIXTURE"
   exit 0
 fi
+wait_text "$FM_HOME/state/$ID.status" 'brief processed' "$TARGET"
+wait_idle "$ID" "$TARGET"
 [ -f "$FM_HOME/state/$ID.turn-ended" ] || fail 'native turn-end absent'
 # An event record from another incarnation must not prove an idle worker.
 GEN=$(cat "$FM_HOME/state/$ID.busy-gen")

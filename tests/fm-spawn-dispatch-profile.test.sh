@@ -1155,7 +1155,7 @@ test_opencode_native_launch_model_gate() {
           mismatch) assert_contains "$out" 'observed=opencode/fixture-served' "model refusal lacks actual identity" ;;
           *) assert_contains "$out" 'observed=unavailable' "missing model was not explicit" ;;
         esac
-        if [ "$scenario" = missing-plugin ] || [ "$scenario" = unsupported ]; then
+        if [ "$scenario" = missing-plugin ]; then
           assert_not_contains "$(cat "$LAUNCH_LOG")" 'Read the brief at' "brief submitted before native gate installation/support"
         fi ;;
     esac

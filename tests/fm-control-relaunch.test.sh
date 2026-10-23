@@ -3138,6 +3138,10 @@ case "${1:-} ${2:-}" in
       ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
     esac
     case "$payload" in
+      *'OPENCODE_CONFIG_CONTENT='*|*'Read the brief at'*)
+        node "$(dirname "$0")/opencode-model-fixture.mjs" "$D/oc-model-launch" "$payload" || exit 1 ;;
+    esac
+    case "$payload" in
       *'encode launch-brief'* | *'Firstmate operational input waiting: read'* | *'opencode --standalone --auto'*)
         printf '%s\n' "$payload" > "$D/launched-command"
         : > "$D/herdr-agent-live" ;;

@@ -271,6 +271,50 @@ await cleanup();
 EOF
 }
 
+test_opencode_launch_model_session_scope() {
+  CHECK_MODULE="$ROOT/.opencode/plugins/lib/fm-launch-model.js" CHECK_TMP="$TMP_ROOT" node --input-type=module <<'JS'
+import { readFileSync } from "node:fs";
+import { strict as assert } from "node:assert";
+import { pathToFileURL } from "node:url";
+const { installLaunchModelCheck } = await import(pathToFileURL(process.env.CHECK_MODULE));
+for (const scenario of ["matching", "mismatch", "missing", "default", "unavailable", "malformed"]) {
+  const hooks = {};
+  const evidence = `${process.env.CHECK_TMP}/model-${scenario}.json`;
+  const ctx = {
+    model: { list: async () => {
+      if (scenario === "unavailable") throw new Error("offline");
+      return { data: scenario === "malformed" ? [{}] : [{ providerID: "example", id: "requested" }] };
+    } },
+    session: { hook: async (name, callback) => { hooks[name] = callback; } },
+  };
+  await installLaunchModelCheck(ctx, { expected: scenario === "default" ? "default" : "example/requested", evidence, launchText: "launch brief" });
+  const read = () => JSON.parse(readFileSync(evidence, "utf8"));
+  const event = { sessionID: "worker", model: { providerID: "example", id: "served" } };
+  hooks.context(event);
+  assert.equal(read().phase, "ready", "unbound roots must not prove identity");
+  await hooks.prompt({ sessionID: "other-root", prompt: { text: "unrelated prompt" } });
+  hooks.context(event);
+  assert.equal(read().phase, "ready", "unrelated admission must not bind the worker");
+  await hooks.prompt({ sessionID: "worker", prompt: { text: "launch brief" } });
+  hooks.context({ ...event, sessionID: "child" });
+  assert.equal(read().phase, "pending", "child model must not prove or refuse the parent");
+  if (scenario === "missing") event.model = {};
+  else if (scenario !== "mismatch") event.model = { providerID: "example", id: "requested" };
+  if (["missing", "mismatch"].includes(scenario)) {
+    assert.throws(() => hooks.context(event), /expected=example\/requested observed=/);
+    assert.equal(read().phase, "refused");
+  } else {
+    hooks.context(event);
+    assert.equal(read().phase, "verified");
+    assert.equal(read().source, "session.context");
+  }
+  if (["unavailable", "malformed"].includes(scenario)) assert.equal(read().discovery, "unavailable");
+}
+JS
+  [ "$?" -eq 0 ] || fail "native model session-scope checks failed"
+  pass "OpenCode model evidence requires the exact launch session; configuration, unrelated roots and children cannot prove it"
+}
+
 test_opencode_plugin_semantic_lifecycle() {
   local rec id=busy-oc-1 out state plugin
   rec=$(make_spawn_case oc-lifecycle opencode "$id")
@@ -1034,6 +1078,7 @@ test_pi_extension_stale_incarnation_rejected
 test_pi_extension_enforces_the_publish_policy
 test_pi_extension_denies_when_the_publish_check_cannot_run
 test_kimi_and_grok_install_no_unverified_wiring
+test_opencode_launch_model_session_scope
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
 test_claude_hooks_stale_incarnation_harmless

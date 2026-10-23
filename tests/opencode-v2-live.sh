@@ -61,6 +61,11 @@ exec '$REAL_TMUX' -S '$SOCKET' "\$@"
 SH
 chmod +x "$LAB/shim/tmux"
 export PATH="$LAB/shim:$PATH"
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  # shellcheck source=tests/opencode-model-live.sh
+  . "$ROOT/tests/opencode-model-live.sh"
+  oc_model_live_prepare
+fi
 printf 'manual\n' > "$FM_HOME/config/backlog-backend"
 printf 'tmux\n' > "$FM_HOME/config/backend"
 # A fresh independent fixture repository, never the fleet's shared worktree pool.
@@ -97,7 +102,19 @@ Your steering inbox is $FM_HOME/state/$ID.inbox.
 Read each *.msg there when instructed and acknowledge it by moving it into handled/.
 If the status file already contains "brief processed", append "working: relaunched" instead.
 BRIEF
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  cat > "$FM_HOME/data/$ID/brief.md" <<BRIEF
+# Task
+Do not edit project files or run fleet supervision.
+Append a newline-terminated line 'working: brief processed' to $FM_HOME/state/$ID.status, then stop.
+If it already contains that line, append 'working: relaunched' instead.
+BRIEF
+fi
 TMUX_TMPDIR="$LAB_TMUX_DIR" "$REAL_TMUX" new-session -d -s probe -n anchor -c "$LAB/project" -x 140 -y 40 "bash --noprofile --norc -i"
+# Keep every window on this private server in the same controlled shell.
+# A login shell can reorder PATH ahead of the test's executable wrapper.
+"$REAL_TMUX" -S "$SOCKET" set-option -g default-shell /bin/bash
+"$REAL_TMUX" -S "$SOCKET" set-option -g default-command 'bash --noprofile --norc -i'
 # Keep the new endpoint on this private server; production allocation still
 # creates the worker window and enters the independent scratch copy.
 export TMUX="$SOCKET,$$,0"
@@ -212,14 +229,12 @@ tmux kill-window -t probe:permission
 pass "$VERSION: manual permission prompt refuses typed delivery; no permission accepted"
 fi
 bash "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB/project" --scout --harness opencode --model "$MODEL"
-wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
-wait_idle
 if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
-  # shellcheck source=tests/opencode-model-live.sh
-  . "$ROOT/tests/opencode-model-live.sh"
   oc_model_live_checks "$LAB/wt"
   exit 0
 fi
+wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
+wait_idle
 wait_file_text "$FM_HOME/state/$ID.status" 'FM_OPENCODE_LOCAL_SKILL_OK'
 assert_local_skill_loaded
 [ -z "$(git -C "$LAB/wt" status --porcelain)" ] || fail "$VERSION: skill probe wrote to the scratch project"

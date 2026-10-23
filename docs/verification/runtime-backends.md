@@ -3041,6 +3041,29 @@ Portable regressions are in `tests/fm-composer-lib.test.sh`, `tests/fm-spawn-dis
 This tmux run does not exercise native `--continue`, provider reasoning variants on paid models, or non-tmux backends.
 V2 primary operation is deferred as documented by the [harness reference](../../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration).
 
+### Native launch-model identity
+
+Verified on 2026-10-23 with `opencode v2.0.27` and a private tmux server:
+
+```sh
+FM_OPENCODE_MODEL_CHECK_ONLY=1 FM_OPENCODE_LIVE_MODEL=opencode/deepseek-v4.1-flash-free FM_OPENCODE_LIVE_OTHER_MODEL=opencode/flint-40b-free FM_OPENCODE_LIVE_E2E=1 bash bin/fm-test-run.sh tests/fm-opencode-primary-live-e2e.test.sh
+```
+
+```text
+ok - opencode v2.0.27: native session selection agrees with the resolved agent-loop request model
+ok - opencode v2.0.27: mismatch refuses task execution and preserves work and endpoint ownership
+ok - opencode v2.0.27: missing-plugin refuses task execution and preserves work and endpoint ownership
+```
+
+`bin/fm-spawn.sh` owns the launch identity gate and refusal mechanics.
+The focused live guard uses an independent native request observer and an executable wrapper confined to the disposable lab.
+It requires a wrapper witness and the intended differing native model identity before accepting the mismatch test.
+The matching native session export agrees with the resolved agent-loop request, and a missing worker plugin cannot admit the brief.
+The guard controls every private tmux window's shell startup so a login profile cannot bypass the wrapper by reordering `PATH`.
+This result covers native request identity before inference on tmux; it does not attest a provider's internal routing, response completion, or other backends.
+The portable cases in `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-control-relaunch.test.sh`, and `tests/fm-busy-adapter-wiring.test.sh` cover unknown models, missing identity, unavailable discovery, session isolation, and preserved work.
+The supported-floor plugin hooks and model-list response envelope are declared in the [2.0.18 session API](https://github.com/anomalyco/opencode/blob/v2.0.18/packages/plugin/src/promise/session.ts) and [client types](https://github.com/anomalyco/opencode/blob/v2.0.18/packages/client/src/promise/generated/types.ts).
+
 ### External worker skills
 
 Verified on 2026-10-09 with `opencode v2.0.18` and again on 2026-10-12 with `opencode v2.0.27`, a disposable profile, a private tmux server, and `opencode/muse-spark-1.3-contributor-free`:

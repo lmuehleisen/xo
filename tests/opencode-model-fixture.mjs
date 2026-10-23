@@ -29,14 +29,14 @@ const cleanup = await mod.default.setup({
   location: { directory: "/tmp" },
   model: { list: async () => {
     if (process.env.FM_FAKE_OPENCODE_DISCOVERY === "unavailable") throw new Error("catalog offline");
-    return [ref(process.env.FM_FAKE_OPENCODE_DISCOVERY === "unsupported" ? "opencode/other" : selected)];
+    return { data: [ref(process.env.FM_FAKE_OPENCODE_DISCOVERY === "unsupported" ? "opencode/other" : selected)] };
   } },
   session: { hook: async (name, callback) => { hooks[name] = callback; } },
   event: { subscribe: async function* () {} },
 });
 if (prompt && hooks.prompt) {
-  await hooks.prompt({ sessionID: "ses_worker", prompt: { text: prompt } });
   try {
+    await hooks.prompt({ sessionID: "ses_worker", prompt: { text: prompt } });
     await hooks.context({ sessionID: "ses_worker", model: ref(process.env.FM_FAKE_OPENCODE_ACTUAL_MODEL || selected) });
   } catch {
     // The native request fails, while terminal text delivery still succeeds.

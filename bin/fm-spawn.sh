@@ -5781,7 +5781,7 @@ opencode_wait_model() { # <ready|verified>
     phase=$(jq -r '.phase // empty' "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null) || phase=
     if [ "$phase" = refused ]; then break; fi
     if [ "$phase" = "$wanted" ]; then
-      if [ "$wanted" = ready ] && [ "$(jq -r '.discovery' "$OPENCODE_MODEL_EVIDENCE")" = unavailable ]; then
+      if [ "$wanted" = verified ] && [ "$(jq -r '.discovery' "$OPENCODE_MODEL_EVIDENCE")" = unavailable ]; then
         echo "notice: OpenCode native model discovery unavailable; requiring native session identity for expected=${MODEL:-default}" >&2
       fi
       return 0
@@ -7869,6 +7869,11 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" != empty ]; then
+    if [ "$(jq -r '.phase' "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null)" = refused ]; then
+      opencode_wait_model verified || true
+      opencode_spawn_fail "OpenCode V2 model verification failed: $OPENCODE_MODEL_FAILURE" unknown
+      exit $?
+    fi
     opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T" unknown
     exit $?
   fi
