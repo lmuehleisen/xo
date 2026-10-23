@@ -272,7 +272,7 @@ EOF
 }
 
 test_opencode_launch_model_session_scope() {
-  CHECK_MODULE="$ROOT/.opencode/plugins/lib/fm-launch-model.js" CHECK_TMP="$TMP_ROOT" node --input-type=module <<'JS'
+  if ! CHECK_MODULE="$ROOT/.opencode/plugins/lib/fm-launch-model.js" CHECK_TMP="$TMP_ROOT" node --input-type=module <<'JS'
 import { readFileSync } from "node:fs";
 import { strict as assert } from "node:assert";
 import { pathToFileURL } from "node:url";
@@ -311,7 +311,9 @@ for (const scenario of ["matching", "mismatch", "missing", "default", "unavailab
   if (["unavailable", "malformed"].includes(scenario)) assert.equal(read().discovery, "unavailable");
 }
 JS
-  [ "$?" -eq 0 ] || fail "native model session-scope checks failed"
+  then
+    fail "native model session-scope checks failed"
+  fi
   pass "OpenCode model evidence requires the exact launch session; configuration, unrelated roots and children cannot prove it"
 }
 
