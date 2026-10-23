@@ -404,6 +404,12 @@ TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" '  status: escalate' "unknown pressure never falls back to legacy scores"
 assert_contains "$out" '  reason: no rankable eligible candidate' "unknown pressure is not zero"
 
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0.1' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: escalate' "equal pressure never falls back to different legacy scores"
+assert_contains "$out" '  reason: genuine spendPressure tie' "a pressure tie names the selected metric"
+
 jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.usableRunwaySeconds) = 30' "$TMP_ROOT/pressure.json" > "$QUOTA"
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
