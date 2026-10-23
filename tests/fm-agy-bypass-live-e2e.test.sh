@@ -211,10 +211,12 @@ GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$CASE_STATE" "$CASE_ID") || fail 'could 
 "$ROOT/bin/fm-agy-hook.sh" install-worker "$CASE_STATE" "$CASE_ID" "$GEN" "$CASE_WS" "$CASE_POLICY" \
   || fail 'could not install judge approval fixture hooks'
 JCANARY="$CASE_WS/judge-approved.txt"
+# The command precedes the reply instruction so it cannot read as reply text.
 out=$(headless "$CASE_WS" "$CASE_STATE/$CASE_ID.agy-hooks" \
-  "Run exactly this run_command once, then reply DONE: python3 -c 'open(\"$JCANARY\",\"w\").write(\"JUDGE_OK\")'") \
+  "Runtime verification. Call run_command once with exactly this command: python3 -c 'open(\"$JCANARY\",\"w\").write(\"JUDGE_OK\")'. Wait for the tool result, then reply DONE.") \
   || fail "judge approval fixture run failed: $out"
-[ "$(cat "$JCANARY" 2>/dev/null)" = JUDGE_OK ] || fail 'the real judge did not permit the harmless task-local command'
+[ "$(cat "$JCANARY" 2>/dev/null)" = JUDGE_OK ] \
+  || fail "the real judge did not permit the harmless task-local command: $out $(cat "$CASE_LOG" 2>/dev/null)"
 jq -es 'any(.[]; .decision == "approve" and .decider == "judge")' "$CASE_LOG" >/dev/null \
   || fail 'the positive residue call did not exercise the selected judge'
 pass "agy $AGY_VERSION: selected custom judge approves a harmless residue call"
