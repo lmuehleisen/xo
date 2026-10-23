@@ -1413,6 +1413,8 @@ An absent file preserves native ranking exactly.
 ```
 
 Each override names one provider and the account lane a candidate must provably bind through the shared quota library, such as the native Codex `codex-home` lane or a Pi `codex-native/` route on that same account.
+The bound row must publish that membership, through its `accountKey` or `accountKeys`; a lane string alone, a default-row fallback, or unknown schema-5 membership never proves it.
+When both a generic override and a `windowId` override for the same provider and account match a row, the window-specific override wins, regardless of file order.
 A different account lane, a reseller or API-key provider, or a route matched only by model name never receives the override.
 `windowId` is optional and, when present, must equal the scope's single bounding window.
 

@@ -391,25 +391,30 @@ PLANNING_JSON='{"overrides":[]}'
 PLANNING_PRESENT=false
 if [ -e "$PLANNING_PATH" ] || [ -L "$PLANNING_PATH" ]; then
   [ -f "$PLANNING_PATH" ] && [ -r "$PLANNING_PATH" ] || die "malformed planning file: $PLANNING_PATH - expected a readable regular file"
-  planning_err=$(jq -r --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_QUOTA_PLANNING_JQ"'
+  planning_err=$(jq -sr --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_QUOTA_PLANNING_JQ"'
+    def nonblank_string: (type == "string") and (length > 0) and (test("\\s") | not);
     def override_bad:
-      (type != "object") or
-      ((keys - ["provider", "accountKey", "windowId", "horizonSeconds", "expiresAt"]) | length) != 0 or
-      ((.provider | type) != "string" or (.provider | test($provider_re)) | not) or
-      ((.accountKey | type) != "string" or (.accountKey | length) == 0 or (.accountKey | test("\\s"))) or
-      (has("windowId") and ((.windowId | type) != "string" or (.windowId | length) == 0 or (.windowId | test("\\s")))) or
-      ((.horizonSeconds | type) != "number" or .horizonSeconds <= 0 or (.horizonSeconds | isinfinite)) or
-      ((.expiresAt | quota_ts) == null);
-    if type != "object" then "top-level value must be an object"
-    elif (has("overrides") | not) or (.overrides | type) != "array" then "overrides must be an array"
-    elif any(.overrides[]; override_bad) then "each override needs provider, accountKey, horizonSeconds above 0, an ISO expiresAt, and no other fields except optional windowId"
-    elif ([.overrides[] | [.provider, .accountKey, (.windowId // "")] | @json] | length) !=
-         ([.overrides[] | [.provider, .accountKey, (.windowId // "")] | @json] | unique | length)
+      if type != "object" then true
+      elif ((keys - ["provider", "accountKey", "windowId", "horizonSeconds", "expiresAt"]) | length) != 0 then true
+      elif ((.provider | nonblank_string) | not) then true
+      elif (.provider | test($provider_re) | not) then true
+      elif ((.accountKey | nonblank_string) | not) then true
+      elif (has("windowId") and ((.windowId | nonblank_string) | not)) then true
+      elif (.horizonSeconds | type) != "number" then true
+      elif (.horizonSeconds <= 0 or (.horizonSeconds | isinfinite)) then true
+      elif ((.expiresAt | quota_ts) == null) then true
+      else false end;
+    if length != 1 then "expected exactly one JSON object"
+    elif (.[0] | type) != "object" then "top-level value must be an object"
+    elif ((.[0] | has("overrides")) | not) or ((.[0].overrides | type) != "array") then "overrides must be an array"
+    elif any(.[0].overrides[]; override_bad) then "each override needs provider, accountKey, horizonSeconds above 0, an ISO expiresAt, and no other fields except optional windowId"
+    elif ([.[0].overrides[] | [.provider, .accountKey, (.windowId // "")] | @json] | length) !=
+         ([.[0].overrides[] | [.provider, .accountKey, (.windowId // "")] | @json] | unique | length)
     then "overrides must not duplicate provider, accountKey, and windowId"
     else empty end
   ' "$PLANNING_PATH" 2>/dev/null) || die "malformed planning file: $PLANNING_PATH (not JSON)"
   [ -z "$planning_err" ] || die "malformed planning file: $PLANNING_PATH - $planning_err"
-  PLANNING_JSON=$(jq -c . "$PLANNING_PATH") || die "malformed planning file: $PLANNING_PATH (not JSON)"
+  PLANNING_JSON=$(jq -sc '.[0]' "$PLANNING_PATH") || die "malformed planning file: $PLANNING_PATH (not JSON)"
   PLANNING_PRESENT=true
 fi
 
@@ -756,11 +761,13 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         ($rows | map(select(quota_selection_known | not)) | first) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "spendPriority missing, non-numeric, or selection not known at \($bad.scope): not rankable"}
       else
-        ($rows | min_by(.selection.spendPriority)) as $limiting |
-        (quota_plan_adjust(prov($p; $lane); $limiting; ($planning.overrides // []); $p; $lane; $now)) as $plan |
+        (prov($p; $lane)) as $prov_row |
+        ($rows | map((quota_plan_adjust($prov_row; .; ($planning.overrides // []); $p; $lane; $now)) as $row_plan
+                     | . + {effectiveSpend: ($row_plan.spendPriority // .selection.spendPriority), rowPlan: $row_plan})
+               | min_by(.effectiveSpend)) as $limiting |
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
-         spendPriority: ($plan.spendPriority // $limiting.selection.spendPriority), runway: $limiting.runway.status, eligible: true, reason: "ok"}
-        + (if $plan != null then {planning: $plan, nativeSpendPriority: $plan.nativeSpendPriority} else {} end)
+         spendPriority: $limiting.effectiveSpend, runway: $limiting.runway.status, eligible: true, reason: "ok"}
+        + (if $limiting.rowPlan != null then {planning: $limiting.rowPlan, nativeSpendPriority: $limiting.rowPlan.nativeSpendPriority} else {} end)
       end
     end;
   def evaluate($c): evaluate_route($c; false; 0);

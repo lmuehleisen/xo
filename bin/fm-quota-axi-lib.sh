@@ -313,24 +313,29 @@ FM_QUOTA_PLANNING_JQ='
   def quota_ts:
     if type != "string" then null
     else (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null) end;
+  def quota_plan_account_proven($prov; $lane; $account):
+    if ($account | type) != "string" then false
+    elif (($prov.accountKey // null) == $account) then ($lane == "" or $lane == $account)
+    elif (($prov.accountKeys // null) | type) == "array"
+    then (($lane == "" or $lane == $account) and ((($prov.accountKeys) | index($account)) != null))
+    else false end;
   def quota_plan_adjust($prov; $row; $overrides; $provider; $lane; $now):
     if $now == null then null
+    elif (($row.limitingWindowIds // []) | length) != 1 then null
+    elif (($row.boundedBy // $row.limitingWindowIds) != $row.limitingWindowIds) then null
     else
-      ([$overrides[]? | select(.provider == $provider)
-        | select(
-            (if $lane != "" then $lane == .accountKey
-             else ((($prov.accountKey // "") == .accountKey) or
-                   ((($prov.accountKeys // []) | index(.accountKey)) != null)) end))
-        | select((.expiresAt | quota_ts) != null and $now < (.expiresAt | quota_ts))]
-       | first) as $override |
-      if $override == null then null
-      elif (($row.limitingWindowIds // []) | length) != 1 then null
-      elif (($row.boundedBy // $row.limitingWindowIds) != $row.limitingWindowIds) then null
+      ($row.limitingWindowIds[0]) as $window_id |
+      ([$prov.windows[]? | select(.id == $window_id)] | first) as $window |
+      ([$overrides[]? | . as $candidate_override
+        | select($candidate_override.provider == $provider)
+        | select(quota_plan_account_proven($prov; $lane; $candidate_override.accountKey))
+        | select((($candidate_override.expiresAt | quota_ts) != null) and ($now < ($candidate_override.expiresAt | quota_ts)))
+        | select((($candidate_override | has("windowId")) | not) or $candidate_override.windowId == $window_id)]) as $matched |
+      ([$matched[] | select(has("windowId"))]) as $specific |
+      (if ($specific | length) > 0 then $specific else $matched end) as $candidates |
+      if ($candidates | length) != 1 then null
       else
-        ($row.limitingWindowIds[0]) as $window_id |
-        if ($override | has("windowId")) and $override.windowId != $window_id then null
-        else
-          ([$prov.windows[]? | select(.id == $window_id)] | first) as $window |
+        ($candidates[0]) as $override |
           if $window == null then null
           elif (($window.pace.status // "unknown") == "unknown") then null
           elif (($window.pace.burnMultiple | type) != "number") then null
@@ -365,7 +370,6 @@ FM_QUOTA_PLANNING_JQ='
             end
           end
         end
-      end
     end;
 '
 

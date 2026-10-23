@@ -2145,6 +2145,64 @@ run_lane code out err "$BRIEF" --lane plan --project xo
 assert_contains "$out" 'spendPriority=-1.2017' "a scope bounded by a short window beside the weekly window keeps the native value"
 assert_not_contains "$out" 'native_spendPriority=' "multi-window scopes are never planning-adjusted from one window"
 
+# The limiting scope is re-evaluated after planning: an unchanged second
+# bound still caps the route even when the weekly bound rises.
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW,{\"scope\":\"model:gpt-6.1-sol\",\"status\":\"known\",\"effectivePercentRemaining\":60,\"boundedBy\":[\"weekly\",\"five_hour\"],\"limitingWindowIds\":[\"weekly\",\"five_hour\"],\"runway\":{\"status\":\"projected_exhaustion\",\"usableRunwaySeconds\":200000},\"selection\":{\"status\":\"known\",\"spendPriority\":-1}}" '[{"id":"weekly","resetsAt":"2026-10-29T00:00:00Z","percentRemaining":71,"pace":{"status":"ahead","reservePercentPoints":-14.7143,"burnMultiple":2.03}},{"id":"five_hour","resetsAt":"2026-10-23T05:00:00Z","percentRemaining":50,"pace":{"status":"ahead","reservePercentPoints":-10,"burnMultiple":1.5}}]'
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'scope=model:gpt-6.1-sol  remaining=60%  spendPriority=-1' "an unchanged bound still limits the route after the weekly bound is planning-adjusted"
+assert_contains "$out" "profile: --harness 'cursor'" "the re-evaluated limiting bound keeps the competitor first"
+assert_not_contains "$out" 'native_spendPriority=' "a route limited by an unchanged bound prints no planning value"
+
+# Window matching happens before an override is selected: a window-specific
+# entry wins over an earlier generic or wrong-window entry.
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+cat > "$PLANNING" <<'JSON'
+{"overrides":[
+ {"provider":"codex","accountKey":"codex-home","windowId":"five_hour","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"},
+ {"provider":"codex","accountKey":"codex-home","windowId":"weekly","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}
+JSON
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPriority=-0.61' "the weekly override applies even when a wrong-window override is listed first"
+cat > "$PLANNING" <<'JSON'
+{"overrides":[
+ {"provider":"codex","accountKey":"codex-home","horizonSeconds":86400,"expiresAt":"2026-11-01T04:00:00Z"},
+ {"provider":"codex","accountKey":"codex-home","windowId":"weekly","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}
+JSON
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPriority=-0.61' "a window-specific override takes precedence over an earlier generic override"
+assert_not_contains "$out" 'spendPriority=2.94' "the generic override horizon never applies beside a window-specific one"
+cat > "$PLANNING" <<'JSON'
+{"overrides":[{"provider":"codex","accountKey":"codex-home","windowId":"weekly","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}
+JSON
+
+# Account membership must be published: an unproven lane keeps native
+# ranking, and a lane-less candidate resolves instead of erroring in jq.
+jq 'del(.providers[0].accountKeys)' "$LANE_QUOTA" > "$TMP_ROOT/plan-no-keys.json" && mv "$TMP_ROOT/plan-no-keys.json" "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 0 "$code" "unknown account membership still resolves: $err"
+assert_contains "$out" 'spendPriority=-1.2017' "a non-default lane without published account membership keeps the native value"
+assert_not_contains "$out" 'native_spendPriority=' "unproven account membership is never planning-adjusted"
+jq '.classes.soloc = {"family":"gpt","routes":[{"harness":"opencode","model":"gpt-6.1-sol","provider":"codex"}]} | .rules += [{"when":"Plan oc","lane":"planoc","order":"pool","classes":["soloc","alt"]}]' "$RULES" > "$TMP_ROOT/plan-oc-rules.json" && mv "$TMP_ROOT/plan-oc-rules.json" "$RULES"
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane planoc --project xo
+expect_code 0 "$code" "a lane-less Codex candidate resolves under a planning file: $err"
+assert_contains "$out" 'spendPriority=-0.61' "a lane-less candidate on the published default account receives the planning value"
+
+printf '%s\n' '{"overrides":[{"accountKey":"codex-home","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "an override without provider refuses resolution"
+assert_contains "$err" 'malformed planning file' "a missing provider is the documented malformed error"
+printf '%s\n' '{"overrides":[{"provider":123,"accountKey":"codex-home","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "an override with a non-string provider refuses resolution"
+: > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "an empty planning file refuses resolution"
+assert_contains "$err" 'malformed planning file' "an empty planning file is the documented malformed error"
+printf '%s\n%s\n' '{"overrides":[]}' '{"overrides":[]}' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "a planning file with multiple JSON values refuses resolution"
+
 printf '%s\n' '{"overrides":[{"provider":"codex","accountKey":"codex-home","horizonSeconds":-5,"expiresAt":"2026-11-01T04:00:00Z"}]}' > "$PLANNING"
 run_lane code out err "$BRIEF" --lane plan --project xo
 expect_code 2 "$code" "a malformed planning override refuses resolution"
