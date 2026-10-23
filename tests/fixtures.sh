@@ -111,7 +111,7 @@ fm_test_fake_gh_axi() {
 # FM_FAKE_TMUX_PANE_COMMAND answers #{pane_current_command}.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
-  ln -s "$ROOT/tests/opencode-model-fixture.mjs" "$fakebin/opencode-model-fixture.mjs"
+  ln -sf "$ROOT/tests/opencode-model-fixture.mjs" "$fakebin/opencode-model-fixture.mjs"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u

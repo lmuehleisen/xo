@@ -113,7 +113,7 @@ fi
 TMUX_TMPDIR="$LAB_TMUX_DIR" "$REAL_TMUX" new-session -d -s probe -n anchor -c "$LAB/project" -x 140 -y 40 "bash --noprofile --norc -i"
 # Keep every window on this private server in the same controlled shell.
 # A login shell can reorder PATH ahead of the test's executable wrapper.
-"$REAL_TMUX" -S "$SOCKET" set-option -g default-shell /bin/bash
+"$REAL_TMUX" -S "$SOCKET" set-option -g default-shell "$(command -v bash)"
 "$REAL_TMUX" -S "$SOCKET" set-option -g default-command 'bash --noprofile --norc -i'
 # Keep the new endpoint on this private server; production allocation still
 # creates the worker window and enters the independent scratch copy.

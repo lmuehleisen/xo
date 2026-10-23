@@ -56,7 +56,7 @@ trap relaunch_cleanup EXIT
 make_tmux_stub() {  # <dir>
   local fb="$1/fakebin"
   mkdir -p "$fb"
-  ln -s "$ROOT/tests/opencode-model-fixture.mjs" "$fb/opencode-model-fixture.mjs"
+  ln -sf "$ROOT/tests/opencode-model-fixture.mjs" "$fb/opencode-model-fixture.mjs"
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
