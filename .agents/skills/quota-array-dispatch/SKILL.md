@@ -42,7 +42,7 @@ The default `quota[]` block carries `spendPriority` beside `effectivePercentRema
 Sparse `exhaustion[]` carries finite-runway seconds, and sparse `attention[]` names auth, stale, and unmeasurable facts.
 Choose the spend metric once for the entire intake snapshot: when TOON has a `spendPressure` column, or any JSON scope's `selection` has that property, use `spendPressure` for every candidate and bound.
 Only an older snapshot with no such column or property uses legacy `spendPriority` throughout.
-A missing, unknown, or invalid selected score stays unranked; never fall back to another formula for one provider or scope, and retain the selected metric if the permitted JSON fallback is needed.
+A missing, unknown, or nonnumeric selected score stays unranked; never fall back to another formula for one provider or scope, and retain the selected metric if the permitted JSON fallback is needed.
 The selected metric is the only quota-perspective ranker after the three gates below.
 Do not reconstruct it from headroom, reserve, pace, or window lists.
 
@@ -124,7 +124,8 @@ Legacy `spendPriority` retains its historical-burn meaning.
 Rank only finite values in [-100,100] with `selection.status == known`.
 Contradictory stale/auth-required state with claimed known headroom is invalid evidence.
 Never treat absent, `unknown`, or invalid selected scores as zero or healthy.
-Such candidates remain eligible with disclosed uncertainty; prefer known viable evidence when otherwise comparable.
+Missing or unknown scores keep candidates eligible with disclosed uncertainty; prefer known viable evidence when otherwise comparable.
+The [shared quota validator](../../../bin/fm-quota-axi-lib.sh) refuses malformed or contradictory snapshots, including out-of-range numeric scores.
 After the permitted TOON-to-JSON fallback, escalate instead of routing if no candidate can be ranked or runway uncertainty prevents proving the feasibility floor for any candidate that could be selected.
 Show the chosen metric name and score or literal `unknown` in the rationale.
 
