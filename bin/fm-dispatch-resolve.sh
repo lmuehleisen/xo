@@ -872,10 +872,10 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     [$classes0[] |
       if .gate == "others-ahead-of-pace" and .excluded == null then
         ([.candidates[] | select(rankable)] | max_by(.spendPriority)) as $own |
-        (if ($others | length) == 0 then "pace gate closed: no ungated class in the lane has a rankable spendPriority"
+        (if ($others | length) == 0 then "pace gate closed: no ungated class in the lane has a rankable \($metric)"
          elif any($others[]; ahead_of_pace | not) then
            "pace gate closed: \([$others[] | select(ahead_of_pace | not) | .class] | unique | join(", ")) not spending ahead of pace"
-         elif $own == null then "pace gate closed: this class has no rankable spendPriority"
+         elif $own == null then "pace gate closed: this class has no rankable \($metric)"
          elif ($own | ahead_of_pace) then "pace gate closed: this class is itself spending ahead of pace"
          else null end) as $closed |
         if $closed == null then . + {gate_open: true}
@@ -898,7 +898,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       then {status: "escalate", reason: "genuine \($metric) tie\($where)"}
       else {status: "clear", chosen: $final[0]}
         + (if ($ties | length) > 1 then
-             {tie_break: "\($final[0].class) has fewest live workers (\($final[0].live)) among spendPriority ties"}
+             {tie_break: "\($final[0].class) has fewest live workers (\($final[0].live)) among \($metric) ties"}
            else {} end)
       end
     end;
