@@ -924,7 +924,7 @@ agy's own reviewed `--mode auto` exists since 1.3.5 ([release notes](https://git
 Firstmate does not route workers through it, so an agy crewmate or scout in Auto uses `--dangerously-skip-permissions` with Firstmate's permission policy and judge by default.
 The per-spawn `--no-agy-bypass` option selects `--mode accept-edits`, which approves file edits inside granted directories while still prompting for shell commands.
 Manual leaves agy's default review mode in place, where edits and shell commands prompt; agy secondmates also stay outside the worker policy layer.
-The policy layer's version, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.
+The policy layer's executable-compatibility, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.
 For a policy-layer launch, availability depends on the installed CLI, account, and managed policy; a denied or unsupported launch must be reported rather than retried without the policy layer.
 Manual approval prompts can leave an unattended task waiting for intervention; with agy, Manual keeps its full review prompts and `--no-agy-bypass` selects `accept-edits`, which still prompts for shell commands.
 Both modes preserve the separate project delivery and merge-approval rules.

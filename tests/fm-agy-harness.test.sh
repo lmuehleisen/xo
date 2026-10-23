@@ -36,6 +36,12 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/agy-admission-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/agy-admission-helpers.sh"
+# shellcheck source=bin/fm-agy-lib.sh
+. "$ROOT/bin/fm-agy-lib.sh"
+# shellcheck source=bin/fm-judge-tier-lib.sh
+. "$ROOT/bin/fm-judge-tier-lib.sh"
 
 # bin/fm-harness.sh checks verified ENV markers before ancestry, so an
 # inherited marker from whichever harness launched this suite would outrank the
@@ -505,14 +511,31 @@ EOF
 
 run_agy_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
   local home=$1 proj=$2 wt=$3 fakebin=$4 id=$5
+  local model=gemini-3.8-flash-low effort= tier=agy judge_model= judge_bin arg previous=
   shift 5
+  for arg in "$@"; do
+    case "$previous" in
+      --model) model=$arg ;;
+      --effort) effort=$arg ;;
+      --agy-judge) tier=${arg%%:*}; case "$arg" in *:*) judge_model=${arg#*:} ;; esac ;;
+    esac
+    previous=$arg
+  done
+  if [ "$("$fakebin/agy" --version 2>/dev/null)" = 'agy 1.2.5' ] \
+    && fm_judge_tier_known "$tier"; then
+    [ -n "$judge_model" ] || judge_model=$(fm_judge_tier_model "$tier")
+    judge_bin="$fakebin/$(fm_judge_tier_command "$tier")"
+    [ "$tier" != agy ] || judge_bin="$fakebin/agy"
+    fm_agy_fixture_receipt "$home" "$fakebin/agy" "$model" \
+      "$(agy_effort_level "$effort" "$model")" "$tier" "$judge_model" "$judge_bin" || return 1
+  fi
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$home/launch.log" \
     PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" "$proj" agy "$@" 2>&1
+    "$SPAWN" "$id" "$proj" agy --model gemini-3.8-flash-low "$@" 2>&1
 }
 
 # --- approvals --------------------------------------------------------------
@@ -1122,8 +1145,8 @@ EOF
 
 # --- agy bypass posture (--agy-bypass) ----------------------------------------
 
-# A bypass-viable fakebin: agy answers --version with the live-verified
-# release so the spawn's version gate passes.
+# A historical baseline fixture. Its version alone is insufficient; the unit
+# receipt above binds the exact fake executable and tested launch context.
 make_bypass_fakebin() {  # <dir> -> fakebin with a version-printing agy
   local fakebin
   fakebin=$(make_spawn_fakebin "$1")
@@ -1403,14 +1426,14 @@ SH
   status=$?
   [ "$status" -ne 0 ] || fail "the default agy policy layer on an unverified version must refuse: $out"
   case "$out" in
-    *'outside the live-verified set'*) ;;
+    *'outside candidate family'*) ;;
     *) fail "the refusal must name the unverified version, got: $out" ;;
   esac
   ! grep -Fq -- '--dangerously-skip-permissions' "$home/launch.log" 2>/dev/null \
     || fail "a refused bypass must never reach the launch: $(cat "$home/launch.log")"
   [ ! -e "$home/state/$id.agy-permission.json" ] \
     || fail "a refused bypass must not leave a policy file"
-  pass "fm-spawn.sh: --agy-bypass refuses an agy version outside the live-verified set"
+  pass "fm-spawn.sh: --agy-bypass refuses an agy version outside the candidate family"
 }
 
 test_agy_bypass_refuses_a_project_hooks_file() {
@@ -1679,6 +1702,8 @@ EOF
 
   rm -f "$home/launch.log.command" # Model the previous agent exiting to its shell.
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
+  fm_agy_fixture_receipt "$home" "$fakebin/agy" gemini-3.8-flash-low '' agy gemini-3.8-flash-low "$fakebin/agy" \
+    || fail 'could not seed the moved-harness compatibility fixture'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -1740,6 +1765,8 @@ EOF
     || sed -i '/^agy_bypass=/d; /^agy_judge=/d' "$home/state/$id.meta"
   rm -f "$home/launch.log.command" # Model the previous agent exiting to its shell.
   fakebin=$(make_bypass_fakebin "$case_dir/fake2")
+  fm_agy_fixture_receipt "$home" "$fakebin/agy" gemini-3.8-flash-low '' agy gemini-3.8-flash-low "$fakebin/agy" \
+    || fail 'could not seed the legacy-record compatibility fixture'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \

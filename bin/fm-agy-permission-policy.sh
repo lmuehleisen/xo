@@ -41,9 +41,8 @@
 #   grants-digest <file>       prints the digest of a brief's grants block.
 #   retire                     closes every pending escalation as not-run and
 #                              removes the pending directory.
-#   verified-versions          prints the agy versions the live evidence in
-#                              docs/verification/runtime-backends.md covers;
-#                              fm-spawn refuses bypass mode on any other.
+#   verified-versions          prints historical manually verified releases;
+#                              fm-agy-admission.sh owns executable admission.
 #   judge-probe                the measurement seam: runs the same static
 #                              analysis and judge call as pre-tool-use on the
 #                              payload given, prints one line naming the tier,
@@ -165,17 +164,9 @@ case "$EVENT" in
 esac
 
 if [ "$EVENT" = verified-versions ]; then
-  # The agy versions docs/verification/runtime-backends-fork.md records live
-  # evidence for; fm-spawn gates --agy-bypass launches on this set. Each
-  # entry is admitted only after tests/fm-agy-bypass-live-e2e.test.sh passes
-  # against that installed binary, because the hook contract this layer rests
-  # on is version-sensitive. The live checks cover that deny blocks a
-  # bypassed call with its reason, abstention runs the call, a timed-out judge
-  # denies and holds, an invalid merged hooks.json is refused before launch,
-  # force_ask stays inert, and a session that never loads the adapter logs no
-  # armed line; a version without that evidence stays out. Keep this an
-  # explicit list, never a minimum or a range: a range would admit the next
-  # release unproven, which is the failure this gate exists to prevent.
+  # Migration history, not authority for an arbitrary same-version executable.
+  # The bounded admission owner retains the explicit manual-baseline refresh
+  # path without requiring a tracked list edit for eligible patch candidates.
   printf '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4\n'
   exit 0
 fi

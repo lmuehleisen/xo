@@ -517,8 +517,8 @@
 #   Claude, Codex, and agy launches read config/crew-permissions: absent or auto
 #   uses Claude's --permission-mode auto / Codex's --approve-for-me
 #   (workspace-write with automatic review); manual uses Claude manual / Codex
-#   on-request with human review. agy has no reviewed-auto mode of its own, so
-#   auto selects its policy-layered --dangerously-skip-permissions posture for
+#   on-request with human review. agy's native Auto is account-dependent and
+#   not this route; auto selects its policy-layered bypass posture for
 #   crewmates and scouts; --no-agy-bypass selects --mode accept-edits, which
 #   auto-approves file edits inside the granted directories but STILL prompts
 #   for every shell command, and manual leaves agy's default review mode where
@@ -2766,7 +2766,7 @@ agy_model_validate() {  # <agy-bin> <model> <effort>
   local bin=$1 model=$2 effort=$3 listing ids level levels rc=0 bound=${FM_AGY_MODELS_TIMEOUT:-15}
   case "$bound" in ''|*[!0-9]*|0*) bound=15 ;; esac
   [ -n "$model" ] && [ "$model" != default ] || return 0
-  listing=$(fm_run_timed "$bound" "$bin" models 2>/dev/null < /dev/null) || rc=$?
+  listing=$(fm_run_timed "$bound" env AGY_CLI_DISABLE_AUTO_UPDATE=1 "$bin" models 2>/dev/null < /dev/null) || rc=$?
   if [ "$rc" -ne 0 ] || [ -z "$listing" ]; then
     if [ "$rc" -eq 124 ]; then
       echo "notice: 'agy models' did not answer within ${bound}s; launching with --model '$model' unvalidated" >&2
@@ -3109,7 +3109,7 @@ launch_command_template() { # <harness> <kind> <permission-flags>
   # inherited CLAUDECODE from a claude primary would otherwise outrank them in
   # a process that only reads the environment.
   agy)
-    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS __AGYBIN__ '
+    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS AGY_CLI_DISABLE_AUTO_UPDATE=1 __AGYBIN__ '
     printf '%s' "$permission_flags"
     printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     ;;
@@ -7333,7 +7333,10 @@ pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
 omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
-agy) LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "${AGY_BIN:-}")"} ;;
+agy)
+  LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "${AGY_BIN:-}")"}
+  LAUNCH="$(fm_agy_launch_guard)$LAUNCH"
+  ;;
 devin)
   LAUNCH=${LAUNCH//__DEVINBIN__/"$(shell_quote "${DEVIN_BIN:-}")"}
   LAUNCH=${LAUNCH//__DEVINCONFIG__/"$(shell_quote "$STATE_REAL/$ID.devin-config.json")"}

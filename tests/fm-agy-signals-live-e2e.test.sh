@@ -37,18 +37,22 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/agy-live-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/agy-live-helpers.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGY_BIN=$(command -v agy 2>/dev/null || true)
+agy_live_context
 LAB=
-SOCKET="fm-agy-signals-$$"
+SOCKET=
+TMUX_ROOT=
 SESSION=agy-signals
 TARGET="$SESSION:agy"
 AGY_VERSION=
 
 cleanup() {
   local rc=$?
-  [ -z "${REAL_TMUX:-}" ] || "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
+  [ -z "$SOCKET" ] || "$REAL_TMUX" -S "$SOCKET" kill-server >/dev/null 2>&1 || true
+  fm_test_rm_tmproot "${TMUX_ROOT:-}"
   if [ "$rc" -ne 0 ] && [ -n "$LAB" ]; then
     printf 'Agy worker failure evidence retained: %s\n' "$LAB" >&2
   else
@@ -56,6 +60,8 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+trap 'exit 143' TERM HUP
+trap 'exit 130' INT
 
 fail() {
   printf 'not ok - %s (agy %s)\n' "$1" "${AGY_VERSION:-unknown}" >&2
@@ -68,8 +74,8 @@ pass() {
 
 composer_state() {
   local screen cy
-  screen=$("$REAL_TMUX" -L "$SOCKET" capture-pane -e -p -t "$TARGET")
-  cy=$("$REAL_TMUX" -L "$SOCKET" display-message -p -t "$TARGET" '#{cursor_y}')
+  screen=$("$REAL_TMUX" -S "$SOCKET" capture-pane -e -p -t "$TARGET")
+  cy=$("$REAL_TMUX" -S "$SOCKET" display-message -p -t "$TARGET" '#{cursor_y}')
   printf '%s\n' "$screen" > "$LAB/composer.capture"
   printf '%s\n' "$cy" > "$LAB/composer.cursor"
   bash -c '. "$1/bin/fm-composer-lib.sh"; fm_composer_classify_screen "$2" "$3" "$4"' \
@@ -94,6 +100,8 @@ LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-agy-live.XXXXXX")
 # it treat a write inside the granted directory as non-workspace access.
 LAB=$(cd "$LAB" && pwd -P)
 fm_test_require_tmproot "$LAB"
+TMUX_ROOT=$(TMPDIR=/tmp fm_test_tmproot fm-agy-socket)
+SOCKET="$TMUX_ROOT/agy"
 WORKSPACE="$LAB/workspace"
 # Reproduce a Firstmate worker inheriting the tracked primary registration.
 # A real linked worktree must keep accept-edits even when that hook is loaded.
@@ -150,7 +158,7 @@ PYCOUNT
 trusted_before=$(agy_trusted_count)
 
 tmux_capture() {
-  "$REAL_TMUX" -L "$SOCKET" capture-pane -p -t "$TARGET" 2>/dev/null || true
+  "$REAL_TMUX" -S "$SOCKET" capture-pane -p -t "$TARGET" 2>/dev/null || true
 }
 
 assert_delivery_busy() {  # <busy|idle>
@@ -212,11 +220,12 @@ wait_for_text() {  # <text> [samples]
 # The production approval posture for config/crew-permissions=auto, which is
 # what makes facts 2 and 3 a test of the shipped decision rather than of an
 # arbitrary flag combination.
-"$REAL_TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -n agy -c "$WORKSPACE" -x 200 -y 50 \
+TMUX_TMPDIR="$TMUX_ROOT" "$REAL_TMUX" -S "$SOCKET" new-session -d -s "$SESSION" -n agy -c "$WORKSPACE" -x 200 -y 50 \
   || fail "could not create the private tmux session"
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l \
-  "env -u NO_COLOR $AGY_BIN --mode accept-edits --add-dir $WORKSPACE --add-dir $STATE/agy-live.agy-hooks -i 'reply with exactly: LIVE_OK'"
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter
+launch=$(printf '%q ' env -u NO_COLOR AGY_CLI_DISABLE_AUTO_UPDATE=1 "$AGY_BIN" --mode accept-edits \
+  "${MODEL_FLAGS[@]}" --add-dir "$WORKSPACE" --add-dir "$STATE/agy-live.agy-hooks" -i 'reply with exactly: LIVE_OK')
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l "$launch"
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" Enter
 
 # --- 1. no trust dialog, no global trust mutation ---------------------------
 
@@ -229,10 +238,10 @@ wait_for_text 'Accept-edits mode' \
 wait_for_turn || fail "agy did not complete its opening turn"
 assert_delivery_busy idle
 [ "$(composer_state)" = empty ] || fail 'shared composer classifier did not prove the idle Agy input empty'
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l 'AGY_PENDING_GUARD'
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l 'AGY_PENDING_GUARD'
 sleep 0.3
 [ "$(composer_state)" = pending ] || fail 'shared composer classifier did not preserve unsubmitted Agy input'
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" C-u
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" C-u
 pass 'agy: shared composer classifier distinguishes idle placeholder from pending input'
 capture=$(tmux_capture)
 case "$capture" in
@@ -254,9 +263,9 @@ pass 'agy: production hooks in the separately granted directory settle a real tu
 
 # --- 2. accept-edits auto-approves a file edit ------------------------------
 
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l \
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l \
   "Using your native file writing tool, create the absolute file $WORKSPACE/edit-probe.txt containing EDIT_OK. Do not use the shell."
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" Enter
 wait_for_turn || fail "agy did not finish the accept-edits file write turn"
 [ -f "$WORKSPACE/edit-probe.txt" ] \
   || fail "--mode accept-edits did not auto-approve a file edit in the granted worktree"
@@ -270,9 +279,9 @@ pass 'agy: inherited primary PreToolUse exits silently and the linked worker edi
 # --- 3. the same mode still prompts for a shell command --------------------
 
 # `date` is deliberately a command no allow-rule would plausibly already cover.
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l \
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l \
   'Run the shell command: date'
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" Enter
 wait_for_text 'Requesting permission for:' 240 \
   || fail "accept-edits must still REQUEST approval for a shell command; no prompt appeared"
 capture=$(tmux_capture)
@@ -293,17 +302,17 @@ pass "agy: a shell command still requests approval under accept-edits"
 
 # Cancel the pending approval, then interrupt a real running turn: the recorded
 # mechanic is a single Escape with no clear key after it.
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Escape
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" Escape
 sleep 2
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l \
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l \
   'Count slowly from 1 to 60, one number per line with a sentence about each.'
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" Enter
 wait_for_text 'esc to cancel' 120 \
   || fail "agy did not render its running-turn footer for a long turn"
 tmux_capture > "$LAB/busy.capture"
 rm -f "$STATE/agy-live.turn-ended"
 assert_delivery_busy busy
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Escape
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" Escape
 wait_for_text 'Interrupted' 120 \
   || fail "a single Escape did not cancel agy's running turn"
 capture=$(tmux_capture)
@@ -320,12 +329,12 @@ pass "agy: a single Escape cancels the turn and leaves the composer empty"
 
 # --- 5. /exit exits on one Enter -------------------------------------------
 
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l '/exit'
-"$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l '/exit'
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" Enter
 i=0
 exited=0
 while [ "$i" -lt 60 ]; do
-  cmd=$("$REAL_TMUX" -L "$SOCKET" list-panes -t "$TARGET" -F '#{pane_current_command}' 2>/dev/null || true)
+  cmd=$("$REAL_TMUX" -S "$SOCKET" list-panes -t "$TARGET" -F '#{pane_current_command}' 2>/dev/null || true)
   case "$cmd" in
     *agy*) ;;
     '') ;;
@@ -366,3 +375,4 @@ fi
 pass "agy: a suffixed model id still conflicts with --effort"
 
 printf '# all fm-agy-signals live checks passed (agy %s)\n' "$AGY_VERSION"
+agy_live_complete signals "$STATE/agy-permission-log.jsonl" || fail 'could not record complete lifecycle coverage'
