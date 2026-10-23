@@ -119,7 +119,7 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 ## Rank by the selected score
 
 Among candidates that pass all three gates, pick the highest known value of the snapshot's selected metric.
-For `spendPressure`, positive means behind a steady spending schedule, zero means on schedule or offsetting window pressures, and negative means ahead.
+For `spendPressure`, positive means behind a steady spending schedule, zero means its limiting budget window is on schedule, and negative means ahead.
 Legacy `spendPriority` retains its historical-burn meaning.
 Rank only finite values in [-100,100] with `selection.status == known`.
 Contradictory stale/auth-required state with claimed known headroom is invalid evidence.
