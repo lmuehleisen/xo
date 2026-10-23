@@ -16,18 +16,14 @@ That baseline covers all 24 parallel members; an existing live-capability skip i
 Observed maxima provide conservative packing weights, not an upper bound on future durations.
 
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
-The serial hint table was refreshed on 2026-10-05 from completed successful `FM_TEST_END` markers in fork CI runs [37096327244](https://github.com/lmuehleisen/xo/actions/runs/37096327244), [37342499054](https://github.com/lmuehleisen/xo/actions/runs/37342499054), [37345671591](https://github.com/lmuehleisen/xo/actions/runs/37345671591), [37349653454](https://github.com/lmuehleisen/xo/actions/runs/37349653454), [37357918789](https://github.com/lmuehleisen/xo/actions/runs/37357918789), and the serial-2 job in [37364845938](https://github.com/lmuehleisen/xo/actions/runs/37364845938).
-These samples cover all 238 pre-split serial members across all nine original lanes, using the maximum successful duration per script and excluding failed assertions and missing tails.
+The serial hint table was refreshed on 2026-10-23 from successful per-script timing artifacts in fork CI runs [39990088333](https://github.com/lmuehleisen/xo/actions/runs/39990088333) and [40000907445](https://github.com/lmuehleisen/xo/actions/runs/40000907445), supplemented by completed successful `FM_TEST_END` markers from the latter run's timed-out serial-3 job.
+These samples cover every current serial member; failed assertions, missing tails, and timeout durations are excluded.
 The native-Windows-only measurement remains separate from portable capability skips.
-The supervision-host suite reached 1668931 ms against its previous 789123 ms hint; it now runs as four serial scripts sharing unchanged fixture helpers, assertions, and bounds.
-Their initial weights round up the sums of slowest per-case CI log intervals: reporting 65000 ms, attended dispatch 570000 ms, away outcomes 305000 ms, and recovery 900000 ms.
-Refresh those estimates from the new scripts' own successful markers once available.
-The 2026-10-07 polytoken adapter tests carry provisional local measurements instead - 21090 ms for `tests/fm-polytoken-harness.test.sh` and the 103 ms live-guard skip for `tests/fm-polytoken-signals-live-e2e.test.sh`, both measured on the adapter-verification macOS host - until the next CI refresh replaces them with Ubuntu measurements, because they postdate the 2026-10-05 refresh.
-The wedge-cap suite carries the Ubuntu measurements from CI run [39597689178](https://github.com/kunchenguid/firstmate/actions/runs/39597689178) - 374225 ms for `tests/fm-watch-wedge-cap.test.sh` and the 74 ms live-guard skip for `tests/fm-watch-wedge-cap-live.test.sh` - in place of the provisional local measurements the suite first carried (1003000 ms and the 155 ms skip), which overstated the CI cost of both.
-They are not a formality: without a hint the suite is packed on the 45000 ms default, which puts it beside a shard already holding about 17 minutes of measured work, so that shard would really have run for about 23 minutes - past the 20-minute target the guard reserves - while the coverage guard still passed.
-The same run measured the wedge-cap parity suite at 27763 ms, which `bin/fm-test-run.sh` packs in place of the provisional 209000 ms local measurement.
-The local measurements had left the serial lane less aggregate headroom under the nine shards' 1200000 ms budget than the packing-boundary check needs to place one script exactly at the budget, so that check failed; the CI measurements restore it.
-The session-start hint retains its pre-optimization maximum until CI measures the shorter fixture-only home-summary bound; do not discount a local speedup from CI packing weights.
+The measured watch-triage and attended-host suites exceeded the twenty-minute packing target individually, so each now runs as two serial scripts sharing unchanged fixtures, assertions, polling cadence, and bounds.
+Until the new scripts have their own CI measurements, their hints round up the sums of completed case intervals from that same run: watch-triage 740000 ms, declared waits 930000 ms, attended host 710000 ms, and dialog delivery 630000 ms.
+Their combined case inventories remain unchanged: 160 watcher-triage cases and 37 attended-host cases.
+Refresh these conservative case-based estimates from the new scripts' own successful CI markers once available.
+Observed maxima provide packing inputs rather than upper bounds on future runner variance.
 
 ## Parallel lanes
 
@@ -52,8 +48,8 @@ Membership is derived rather than enumerated, so a newly added test lands here b
 ## Portable serial CI shards
 
 `portable-serial-<k>of<n>` splits it across `n` separate CI runners.
-The current layout uses twelve shards while preserving the original job names and adding `Behavior portable serial 12`.
-Add those two contexts to the existing required-check rule after the workflow is green and landed, following [CONTRIBUTING.md](../CONTRIBUTING.md#maintaining-required-checks).
+The current layout uses fourteen shards while preserving the original job names and adding `Behavior portable serial 13` and `Behavior portable serial 14`.
+The existing `ci-pass` aggregate requires the entire serial matrix, following [CONTRIBUTING.md](../CONTRIBUTING.md#maintaining-required-checks).
 Each shard is still strictly serial in itself, and separate runners mean no two of these stateful scripts ever share a machine, so the split needs no concurrency isolation proof.
 
 `bin/fm-test-run.sh` owns `n` and refuses any lane whose `of<n>` disagrees with it.
@@ -71,9 +67,9 @@ Refresh the hints whenever a serial member grows materially or the lane gains sc
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
 Its header and `--help` own the modeled-budget check and output fields; read the current estimates from `--check-coverage` instead of retaining copied lane sums here.
 [`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_serial_packing_budget_boundary`, verifies acceptance exactly at the budget and refusal one millisecond above it through the executable runner.
-The longest script, `tests/fm-watch-triage.test.sh`, is the indivisible floor for this layout.
-The estimates use per-file maxima from different runs, not measured rebalanced jobs or an end-to-end latency guarantee.
-The refreshed watch-triage maximum is 1070941 ms; allow additional time for dependency installation, checkout, and artifact upload.
+The largest individual hint is the indivisible floor for this layout.
+The estimates use per-file maxima and the split scripts' case-based estimates, not measured rebalanced jobs or an end-to-end latency guarantee.
+Allow additional time for dependency installation, checkout, and artifact upload.
 Even so, these observed maxima do not establish a P95 or guarantee future headroom.
 Job timeouts remain hang tripwires under the policy in [Timeouts](#timeouts) below; they are not the desired healthy duration.
 `tests/fm-ci-workflow.test.sh` compares the parsed CI matrix to the executable runner lanes, and the runner rejects parallel `--jobs` on a serial lane even when that shard has only one member.
@@ -115,9 +111,9 @@ Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.s
 The workflow uploads each partition's quiet telemetry plus its per-root lifecycle sidecar to distinguish analysis cost, memory use, and host contention.
 No fast mode, path skips, or paid runner provisioning is part of this layout.
 
-The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the current watch-triage floor alone exceeds that objective.
+The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the largest measured serial scripts still approach or exceed that objective.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-The layout uses seventeen long-lived Linux jobs (twelve serial, two parallel, Herdr, two lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
+The layout uses nineteen long-lived Linux jobs (fourteen serial, two parallel, Herdr, two lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
 

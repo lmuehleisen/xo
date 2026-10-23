@@ -540,9 +540,9 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### ci-shard-split
 
-- Intent: portable serial CI runs as twelve shards, with the supervision-host suite split into attended, away, and recovery suites, so each shard stays inside the CI job limit.
+- Intent: portable serial CI runs as fourteen shards, with the supervision-host suite split into attended, dialog, away, and recovery suites and watcher triage split into ordinary and declared-wait suites, so each shard stays inside the CI job limit.
 - Class: carried.
-- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, plus the shard matrix in `.github/workflows/ci.yml`, shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
+- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-dialog.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, fork-only `tests/watch-triage-helpers.sh` and `tests/fm-watch-triage-waits.test.sh`, the shared `tests/fm-watch-triage.test.sh` driver, plus the shard matrix in `.github/workflows/ci.yml`, shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
 - Guard: `tests/fm-test-run.test.sh` shard cases; every integration ports upstream's new supervision-host tests into the split suites.
 - Upstream: runs nine serial shards and one supervision-host suite; drop once upstream shards equivalently.
 
