@@ -2127,7 +2127,7 @@ run_lane code out err "$BRIEF" --lane planwork --project xo
 assert_contains "$out" 'spendPriority=-1.2017' "a Pi route on a different account lane keeps the native value"
 assert_not_contains "$out" 'native_spendPriority=' "a different account lane is never planning-adjusted by model name"
 run_lane code out err "$BRIEF" --lane plandevin --project xo
-assert_contains "$out" 'candidate: devin:gpt-6-1-sol-max  provider=devin  scope=included_quota  remaining=87%  spendPriority=-0.5' "a Devin route keeps its native value under a Codex planning override"
+assert_contains "$out" 'candidate: devin:gpt-6-1-sol-max  class=devinpaid family=gpt  provider=devin  scope=included_quota  remaining=87%  spendPriority=-0.5' "a Devin route keeps its native value under a Codex planning override"
 assert_not_contains "$out" 'native_spendPriority=' "no non-Codex route is planning-adjusted"
 
 plan_quota '2026-10-23T00:00:00Z' '{"scope":"all_models","status":"known","effectivePercentRemaining":0,"boundedBy":["weekly"],"limitingWindowIds":["weekly"],"runway":{"status":"exhausted_now","usableRunwaySeconds":0},"selection":{"status":"known","spendPriority":-5}}' "$PLAN_CODEX_WINDOWS"
