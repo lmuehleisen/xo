@@ -1828,12 +1828,12 @@ pass "the Gemini pace gate applies only where the lane declares it"
 # Pace gates must use pressure even when legacy signs would close the gate.
 jq '.rules = [{lane:"pressure",when:"ordinary work",classes:["sol-high",{class:"gemini-flash-high",gate:"others-ahead-of-pace"}]}]' "$TEMPLATE" > "$RULES"
 lane_quota codex=0.2 agy=-0.4
-jq '(.providers[].quotaSemantics.effectiveAvailability[].selection) |= (.spendPressure = (-.spendPriority))' "$QUOTA" > "$QUOTA.pressure"
-mv "$QUOTA.pressure" "$QUOTA"
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection) |= (.spendPressure = (-.spendPriority))' "$LANE_QUOTA" > "$LANE_QUOTA.pressure"
+mv "$LANE_QUOTA.pressure" "$LANE_QUOTA"
 run_lane code out err "$BRIEF" --lane pressure --project xo
 assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "pressure signs open the pace gate despite opposite legacy signs"
-jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0' "$QUOTA" > "$QUOTA.pressure"
-mv "$QUOTA.pressure" "$QUOTA"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0' "$LANE_QUOTA" > "$LANE_QUOTA.pressure"
+mv "$LANE_QUOTA.pressure" "$LANE_QUOTA"
 run_lane code out err "$BRIEF" --lane pressure --project xo
 assert_contains "$out" 'pace gate closed: sol-high not spending ahead of pace' "zero pressure closes the gate without consulting legacy priority"
 
