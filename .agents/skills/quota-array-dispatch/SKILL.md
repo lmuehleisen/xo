@@ -128,6 +128,11 @@ After the permitted TOON-to-JSON fallback, escalate to Firstmate instead of rout
 Never resolve that terminal uncertainty by treating unknown as healthy or by choosing arbitrarily.
 Show the scalar or the literal `unknown` in the rationale; do not hide it in a score.
 
+When the local [quota planning overrides](../../../docs/configuration.md#quota-planning-overrides-configquota-planningjson) file is present, the typed resolver already applies any active override and prints the planning value as `spendPriority` beside `native_spendPriority`, with a `planning: active` or `planning: inactive` line.
+Rank by the resolver's printed value in that case and name the planning horizon and expiry in the rationale.
+Never recompute a planning value by hand from window lists, and never apply one the resolver did not print.
+An absent or inactive override means the native scalar above is the whole ranking evidence.
+
 Do not compare headroom against runway by hand.
 Do not use pace or signed reserve as a later tie-break layer.
 Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what `spendPriority` already computed.
