@@ -344,6 +344,7 @@ fm_test_remove_tree() {
 fm_test_reap_root_processes() {  # <root>
   local root=${1%/} chain pid pids signal i
   [ -n "$root" ] && [ "$root" != / ] || return 0
+  fm_test_tmproot_guard_reason "$root" >/dev/null && return 0
   chain=" "
   pid=$$
   while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do

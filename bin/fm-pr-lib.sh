@@ -314,7 +314,7 @@ fm_pr_head_valid() {
   [[ "$head" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]
 }
 
-# Resolve the PR number for a task copy's branch via gh-axi, run inside that
+# Resolve the PR number for a task copy's branch via gh, run inside that
 # copy so gh resolves the copy's own repository. Echoes the number on a
 # single match and returns 0; returns non-zero on no match or any lookup
 # failure, so callers treat it as "no PR found" (fail-safe). bin/fm-teardown.sh
