@@ -1,10 +1,69 @@
 #!/usr/bin/env bash
-# Opt-in credentialed OpenCode continuity regression on an isolated project and
-# FM_HOME. Existing OpenCode credentials stay in their managed store.
+# Token-free OpenCode V2 worker-plugin integration plus an opt-in credentialed
+# OpenCode continuity regression, both on an isolated project and FM_HOME.
+# Existing OpenCode credentials stay in their managed store.
+#
+# The token-free half has the real bin/fm-spawn.sh write a scratch worker's
+# plugin and launch against a fake pane, then drives
+# tests/opencode-v2-live-fixture.py (a private `opencode serve` and a loopback
+# provider) with that launch's config against every OpenCode executable named
+# in FM_OPENCODE_LIVE_BINS (space-separated paths), or the `opencode` on PATH
+# when that is unset. An executable older than OpenCode 2 is reported and
+# skipped. FM_OPENCODE_LIVE_E2E=1 selects the credentialed half instead.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+opencode_major() {  # <executable>
+  local version
+  version=$("$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+  printf '%s\n' "${version%%.*}"
+}
+
+if [ "${FM_OPENCODE_LIVE_E2E:-0}" != 1 ]; then
+  fm_live_gate default-on FM_OPENCODE_V2_OFFLINE_LIVE opencode python3 git jq
+  # shellcheck source=tests/fixtures.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
+  fixture="$ROOT/tests/opencode-v2-live-fixture.py"
+  TMP_ROOT=$(fm_test_tmproot fm-opencode-v2-offline)
+  OFFLINE_IDS=()
+  offline_cleanup() {
+    local id meta dir
+    for id in ${OFFLINE_IDS[@]+"${OFFLINE_IDS[@]}"}; do
+      meta="$TMP_ROOT/$id/home/state/$id.meta"
+      dir=$(sed -n 's/^worker_tmux_dir=//p' "$meta" 2>/dev/null)
+      fm_test_rm_tmproot "/tmp/fm-$id" /tmp/fm-"$id"+* ${dir:+"$dir"} || true
+    done
+    fm_test_cleanup
+  }
+  trap offline_cleanup EXIT
+  checked=0
+  for bin in ${FM_OPENCODE_LIVE_BINS:-$(command -v opencode)}; do
+    [ -x "$bin" ] || fail "OpenCode executable $bin is missing"
+    major=$(opencode_major "$bin")
+    if [ -z "$major" ] || [ "$major" -lt 2 ]; then
+      printf 'skip: %s reports %s, not OpenCode 2\n' "$bin" "$("$bin" --version 2>/dev/null || printf unknown)"
+      continue
+    fi
+    id="oc-v2-fixture-$$-$checked"
+    case_dir="$TMP_ROOT/$id"
+    OFFLINE_IDS+=("$id")
+    fakebin=$(make_spawn_fakebin "$case_dir/fake")
+    fm_test_spawn_home "$case_dir/home" opencode
+    fm_git_worktree "$case_dir/project" "$case_dir/wt" "wt-$id"
+    fm_test_spawn_brief "$case_dir/home" "$id"
+    out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" fm_test_run_spawn "$case_dir/home" "$case_dir/wt" \
+      "$fakebin" "$id" "$case_dir/project" --scout --harness opencode --model fixture/native) \
+      || fail "scratch OpenCode worker spawn failed: $out"
+    PATH="$(dirname "$bin"):$PATH" python3 -I "$fixture" --launch-log "$case_dir/launch.log" --root "$ROOT" \
+      --state "$case_dir/home/state" --task "$id" --worktree "$case_dir/wt" \
+      || fail "OpenCode $("$bin" --version) native worker fixture failed"
+    checked=$((checked + 1))
+  done
+  [ "$checked" -gt 0 ] || printf 'skip: no OpenCode 2 executable to exercise\n'
+  exit 0
+fi
 
 fm_live_gate opt-in FM_OPENCODE_LIVE_E2E opencode tmux sqlite3
 

@@ -3263,6 +3263,39 @@ The scratch project remains clean after the initial skill load; the guard uses n
 The worktree source follows the home source so its duplicate IDs retain precedence.
 The launch source uses V2's supported [`skills` array](https://opencode.ai/v2/docs/skills/); `tests/fm-spawn-dispatch-profile.test.sh` covers the generated ship/scout configuration with default and explicit models.
 
+### Token-free worker plugin
+
+Verified on 2026-10-23 with `opencode v2.0.27` on macOS.
+Refresh with:
+
+```sh
+bash bin/fm-test-run.sh tests/fm-opencode-primary-live-e2e.test.sh
+```
+
+Without `FM_OPENCODE_LIVE_E2E=1` this half runs by default wherever OpenCode 2, Python 3, Git, and jq are installed, and spends no model tokens; `FM_OPENCODE_LIVE_BINS` names several executables to exercise in turn.
+The real `bin/fm-spawn.sh` writes a scratch scout's plugin and launch against a fake pane, then `tests/opencode-v2-live-fixture.py` starts a private `opencode serve` with that launch's `OPENCODE_CONFIG_CONTENT` and answers every model request from a loopback provider defined in the lab's user config.
+The exact terminal result was:
+
+```text
+ok - OpenCode 2.0.27 loads the spawn's worker plugin from its private launch config; the worktree has no OpenCode files
+ok - a succeeded turn applies busy then idle once and notifies the worker turn end
+ok - an unrelated same-directory root's turn neither settles nor notifies the worker session
+ok - a child session's turn neither settles nor notifies the worker session
+ok - a user-interrupted turn settles idle and notifies the worker turn end
+ok - a failed turn settles idle and notifies the worker turn end
+ok - after a plugin reload exactly one subscription applies the worker's lifecycle
+ok - server shutdown keeps the worker busy for resume, and its plugin cleanup reports no subscription failure
+ok - private OpenCode server, provider, configuration and database cleaned
+```
+
+The fixture drives sessions through the public HTTP API and reads the production busy record after each step.
+The unrelated root and the child (created with `parentID`) each run a complete turn, confirmed by its terminal event on the public stream, while the worker's own turn is held at the provider.
+On 2.0.27 a SIGTERM to the server disposes plugins after `location.shutdown`, before any `session.execution.interrupted` with reason `shutdown` reaches them, so the shutdown case proves the observable result rather than the plugin's shutdown-reason filter.
+A location reload calls the old plugin's cleanup and re-imports the module, and 2.0.27 also ends the old event stream itself, so the exact-sequence check after reload cannot detect a subscription that cleanup failed to abort.
+`tests/fm-busy-adapter-wiring.test.sh` pins the shutdown-reason filter, the abort, and visible stream failures.
+A reload while the worker's turn is running starts the replacement plugin before the old one is cleaned up, and the old instance is gone before that turn's terminal event, so the replacement ignores the settlement and the record stays busy until the next turn settles.
+This half does not exercise the TUI launch, guarded brief delivery, draft or dialog refusal, or the control plane; the credentialed half above does.
+
 ### Herdr worker lifecycle
 
 Verified on 2026-10-06 with `opencode v2.0.18`, Herdr 0.9.3, and the free contributor model above.
