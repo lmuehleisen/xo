@@ -920,6 +920,9 @@ out=$(call_choose --snapshot "$LAB/pressure.toon" --candidate claude:default)
 sed 's/,0.6$/,unknown/' "$LAB/pressure.toon" > "$LAB/pressure-unknown.toon"
 out=$(call_choose --snapshot "$LAB/pressure-unknown.toon" --candidate claude:default)
 [ "$out" = "claude default" ] || fail "eligibility helper incorrectly used pressure as a gate: $out"
+sed 's/provider,scope/provider,accountKey,scope/; s/claude,all_models/codex,codex-home,all_models/' "$LAB/pressure.toon" > "$LAB/pressure-account.toon"
+out=$(call_choose --snapshot "$LAB/pressure-account.toon" --candidate codex:default)
+[ "$out" = "codex default" ] || fail "account-key offset lost the appended pressure column: $out"
 ok "additive pressure column leaves the eligibility-only helper unchanged"
 
 printf '# all fm-quota-choose tests passed\n'
