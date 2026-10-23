@@ -544,7 +544,7 @@ write_forgejo_pr_json() {
 # unconfigured-CI shape verified against a real instance (empty state, zero
 # count), regardless of any state= override.
 write_forgejo_status_json() {
-  local file=$1 kv key value
+  local file=$1 kv key value statuses
   local state=success total=1
   shift
   for kv in "$@"; do
@@ -559,8 +559,8 @@ write_forgejo_status_json() {
   if [ "$total" = 0 ]; then
     printf '{"state":"","total_count":0,"statuses":[]}\n' > "$file"
   else
-    printf '{"state":"%s","total_count":%s,"statuses":[%s]}\n' "$state" "$total" \
-      "$(seq "$total" | sed "s/.*/{\"context\":\"ci-&\",\"status\":\"$state\"}/" | paste -sd, -)" \
+    statuses=$(seq "$total" | sed "s/.*/{\"context\":\"ci-&\",\"status\":\"$state\"}/" | paste -sd, -)
+    printf '{"state":"%s","total_count":%s,"statuses":[%s]}\n' "$state" "$total" "$statuses" \
       > "$file"
   fi
 }

@@ -17,27 +17,58 @@ OLD_HEAD_2=4dc2291e6969de1bf204fbdb53c9e57a8353d4e2
 
 # The fake gh answers every query with the JSON shape GitHub returns and runs
 # the --jq program it received with the real jq, so field selection is what is
-# under test. The pull-request object speaks GitHub's own vocabulary: an
+# under test. Calls without --jq get the raw served JSON back, the way gh's API
+# calls behave. The pull-request object speaks GitHub's own vocabulary: an
 # uppercase state with MERGED as its own value, and a null mergeable while
 # GitHub is still computing one.
 # It evaluates with the local jq, while gh itself embeds gojq; the live guard in
 # tests/fm-pr-state-live-e2e.test.sh runs the real engine.
+# Default fixtures describe a repository with no required status checks at
+# all: an unprotected branch summary and an empty rules list, which the
+# canonical policy read resolves to a positively empty required set, and gh's
+# required view answering its "no required checks reported" sentence.
 cat > "$FAKEBIN/gh" <<'SH'
 #!/usr/bin/env bash
 set -o pipefail
 head=c2eac54c17a1ddc2633ad51b83e21e5fe888142e
+runs_default='{"check_runs":[]}'
+branch_default='{"name":"main","protected":false}'
 serve() {
   case "$*" in
-    "pr view "*" --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt --jq "*)
+    "pr view "*" --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt,baseRefName,statusCheckRollup"*)
       jq -n --arg head "$head" --arg state "${FM_TEST_STATE-OPEN}" \
         --arg merged "${FM_TEST_MERGED_AT-}" --arg draft "${FM_TEST_DRAFT-false}" \
         --arg mergeable "${FM_TEST_VIEW_MERGEABLE-MERGEABLE}" \
         --arg decision "${FM_TEST_VIEW_REVIEW_DECISION-APPROVED}" \
+        --arg base "${FM_TEST_BASE-main}" \
+        --argjson rollup "${FM_TEST_ROLLUP-[]}" \
         '{state: $state, mergedAt: (if $merged == "" then null else $merged end),
           isDraft: ($draft == "true"), headRefOid: $head,
           author: {login: "prauthor", is_bot: false},
           mergeable: (if $mergeable == "null" then null else $mergeable end),
-          reviewDecision: $decision, updatedAt: (env.FM_TEST_UPDATED_AT // "2020-01-01T00:00:00Z")}'
+          reviewDecision: $decision, updatedAt: (env.FM_TEST_UPDATED_AT // "2020-01-01T00:00:00Z"),
+          baseRefName: $base, statusCheckRollup: $rollup}'
+      ;;
+    "api --paginate repos/o/r/commits/"*"/check-runs")
+      if [ -n "${FM_TEST_RUNS_ERROR-}" ]; then
+        printf '%s\n' "$FM_TEST_RUNS_ERROR" >&2
+        exit 1
+      fi
+      printf '%s\n' "${FM_TEST_RUNS:-$runs_default}"
+      ;;
+    "api --paginate repos/o/r/rules/branches/"*)
+      if [ -n "${FM_TEST_RULES_ERROR-}" ]; then
+        printf '%s\n' "$FM_TEST_RULES_ERROR" >&2
+        exit 1
+      fi
+      printf '%s\n' "${FM_TEST_RULES:-[]}"
+      ;;
+    "api repos/o/r/branches/"*)
+      if [ -n "${FM_TEST_BRANCH_ERROR-}" ]; then
+        printf '%s\n' "$FM_TEST_BRANCH_ERROR" >&2
+        exit 1
+      fi
+      printf '%s\n' "${FM_TEST_BRANCH:-$branch_default}"
       ;;
     "api graphql "*)
       [ "${FM_TEST_THREAD_ERROR:-0}" = 0 ] || exit 1
@@ -52,8 +83,11 @@ serve() {
         printf '%s\n' "$FM_TEST_CHECKS_ERROR" >&2
         exit 1
       fi
-      checks='[{"name":"lint","state":"SUCCESS","bucket":"pass","workflow":"ci"},{"name":"optional","state":"SKIPPED","bucket":"skipping","workflow":"ci"}]'
-      printf '%s\n' "${FM_TEST_REQUIRED_CHECKS:-$checks}"
+      if [ -z "${FM_TEST_REQUIRED_CHECKS-}" ]; then
+        printf "no required checks reported on the '%s' branch\n" "${FM_TEST_BASE-main}" >&2
+        exit 1
+      fi
+      printf '%s\n' "$FM_TEST_REQUIRED_CHECKS"
       ;;
     "pr checks "*" --json name,state,bucket --jq "*)
       if [ -n "${FM_TEST_REPORTED_CHECKS_ERROR-}" ]; then
@@ -75,7 +109,12 @@ for arg in "$@"; do
   [ "$prev" != --jq ] || prog=$arg
   prev=$arg
 done
-serve "$@" | jq -r "$prog"
+out=$(serve "$@") || exit $?
+if [ -n "$prog" ]; then
+  printf '%s\n' "$out" | jq -r "$prog"
+else
+  printf '%s\n' "$out"
+fi
 SH
 chmod +x "$FAKEBIN/gh"
 
@@ -213,18 +252,100 @@ test_required_failure_is_a_blocker() {
 # FM_TEST_CHECKS_ERROR, so they prove the behaviour GIVEN those strings and
 # nothing about the strings themselves. A gh reword is invisible to this
 # hermetic suite; only a run against a real gh would catch one.
-test_unreported_required_checks_are_unconfirmed() {
+test_unreported_required_checks_are_named() {
   local out status
-  out=$(FM_TEST_CHECKS_ERROR="no required checks reported on the 'fm/fixture' branch" run_state) \
-    || fail "a head without reported required checks was refused"
-  [ "$out" = 'CHECKS: no required check has reported; readiness unconfirmed' ] \
-    || fail "a head where nothing required has reported must not pass silently as ready, got: $out"
-  # This asserts the branch taken for that sentence, not that gh still says it.
+  out=$(FM_TEST_RULES='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"},{"context":"deploy"}]}}]' \
+    run_state) || fail "a head without reported required checks was refused"
+  [ "$out" = $'REQUIRED CHECK: ci (not reported)\nREQUIRED CHECK: deploy (not reported)' ] \
+    || fail "a configured required check that never reported must be named, not pass silently as ready, got: $out"
+  # This asserts the branch taken for gh's sentence, not that gh still says it.
 
   status=0
   FM_TEST_CHECKS_ERROR='HTTP 502: Bad Gateway' run_state >/dev/null 2>&1 || status=$?
   [ "$status" -ne 0 ] || fail "a real check lookup failure must still refuse"
-  pass "given gh's sentence, an unreported required check is unconfirmed, other check lookup failures refuse"
+  pass "given gh's sentence, configured-but-unreported required checks are named, other check lookup failures refuse"
+}
+
+# When the required view reports nothing while required checks are configured,
+# the reported view still runs so a failing advisory check stays visible.
+test_reported_failure_stays_visible_behind_unreported_required() {
+  local out
+  out=$(FM_TEST_RULES='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"}]}}]' \
+    FM_TEST_REPORTED_CHECKS='[{"name":"backend","state":"FAILURE","bucket":"fail","workflow":"ci"}]' \
+    run_state) || fail "unreported-required fixture was refused"
+  assert_contains "$out" 'REQUIRED CHECK: ci (not reported)' \
+    "the unreported required check must be named"
+  assert_contains "$out" 'REPORTED CHECK: backend (FAILURE)' \
+    "a stacked base's reported failure must stay visible"
+  pass "an unreported required check is named and a reported failure stays visible"
+}
+
+# A base whose policy verifies as requiring nothing leaves the reported checks
+# as the whole signal: all of them passing means no blocker this command can
+# see.
+test_verified_empty_required_set_reads_reported_checks() {
+  local out
+  out=$(run_state) || fail "verified-empty fixture was refused"
+  [ -z "$out" ] || fail "verified-zero requirements with all reported checks passing must be silent, got: $out"
+
+  # GitHub's plan-gated 403 on the rules read is the same verified-empty
+  # answer: a repository whose plan cannot expose branch rules has none.
+  out=$(FM_TEST_RULES_ERROR='gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)' \
+    run_state) || fail "plan-gated fixture was refused"
+  [ -z "$out" ] || fail "a plan that cannot expose branch rules must verify as requiring nothing, got: $out"
+  pass "a verified-empty required set falls back to reported checks and stays silent when they pass"
+}
+
+test_required_set_read_failures_are_unconfirmed() {
+  local out
+  out=$(FM_TEST_RULES_ERROR='gh: HTTP 500: Server Error' run_state) \
+    || fail "unreadable-rules fixture was refused"
+  assert_contains "$out" 'CHECKS: the branch rules for base branch main could not be read; readiness unconfirmed' \
+    "an unreadable rules read must stay unconfirmed, not pass as verified-empty"
+
+  out=$(FM_TEST_BRANCH_ERROR='gh: HTTP 500: Server Error' run_state) \
+    || fail "unreadable-branch fixture was refused"
+  assert_contains "$out" 'CHECKS: the branch protection summary for base branch main could not be read; readiness unconfirmed' \
+    "an unreadable protection summary must stay unconfirmed"
+  pass "a required set that cannot be read is unconfirmed, not assumed empty"
+}
+
+test_missing_required_check_is_named_when_others_report() {
+  local out
+  out=$(FM_TEST_RULES='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"},{"context":"deploy"}]}}]' \
+    FM_TEST_ROLLUP='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]' \
+    FM_TEST_REQUIRED_CHECKS='[{"name":"ci","state":"SUCCESS","bucket":"pass","workflow":"ci"}]' \
+    run_state) || fail "partial-missing fixture was refused"
+  [ "$out" = 'REQUIRED CHECK: deploy (not reported)' ] \
+    || fail "a required check absent from the rollup must be named even when others reported, got: $out"
+  pass "a configured required check missing from the rollup is named"
+}
+
+test_app_bound_required_check_needs_its_producer() {
+  local out bound_rule rollup
+  bound_rule='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci","integration_id":42}]}}]'
+  rollup='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]'
+
+  out=$(FM_TEST_RULES=$bound_rule FM_TEST_ROLLUP=$rollup \
+    FM_TEST_REQUIRED_CHECKS='[{"name":"ci","state":"SUCCESS","bucket":"pass","workflow":"ci"}]' \
+    FM_TEST_RUNS="{\"check_runs\":[{\"name\":\"ci\",\"app\":{\"id\":42},\"head_sha\":\"$HEAD\"}]}" \
+    run_state) || fail "matching-producer fixture was refused"
+  [ -z "$out" ] || fail "an app-bound requirement satisfied by that app's run must be silent, got: $out"
+
+  out=$(FM_TEST_RULES=$bound_rule FM_TEST_ROLLUP=$rollup \
+    FM_TEST_REQUIRED_CHECKS='[{"name":"ci","state":"SUCCESS","bucket":"pass","workflow":"ci"}]' \
+    FM_TEST_RUNS="{\"check_runs\":[{\"name\":\"ci\",\"app\":{\"id\":7},\"head_sha\":\"$HEAD\"}]}" \
+    run_state) || fail "foreign-producer fixture was refused"
+  [ "$out" = 'REQUIRED CHECK: ci (not reported)' ] \
+    || fail "a same-named run from another app must not satisfy an app-bound requirement, got: $out"
+
+  out=$(FM_TEST_RULES=$bound_rule FM_TEST_ROLLUP=$rollup \
+    FM_TEST_REQUIRED_CHECKS='[{"name":"ci","state":"SUCCESS","bucket":"pass","workflow":"ci"}]' \
+    FM_TEST_RUNS_ERROR='gh: HTTP 500: Server Error' \
+    run_state) || fail "unreadable-producers fixture was refused"
+  assert_contains "$out" "CHECKS: required check producers at head $HEAD could not be read; readiness unconfirmed" \
+    "an unreadable producer read must stay unconfirmed"
+  pass "an app-bound requirement is satisfied only by a run from that app at this head"
 }
 
 test_no_reported_checks_is_unverified() {
@@ -239,23 +360,18 @@ test_no_reported_checks_is_unverified() {
 
 # A stacked pull request can target an unprotected branch, so gh's required
 # view can report nothing while a check on this head has already failed.
-UNPROTECTED_BASE="no required checks reported on the 'fm/fixture' branch"
-
 test_failing_reported_check_is_shown_when_nothing_is_required() {
-  local out expected
-  out=$(FM_TEST_CHECKS_ERROR=$UNPROTECTED_BASE \
-    FM_TEST_REPORTED_CHECKS='[{"name":"backend","state":"FAILURE","bucket":"fail","workflow":"ci"},{"name":"lint","state":"SUCCESS","bucket":"pass","workflow":"ci"}]' \
+  local out
+  out=$(FM_TEST_REPORTED_CHECKS='[{"name":"backend","state":"FAILURE","bucket":"fail","workflow":"ci"},{"name":"lint","state":"SUCCESS","bucket":"pass","workflow":"ci"}]' \
     run_state) || fail "stacked failing fixture was refused"
-  expected=$(printf 'CHECKS: no required check has reported; readiness unconfirmed\nREPORTED CHECK: backend (FAILURE)')
-  [ "$out" = "$expected" ] \
+  [ "$out" = 'REPORTED CHECK: backend (FAILURE)' ] \
     || fail "a failure on a head whose base requires nothing must still be shown, labelled as reported rather than required, got: $out"
   pass "a failing reported check is shown when the base has no required checks"
 }
 
 test_pending_reported_check_is_shown_when_nothing_is_required() {
   local out status
-  out=$(FM_TEST_CHECKS_ERROR=$UNPROTECTED_BASE \
-    FM_TEST_REPORTED_CHECKS='[{"name":"backend","state":"IN_PROGRESS","bucket":"pending","workflow":"ci"},{"name":"optional","state":"SKIPPED","bucket":"skipping","workflow":"ci"}]' \
+  out=$(FM_TEST_REPORTED_CHECKS='[{"name":"backend","state":"IN_PROGRESS","bucket":"pending","workflow":"ci"},{"name":"optional","state":"SKIPPED","bucket":"skipping","workflow":"ci"}]' \
     run_state) || fail "stacked pending fixture was refused"
   assert_contains "$out" 'REPORTED CHECK: backend (IN_PROGRESS)' \
     "a check still running on a head whose base requires nothing must be shown"
@@ -263,7 +379,7 @@ test_pending_reported_check_is_shown_when_nothing_is_required() {
     "a skipped reported check is not worth a line"
 
   status=0
-  FM_TEST_CHECKS_ERROR=$UNPROTECTED_BASE FM_TEST_REPORTED_CHECKS_ERROR='HTTP 502: Bad Gateway' \
+  FM_TEST_REPORTED_CHECKS_ERROR='HTTP 502: Bad Gateway' \
     run_state >/dev/null 2>&1 || status=$?
   [ "$status" -ne 0 ] || fail "a failed read of the reported checks must refuse, not pass as unconfirmed"
   pass "a pending reported check is shown when the base has no required checks, and a failed fallback read refuses"
@@ -271,7 +387,9 @@ test_pending_reported_check_is_shown_when_nothing_is_required() {
 
 test_protected_base_reports_only_required_checks() {
   local out
-  out=$(FM_TEST_REQUIRED_CHECKS='[{"name":"CI Status","state":"FAILURE","bucket":"fail","workflow":"ci"}]' \
+  out=$(FM_TEST_RULES='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"CI Status"}]}}]' \
+    FM_TEST_ROLLUP='[{"__typename":"CheckRun","name":"CI Status","status":"COMPLETED","conclusion":"FAILURE"}]' \
+    FM_TEST_REQUIRED_CHECKS='[{"name":"CI Status","state":"FAILURE","bucket":"fail","workflow":"ci"}]' \
     FM_TEST_REPORTED_CHECKS_ERROR='HTTP 502: Bad Gateway' \
     run_state) || fail "protected-base fixture was refused"
   [ "$out" = 'REQUIRED CHECK: CI Status (FAILURE)' ] \
@@ -284,8 +402,10 @@ test_help_states_what_silence_means_and_what_is_out_of_scope() {
   out=$("$SCRIPT" --help) || fail "help was refused"
   assert_contains "$out" 'it does not mean the pull request is ready to merge' \
     "help must not let empty output read as a verdict that the pull request can merge"
-  assert_contains "$out" 'is absent from what this command reads' \
-    "help must name the limit: a required context that never reported is absent from what is read"
+  assert_contains "$out" 'REQUIRED CHECK: <context> (not reported)' \
+    "help must name how a configured-but-unreported required check is printed"
+  assert_contains "$out" 'unconfirmed rather than assumed empty' \
+    "help must state that an unreadable required set is unconfirmed"
   assert_contains "$out" "Unresolved bot inline threads are printed with their comments for triage" \
     "help must name the bot-thread read"
   assert_contains "$out" 'labelled REPORTED rather than' \
@@ -337,7 +457,12 @@ test_changes_requested_decision_is_never_silent
 test_authors_own_changes_requested_review_is_not_a_blocker
 test_pending_approval_is_not_a_blocker
 test_required_failure_is_a_blocker
-test_unreported_required_checks_are_unconfirmed
+test_unreported_required_checks_are_named
+test_reported_failure_stays_visible_behind_unreported_required
+test_verified_empty_required_set_reads_reported_checks
+test_required_set_read_failures_are_unconfirmed
+test_missing_required_check_is_named_when_others_report
+test_app_bound_required_check_needs_its_producer
 test_no_reported_checks_is_unverified
 test_failing_reported_check_is_shown_when_nothing_is_required
 test_pending_reported_check_is_shown_when_nothing_is_required
