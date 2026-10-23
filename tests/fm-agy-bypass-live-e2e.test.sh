@@ -145,7 +145,11 @@ write_policy 60
 GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$CASE_STATE" "$CASE_ID") || fail 'could not arm worker state'
 "$ROOT/bin/fm-agy-hook.sh" install-worker "$CASE_STATE" "$CASE_ID" "$GEN" "$CASE_WS" "$CASE_POLICY" \
   || fail 'could not install the bypass worker hooks'
-OUTSIDE="$LAB/deny-outside"
+# /tmp and $TMPDIR scratch files are permitted write roots, so the outside
+# targets live in a separate reserved /tmp/fm-* namespace this test owns.
+OUTSIDE_LAB=$(TMPDIR=/tmp fm_test_tmproot fm-agy-outside) || fail 'could not create the outside fixture'
+fm_test_require_tmproot "$OUTSIDE_LAB"
+OUTSIDE="$OUTSIDE_LAB/shell"
 mkdir -p "$OUTSIDE" || fail 'could not create the outside canary directory'
 
 # The reason must reach the model: a verbatim quote in the reply is only
@@ -185,12 +189,10 @@ jq -es --arg id "$CASE_ID" --arg target "$CANARY" '
   || fail "the abstain run left no armed heartbeat or approval line: $(cat "$CASE_LOG" 2>/dev/null)"
 pass "agy $AGY_VERSION: an abstained task-local file op runs unchanged and the armed heartbeat logged"
 
-# A native writer must reach the same hard root check as a shell write.
-# This marked fixture occupies a different reserved /tmp/fm-* namespace;
-# it is owned by this test, but outside this case's permitted write roots.
+# A native writer must reach the same hard root check as a shell write, in the
+# same reserved outside fixture.
 mkcase native-outside
 write_policy 60
-OUTSIDE_LAB=$(TMPDIR=/tmp fm_test_tmproot fm-agy-native-outside)
 NATIVE_OUTSIDE="$OUTSIDE_LAB/forbidden.txt"
 GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$CASE_STATE" "$CASE_ID") || fail 'could not arm native write fixture'
 "$ROOT/bin/fm-agy-hook.sh" install-worker "$CASE_STATE" "$CASE_ID" "$GEN" "$CASE_WS" "$CASE_POLICY" \
