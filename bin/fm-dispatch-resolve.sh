@@ -309,7 +309,11 @@ if [ -z "$LANE" ]; then
   esac
   if [ -z "$DISPATCH_API_KEY_PRIVATE" ]; then
     HISTORY_STATUS=off HISTORY_REASON='API key absent'
-    echo "dispatch-resolve: off (selected API key absent; implicit fallback requires TYPESAFE_API_KEY in the environment or home .env, or OPENROUTER_API_KEY in the home .env)" >&2
+    if [ "$DISPATCH_PROVIDER" = openrouter ]; then
+      echo "dispatch-resolve: off (OPENROUTER_API_KEY absent from the environment and home .env)" >&2
+    else
+      echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback)" >&2
+    fi
     exit 0
   fi
 fi
