@@ -670,10 +670,9 @@ ok - agy 1.4.6: a bypass session whose hook never logs leaves no armed line for 
 agy compatibility: all focused checks completed; private executable-bound receipt published
 ```
 
-The cold admission took about 119 seconds; an unchanged second run printed `agy compatibility: reusing matching executable/model receipt` in under one second.
-A production `fm-spawn.sh` ship with `--mode local-only --yolo off --harness agy --model gemini-3.8-flash-low --backend herdr` in a generated named lab session then reused that receipt and launched behind the pane-side identity assertion.
-The worker completed native `read_file`, `write_file`, and `edit_file` calls and a `run_command` approved by the agy judge, all bound to its startup generation, then acknowledged a durable steer and passed `fm-control.sh` interrupt and exit.
-Only worktree acquisition came from a fixture, interrupt cancellation remained unconfirmed, and the lab helper verified the default session was unchanged after teardown.
+An unchanged repeat admission printed `agy compatibility: reusing matching executable/model receipt` without rerunning any guard.
+A synthetic local-only agy ship through the production `fm-spawn.sh` path reused that receipt behind the pane-side identity assertion and exercised native `read_file`, `write_file`, and `edit_file`, a judge-approved `run_command`, durable steering, interrupt, and exit.
+Only worktree acquisition came from a fixture, and interrupt cancellation remained unconfirmed.
 `tests/fm-agy-admission.test.sh` pins the portable receipt and admission behavior.
 A receipt covers finite fixtures only; it does not prove arbitrary commands, untested tool shapes, or unchanged server-side model behavior.
 
