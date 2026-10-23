@@ -56,6 +56,7 @@ trap relaunch_cleanup EXIT
 make_tmux_stub() {  # <dir>
   local fb="$1/fakebin"
   mkdir -p "$fb"
+  ln -s "$ROOT/tests/opencode-model-fixture.mjs" "$fb/opencode-model-fixture.mjs"
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -83,6 +84,10 @@ case "${1:-}" in
         ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
       esac
       printf '%s\n' "$payload" >> "$D/literal"
+      case "$payload" in
+        *'OPENCODE_CONFIG_CONTENT='*|*'Read the brief at'*)
+          node "$(dirname "$0")/opencode-model-fixture.mjs" "$D/oc-model-launch" "$payload" || exit 1 ;;
+      esac
       if [ "${FM_FAKE_OPENCODE_POST_ENTER_FAILURE:-0}" = 1 ]; then
         case "$payload" in *'Read the brief at'*) : > "$D/opencode-brief-typed" ;; esac
       fi
@@ -1298,7 +1303,7 @@ test_opencode_late_backlog_failure_confirms_the_running_replacement() {
 
 test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
   local dir id out rc failure gen current expected
-  for failure in readiness submission; do
+  for failure in readiness submission model missing-plugin; do
     id="oc-restart-fail-$failure"
     dir=$(new_case "$id" "$id")
     add_ship_task "$dir" "$id" opencode
@@ -1312,6 +1317,8 @@ test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
     printf 'preserved\n' > "$dir/wt/progress.txt"
     out=$(FM_FAKE_OPENCODE_PENDING="$([ "$failure" != readiness ] || printf 1)" \
       FM_FAKE_OPENCODE_SEND_FAIL="$([ "$failure" != submission ] || printf 1)" \
+      FM_FAKE_OPENCODE_ACTUAL_MODEL="$([ "$failure" != model ] || printf missing)" \
+      FM_FAKE_OPENCODE_PLUGIN_MISSING="$([ "$failure" != missing-plugin ] || printf 1)" \
       FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
       run_spawn "$dir" "$id" --relaunch); rc=$?
     expect_code 1 "$rc" "OpenCode failed restart must fail: $out"
@@ -1326,7 +1333,7 @@ test_opencode_failed_relaunch_retains_pane_record_work_and_diagnostics() {
     current=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
       HOME="$dir/user-home" "$ROOT/bin/fm-crew-state.sh" "$id")
     expected=failed
-    [ "$failure" != submission ] || expected=unknown
+    case "$failure" in submission|model) expected=unknown ;; esac
     assert_contains "$current" "state: $expected" "failed restart reconciled incorrectly: $current"
     gen=$(cat "$dir/home/state/$id.busy-gen")
     [ -f "/tmp/fm-$id/opencode-plugin-$gen/index.mjs" ] || fail "retained agent lost plugin wiring"

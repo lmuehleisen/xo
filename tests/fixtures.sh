@@ -111,6 +111,7 @@ fm_test_fake_gh_axi() {
 # FM_FAKE_TMUX_PANE_COMMAND answers #{pane_current_command}.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
+  ln -s "$ROOT/tests/opencode-model-fixture.mjs" "$fakebin/opencode-model-fixture.mjs"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -195,6 +196,17 @@ case "${1:-}" in
   has-session|new-session|set-window-option) exit 0 ;;
 
   send-keys)
+    for arg in "$@"; do
+      case "$arg" in
+        ". '"*"'")
+          staged=${arg#". '"}; staged=${staged%"'"}
+          if [ -f "$staged" ] && grep -q 'OPENCODE_CONFIG_CONTENT=' "$staged"; then
+            node "$(dirname "$0")/opencode-model-fixture.mjs" "$(dirname "$0")/.oc-model-launch" "$(cat "$staged")" || exit 1
+          fi ;;
+        *'Read the brief at'*)
+          node "$(dirname "$0")/opencode-model-fixture.mjs" "$(dirname "$0")/.oc-model-launch" "$arg" || exit 1 ;;
+      esac
+    done
     if [ -n "${FM_FAKE_TMUX_BRIEF_STATE:-}" ]; then
       for arg in "$@"; do
         case "$arg" in *'Read the brief at'*) : > "$FM_FAKE_TMUX_BRIEF_STATE" ;; esac

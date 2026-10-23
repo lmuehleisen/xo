@@ -259,7 +259,8 @@ let finished;
 const done = new Promise((resolve) => { finished = resolve; });
 const cleanup = await mod.default.setup({
   location: { directory: "/tmp" },
-  session: { prompt: async () => {} },
+  model: { list: async () => { throw new Error("catalog unavailable"); } },
+  session: { prompt: async () => {}, hook: async () => {} },
   event: { subscribe: async function* () {
     try { for (const arg of process.argv.slice(2)) yield JSON.parse(arg); }
     finally { finished(); }
