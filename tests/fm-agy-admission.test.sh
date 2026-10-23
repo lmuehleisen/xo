@@ -115,7 +115,7 @@ if python3 "$CODE/bin/fm-agy-admission.py" assert "$RECEIPT" "$BINARY" fixture-m
 if admit ensure ''; then fail 'mutable implicit model was certified'; fi
 pass 'agy admission: model, effort and judge contexts are independently bound'
 
-for version in 1.4.4 1.4.99; do
+for version in 1.4.4 1.4.6 1.4.99; do
   new_case "eligible-$version" "$version"
   admit >/dev/null || fail "$version candidate was rejected before verification"
   [ "$(attempts)" = 3 ] || fail "$version was admitted without behavioral verification"
