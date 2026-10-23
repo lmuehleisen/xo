@@ -906,4 +906,20 @@ if call_choose --snapshot "$LAB/alias.toon" --candidate codex:default >/dev/null
 fi
 ok "schema-six TOON lane uncertainty requires the agent-owned JSON fallback"
 
+# The producer appends pressure without moving any existing quota column.
+cat > "$LAB/pressure.toon" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt,spendPressure}:
+  claude,all_models,80,1.2,through_reset,established,weekly,"2030-01-03T00:00:00Z",0.6
+exhaustion[0]:
+attention[0]:
+TOON
+out=$(call_choose --snapshot "$LAB/pressure.toon" --candidate claude:default)
+[ "$out" = "claude default" ] || fail "additive pressure TOON was refused: $out"
+sed 's/,0.6$/,unknown/' "$LAB/pressure.toon" > "$LAB/pressure-unknown.toon"
+out=$(call_choose --snapshot "$LAB/pressure-unknown.toon" --candidate claude:default)
+[ "$out" = "claude default" ] || fail "eligibility helper incorrectly used pressure as a gate: $out"
+ok "additive pressure column leaves the eligibility-only helper unchanged"
+
 printf '# all fm-quota-choose tests passed\n'

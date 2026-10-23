@@ -379,6 +379,39 @@ assert_not_contains "$body" 'spendPriority' "quota never leaves the machine"
 assert_not_contains "$body" 'cursor-grok' "use profiles never leave the machine"
 pass "clear: one rule Choice request, key on the fd header only, spendPriority argmax over every candidate"
 
+# --- additive steady-rate score: one metric for the complete snapshot --------
+write_quota "$QUOTA" 0.7597
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0.1 |
+    (.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models") | .selection.spendPressure) = 0.8 |
+    (.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0.3' "$QUOTA" > "$TMP_ROOT/pressure.json"
+cp "$TMP_ROOT/pressure.json" "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "additive pressure is rankable"
+assert_contains "$out" '  spend_metric: spendPressure' "the snapshot metric is disclosed"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "steady pressure reverses the legacy Cursor winner"
+assert_contains "$out" 'remaining=79%  spendPressure=0.8' "candidate evidence labels the selected metric"
+
+jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[].selection) |= (del(.spendPressure) | .spendPriority = 100)' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "a missing pressure never falls back to a provider legacy score"
+assert_contains "$out" 'spendPressure missing, non-numeric, or selection not known at all_models' "mixed-snapshot missing scores stay unranked"
+
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = "unknown"' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: escalate' "unknown pressure never falls back to legacy scores"
+assert_contains "$out" '  reason: no rankable eligible candidate' "unknown pressure is not zero"
+
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.usableRunwaySeconds) = 30' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "pressure cannot override a short completion runway"
+assert_contains "$out" 'runway 30s below completion horizon 3600s' "the unchanged runway veto is disclosed"
+pass "additive pressure: consistent snapshot metric, unknown handling, and runway veto"
+write_quota "$QUOTA" 0.7597
+
 # --- never-send list: a match or a bad list withholds the request -------------
 NEVER_SEND="$HOME_DIR/config/dispatch-never-send"
 PRIVATE_BRIEF="$TMP_ROOT/private-brief.md"

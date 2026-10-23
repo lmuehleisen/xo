@@ -77,6 +77,10 @@
 #   --lane <name> resolves that lane rule directly: no Choice request, so no
 #   API key, curl, or never-send check is needed; it still reads the
 #   one quota snapshot.
+#   Prefer additive spendPressure once per snapshot when any scope publishes it;
+#   otherwise use legacy spendPriority. Missing selected scores stay unranked.
+#   Candidate output labels name the selected metric; unmetered policy scores
+#   retain their configured values.
 #
 # Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
 #   exists, every string value of the built request is checked against it
@@ -628,7 +632,7 @@ DIRECT=false
 RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson installed "$INSTALLED" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
-  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
+  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | (quota_selection_metric($q)) as $metric | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
@@ -650,7 +654,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         end
     end;
   def evidence($rows):
-    $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), usableRunwaySeconds: (.runway.usableRunwaySeconds // null), spendPriority: (.selection.spendPriority // null)});
+    $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), usableRunwaySeconds: (.runway.usableRunwaySeconds // null), spendPriority: (.selection[$metric] // null)});
   def evaluate_route($c; $unmetered; $spend_priority):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if ($installed[$c.harness] // false) | not then
@@ -710,13 +714,13 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
           (.runway.status != "projected_exhaustion" or (.runway.usableRunwaySeconds | type) != "number")) then
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true,
          reason: "runway feasibility unknown for completion horizon \($horizon)s"}
-      elif any($rows[]; (quota_selection_known | not)) then
-        ($rows | map(select(quota_selection_known | not)) | first) as $bad |
-        {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "spendPriority missing, non-numeric, or selection not known at \($bad.scope): not rankable"}
+      elif any($rows[]; (quota_selection_known($metric) | not)) then
+        ($rows | map(select(quota_selection_known($metric) | not)) | first) as $bad |
+        {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "\($metric) missing, non-numeric, or selection not known at \($bad.scope): not rankable"}
       else
-        ($rows | min_by(.selection.spendPriority)) as $limiting |
+        ($rows | min_by(.selection[$metric])) as $limiting |
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
-         spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
+         spendPriority: $limiting.selection[$metric], runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
     end;
   def evaluate($c): evaluate_route($c; false; 0);
@@ -798,7 +802,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
          ($ties | map(.live) | min) as $fewest | [$ties[] | select(.live == $fewest)]
        else $ties end) as $final |
       if ($final | length) > 1
-      then {status: "escalate", reason: "genuine spendPriority tie\($where)"}
+      then {status: "escalate", reason: "genuine \($metric) tie\($where)"}
       else {status: "clear", chosen: $final[0]}
         + (if ($ties | length) > 1 then
              {tie_break: "\($final[0].class) has fewest live workers (\($final[0].live)) among spendPriority ties"}
@@ -854,7 +858,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def when_of($c): (if rule_at($c) == null then $none_criterion else rule_at($c).when end | .[0:60]);
   {
     completion_horizon_seconds: $horizon, model: $r.model, latency_ms: $lat, tokens: ($r.usage // null),
-    direct: $direct,
+    direct: $direct, spendMetric: $metric,
     rule: $picked,
     rule_when: when_of($picked),
     confidence: $a.confidence, probabilities: $a.probabilities
@@ -893,7 +897,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     else
       ($elig | max_by(.spendPriority)) as $best |
       ([$elig[] | select(.spendPriority == $best.spendPriority)] | length) as $ties |
-      if $ties > 1 then $ev + {status: "escalate", reason: "genuine spendPriority tie", note: $sel.note, candidates: $cands}
+      if $ties > 1 then $ev + {status: "escalate", reason: "genuine \($metric) tie", note: $sel.note, candidates: $cands}
       else $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $best}
         + (if ($unranked | length) > 0 then
              {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
@@ -906,9 +910,11 @@ TEXT=$(jq -r '
   def flat: tostring | gsub("[\t\r\n]"; " ");
   def show($value): ($value // "-") | flat;
   def shell_arg: flat | @sh;
+  (.spendMetric // "spendPriority") as $metric |
   "dispatch-resolve:",
   "  status: \(.status | flat)",
   "  completion_horizon_seconds: \(.completion_horizon_seconds)",
+  (if $metric == "spendPressure" then "  spend_metric: \($metric)" else empty end),
   (if .direct then empty
    else "  model: \(show(.model))   latency_ms: \(show(.latency_ms))   tokens: \(show(.tokens.input_tokens))/\(show(.tokens.output_tokens))" end),
   (if .direct then "  rule: \(.rule | flat) (\(.rule_when | flat))   selected: by --lane"
@@ -927,8 +933,8 @@ TEXT=$(jq -r '
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
       + (if .class then "  class=\(.class | flat) family=\(.family | flat)" + (if .experiment then " experiment" else "" end) else "" end)
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
-      + (if .unmetered then "  quota=unmetered (declared)  spendPriority=\(show(.spendPriority))  runway=unmetered"
-         elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
+      + (if .unmetered then "  quota=unmetered (declared)  \($metric)=\(show(.spendPriority))  runway=unmetered"
+         elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  \($metric)=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
       + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)
