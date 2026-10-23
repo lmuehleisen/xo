@@ -12,7 +12,7 @@ metadata:
 This skill is the single owner of the completion-aware profile-array selection procedure.
 `AGENTS.md` section 4 owns the always-loaded intake boundary, load trigger, malformed-config refusal, every-candidate accounting, and strongest-reasoning/tie safety rules.
 `harness-adapters` owns harness verification, model/provider discovery, and effort fallback.
-`quota-axi` remains data-only: it publishes `spendPriority` as a comparable scalar and never recommends, selects, ranks, or infers a route.
+`quota-axi` remains data-only: it publishes comparable selection scalars and never recommends, selects, ranks, or infers a route.
 Do not add a daemon, opaque composite score, routing wrapper, hard-coded model-specific policy, or producer-side route recommendation.
 The [worker helper](../../../bin/fm-quota-choose.sh) and [typed resolver](../../../docs/configuration.md#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model) own their deterministic mapping boundaries.
 
@@ -38,17 +38,18 @@ It never removes this skill's authority, and its `ambiguous`, `escalate`, and `e
 Use `bin/fm-quota-read.sh` for every quota or auth read; it applies the [home provider scope](../../../docs/configuration.md#quota-provider-scope-configquota-providers) and refuses malformed configuration.
 
 Start each intake by running `bin/fm-quota-read.sh` once with no `--json`, and reuse that TOON for every candidate.
-Post-consolidation quota-axi (the floor owned by `bin/fm-quota-axi-lib.sh`) puts `spendPriority` in the default `quota[]` block beside `effectivePercentRemaining`, `runway`, `confidence`, `limitedBy`, and `resetsAt`.
-Sparse `exhaustion[]` carries finite-runway seconds only for `projected_exhaustion` and `exhausted_now`.
-Sparse `attention[]` names auth, stale, and unmeasurable facts.
-`spendPriority` is THE quota-perspective ranker.
-It already computes the economics that older instructions reconstructed by hand from headroom, pace, reserve, and window-id lists; do not recompute those.
-Do not read `--json` on the normal path, and do not reach for `--full` to rebuild that economics.
+The default `quota[]` block carries `spendPriority` beside `effectivePercentRemaining`, `runway`, `confidence`, `limitedBy`, and `resetsAt`; newer builds append `spendPressure`.
+Sparse `exhaustion[]` carries finite-runway seconds, and sparse `attention[]` names auth, stale, and unmeasurable facts.
+Choose the spend metric once for the entire intake snapshot: when TOON has a `spendPressure` column, or any JSON scope's `selection` has that property, use `spendPressure` for every candidate and bound.
+Only an older snapshot with no such column or property uses legacy `spendPriority` throughout.
+A missing, unknown, or invalid selected score stays unranked; never fall back to another formula for one provider or scope, and retain the selected metric if the permitted JSON fallback is needed.
+The selected metric is the only quota-perspective ranker after the three gates below.
+Do not reconstruct it from headroom, reserve, pace, or window lists.
 
 After reading the TOON, fall back to one `bin/fm-quota-read.sh --json` call only when that TOON is genuinely ambiguous for the decision, or when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`.
 Ambiguous includes a schema 6 account lane whose membership cannot be proved from TOON, which omits `accountKeys`, even when a `default` row is present.
 Match that lane with the permitted JSON fallback before using any default-account evidence.
-Ambiguous also means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, a real tie still needs extra evidence, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
+Ambiguous also means a candidate's selected score is the literal `unknown` or unmeasurable, a real tie still needs extra evidence, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
 The fallback therefore has an explicit TOON-then-JSON call sequence; reuse its JSON result and do not take any further quota snapshots.
 Below-floor is rare: bootstrap enforces `FM_QUOTA_AXI_MIN` and normally reports `OUTDATED` before dispatch; if an intake somehow reaches an older build whose TOON lacks `spendPriority`, use the defensive `--json` fallback rather than treating the missing scalar as healthy.
 `--json` is a defensive belt, not a habit; never reach for it because it feels more complete.
@@ -56,10 +57,10 @@ Read `bin/fm-quota-read.sh auth --json` only when a candidate's credential surfa
 
 For each candidate, preserve explicit `harness`, `model`, and `provider`; `harness-adapters` owns identity, and model/provider never infer harness.
 
-## Three gates, then spendPriority
+## Three gates, then the selected score
 
 Apply the three cheap orthogonal gates first.
-`spendPriority` ranks only among candidates that pass all three.
+The selected score ranks only among candidates that pass all three.
 It cannot override a hard-gate failure, and it is never hidden inside a new composite score.
 
 ### 1. Eligibility
@@ -103,30 +104,29 @@ Malformed configuration is an actionable error, not a candidate to rank around.
 ### 2. Reasoning-class fit
 
 Keep only candidates that meet the required reasoning class for this task (a simple bug fix versus very-difficult design).
-Never use `spendPriority` or remaining quota to silently replace that class.
+Never use the selected score or remaining quota to silently replace that class.
 When every remaining candidate is tight, dispatch inside the strongest-reasoning class if one of those candidates can proceed, or stop and report that the strongest-class choice cannot proceed rather than downgrading it to spend or conserve quota.
 
 ### 3. Runway feasibility floor
 
-Known runway that will not last until the inspectable likely-completion horizon fails this gate, even when that candidate has the highest `spendPriority`.
+Known runway that will not last until the inspectable likely-completion horizon fails this gate, even when that candidate has the highest selected score.
 Read `runway` from the `quota[]` row: `through_reset` passes this generic feasibility floor because the window reaches its refill without exhausting; never compare its `resetsAt` with the completion horizon as though reset were an exhaustion deadline.
 `exhausted_now` is zero, and `projected_exhaustion` uses the matching `exhaustion[]` row's `usableRunwaySeconds`.
-A high `spendPriority` on a nearly empty window that will exhaust soon must not route into a mid-task stall.
+A high selected score on a nearly empty window that will exhaust soon must not route into a mid-task stall.
 Unknown or unmeasurable runway stays eligible with disclosed uncertainty and is never assumed to pass.
 Do not invent a generic percentage floor, and honor an explicit captain floor for a candidate when one exists.
 
-## Rank by spendPriority
+## Rank by the selected score
 
-Among candidates that pass all three gates, pick the highest known `spendPriority`.
-A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
-Rank only from comparable known scalars with `selection.status == known` and a finite value in [-100,100].
+Among candidates that pass all three gates, pick the highest known value of the snapshot's selected metric.
+For `spendPressure`, positive means behind a steady spending schedule, zero means on schedule or offsetting window pressures, and negative means ahead.
+Legacy `spendPriority` retains its historical-burn meaning.
+Rank only finite values in [-100,100] with `selection.status == known`.
 Contradictory stale/auth-required state with claimed known headroom is invalid evidence.
-Never treat absent, `unknown`, or unmeasurable `spendPriority` as zero or as healthy; `0` means exact utilization, a different claim from unknown.
-An unknown `spendPriority` keeps the candidate eligible with disclosed uncertainty.
-Prefer known viable evidence when otherwise comparable.
-After the permitted TOON-to-JSON fallback, escalate to Firstmate instead of routing if no candidate can be ranked or runway uncertainty prevents proving the feasibility floor for any candidate that could be selected.
-Never resolve that terminal uncertainty by treating unknown as healthy or by choosing arbitrarily.
-Show the scalar or the literal `unknown` in the rationale; do not hide it in a score.
+Never treat absent, `unknown`, or invalid selected scores as zero or healthy.
+Such candidates remain eligible with disclosed uncertainty; prefer known viable evidence when otherwise comparable.
+After the permitted TOON-to-JSON fallback, escalate instead of routing if no candidate can be ranked or runway uncertainty prevents proving the feasibility floor for any candidate that could be selected.
+Show the chosen metric name and score or literal `unknown` in the rationale.
 
 When the local [quota planning overrides](../../../docs/configuration.md#quota-planning-overrides-configquota-planningjson) file is present, the typed resolver already applies any active override and prints the planning value as `spendPriority` beside `native_spendPriority`, with a `planning: active` or `planning: inactive` line.
 Rank by the resolver's printed value in that case and name the planning horizon and expiry in the rationale.
@@ -135,13 +135,13 @@ An absent or inactive override means the native scalar above is the whole rankin
 
 Do not compare headroom against runway by hand.
 Do not use pace or signed reserve as a later tie-break layer.
-Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what `spendPriority` already computed.
+Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what the selected score already computed.
 
 Genuine ties: stop and report every tied candidate for captain choice.
 Do not select by array order, harness name, or another arbitrary identity ordering.
 Report duplicate concrete profiles as a configuration error.
 
-Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, `spendPriority`, and runway-versus-horizon result.
+Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, the selected metric and score, and runway-versus-horizon result.
 A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
 Never conclude with an unexplained "best quota" label.
 

@@ -74,10 +74,16 @@ FM_QUOTA_ROW_JQ='
   def quota_hard_bound($provider):
     ((($provider == "kiro" and .scope == "included:credit_monthly") or
       ($provider == "devin" and .scope == "included_quota"))) | not;
-  def quota_selection_known:
+  # Pick one formula for the entire snapshot. Missing new scores on a mixed
+  # snapshot stay unranked; never fall back provider by provider.
+  def quota_selection_metric($snapshot):
+    if any($snapshot.providers[]?.quotaSemantics.effectiveAvailability[]?;
+      (.selection // {}) | has("spendPressure"))
+    then "spendPressure" else "spendPriority" end;
+  def quota_selection_known($metric):
     .selection.status == "known" and
-    (.selection.spendPriority | type) == "number" and
-    .selection.spendPriority >= -100 and .selection.spendPriority <= 100;
+    (.selection[$metric] | type) == "number" and
+    .selection[$metric] >= -100 and .selection[$metric] <= 100;
 
 '
 
@@ -153,7 +159,8 @@ fm_quota_json_valid() {
       (.state.status as $state_status |
         if .state.stale == true or (["stale", "auth_required"] | index($state_status)) != null then
           all(.quotaSemantics.effectiveAvailability[]; .status == "unknown" and
-            ((.selection.spendPriority | type) != "number"))
+            ((.selection.spendPriority | type) != "number") and
+            ((.selection.spendPressure | type) != "number"))
         else true end) and
       (.quotaSemantics.status as $semantics_status |
         (["known", "partial", "unknown"] | index($semantics_status)) != null and
@@ -179,6 +186,9 @@ fm_quota_json_valid() {
           ((.selection.spendPriority | type) != "number" or
             (.selection.status == "known" and
              .selection.spendPriority >= -100 and .selection.spendPriority <= 100)) and
+          ((.selection.spendPressure | type) != "number" or
+            (.selection.status == "known" and
+             .selection.spendPressure >= -100 and .selection.spendPressure <= 100)) and
           ((.status == "known" and
             (.runway.status as $runway_status |
             ((.effectivePercentRemaining | type) == "number" and
