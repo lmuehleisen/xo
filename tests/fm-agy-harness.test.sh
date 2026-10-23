@@ -1172,6 +1172,11 @@ EOF
     || fail "an automatic agy policy-layer spawn failed: $out"
   grep -Fq -- '--dangerously-skip-permissions' "$home/launch.log" \
     || fail "the bypass launch must carry --dangerously-skip-permissions: $(cat "$home/launch.log")"
+  # The pane re-checks the admitted executable before agy receives the brief.
+  case "$(cat "$home/launch.log")" in
+    *fm-agy-admission.py*' assert '*'&& '*--dangerously-skip-permissions*) ;;
+    *) fail "the bypass launch must gate agy on the pane-side identity assertion: $(cat "$home/launch.log")" ;;
+  esac
   [ -f "$home/state/$id.agy-permission.json" ] \
     || fail "the bypass spawn must write the per-task policy file"
   [ "$(jq -r '[."firstmate-worker" | .. | objects | select(has("command")) | .command] | length' \
