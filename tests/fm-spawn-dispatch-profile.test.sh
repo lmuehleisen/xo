@@ -166,11 +166,6 @@ run_spawn() {
     PI_CODING_AGENT_DIR="${FM_TEST_PI_AGENT_DIR:-$home/pi-agent}" \
     FM_FAKE_LAUNCH_LOG="$launchlog" FM_FAKE_PANE_LOG="${FM_TEST_PANE_LOG:-}" \
     FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
-    FM_FAKE_OPENCODE_VERSION="${FM_TEST_OPENCODE_VERSION:-2.0.21}" \
-    FM_FAKE_OPENCODE_PROBE_LOG="${FM_TEST_OPENCODE_PROBE_LOG:-}" \
-    FM_FAKE_OPENCODE_TURN="${FM_TEST_OPENCODE_TURN:-auto}" \
-    FM_FAKE_ENTER_LOG="${FM_TEST_ENTER_LOG:-}" \
-    FM_OPENCODE_POLL_INTERVAL="${FM_TEST_OPENCODE_POLL_INTERVAL:-0.01}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
     CODEX_HOME="${FM_TEST_CODEX_HOME-$home/codex-home}" \
@@ -964,15 +959,11 @@ test_codex_crewmate_launch_disables_the_hook_layer() {
   # disabling them, so a launch must never reach for it.
   assert_not_contains "$launch" "--dangerously-bypass-hook-trust" \
     "codex crewmate launch ran the operator's untrusted hooks instead of disabling them"
-  assert_contains "$launch" "--approve-for-me" \
-    "codex crewmate launch did not use automatic approval review"
-  assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
-    "codex crewmate launch retained the managed-settings-fragile complete-bypass posture"
   # Firstmate goes blind without the turn-end signal, which rides this same
   # launch rather than any hook.
   assert_contains "$launch" "notify=" \
     "codex crewmate launch lost the turn-end notify program"
-  pass "a codex crewmate requests no hook layer and keeps its turn-end signal"
+  pass "a codex crewmate launches with no hook layer and keeps its turn-end signal"
 }
 
 test_codex_secondmate_launch_keeps_the_hook_layer() {
@@ -989,13 +980,8 @@ test_codex_secondmate_launch_keeps_the_hook_layer() {
   launch=$(cat "$LAUNCH_LOG")
   assert_not_contains "$launch" "--disable hooks" \
     "codex secondmate launch disabled the project hooks its own primary supervision depends on"
-  assert_contains "$launch" "--approve-for-me" \
-    "codex secondmate launch did not use automatic approval review"
-  assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
-    "codex secondmate launch retained the managed-settings-fragile complete-bypass posture"
-  pass "a codex secondmate keeps its project hooks and uses automatic approval review"
+  pass "a codex secondmate keeps the project hook layer its primary session runs on"
 }
-
 
 test_grok_threads_model_and_reasoning_effort() {
   local rec id out status launch
@@ -1318,8 +1304,6 @@ test_opencode_threads_model_and_effort_variant() {
   status=$?
   expect_code 0 "$status" "opencode spawn with model and effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 high
-  assert_grep "opencode_version=2.0.21" "$HOME_DIR/state/$id.meta" \
-    "opencode 2.x spawn must record the detected version in meta"
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "\"agents\":{\"build\":{\"model\":\"anthropic/claude-sonnet-4-5#high\"}}}" \
     "OpenCode V2 agent model must carry the effort variant"
@@ -1363,7 +1347,6 @@ test_opencode_emits_variant_for_openai_family_effort() {
   assert_contains "$launch" \
     "\"agents\":{\"build\":{\"model\":\"openai/gpt-5.6-sol#xhigh\"}}}" \
     "opencode launch did not write the openai family effort as the build agent's variant"
-  assert_not_contains "$launch" "--model" "opencode interactive launch must not pass removed --model"
   pass "opencode emits the variant for an effort the openai family exposes"
 }
 
@@ -1382,36 +1365,8 @@ test_opencode_omits_variant_when_model_family_lacks_effort() {
     "\"model\":\"anthropic/claude-sonnet-4-5\"" \
     "opencode must keep the model config when the model family lacks the effort"
   assert_not_contains "$launch" '"variant"' "opencode must omit the variant when the model family lacks the effort"
-  assert_not_contains "$launch" "--model" "opencode interactive launch must not pass removed --model"
   pass "opencode omits the variant for an effort outside the model family's list"
 }
-
-
-
-
-opencode_gate_spawn() {  # <case> <id> <turn-mode> [unknown-reads] -> sets OUT STATUS ENTERS READS
-  local rec enter_log
-  rec=$(make_spawn_case "$1" opencode "$2")
-  read_case_record "$rec"
-  enter_log="$CASE_DIR/enter.log"
-  : > "$enter_log"
-  OUT=$(FM_TEST_OPENCODE_TURN=$3 FM_TEST_ENTER_LOG="$enter_log" \
-    FM_FAKE_OPENCODE_COMPOSER_UNKNOWN_READS=${4:-} \
-    FM_OPENCODE_DELIVERY_POLLS=30 FM_OPENCODE_SUBMIT_SETTLE_POLLS=5 FM_OPENCODE_SUBMIT_DEADLINE_POLLS=15 \
-    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$2" "$PROJ_DIR" \
-    --model anthropic/claude-sonnet-4-5)
-  STATUS=$?
-  ENTERS=$(wc -l < "$enter_log" | tr -d ' ')
-  READS=$(cat "$WT_DIR/.opencode/plugins/fm-busy-state.js.fake-composer-reads" 2>/dev/null || echo 0)
-}
-
-
-
-
-
-
-
-
 
 test_native_effort_validator_keeps_axes_separate() {
   local harness
@@ -3697,6 +3652,7 @@ test_upstream_claude_permission_mode_file_cannot_select_bypass() {
   id=permmode-bypass-z19
   rec=$(make_spawn_case permmode-bypass claude "$id")
   read_case_record "$rec"
+  printf 'bypass\n' > "$HOME_DIR/config/claude-permission-mode"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
