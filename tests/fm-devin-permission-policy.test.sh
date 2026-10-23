@@ -744,6 +744,8 @@ $ROOT/bin/fm-ensure-agents-md.sh $(jq -r .worktree "$policy")
 $ROOT/bin/fm-captain-hold.sh complete t1 --none
 $ROOT/bin/fm-captain-hold.sh verify t1
 $ROOT/bin/fm-captain-hold.sh hold t1 --reason "waiting on the captain"
+$ROOT/bin/fm-approved-publish.sh run t1
+$ROOT/bin/fm-approved-publish.sh run t1 --approval t1-publish-ok
 $ROOT/bin/fm-lint.sh
 $ROOT/bin/fm-test-run.sh tests/fm-devin-harness.test.sh
 cd $ROOT && bin/fm-captain-hold.sh complete t1 --none 2>&1 | tail -10
@@ -754,6 +756,7 @@ EOF
   # merely sits in the worktree all keep escalating.
   mkdir -p "$(jq -r .worktree "$policy")/bin"
   printf '#!/bin/sh\n' > "$(jq -r .worktree "$policy")/bin/fm-captain-hold.sh"
+  printf '#!/bin/sh\n' > "$(jq -r .worktree "$policy")/bin/fm-approved-publish.sh"
   while IFS= read -r cmd; do
     [ -n "$cmd" ] || continue
     rm -rf "$dir/state/t1.devin-permission-pending"
@@ -765,6 +768,10 @@ $ROOT/bin/fm-captain-hold.sh complete t1 other-task-b7
 $ROOT/bin/fm-captain-hold.sh answer t1 --decision-file /tmp/x
 $ROOT/bin/fm-ensure-agents-md.sh /somewhere/else
 bin/fm-captain-hold.sh complete t1 --none
+$ROOT/bin/fm-approved-publish.sh run other-task-b7
+$ROOT/bin/fm-approved-publish.sh check t1
+$ROOT/bin/fm-approved-publish.sh run t1 --approval \$HOME
+bin/fm-approved-publish.sh run t1
 EOF
   pass "fm-devin-permission-policy: the worker contract's own helpers approve by resolved path, other tasks' ids do not"
 }

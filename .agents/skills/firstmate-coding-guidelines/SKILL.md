@@ -115,7 +115,9 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 This guidance applies only when preparing a contribution to an upstream repository that still requires no-mistakes evidence.
 This fork's own `direct-PR` and `local-only` work runs relevant tests and lint directly and never starts a no-mistakes pipeline.
 Use a `contrib/<name>` branch for an upstream submission; the publisher's generated-body exception is limited to that branch namespace.
-Before the pipeline publishes, add the exact upstream/fork/branch approval row to the isolated publisher's private `no-mistakes-submissions` file, and remove that row after publication or abandonment.
+Package the public steps as the task's publish procedure for [`bin/fm-approved-publish.sh`](../../../bin/fm-approved-publish.sh), whose header owns the step and approval contract: its lift step adds the exact upstream/fork/branch approval row to the isolated publisher's private `no-mistakes-submissions` file, and its restore step removes that row.
+Firstmate asks the captain with the line that `fm-approved-publish.sh approval <task-id>` prints; once that approval is recorded, the worker runs `fm-approved-publish.sh run <task-id>` itself, from the home whose `bin/` its brief's status command names, and the captain running the same command by hand is the fallback.
+Report a refused, stopped, or failed run with its log; never retry it with blocks lifted, answer a finding, or override a refusal.
 A test override also requires the operator to list that submission by hand in the separate private `no-mistakes-test-exceptions` file; remove its approval row after publication or abandonment.
 [`bin/fm-no-mistakes-body.mjs`](../../../bin/fm-no-mistakes-body.mjs) owns row validation, test-exception eligibility, guarded pre-push refreshes, and generated-body normalization.
 An evidence-branch publish-judge refusal is expected and non-fatal; it does not authorize bypassing the contribution branch's publish checks.

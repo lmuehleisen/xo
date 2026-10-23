@@ -167,6 +167,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: fork-only `tests/fm-publish-gate.test.sh`, `tests/fm-publish-judge.test.sh`, and `tests/fm-spawn-identity-pin.test.sh`; the keep-ai-trailers cases in `tests/fm-spawn-dispatch-profile.test.sh`; the publish fail-closed cases in `tests/fm-arm-pretool-check.test.sh`; fork-only `tests/fm-pi-worker-publish-policy-live-e2e.test.sh`.
 - Upstream: has no publish gate, and `config/keep-ai-trailers` removes the per-task hooks entirely.
 
+### approved-publish-runner
+
+- Intent: a worker runs its task's captain-approved publication itself once the approval is recorded, with the captain running it by hand as the fallback; `firstmate-coding-guidelines` "Upstream no-mistakes submissions".
+- Class: intended.
+- Seam: fork-only `bin/fm-approved-publish.sh` and its own-task approval in `bin/fm-command-policy-lib.sh`, plus the `decision` read in `bin/fm-captain-hold.sh`, the per-task allowance in `bin/fm-spawn.sh`, and the approval sentence in the captain-hold-lifecycle skill (shared).
+- Guard: fork-only `tests/fm-approved-publish.test.sh`; the approved-publish allowance case in `tests/fm-busy-adapter-wiring.test.sh`; the approved-publish forms in `tests/fm-devin-permission-policy.test.sh` `test_worker_contract_is_instant_approved`.
+- Upstream: has no approval-checked publish runner; its contribution steps publish through its own required pipeline.
+
 ### devin-and-agy-first-class
 
 - Intent: Devin and agy are routine worker runtimes.

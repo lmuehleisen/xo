@@ -6574,8 +6574,16 @@ BUSY_GEN=
       fi
       printf '{%s%s}\n' "$session_keys" "$hooks_json" >"$STATE_REAL/$ID.claude-settings.json"
     else
+      # The one publish allowance: this task may run its own captain-approved
+      # publication through this home's runner, which checks the recorded
+      # approval itself (bin/fm-approved-publish.sh), without auto mode's
+      # classifier refusing it. The deny keeps a worker on firstmate's own
+      # repository off its worktree copy, whatever a project rule allows for
+      # the relative spelling.
+      j_publish_run=$(json_escape "Bash($FM_ROOT/bin/fm-approved-publish.sh run $ID *)")
+      permissions_json="\"permissions\":{\"allow\":[\"$j_publish_run\"],\"deny\":[\"Bash(bin/fm-approved-publish.sh run *)\",\"Bash(./bin/fm-approved-publish.sh run *)\"]},"
       mkdir -p "$WT/.claude"
-      printf '{%s}\n' "$hooks_json" >"$WT/.claude/settings.local.json"
+      printf '{%s%s}\n' "$permissions_json" "$hooks_json" >"$WT/.claude/settings.local.json"
       exclude_path '.claude/settings.local.json'
     fi
     ;;
