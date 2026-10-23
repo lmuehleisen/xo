@@ -4,6 +4,10 @@
 # shellcheck source=tests/supervision-host-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/supervision-host-helpers.sh"
 
+test_main_only_close_after_handled_turn_restores_inherited_handling
+test_main_only_close_after_handled_turn_delivers_restore_failure
+test_returned_driver_is_caught_attended
+test_returned_driver_is_caught_away
 test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main
 test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn
 test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails

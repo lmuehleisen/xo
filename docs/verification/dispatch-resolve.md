@@ -3,7 +3,7 @@
 Audience: maintainer verification.
 
 This record supports the opt-in `bin/fm-dispatch-resolve.sh` contract owned by [`../configuration.md`](../configuration.md) ("Typed dispatch resolution") and the declared rule and profile fields owned there under "Crew dispatch profiles".
-It records only facts that must be re-established when the Jev model, either transport API, or firstmate's dispatch rules change.
+It records only facts that must be re-established when a decision provider, its API, or firstmate's dispatch rules change.
 Task chronology, the captain's rules, and the briefs themselves stay in the private scout report.
 
 ## The API the tool depends on
@@ -36,6 +36,8 @@ Observed output fields:
   model: typesafe/jev-1.13-20260917   latency_ms: 1000   tokens: 1679/98
   reason: confidence 0.59 below floor 0.6
 ```
+OpenRouter's [Jev 1.13 model catalog entry](https://openrouter.ai/typesafe/jev-1.13) listed `typesafe/jev-1.13` at $0.042 per million input tokens and $0 per million output tokens on 2026-10-12.
+OpenRouter's [Decisions API guide](https://openrouter.ai/blog/insights/what-is-jev/) specifies `POST https://openrouter.ai/api/alpha/decisions` with the same `{model, state, questions}` Choice request and typed Choice answer.
 
 ## Live rule match against real briefs
 
@@ -133,6 +135,8 @@ It proves the request uses the selected fixed endpoint and model, carries only t
 It proves a declared `min_confidence` is checked against the rule's own probability both as the pick and as a runner-up, a picked rule below it falls to the most probable runner-up that clears its floor, is `ambiguous` when none does or two tie, and that a file without declared floors keeps the global 0.6 floor on confidence unchanged.
 It proves the clear, fixed-floor ambiguous with candidate evidence, escalate (approval with candidate evidence, unverifiable rule floor, tie, nothing rankable), known rule-floor fall-through, known and unverifiable profile-floor evidence, explicit-provider and provider-ID enforcement, authoritative Agy and explicit-provider Gemini routing, partial providers, eligible unranked candidates and their clear-result note, concrete quota vetoes and profile-floor shortfalls taking precedence over uncertainty, account-wide quota veto, limiting-bound ranking, schema-6 account-row binding with schema-5 compatibility, missing-curl and quota-axi failures, HTTP 429 and 500, transport failure, malformed usage, zero-mass or malformed probabilities or confidence, malformed or duplicate profile, invalid selector, removed-option rejection, and out-of-range rule ID paths behave as the contract states, with configuration errors exiting 2 before any network call.
 `tests/fm-bootstrap.test.sh` proves bootstrap ignores resolver-only fields without the typed key, validates each malformed shape when the TypeSafe environment key or either home `.env` key activates typed resolution, ignores an environment-only OpenRouter key, and prevents an environment-provided key from reaching child processes.
+It also proves OpenRouter supports explicit provider and model selection, accepts the environment or `.env` key, sends the same Choice request to the Decisions API, preserves clear and ambiguous output, withholds a never-send match, and handles malformed responses and HTTP errors.
+The fake `curl` and `quota-axi` prove that the OpenRouter key stays out of their argv and environments.
 
 ```console
 $ bash tests/fm-dispatch-resolve.test.sh | tail -1
