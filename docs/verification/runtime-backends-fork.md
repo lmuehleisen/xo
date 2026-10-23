@@ -639,15 +639,19 @@ The interrupt receipt remained `cancel=unconfirmed`, preserving the existing sem
 The lab helper verified unchanged default-session state after teardown.
 
 The focused portable harness, permission-policy, composer, send-confirmation, and submit-busy suites and canonical lint passed for the implementation.
-The explicit verified-version set admits 1.4.4 only after the real checks above.
+The historical manual baseline admits 1.4.4 only after the real checks above; patch releases use the executable-bound admission path below.
 Headless primary supervision, compaction refresh, semantic cancellation acknowledgement, and remote secondmate launch remain outside this evidence.
 
 #### Executable-bound patch admission (2026-10-23)
 
-Verified with agy 1.4.6 on macOS Apple silicon (executable SHA-256 `cab004f3c5c6cb7dc8b8712d3bc30431bd4480b17ff38a07eb1865abeffd2f27`) in an isolated Firstmate home, with `gemini-3.8-flash-low` as both worker and judge model.
+Verified with agy 1.4.6 on macOS Apple silicon (executable SHA-256 `cab004f3c5c6cb7dc8b8712d3bc30431bd4480b17ff38a07eb1865abeffd2f27`) in an isolated Firstmate home, with `gemini-3.8-flash-low` as both worker and judge model. The 1.4.6 binary is not added to the historical `verified-versions` baseline: it is an eligible patch candidate that receives support only through its matching executable-bound receipt.
 [`bin/fm-agy-admission.sh`](../../bin/fm-agy-admission.sh) treated 1.4.6 as an eligible patch candidate, ran the complete bypass, observer, and signals guards before any real brief, and published a private receipt bound to that executable, platform, integration and guard bytes, worker model and effort, and judge.
 Each guard records completion only after all of its cases pass with real tool attempts observed.
 The outside-root shell probe targets a separate reserved `/tmp/fm-*` fixture, because `/tmp` and `$TMPDIR` scratch files are permitted write roots.
+
+The official [1.4.6 macOS arm64 release archive](https://github.com/google-antigravity/antigravity-cli/releases/download/1.4.6/agy_cli_mac_arm64.tar.gz) matched its published SHA-256 `8854514fc3f577c8b4271e735a7605562ecd353aae270c323c3ee6876e892296`; the extracted executable matched the installed binary byte-for-byte at SHA-256 `cab004f3c5c6cb7dc8b8712d3bc30431bd4480b17ff38a07eb1865abeffd2f27`. Strict local codesign validation did not validate this binary, so provenance rests on the release digest and byte identity.
+
+The [1.4.6 release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.4.6) add terminal-sandbox protections for Docker, Kubernetes, and netrc credentials, and extend conversation-level permission approvals to subagents. They do not describe a hook-registry or native file-tool schema change. Credential checks used synthetic registry data only.
 
 ```sh
 bin/fm-agy-admission.sh ensure <absolute-agy> gemini-3.8-flash-low '' agy gemini-3.8-flash-low <absolute-agy>
@@ -670,7 +674,16 @@ ok - agy 1.4.6: a bypass session whose hook never logs leaves no armed line for 
 agy compatibility: all focused checks completed; private executable-bound receipt published
 ```
 
-An unchanged repeat admission printed `agy compatibility: reusing matching executable/model receipt` without rerunning any guard.
+An unchanged repeat admission printed `agy compatibility: reusing matching executable/model receipt` without rerunning any guard. The separately bounded primary integration canary also passed against the pinned executable:
+
+```sh
+FM_AGY_PRIMARY_LIVE=1 bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
+```
+
+```text
+# all agy primary live checks passed (agy 1.4.6)
+```
+
 A synthetic local-only agy ship through the production `fm-spawn.sh` path reused that receipt behind the pane-side identity assertion and exercised native `read_file`, `write_file`, and `edit_file`, a judge-approved `run_command`, durable steering, interrupt, and exit.
 Only worktree acquisition came from a fixture, and interrupt cancellation remained unconfirmed.
 `tests/fm-agy-admission.test.sh` pins the portable receipt and admission behavior.
