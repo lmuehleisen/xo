@@ -283,11 +283,12 @@ command_run() {
     refuse "cannot create a temporary directory"
   }
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  mkdir -p "$DATA/$TASK/publish-logs" && LOG=$DATA/$TASK/publish-logs/$stamp-$$.log && : >>"$LOG" || {
+  LOG=$DATA/$TASK/publish-logs/$stamp-$$.log
+  if ! { mkdir -p "$DATA/$TASK/publish-logs" && : >>"$LOG"; }; then
     fm_lock_release "$LOCK"
     rm -rf "$RUN_TMP"
     refuse "cannot create the run log under $DATA/$TASK/publish-logs"
-  }
+  fi
   export FM_PUBLISH_TASK=$TASK FM_PUBLISH_DIR=$PROC_DIR FM_PUBLISH_LOG=$LOG
   trap 'finish $?' EXIT
   trap 'on_signal INT' INT
@@ -302,7 +303,7 @@ command_run() {
   run_step lift || stop 5 "$STOP_WHY"
   run_step publish || stop 6 "$STOP_WHY"
   run_step verify || stop 7 "$STOP_WHY"
-  STAGE=done
+  STAGE='done'
   exit 0
 }
 
