@@ -3,6 +3,7 @@
 # Admission requires an end-of-guard artifact in addition to exit status.
 # A narrowed or skipped guard never reaches agy_live_complete.
 agy_live_context() {
+  # shellcheck disable=SC2034 # read by the sourcing live guards
   AGY_BIN=${FM_AGY_LIVE_BIN:-$(command -v agy 2>/dev/null || true)}
   MODEL=${FM_AGY_LIVE_MODEL:-${FM_AGY_BYPASS_LIVE_MODEL:-gemini-3.8-flash-low}}
   MODEL_FLAGS=(--model "$MODEL")

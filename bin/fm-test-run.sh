@@ -1682,6 +1682,7 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-observer-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-signals-live-e2e.test.sh
+      printf '%s\n' __script__:fm-spawn-prelaunch-rollback.test.sh
       ;;
     bin/fm-agy-lib.sh)
       printf '%s\n' __script__:fm-agy-admission.test.sh
