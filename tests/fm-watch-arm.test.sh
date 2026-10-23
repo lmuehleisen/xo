@@ -1561,16 +1561,44 @@ wait_for_pid_gone() {  # <pid> <polls>
 # already in progress before its next FM_POLL=1 tick. A busy poll may spend
 # longer than ten seconds in subprocesses on a contended CI runner.
 test_watcher_exits_when_its_state_directory_is_removed() {
-  local dir home state fakebin armout
-  dir=$(make_case state-dir-removed)
+  local mode=${1:-natural} dir home state fakebin armout real_touch i
+  dir=$(make_case "state-dir-removed-$mode")
   home="$dir/home"
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
   mkdir -p "$home/data"
+  if [ "$mode" = recovery ]; then
+    # Hold a real command after the loop's existence check and beacon, before
+    # recovery takes its locks. Delete state in that window, without changing
+    # production code or relying on scheduler timing to hit the race.
+    real_touch=$(command -v touch)
+    cat > "$fakebin/touch" <<SH
+#!/usr/bin/env bash
+"$real_touch" "\$@" || exit 1
+if [ "\$*" = "$state/.secondmate-liveness-tick" ]; then
+  "$real_touch" "$dir/in-cycle"
+  for ((i=0; i<400; i++)); do
+    [ -e "$dir/release" ] && exit 0
+    sleep 0.1
+  done
+  exit 1
+fi
+SH
+    chmod +x "$fakebin/touch"
+  fi
   start_owned_watcher "$home" "$state" "$fakebin" "$armout"
+  if [ "$mode" = recovery ]; then
+    i=0
+    while [ "$i" -lt 200 ] && [ ! -e "$dir/in-cycle" ]; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    [ -e "$dir/in-cycle" ] || fail "watcher did not reach the in-cycle deletion barrier"
+  fi
 
   rm -rf "$state"
+  [ "$mode" != recovery ] || touch "$dir/release"
   wait_for_pid_gone "$WATCH_PID" 400 \
     || { kill -TERM "$WATCH_PID" 2>/dev/null; fail "watcher pid $WATCH_PID outlived its deleted state directory"; }
   wait_for_exit "$ARM_PID" 100 >/dev/null 2>&1 || true
@@ -1578,7 +1606,9 @@ test_watcher_exits_when_its_state_directory_is_removed() {
     || fail "watcher did not log the state-gone exit reason: $(cat "$armout")"
   ! grep -q '^signal:\|^check:\|^stale:\|^heartbeat' "$armout" \
     || fail "a state-gone exit was reported as an actionable wake: $(cat "$armout")"
-  pass "watch-arm: a watcher exits when its state directory is removed"
+  ! grep -qF "recovery state could not be consumed safely" "$armout" \
+    || fail "state removal was misreported as a recovery failure: $(cat "$armout")"
+  pass "watch-arm: a watcher exits when its state directory is removed ($mode)"
 }
 
 # The same for a deleted home whose state directory still exists elsewhere: the
@@ -1920,6 +1950,7 @@ test_started_arm_closes_at_its_deadline_while_the_watcher_is_parked
 test_arm_refuses_an_unusable_launch_confirm_window
 test_arm_refuses_a_disposable_validation_checkout
 test_watcher_exits_when_its_state_directory_is_removed
+test_watcher_exits_when_its_state_directory_is_removed recovery
 test_watcher_exits_when_its_home_is_removed
 test_attached_arm_exits_when_its_root_is_removed
 test_reaper_stops_a_tracked_watcher
