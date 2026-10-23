@@ -377,7 +377,7 @@ test_claude_hooks_semantic_lifecycle() {
 }
 
 # The worker's one publish allowance names this home's runner and this task
-# only, and the relative spellings the tracked project rule allows are denied.
+# only, and the relative spellings a project rule could allow are denied.
 test_claude_worker_approved_publish_allowance() {
   local rec id=busy-cl-pub out settings
   rec=$(make_spawn_case claude-publish claude "$id")
