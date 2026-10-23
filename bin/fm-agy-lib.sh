@@ -93,7 +93,8 @@
 # them as arguments: AGY_BYPASS, AGY_BYPASS_POSTURE_SET, AGY_BYPASS_OPT_OUT,
 # AGY_JUDGE_ARG,
 # AGY_JUDGE_SET, AGY_JUDGE_TIER, AGY_JUDGE_MODEL, AGY_JUDGE_BIN, AGY_BIN,
-# ARG3, RELAUNCH_META, HARNESS, KIND, RAW_LAUNCH, RELAUNCH,
+# ARG3, RELAUNCH_META, RELAUNCH_PRIOR_HARNESS, MODEL, MODEL_SET, EFFORT,
+# EFFORT_SET, HARNESS, KIND, RAW_LAUNCH, RELAUNCH,
 # CREW_PERMISSION_MODE, WT, STATE, STATE_REAL, ID, BUSY_GEN, TASK_TMP, BRIEF,
 # FM_ROOT, SCRIPT_DIR, BACKEND, T, W, ZELLIJ_TAB_ID, and
 # SPAWN_FRESH_COMMIT_PENDING, plus shell_quote, status_stamp_line,
@@ -162,6 +163,13 @@ fm_agy_default_posture() {  # <harness> <kind>
 # field, which resolves to this adapter's own tier in fm_agy_bypass_validate.
 fm_agy_relaunch_inherit() {
   [ "$ARG3" = agy ] && [ "$KIND" != secondmate ] || return 0
+  # Retain the exact tested context on a same-adapter restart. A switch from
+  # another harness must select its agy model rather than borrowing that id.
+  if [ "${RELAUNCH_PRIOR_HARNESS:-}" = agy ]; then
+    [ "$MODEL_SET" -eq 1 ] || MODEL=$(fm_meta_get "$RELAUNCH_META" model)
+    [ "$EFFORT_SET" -eq 1 ] || EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
+    [ "$MODEL" != default ] || MODEL=
+  fi
   case "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" in
     on)
       AGY_BYPASS=1

@@ -1625,6 +1625,12 @@ EOF
     || fail "the relaunch's policy file must carry the new generation"
   grep -q '^agy_bypass=on$' "$home/state/$id.meta" \
     || fail "the relaunch must keep the recorded bypass posture"
+  grep -q '^model=gemini-3.8-flash-low$' "$home/state/$id.meta" \
+    || fail 'same-adapter relaunch lost its explicitly tested model context'
+  case "$out" in
+    *'reusing matching executable/model receipt'*) ;;
+    *) fail "unchanged relaunch must reuse its context-bound proof: $out" ;;
+  esac
   # A relaunch resolving onto a different harness drops the posture: no
   # bypass flag on the new launch line, and the agy wiring is retired. The
   # claude replacement changes the fixture's foreground command on Enter;
@@ -1709,7 +1715,7 @@ EOF
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$home/launch.log" PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" --relaunch --harness agy 2>&1) \
+    "$SPAWN" "$id" --relaunch --harness agy --model gemini-3.8-flash-low 2>&1) \
     || fail "moving the task onto agy must apply the default policy layer: $out"
   tail -1 "$home/launch.log" | grep -Fq -- '--dangerously-skip-permissions' \
     || fail "a relaunch from another harness must select agy's policy layer: $(tail -1 "$home/launch.log")"
