@@ -4330,6 +4330,19 @@ test_unreadable_required_set_refuses() {
   expect_code 1 "$RC" "required-plan-gated-classic-absent: a classic required check must still be enforced"
   assert_grep "required check 'validate' has not reported" "$case_dir/stderr" \
     "required-plan-gated-classic-absent: the unreported classic check was not named"
+
+  # A protected branch whose protection enables no required-status-check
+  # section reports null for it: a verified-empty classic set, not an
+  # unreadable summary.
+  case_dir=$(make_case github-required-null-section)
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" "$(check_run ci COMPLETED SUCCESS)"
+  write_github_required "$case_dir"
+  printf '{"name":"main","protected":true,"protection":{"enabled":true,"required_status_checks":null}}\n' \
+    > "$case_dir/github-branch.json"
+  run_required_case "$case_dir" 96
+  expect_code 0 "$RC" "required-null-section: a null required-status-check section must not read as unreadable: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 96 example/repo --squash
   pass "fm-pr-merge refuses when the required checks cannot be read, and tells a plan without rules apart"
 }
 

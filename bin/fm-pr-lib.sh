@@ -1647,7 +1647,9 @@ github_read_required_contexts() {
     || ! classic=$(printf '%s' "$branch_json" | jq -c '
       if type != "object" or (.protected | type) != "boolean" then
         error("branch payload is unreadable")
-      elif .protected == false then
+      elif .protected == false
+          or ((.protection | type) == "object"
+              and (.protection.required_status_checks | type) == "null") then
         empty
       elif (.protection.required_status_checks | type) != "object" then
         error("branch protection summary is unreadable")

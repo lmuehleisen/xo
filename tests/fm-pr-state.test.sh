@@ -293,6 +293,13 @@ test_verified_empty_required_set_reads_reported_checks() {
   out=$(FM_TEST_RULES_ERROR='gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)' \
     run_state) || fail "plan-gated fixture was refused"
   [ -z "$out" ] || fail "a plan that cannot expose branch rules must verify as requiring nothing, got: $out"
+
+  # A protected branch whose protection enables no required-status-check
+  # section reports null for it, which is also a verified-empty answer, not
+  # an unreadable summary.
+  out=$(FM_TEST_BRANCH='{"name":"main","protected":true,"protection":{"enabled":true,"required_status_checks":null}}' \
+    run_state) || fail "null-section fixture was refused"
+  [ -z "$out" ] || fail "a protected base with no required-status-check section must verify as requiring nothing, got: $out"
   pass "a verified-empty required set falls back to reported checks and stays silent when they pass"
 }
 
