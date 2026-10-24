@@ -57,8 +57,10 @@
 # process group (TERM, then KILL after ten seconds) and waits at most ten more
 # seconds for the step's output to close before going on. A signal during a
 # step first stops that group and every process the step started. So nothing
-# a step began keeps publishing while or after restore runs. The full output
-# goes to the terminal and to
+# a step began keeps publishing while or after restore runs. A step must not
+# daemonize or detach (setsid, nohup, disown): the runner contains only the
+# step's process group, and a process that leaves it is beyond its reach.
+# The full output goes to the terminal and to
 # data/<task-id>/publish-logs/<UTC stamp>-<pid>.log, ending in a summary.
 #
 # Exit codes: 0 published, verified, and blocks restored; 2 usage; 3 refused
