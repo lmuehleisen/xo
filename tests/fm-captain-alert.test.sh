@@ -73,7 +73,7 @@ run() {  # <args...>: runs the notifier in $H at $NOW; output in $OUT, status in
   RC=0
   OUT=$(env -u FM_STATE_OVERRIDE -u FM_ROOT_OVERRIDE FM_HOME="$H" STUB_DIR="$H/stub" \
     FM_CAPTAIN_ALERT_EXEC="$STUB" FM_CAPTAIN_ALERT_SENTINEL="$SENTINEL" \
-    FM_CAPTAIN_ALERT_NOW="$NOW" FM_CAPTAIN_ALERT_COOLDOWN_SECS="${COOLDOWN:-}" "$ALERT" "$@" 2>&1) || RC=$?
+    FM_CAPTAIN_ALERT_NOW="$NOW" FM_CAPTAIN_ALERT_COOLDOWN_SECS="${COOLDOWN:-}" "${ALERT_BIN:-$ALERT}" "$@" 2>&1) || RC=$?
   printf '%s\n' "$OUT" >> "$H/all-output"
 }
 
@@ -310,6 +310,61 @@ test_unconfigured_and_url_secrecy() {
   pass "fm-captain-alert: unconfigured homes are reported and the URL never leaks"
 }
 
+# racing_bin: a bin directory whose outcome store reader appends one captain
+# row right after the first tail read, the way the branch can append between
+# the notifier's tail read and its row read.
+racing_bin() {
+  local dir="$TMP_ROOT/racing-bin" f
+  mkdir -p "$dir"
+  for f in "$ROOT"/bin/*; do
+    case "${f##*/}" in fm-branch-outcome.sh|fm-captain-alert.sh) ;; *) ln -sf "$f" "$dir/${f##*/}" ;; esac
+  done
+  cp "$ALERT" "$dir/fm-captain-alert.sh"
+  cat > "$dir/fm-branch-outcome.sh" <<EOF
+#!/usr/bin/env bash
+"$OUTCOME" "\$@"
+rc=\$?
+if [ "\$*" = "list --recent 1" ] && [ ! -e "\$FM_HOME/raced" ]; then
+  : > "\$FM_HOME/raced"
+  "$OUTCOME" append --task beta --verdict captain --summary "beta raced" >/dev/null
+fi
+exit \$rc
+EOF
+  chmod +x "$dir/fm-branch-outcome.sh"
+  printf '%s\n' "$dir/fm-captain-alert.sh"
+}
+
+test_a_row_appended_between_reads_is_posted_once() {
+  use_home "$(make_home race configured)"
+  run arm
+  go_away
+  append alpha captain "decision on alpha"
+  ALERT_BIN=$(racing_bin)
+  sweep
+  ALERT_BIN=
+  assert_present "$H/raced" "the racing reader appended between the reads"
+  NOW=$((NOW0 + 300)); sweep
+  NOW=$((NOW0 + 600)); sweep
+  NOW=$((NOW0 + 4300)); sweep
+  local i n=0
+  for i in $(seq 1 "$(calls)"); do
+    case "$(payload "$i")" in *"beta raced"*) n=$((n + 1)) ;; esac
+  done
+  assert_equals 1 "$n" "a row appended between the tail and row reads is posted exactly once"
+  pass "fm-captain-alert: a row appended between reads is posted once"
+}
+
+test_long_multibyte_content_is_cut_on_a_character() {
+  use_home "$(make_home multibyte configured)"
+  local text
+  text="$(printf 'a%.0s' $(seq 1 1999))ééé"
+  run post "$text"
+  expect_code 0 "$RC" "post exit"
+  assert_equals 2000 "$(jq -r '.content | length' "$H/stub/payload.1")" "the content is cut to 2000 characters"
+  assert_equals "é" "$(jq -r '.content[-1:]' "$H/stub/payload.1")" "the cut keeps the multibyte character whole"
+  pass "fm-captain-alert: long multibyte content is cut on a character boundary"
+}
+
 test_mention_and_brief_detail() {
   use_home "$(make_home mention configured)"
   printf 'FM_DISCORD_ALERT_DETAIL=brief\nFM_DISCORD_ALERT_MENTION_USER_ID=123456\n' >> "$H/.env"
@@ -375,4 +430,6 @@ test_rate_limit_waits_once_when_it_fits
 test_permanent_rejection_stops_until_test_or_new_webhook
 test_unconfigured_and_url_secrecy
 test_mention_and_brief_detail
+test_a_row_appended_between_reads_is_posted_once
+test_long_multibyte_content_is_cut_on_a_character
 test_contract_reach_and_brief_line

@@ -334,8 +334,10 @@ payload_file() {  # <content>
   fi
   file=$(mktemp "$STATE/.captain-alert-payload.XXXXXX") || return 1
   # flags 4 is SUPPRESS_EMBEDS; SUPPRESS_NOTIFICATIONS (4096) is never set.
-  jq -cn --arg content "${content:0:2000}" --argjson users "$users" \
-    '{content: $content, username: "XO", allowed_mentions: {parse: [], users: $users}, flags: 4}' \
+  # Truncate in jq, which counts characters; a bash slice here would count
+  # bytes under LC_ALL=C and could split a multibyte character.
+  jq -cn --arg content "$content" --argjson users "$users" \
+    '{content: $content[0:2000], username: "XO", allowed_mentions: {parse: [], users: $users}, flags: 4}' \
     > "$file" || { rm -f -- "$file"; return 1; }
   printf '%s\n' "$file"
 }
@@ -437,15 +439,17 @@ pending_count() {
 
 # --- check --------------------------------------------------------------------------
 
-# Move new eligible rows into the pending queue, then advance the cursor.
+# Move new eligible rows up to <tail> into the pending queue, then advance the
+# cursor to <tail>. Rows appended after the tail was read are left for the next
+# sweep, so the cursor never moves past a row that was not ingested.
 ingest() {  # <tail> <entered-epoch>
   local tail=$1 entered=$2 rows tmp
   rows=$("$OUTCOME_BIN" list --recent "$MAX_SCAN" 2>/dev/null) || return 1
   tmp=$(mktemp "$PENDING.XXXXXX") || return 1
   {
     [ ! -s "$PENDING" ] || cat "$PENDING"
-    printf '%s\n' "$rows" | jq -c --argjson c "$R_CURSOR" --argjson e "$entered" '
-      select(type == "object" and .seq > $c and .verdict == "captain"
+    printf '%s\n' "$rows" | jq -c --argjson c "$R_CURSOR" --argjson t "$tail" --argjson e "$entered" '
+      select(type == "object" and .seq > $c and .seq <= $t and .verdict == "captain"
              and (.silent // false) != true and (.epoch // 0) >= $e)
       | {seq, epoch, task: (.task // "fleet"), summary: (.summary // "")}' 2>/dev/null
   } | jq -cs --argjson e "$entered" 'map(select(.epoch >= $e)) | unique_by(.seq) | .[]' > "$tmp" \
