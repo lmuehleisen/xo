@@ -51,6 +51,7 @@ SENTINEL="$TMP_ROOT/stub-sentinel.sh"
 cat > "$SENTINEL" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "$STUB_DIR/fallback"
+[ ! -e "$STUB_DIR/slow-alarm" ] || sleep 30
 EOF
 chmod +x "$SENTINEL"
 
@@ -272,6 +273,27 @@ test_retries_stay_inside_the_check_deadline() {
   pass "fm-captain-alert: retries stay inside the watcher's check deadline"
 }
 
+test_failure_is_saved_before_a_slow_fallback_alarm() {
+  use_home "$(make_home slow-alarm configured)"
+  run arm
+  go_away
+  append alpha captain "decision on alpha"
+  stub_mode 404
+  : > "$H/stub/slow-alarm"
+  CHECK_TIMEOUT=8
+  local start=$SECONDS
+  sweep
+  CHECK_TIMEOUT=
+  [ $((SECONDS - start)) -lt 8 ] || fail "a slow fallback alarm kept the check past its deadline"
+  assert_present "$H/stub/fallback" "the fallback alarm still fired"
+  run status
+  assert_contains "$OUT" "failure: permanent" "the failure is saved even though the alarm was cut off"
+  rm -f "$H/stub/slow-alarm"
+  NOW=$((NOW0 + 300)); sweep
+  assert_equals 1 "$(wc -l < "$H/stub/fallback" | tr -d ' ')" "the cut-off alarm is not repeated in the same episode"
+  pass "fm-captain-alert: the failure is saved before a slow fallback alarm"
+}
+
 test_permanent_rejection_stops_until_test_or_new_webhook() {
   use_home "$(make_home permanent configured)"
   run arm
@@ -479,6 +501,7 @@ test_burst_coalesces_cooldown_folds_and_cap_holds
 test_success_needs_a_message_id_and_transient_failures_retry
 test_rate_limit_waits_once_when_it_fits
 test_retries_stay_inside_the_check_deadline
+test_failure_is_saved_before_a_slow_fallback_alarm
 test_permanent_rejection_stops_until_test_or_new_webhook
 test_unconfigured_and_url_secrecy
 test_mention_and_brief_detail

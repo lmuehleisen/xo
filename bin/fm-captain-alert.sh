@@ -424,11 +424,18 @@ report_line() {  # <line or empty>
   R_REPORTED=$line
 }
 
+# Bounded by what is left of the run's deadline; callers save state first, so
+# a slow or killed alarm cannot lose the failure it reports.
 fallback_alarm() {  # <summary>
-  if [ -n "${FM_CAPTAIN_ALERT_SENTINEL:-}" ]; then
-    "$FM_CAPTAIN_ALERT_SENTINEL" "$1" >/dev/null 2>&1 || true
+  local secs cmd
+  secs=$(time_left)
+  [ "$secs" -ge 1 ] || return 0
+  cmd=${FM_CAPTAIN_ALERT_SENTINEL:-}
+  _fm_wake_require_timeout
+  if [ -n "$cmd" ]; then
+    fm_run_timed "$secs" "$cmd" "$1" >/dev/null 2>&1 || true
   else
-    "$SCRIPT_DIR/fm-afk-sentinel.sh" notify "$1" >/dev/null 2>&1 || true
+    fm_run_timed "$secs" "$SCRIPT_DIR/fm-afk-sentinel.sh" notify "$1" >/dev/null 2>&1 || true
   fi
 }
 
@@ -580,7 +587,7 @@ RECOVERED_LINE="Discord delivery is working again"
 DELIVERED=0
 
 action_check() {
-  local now mode tail entered line=
+  local now mode tail entered line= alarm=
   armed || return 0
   lock_or_skip || return 0
   now=$(now_epoch)
@@ -618,7 +625,7 @@ action_check() {
         deliver "$now"
         line=$(failure_line)
         if [ -n "$line" ] && [ "$R_FALLBACK" != "$R_FAIL_SINCE" ]; then
-          fallback_alarm "XO Discord alerts failing: $R_FAIL_REASON"
+          alarm="XO Discord alerts failing: $R_FAIL_REASON"
           R_FALLBACK=$R_FAIL_SINCE
         fi
       else
@@ -639,6 +646,8 @@ action_check() {
   # Without a cursor there is no safe starting point to record yet.
   [ -z "$R_CURSOR" ] || record_write || true
   fm_lock_release "$LOCK"
+  # The alarm runs last, after the failure and its once-per-episode mark are saved.
+  [ -z "$alarm" ] || fallback_alarm "$alarm"
   return 0
 }
 
