@@ -24,7 +24,7 @@ Give the captain a concise session-only recap without gathering fresh state.
    Also exclude a message whose first character begins the exact current header `FIRSTMATE_OP: v1 <kind>: ` without the U+2063, for a current kind and a non-empty body, because Claude Code 2.1.277 and later remove the mark on submit (`bin/fm-operational-input.sh` owns the kinds).
    Exclude legacy bare-marker away-mode injections only when U+2063 is immediately followed by `Supervisor escalate (`.
    Exclude a message that is exactly a record-backed operational doorbell that `bin/fm-operational-input.sh doorbell-kind` recognizes from its stdin; Claude Code, which strips U+2063, receives away-mode escalations this way.
-   Exclude the exact legacy unmarked session-start payload ``Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.``
+   Exclude only the exact, verbatim legacy unmarked session-start payload ``Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.``; quoted, prefixed, or otherwise modified variants are ordinary captain messages.
    Custom-role messages such as Pi's `firstmate-sessionstart-nudge` are not captain messages.
    System, developer, tool, watcher, guard, away-mode, and other injected operational messages are not captain messages.
    Never infer captain authorship merely because a synthetic message appears in the user-role transcript.

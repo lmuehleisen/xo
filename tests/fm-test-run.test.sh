@@ -130,8 +130,14 @@ init_changed_fixture_repo() {
   printf '# wake-helpers.sh\n' >"$repo/tests/supervision-host-helpers.sh"
   printf '# wake-helpers.sh\n' >>"$repo/tests/fm-daemon.test.sh"
   for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
+    fm-supervision-host-dialog.test.sh \
     fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
     printf '#!/usr/bin/env bash\n# supervision-host-helpers.sh\n' >"$repo/tests/$script"
+    chmod +x "$repo/tests/$script"
+  done
+  printf '# wake-helpers.sh\n' >"$repo/tests/watch-triage-helpers.sh"
+  for script in fm-watch-triage.test.sh fm-watch-triage-waits.test.sh; do
+    printf '#!/usr/bin/env bash\n# watch-triage-helpers.sh\n' >"$repo/tests/$script"
     chmod +x "$repo/tests/$script"
   done
   : >"$repo/tests/lib.sh"
@@ -455,23 +461,28 @@ test_changed_wake_helper_preserves_split_host_coverage() {
   printf '\n' >>"$repo/tests/supervision-host-helpers.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
+    fm-supervision-host-dialog.test.sh \
     fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
     assert_contains "$listed" "tests/$script" "shared host helper selects $script"
   done
   printf '# wake-helpers.sh\n' >"$repo/tests/supervision-host-helpers.sh"
 
   # Only the transitive wake fixture changes. A direct reader must not mask
-  # omission of the four host suites, and unrelated forge coverage stays out.
+  # omission of the five host suites, and unrelated forge coverage stays out.
   printf '\n' >>"$repo/tests/wake-helpers.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-daemon.test.sh" "wake fixture selects its direct reader"
   for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
+    fm-supervision-host-dialog.test.sh \
     fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
     assert_contains "$listed" "tests/$script" "wake fixture selects its indirect host reader $script"
   done
+  for script in fm-watch-triage.test.sh fm-watch-triage-waits.test.sh; do
+    assert_contains "$listed" "tests/$script" "wake fixture selects its indirect triage reader $script"
+  done
   assert_not_contains "$listed" "tests/fm-pr-merge.test.sh" "wake fixture must not select unrelated forge coverage"
   fm_test_rm_tmproot "$tmp"
-  pass "a wake-helper-only change selects direct readers and all four split host suites"
+  pass "a wake-helper-only change selects direct readers and all five split host suites"
 }
 
 # A direct test reference is per-script evidence. Widening it to the referencing

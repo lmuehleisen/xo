@@ -176,6 +176,11 @@ case "${1:-} ${2:-}" in
         printf '%s\t%s\n' "$FM_TEST_GH_HEAD" "$FM_TEST_UPDATED_AT"
         exit 0
         ;;
+      *" --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt,baseRefName,statusCheckRollup "*)
+        [ "${FM_TEST_READINESS:-0}" = 1 ] || exit 1
+        printf '%s\n' "{\"state\":\"OPEN\",\"mergedAt\":null,\"isDraft\":false,\"headRefOid\":\"$FM_TEST_GH_HEAD\",\"author\":{\"login\":\"example\"},\"mergeable\":\"MERGEABLE\",\"reviewDecision\":\"APPROVED\",\"updatedAt\":\"$FM_TEST_UPDATED_AT\",\"baseRefName\":\"main\",\"statusCheckRollup\":[]}"
+        exit 0
+        ;;
       *" --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt "*)
         [ "${FM_TEST_READINESS:-0}" = 1 ] || exit 1
         printf '%s\n' 'state=open' 'merged_at=' 'draft=false' \

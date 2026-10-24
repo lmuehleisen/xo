@@ -32,6 +32,7 @@
     "docs/orca-backend.md",
     "docs/cmux-backend.md",
     "docs/paseo-backend.md",
+    "docs/rex-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -374,6 +375,10 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/examples/usage-warner",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/watched-tools.json",
       "audience": "operator-example"
     },
@@ -435,6 +440,10 @@
     },
     {
       "path": "docs/paseo-backend.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/rex-backend.md",
       "audience": "operator-current"
     },
     {
@@ -520,6 +529,10 @@
     {
       "path": "docs/upstream-integration.md",
       "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/usage-warner.md",
+      "audience": "operator-current"
     },
     {
       "path": "docs/verification/commandcode.md",
