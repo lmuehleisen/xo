@@ -39,6 +39,7 @@ case "$mode" in
   noid) printf '{}' > "$2"; printf '200' ;;
   429) printf '{"retry_after":0.2}' > "$2"; printf '429' ;;
   429long) printf '{"retry_after":40}' > "$2"; printf '429' ;;
+  429three) printf '{"retry_after":3}' > "$2"; printf '429' ;;
   404) printf '{"message":"Unknown Webhook"}' > "$2"; printf '404' ;;
   500) printf '500' ;;
   net) exit 6 ;;
@@ -73,7 +74,7 @@ run() {  # <args...>: runs the notifier in $H at $NOW; output in $OUT, status in
   RC=0
   OUT=$(env -u FM_STATE_OVERRIDE -u FM_ROOT_OVERRIDE FM_HOME="$H" STUB_DIR="$H/stub" \
     FM_CAPTAIN_ALERT_EXEC="$STUB" FM_CAPTAIN_ALERT_SENTINEL="$SENTINEL" \
-    FM_CAPTAIN_ALERT_NOW="$NOW" FM_CAPTAIN_ALERT_COOLDOWN_SECS="${COOLDOWN:-}" FM_CAPTAIN_ALERT_SCAN="${SCAN:-}" "${ALERT_BIN:-$ALERT}" "$@" 2>&1) || RC=$?
+    FM_CAPTAIN_ALERT_NOW="$NOW" FM_CAPTAIN_ALERT_COOLDOWN_SECS="${COOLDOWN:-}" FM_CAPTAIN_ALERT_SCAN="${SCAN:-}" FM_CHECK_TIMEOUT="${CHECK_TIMEOUT:-}" "${ALERT_BIN:-$ALERT}" "$@" 2>&1) || RC=$?
   printf '%s\n' "$OUT" >> "$H/all-output"
 }
 
@@ -247,6 +248,28 @@ test_rate_limit_waits_once_when_it_fits() {
   assert_equals 3 "$(calls)" "a long retry_after is not waited out"
   assert_present "$H/state/.captain-alert-pending.jsonl" "the row waits for the next sweep"
   pass "fm-captain-alert: a rate limit waits once only when it fits"
+}
+
+test_retries_stay_inside_the_check_deadline() {
+  use_home "$(make_home deadline configured)"
+  run arm
+  go_away
+  append alpha captain "decision on alpha"
+  stub_mode 429three ok
+  CHECK_TIMEOUT=8
+  sweep
+  assert_equals 1 "$(calls)" "a 429 wait that would overrun the check deadline is not taken"
+  assert_present "$H/state/.captain-alert-pending.jsonl" "the row waits for the next sweep"
+  CHECK_TIMEOUT=5
+  NOW=$((NOW0 + 300)); sweep
+  assert_equals 1 "$(calls)" "no transfer starts once too little of the deadline is left"
+  run status
+  assert_contains "$OUT" "failure: transient" "the deferred attempt does not replace the earlier failure"
+  CHECK_TIMEOUT=
+  stub_mode ok
+  NOW=$((NOW0 + 600)); sweep
+  assert_equals 2 "$(calls)" "with the default deadline the next sweep posts"
+  pass "fm-captain-alert: retries stay inside the watcher's check deadline"
 }
 
 test_permanent_rejection_stops_until_test_or_new_webhook() {
@@ -432,12 +455,18 @@ test_contract_reach_and_brief_line() {
   sweep
   run brief-line --since "$NOW0"
   assert_equals "Discord alerts: 1 posted during the away window" "$OUT" "the brief counts posts in the window"
+  stub_mode net
+  append beta captain "decision on beta"
+  NOW=$((NOW0 + 150)); sweep
+  assert_equals "" "$OUT" "one transient failure is not yet a check line"
+  run brief-line --since "$NOW0"
+  assert_contains "$OUT" "GAP: Discord alerts failing since" "the brief shows even a single unretried failure"
   stub_mode 404
   append beta captain "decision on beta"
   NOW=$((NOW0 + 300)); sweep
   run brief-line --since "$NOW0"
   assert_contains "$OUT" "GAP: Discord alerts failing since" "a failing channel is a gap in the brief"
-  assert_contains "$OUT" "1 outcomes not posted" "the gap counts what was not posted"
+  assert_contains "$OUT" "2 outcomes not posted" "the gap counts what was not posted"
   pass "fm-captain-alert: the away record's reach and the return-brief line"
 }
 
@@ -449,6 +478,7 @@ test_posts_only_while_away
 test_burst_coalesces_cooldown_folds_and_cap_holds
 test_success_needs_a_message_id_and_transient_failures_retry
 test_rate_limit_waits_once_when_it_fits
+test_retries_stay_inside_the_check_deadline
 test_permanent_rejection_stops_until_test_or_new_webhook
 test_unconfigured_and_url_secrecy
 test_mention_and_brief_detail

@@ -69,7 +69,11 @@
 #   FM_DISCORD_ALERT_MENTION_USER_ID  optional numeric user id mentioned in each post
 # Tunables from the environment: FM_CAPTAIN_ALERT_COOLDOWN_SECS,
 # FM_CAPTAIN_ALERT_HOURLY_CAP, FM_CAPTAIN_ALERT_BUDGET (curl seconds, default
-# 12, valid 3..20). Test seams: FM_CAPTAIN_ALERT_EXEC names a transport stub run
+# 12, valid 3..20). The whole run also stays inside the watcher's per-check
+# bound, FM_CHECK_TIMEOUT (default 30), less a reserve for saving its state:
+# the lock wait, each transfer, and a 429 wait all draw on that one deadline,
+# and an attempt that no longer fits is deferred to the next sweep without
+# counting as a failure. Test seams: FM_CAPTAIN_ALERT_EXEC names a transport stub run
 # as `<stub> <payload-file> <body-file>` with the curl config on stdin, which
 # prints the HTTP status and exits with a curl-style code;
 # FM_CAPTAIN_ALERT_SENTINEL replaces the fallback alarm command;
@@ -130,6 +134,9 @@ whole_or_default() {  # <value> <default> <min> <max>
 COOLDOWN=$(whole_or_default "${FM_CAPTAIN_ALERT_COOLDOWN_SECS:-}" 3600 0 86400)
 HOURLY_CAP=$(whole_or_default "${FM_CAPTAIN_ALERT_HOURLY_CAP:-}" 6 1 60)
 BUDGET=$(whole_or_default "${FM_CAPTAIN_ALERT_BUDGET:-}" 12 3 20)
+CHECK_TIMEOUT=$(whole_or_default "${FM_CHECK_TIMEOUT:-}" 30 1 3600)
+DEADLINE_RESERVE=4
+START_SECONDS=$SECONDS
 MAX_SCAN=$(whole_or_default "${FM_CAPTAIN_ALERT_SCAN:-}" 1000 1 1000)
 SCAN_SLACK=200
 
@@ -272,10 +279,22 @@ away_mode() {
 
 # --- transport ----------------------------------------------------------------
 
-# Post the JSON payload in <payload-file>. Sets T_KIND (ok|transient|permanent),
-# T_REASON, T_ID. The URL travels to curl on stdin only.
+# Seconds left before this run must stop to save its state in time.
+time_left() {
+  printf '%s\n' $((CHECK_TIMEOUT - DEADLINE_RESERVE - (SECONDS - START_SECONDS)))
+}
+
+# Post the JSON payload in <payload-file>. Sets T_KIND
+# (ok|transient|permanent|deferred), T_REASON, T_ID. The URL travels to curl on
+# stdin only.
 transport_once() {  # <payload-file> <body-file>
-  local payload=$1 body=$2 url code rc=0
+  local payload=$1 body=$2 url code rc=0 max_time
+  max_time=$(time_left)
+  [ "$max_time" -le "$BUDGET" ] || max_time=$BUDGET
+  if [ "$max_time" -lt 2 ]; then
+    T_KIND=deferred; T_REASON="no time left in this run"; T_ID=
+    return 0
+  fi
   url=$WEBHOOK
   case "$url" in *\?*) url="$url&wait=true" ;; *) url="$url?wait=true" ;; esac
   : > "$body"
@@ -283,7 +302,7 @@ transport_once() {  # <payload-file> <body-file>
     code=$(printf 'url = "%s"\n' "$url" | "$FM_CAPTAIN_ALERT_EXEC" "$payload" "$body" 2>/dev/null) || rc=$?
   else
     code=$(printf 'url = "%s"\n' "$url" | curl -sS --config - -o "$body" -w '%{http_code}' \
-      --max-time "$BUDGET" -X POST -H 'Content-Type: application/json' \
+      --max-time "$max_time" -X POST -H 'Content-Type: application/json' \
       --data-binary "@$payload" 2>/dev/null) || rc=$?
   fi
   T_ID=
@@ -310,7 +329,8 @@ transport_once() {  # <payload-file> <body-file>
   esac
 }
 
-# One attempt plus at most one short wait on a 429 whose retry_after fits.
+# One attempt plus at most one short wait on a 429 whose retry_after fits,
+# leaving time for the retry itself inside the run's deadline.
 transport() {  # <payload-file>
   local payload=$1 body wait_s
   body=$(mktemp "$STATE/.captain-alert-body.XXXXXX") || { T_KIND=transient; T_REASON="cannot create a scratch file"; return 0; }
@@ -318,7 +338,7 @@ transport() {  # <payload-file>
   if [ "$T_KIND" = ratelimited ]; then
     wait_s=$(jq -r '(.retry_after // 99) | ceil' "$body" 2>/dev/null)
     case "$wait_s" in ''|*[!0-9]*) wait_s=99 ;; esac
-    if [ "$wait_s" -le 3 ]; then
+    if [ "$wait_s" -le 3 ] && [ $(($(time_left) - wait_s)) -ge 2 ]; then
       sleep "$wait_s"
       transport_once "$payload" "$body"
     fi
@@ -519,7 +539,7 @@ deliver() {  # <now>
       DELIVERED=1
       clear_failure
       log_event overflow "$T_ID"
-    else
+    elif [ "$T_KIND" != deferred ]; then
       record_failure "$now"
     fi
     return 0
@@ -543,13 +563,17 @@ deliver() {  # <now>
     DELIVERED=1
     drop_pending
     clear_failure
-  else
+  elif [ "$T_KIND" != deferred ]; then
     record_failure "$now"
   fi
 }
 
 lock_or_skip() {
-  fm_lock_acquire_wait_bounded "$LOCK" 8 >/dev/null 2>&1
+  local wait_s
+  wait_s=$(($(time_left) - 2))
+  [ "$wait_s" -le 8 ] || wait_s=8
+  [ "$wait_s" -ge 1 ] || return 1
+  fm_lock_acquire_wait_bounded "$LOCK" "$wait_s" >/dev/null 2>&1
 }
 
 RECOVERED_LINE="Discord delivery is working again"
@@ -778,7 +802,9 @@ action_brief_line() {
   if [ -s "$LOG" ]; then
     posted=$(awk -F '\t' -v s="$since" '$1 >= s && ($2 == "ok" || $2 == "overflow") { n++ } END { print n + 0 }' "$LOG")
   fi
-  if [ -n "$(failure_line)" ]; then
+  # Any persisted failure is a gap here, even one the check line has not
+  # reported yet: the return is the last chance to show it.
+  if [ -n "$R_FAIL_KIND" ]; then
     printf 'GAP: Discord alerts failing since %s (%s); %s outcomes not posted\n' \
       "$(iso_of "$R_FAIL_SINCE")" "$R_FAIL_REASON" "$(( $(pending_count) + R_DROPPED ))"
   elif ! load_config; then
