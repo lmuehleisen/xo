@@ -16,7 +16,8 @@ It never changes the authority set.
 The posture is a file, `state/.afk-contract`, written only by `bin/fm-afk-contract.sh` in the same turn as `/afk`; nothing infers the posture from chat.
 A record carrying quiet mode (`bin/fm-afk-contract.sh mode`) is not this posture: the captain is present, so none of this skill's holds for a return apply to it (the `quiet` skill owns it).
 Typing `/afk` is itself the go: the captain may not look at the screen again, so entry never waits for a further human response, and no read-back gates it or asks for a go.
-Hold-for-return is the default and the only reach profile this release records: there is no phone channel, and the entry announcement says so aloud every time.
+Hold-for-return is the only reach profile: nobody can answer or approve from outside the session, and the entry announcement names the reach aloud every time.
+The record names either no phone channel or the one-way Discord captain alerts (`bin/fm-captain-alert.sh`), which only post outcomes that need the captain and accept no replies.
 
 ## Entering: `/afk [words]`
 
@@ -47,7 +48,7 @@ Hold-for-return is the default and the only reach profile this release records: 
    Both daemon paths require the record `enter` wrote and share `bin/fm-afk-start.sh` as the daemon entry.
    The daemon is **presence-gated**: it injects escalations only while `state/.afk` exists, and stays quiet otherwise.
 3. **Announce, then read back after entry.**
-   Relay the announcement in spirit: hold-for-return only, no phone channel, your instructions are recorded and the away session will carry them out where it can, anything it is unsure of, or that needs you, waits for your return, and destructive, irreversible, and security-sensitive actions are never pre-authorizable whatever the words say.
+   Relay the announcement in spirit: hold-for-return only, the recorded reach (no phone channel, or notify-only Discord alerts that accept no replies), your instructions are recorded and the away session will carry them out where it can, anything it is unsure of, or that needs you, waits for your return, and destructive, irreversible, and security-sensitive actions are never pre-authorizable whatever the words say.
    Then give your own plain-sentence restatement of the words in `AGENTS.md` section 9 language - what you read them as asking for, sentence by sentence, never a numbered field list - beside the expected return, the spend cap, and the one-sentence reach announcement.
    Say plainly which sentence, if any, you could not act on while away (a red merge, a discard, anything on the never-set, local-only landing); it waits for their return.
    This read-back is informational: the record already stands, so never ask for a go or wait for a reply; a captain who wants a different reading sends `/afk` again with new words.
