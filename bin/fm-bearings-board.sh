@@ -243,8 +243,9 @@ compose_payload() {  # <dest.json>
         ],
         underway: [
           $s.in_flight[]?
-          | {id: .id, state: .state, doing: (.doing // "-"), kind: .kind,
-             name: .name, repo: (.repo // home_repo)}
+          | {id: .id, state: .state,
+             doing: (if (.doing // "") == "" then "-" else .doing end),
+             kind: .kind, name: .name, repo: (.repo // home_repo)}
         ],
         landed: [
           $s.landed[]?
@@ -335,15 +336,21 @@ command_refresh() {
   [ "$#" -eq 0 ] || { usage >&2; exit 2; }
   data=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-refresh.XXXXXX") \
     || fail "cannot stage the refreshed payload"
+  # A fail inside compose or build exits the process before the rm lines
+  # below run; the EXIT trap owns the staged payload until it is cleared.
+  REFRESH_DATA_TMP=$data
   if ! compose_payload "$data"; then
     rm -f -- "$data"
+    REFRESH_DATA_TMP=
     fail "cannot refresh the board from the snapshot"
   fi
   if ! command_build "$data"; then
     rm -f -- "$data"
+    REFRESH_DATA_TMP=
     fail "cannot build the refreshed board"
   fi
   rm -f -- "$data"
+  REFRESH_DATA_TMP=
 }
 
 validate_payload() {  # <data.json>
@@ -593,7 +600,7 @@ read_store_card() {  # <file>
   STORE_CARD_REASONS=$(jq -r "$FM_DECISION_CARD_JQ_DEFS"'
     if (envelope_reasons | length) > 0 then envelope_reasons | join("; ")
     elif (.card | stored_call_item) then ""
-    else .card | call_reasons | join("; ") end' "$1" 2>/dev/null) \
+    else .card | failure_reasons | join("; ") end' "$1" 2>/dev/null) \
     || STORE_CARD_REASONS='unreadable record'
   [ -z "$STORE_CARD_REASONS" ] || return 1
   STORE_CARD=$(jq -c '.card' "$1" 2>/dev/null) && [ -n "$STORE_CARD" ] && return 0
@@ -758,7 +765,12 @@ release_decision_card_locks() {
   return "$rc"
 }
 
+REFRESH_DATA_TMP=
 bearings_board_cleanup() {
+  if [ -n "$REFRESH_DATA_TMP" ]; then
+    rm -f -- "$REFRESH_DATA_TMP"
+    REFRESH_DATA_TMP=
+  fi
   release_decision_card_locks || true
 }
 trap bearings_board_cleanup EXIT
@@ -918,7 +930,7 @@ command_build() {
     return 0
   fi
   if [ -n "$static_page" ]; then
-    trap 'rm -f -- "$page"' EXIT
+    trap 'bearings_board_cleanup; rm -f -- "$page"' EXIT
   fi
   establish_board_session "$board"
   printf 'served: %s\n' "$board"

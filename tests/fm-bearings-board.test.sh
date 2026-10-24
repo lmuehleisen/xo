@@ -1453,6 +1453,60 @@ SH
   pass "refresh carries the snapshot's hold close mode onto synthesized fallbacks"
 }
 
+# A sparse snapshot row is not a board failure: an in-flight task with no
+# captured activity detail carries an empty doing, which the composed payload
+# must normalize rather than hand the validator a value it refuses.
+test_refresh_normalizes_an_empty_doing() {
+  local home stub
+  home=$(make_home refresh-empty-doing)
+  stub="$home/fakebin/snapshot-stub"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+cat <<'JSON'
+{
+  "schema": "fm-bearings.v1",
+  "home": "test-home",
+  "generated": "2026-08-19T00:00:00Z",
+  "in_flight": [
+    { "id": "quiet-work", "kind": "ship", "state": "working",
+      "repo": null, "name": "Quiet work", "doing": "" }
+  ],
+  "decisions_open": [],
+  "landed": [],
+  "gates": []
+}
+JSON
+SH
+  chmod +x "$stub"
+  FM_BEARINGS_BOARD_SNAPSHOT="$stub" run_board "$home" refresh >/dev/null \
+    || fail "refresh refused a snapshot whose underway row carried an empty doing"
+  extract_payload "$home/.lavish/bearings-board.html" > "$home/served.json"
+  jq -e '(.underway[] | select(.id == "quiet-work") | .doing) == "-"' \
+    "$home/served.json" >/dev/null \
+    || fail "an empty doing did not normalize to the placeholder"
+  pass "refresh normalizes an empty doing instead of failing validation"
+}
+
+# The refresh is the scheduled shape, so a failure must not leave its staged
+# payload behind: a fail deep inside compose exits before the caller's rm.
+test_refresh_leaves_no_staged_payload_after_a_compose_failure() {
+  local home stub tmpdir
+  home=$(make_home refresh-leak)
+  tmpdir="$home/tmp"
+  mkdir -p "$tmpdir"
+  stub="$home/fakebin/snapshot-stub"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$stub"
+  chmod +x "$stub"
+  if TMPDIR="$tmpdir" FM_BEARINGS_BOARD_SNAPSHOT="$stub" \
+      run_board "$home" refresh > "$home/out" 2> "$home/err"; then
+    fail "a broken snapshot still refreshed the board"
+  fi
+  if find "$tmpdir" -mindepth 1 | grep -q .; then
+    fail "a failed refresh left staged files behind: $(find "$tmpdir" -mindepth 1)"
+  fi
+  pass "a failed refresh leaves no staged payload behind"
+}
+
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board() {
   local home stub rc out
   home=$(make_home refresh-refusal)
@@ -1511,4 +1565,6 @@ test_refresh_keeps_a_remote_call_when_a_local_merge_card_shares_its_key
 test_refresh_preserves_the_snapshot_gates_truncation_disclosure
 test_refresh_synthesized_fallback_tracks_the_snapshot
 test_refresh_fallback_carries_the_snapshot_close_mode
+test_refresh_normalizes_an_empty_doing
+test_refresh_leaves_no_staged_payload_after_a_compose_failure
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board
