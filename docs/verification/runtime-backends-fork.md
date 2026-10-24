@@ -689,6 +689,8 @@ Only worktree acquisition came from a fixture, and interrupt cancellation remain
 `tests/fm-agy-admission.test.sh` pins the portable receipt and admission behavior.
 A receipt covers finite fixtures only; it does not prove arbitrary commands, untested tool shapes, or unchanged server-side model behavior.
 
+After rebasing onto the PR 92 admission change, changed-file lint and these four focused portable suites passed on the configured remote runner at task commit `2a20ef27` (0 failures, 0 gated skips): `fm-agy-admission.test.sh`, `fm-agy-permission-policy.test.sh`, `fm-agy-harness.test.sh`, and `fm-spawn-prelaunch-rollback.test.sh`.
+
 ### Primary and secondmate supervision
 
 Verified on 2026-09-10 with Agy 1.2.0 and `gemini-3.8-flash` at low effort on macOS using a throwaway Firstmate home and private tmux socket.
