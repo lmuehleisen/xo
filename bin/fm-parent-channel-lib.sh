@@ -40,6 +40,14 @@
 # The parent watcher classifies lines there exactly as it classifies any
 # crewmate's status stream, so a captain-relevant line becomes a parent wake.
 #
+# THE LANE. The channel's inbound counterpart is the mate's own steering lane:
+# the endpoint record and steering inbox the parent steers this mate through.
+# A local route keeps them in the parent home's state/<mate-id>.meta and
+# state/<mate-id>.inbox; a remote route keeps them host-local in this home's
+# state/parent-route/ (bin/fm-remote-secondmate-control.sh). A publisher that
+# must wake this home's own session resolves the lane here and steers it
+# through bin/fm-send.sh like any other caller.
+#
 # Line syntax and retry equivalence are owned by fm-classify-lib.sh.
 # An existing destination must be a regular, non-symlinked file; a missing one
 # is created with its directory.
@@ -172,4 +180,31 @@ fm_parent_channel_report() {  # <home> <state> <line>
   destination=$(fm_parent_channel_destination "$home" "$state") || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || return 4
+}
+
+# Resolve the steering lane of <home> (see THE LANE above): sets
+# FM_PARENT_CHANNEL_LANE_HOME, FM_PARENT_CHANNEL_LANE_STATE, and
+# FM_PARENT_CHANNEL_ID. Same return codes as fm_parent_channel_destination.
+# shellcheck disable=SC2034 # Output globals read by sourcing callers.
+FM_PARENT_CHANNEL_LANE_HOME=
+# shellcheck disable=SC2034 # Output globals read by sourcing callers.
+FM_PARENT_CHANNEL_LANE_STATE=
+# shellcheck disable=SC2034 # Output globals read by sourcing callers.
+fm_parent_channel_lane() {  # <home> <state>
+  local home=$1 state=$2 rc=0
+  FM_PARENT_CHANNEL_LANE_HOME=
+  FM_PARENT_CHANNEL_LANE_STATE=
+  fm_parent_channel_destination "$home" "$state" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  case "$FM_PARENT_CHANNEL_ROUTE" in
+    local)
+      FM_PARENT_CHANNEL_LANE_HOME=$FM_SECONDMATE_PARENT_HOME
+      FM_PARENT_CHANNEL_LANE_STATE="$FM_SECONDMATE_PARENT_HOME/state"
+      ;;
+    remote)
+      FM_PARENT_CHANNEL_LANE_HOME=$home
+      FM_PARENT_CHANNEL_LANE_STATE="$home/state/parent-route"
+      ;;
+    *) return 3 ;;
+  esac
 }

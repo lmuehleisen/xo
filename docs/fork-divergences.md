@@ -570,6 +570,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-secondmate-safety.test.sh` direct and recursive restoration-failure cases.
 - Upstream: uses status 4 for both outcomes; drop once it provides distinct statuses through recursive teardown.
 
+### captain-answer-wake
+
+- Intent: a keyed captain answer or reconcile request, from chat, a board, or an external deck, wakes the home that owns the call so firstmate acts on it without waiting for its next look.
+- Class: carried; a port of the wake half of a third-party Firstmate fork's commits `3c7447704b9ef38757fdd210b4312d6e5a226d88` and `a80a00c09052d3fe60e3fc4368178fb6ea6123b6`, keeping their `wake_answer_owner` name and delivery keys so a deck that detects the function skips its own steer; their card retirement and parent-key transition changes are not ported.
+- Seam: `wake_answer_owner`, `wake_reconcile_owner`, `wake_owner`, `answer_wake_text`, their calls, the replay digest carry in `command_answers`, and the session-lock source line in `bin/fm-captain-hold.sh`; `fm_parent_channel_lane` and its header paragraph in `bin/fm-parent-channel-lib.sh`; `feed_announced` and its `FM_CAPTAIN_ANSWER_ANNOUNCED` uses in `bin/fm-procevent.sh`; the wake paragraphs in `docs/captain-hold-lifecycle.md`, `docs/secondmate-parent-channel.md`, and `docs/configuration.md` (shared).
+- Guard: `tests/fm-captain-hold-lifecycle.test.sh` owner-wake cases for main, local secondmate, and remote secondmate homes, the announced, owning-session, and reconcile-request cases, and the one-notification assertion in `test_board_answer_reaches_the_keyed_answer_intake`.
+- Upstream: an answer closes or releases the call and publishes a secondmate's parent line, but wakes no owning session; drop once upstream wakes the owner on answer.
+
 ## Incidental
 
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.

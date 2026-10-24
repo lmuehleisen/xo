@@ -42,6 +42,8 @@ The mate home's own status scans treat that remote channel the same way: `status
 The remote reply adapter already mirrors every channel line into the parent home, so folding the channel again here would only spin spurious wakes and a phantom `parent-replies` task, while a `parent-replies.status` in a main home or in a local mate is an ordinary task log that keeps folding and waking.
 A missed-reply escalation includes the complete first sighting path and line number in readable shell-escaped form.
 
+An answer recorded inside the mate home also wakes the mate itself, because a channel line wakes only the parent: the answer path steers the mate's own lane through `bin/fm-send.sh` exactly as the parent would, once per answer ([`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#waking-the-home-that-owns-the-call)).
+
 ## What is deliberately not built
 
 - No mirror of the mate's chat: chat can mix outcomes with other conversation, so choosing which sentence is an outcome would itself be model behavior, and every harness exposes turn text differently.
@@ -52,7 +54,7 @@ A missed-reply escalation includes the complete first sighting path and line num
 ## Regression coverage
 
 `tests/fm-inactive-reconcile.test.sh` covers the ledger delivery against real ledgers with no harness: immediate done and failed delivery with note, PR, mode, posture, and report pointer, once-only delivery across polls, a ship `done:` withheld while its named head exists only in the worker copy, a pending one still delivered after teardown removes that copy, a line still being appended, later routine status prose not minting a fresh parent event because the inactive receipt identity binds structured fields only, the remote route, the yield of the inactive path to a terminal ledger, and the real watcher poll driving it.
-`tests/fm-captain-hold-lifecycle.test.sh` covers a mate home publishing a hold, its answer, and a distinct occurrence on re-hold, and a main home publishing nothing.
+`tests/fm-captain-hold-lifecycle.test.sh` covers a mate home publishing a hold, its answer, and a distinct occurrence on re-hold, an answer waking the local and the remote mate's own lane once, and a main home publishing nothing.
 `tests/fm-pr-merge.test.sh` covers the PR-ready line at registration and the merge outcome's upward report.
 `tests/fm-teardown.test.sh` covers teardown delivering a child's final line and refusing when the channel cannot be written.
 It also covers the registration-time ready line and its withholding until checks are green under `config/ready-after-green`.

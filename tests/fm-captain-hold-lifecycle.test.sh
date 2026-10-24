@@ -1474,6 +1474,268 @@ EOF
   pass "a secondmate home publishes each hold occurrence and its answer on the parent channel"
 }
 
+# A stub tmux whose panes read as idle and empty, so a doorbell always submits,
+# and which records every literal line typed into a pane in
+# <fakebin>/doorbell.log. <fakebin>/doorbell.window names the one window it
+# reports, so fm-send resolves the lane's recorded endpoint.
+install_doorbell_tmux() {  # <fakebin> <window-name>
+  local fakebin=$1
+  printf '%s\n' "$2" > "$fakebin/doorbell.window"
+  : > "$fakebin/doorbell.log"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+here=$(cd "$(dirname "$0")" && pwd)
+case "${1:-}" in
+  send-keys)
+    shift
+    literal=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    [ "$literal" = 0 ] || printf '%s\n' "${1:-}" >> "$here/doorbell.log"
+    exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
+    printf 'fakepane\n'; exit 0 ;;
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  list-windows) cat "$here/doorbell.window"; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" sleep
+}
+
+# A secondmate home <mate-id> bound to <parent> by <route>, with a doorbell
+# tmux. The caller records the lane endpoint the route keeps.
+make_mate_home() {  # <name> <mate-id> <parent-or-empty> <local|remote>
+  local mate="$TMP_ROOT/$1" fakebin
+  mkdir -p "$mate/data" "$mate/state" "$mate/config" "$mate/projects"
+  fm_test_tasks_toml "$mate/.tasks.toml"
+  printf '# Synthetic secondmate home\n' > "$mate/AGENTS.md"
+  printf '%s\n' "$2" > "$mate/.fm-secondmate-home"
+  if [ "$4" = local ]; then
+    printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$3" \
+      > "$mate/.fm-secondmate-parent"
+  else
+    printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$mate/.fm-secondmate-parent"
+  fi
+  cat > "$mate/data/backlog.md" <<'EOB'
+## In flight
+
+## Queued
+
+## Done
+EOB
+  fakebin=$(fm_fakebin "$mate")
+  fm_fake_exit0 "$fakebin" treehouse no-mistakes gh gh-axi
+  install_doorbell_tmux "$fakebin" "fm-$2"
+  printf '%s\n' "$mate"
+}
+
+hold_call() {  # <home> <task-id>
+  tasks_in "$1" add "$2" "Ship $2" --kind ship --repo sample >/dev/null \
+    || fail "could not create $2"
+  run_captain "$1" hold "$2" --reason "captain go needed for $2" >/dev/null \
+    || fail "could not hold $2"
+}
+
+lane_records() {  # <inbox-dir>
+  find "$1" -name '*.msg' -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+inbox_notes() {  # <home>
+  find "$1/state/inbox" -name '*.note' -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+# One keyed answer in a main home wakes that home's own session through its
+# captain inbox, while an unrelated open hold stays quiet. A replay of either
+# intake path wakes nothing again, including after the session acknowledged
+# the wake.
+test_answer_wakes_a_main_home_once() {
+  local home a b c out queue note
+  home=$(make_home answer-wake-main)
+  a=sample-deck-release
+  b=sample-deck-unrelated
+  c=sample-direct-release
+  hold_call "$home" "$a"
+  hold_call "$home" "$b"
+  hold_call "$home" "$c"
+
+  out=$(printf '%s\tgo\tGo\trelease\n' "$a" \
+    | run_captain "$home" answers --source "deck fixture" 2>&1) \
+    || fail "the deck answer was refused: $out"
+  assert_contains "$out" "closed: $a" "the deck answer did not release $a"
+  assert_contains "$(tasks_in "$home" show "$a" --full)" "held: no" "the deck answer kept the hold"
+  [ "$(grep -lF "held call $a (released)" "$home/state/inbox"/*.note | wc -l | tr -d ' ')" = 1 ] \
+    || fail "the deck answer did not leave exactly one captain-inbox wake for $a"
+  [ "$(grep -cF "Captain answer recorded for held call $a (released)" "$home/state/.wake-queue")" = 1 ] \
+    || fail "the deck answer did not queue exactly one wake for $a: $(cat "$home/state/.wake-queue")"
+  note=$(grep -lF "held call $a (released)" "$home/state/inbox"/*.note)
+  assert_grep "Answer: go" "$note" "the wake did not carry the recorded answer"
+  assert_contains "$(tasks_in "$home" show "$b" --full)" "held: yes" "an unrelated answer released an open hold"
+  ! grep -qF "$b" "$home/state/inbox"/*.note || fail "an unrelated answer woke the home about $b"
+
+  queue=$(cat "$home/state/.wake-queue")
+  out=$(printf '%s\tgo\tGo\trelease\n' "$a" \
+    | run_captain "$home" answers --source "deck fixture" 2>&1) \
+    || fail "the deck answer replay was refused: $out"
+  assert_contains "$out" "closed: $a" "the deck answer replay was not idempotent"
+  [ "$(cat "$home/state/.wake-queue")" = "$queue" ] || fail "a replayed deck answer woke the home again"
+  [ "$(inbox_notes "$home")" = 1 ] || fail "a replayed deck answer left a second inbox note"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-inbox.sh" drain \
+    --ack "$(basename "$note" .note)" >/dev/null || fail "could not acknowledge the wake"
+  printf '%s\tgo\tGo\trelease\n' "$a" \
+    | run_captain "$home" answers --source "deck fixture" >/dev/null 2>&1 \
+    || fail "the replay after acknowledgement was refused"
+  [ "$(cat "$home/state/.wake-queue")" = "$queue" ] || fail "a replay after acknowledgement woke the home again"
+  [ "$(inbox_notes "$home")" = 1 ] || fail "a replay after acknowledgement left a new inbox note"
+
+  printf 'Go now.\n' > "$home/go.txt"
+  run_captain "$home" answer "$c" --decision-file "$home/go.txt" --release >/dev/null \
+    || fail "answer --release failed"
+  [ "$(grep -cF "Captain answer recorded for held call $c (released)" "$home/state/.wake-queue")" = 1 ] \
+    || fail "answer --release did not wake the home exactly once"
+  queue=$(cat "$home/state/.wake-queue")
+  run_captain "$home" answer "$c" --decision-file "$home/go.txt" --release >/dev/null \
+    || fail "the answer --release retry was not idempotent"
+  [ "$(cat "$home/state/.wake-queue")" = "$queue" ] || fail "an answer --release retry woke the home again"
+  pass "a keyed answer wakes a main home once; replays and other holds stay quiet"
+}
+
+# A channel that already wakes the owning session with this answer declares it
+# announced, so the intake queues no second wake.
+test_announced_answer_wakes_nobody_twice() {
+  local home id
+  home=$(make_home answer-wake-announced)
+  id=sample-announced-answer
+  hold_call "$home" "$id"
+  printf '%s\tgo\tGo\n' "$id" \
+    | FM_CAPTAIN_ANSWER_ANNOUNCED=1 run_captain "$home" answers --source "announced fixture" >/dev/null 2>&1 \
+    || fail "the announced answer was refused"
+  assert_contains "$(tasks_in "$home" show "$id" --full)" "state: done" "the announced answer did not close the call"
+  [ "$(inbox_notes "$home")" = 0 ] || fail "an announced answer queued a second wake"
+  pass "an answer its channel already announced queues no wake of its own"
+}
+
+# The session that holds a home's lock is the one a wake would reach, so when
+# it records the answer itself nothing is queued for it. The lock is attributed
+# to this process's own harness ancestry, which exists only when a verified
+# harness runs the suite.
+test_answer_from_the_owning_session_wakes_nobody() {
+  local home id pids lock_pid
+  pids=$(bash -c '. "$1"; fm_harness_ancestry_pids' _ "$ROOT/bin/fm-session-lock-lib.sh" 2>/dev/null || true)
+  lock_pid=$(printf '%s\n' "$pids" | sed '/^$/d' | tail -n 1)
+  if [ -z "$lock_pid" ]; then
+    pass "skipped: no verified harness in this run's ancestry to hold the fixture's session lock"
+    return 0
+  fi
+  home=$(make_home answer-owning-session)
+  id=sample-session-answer
+  hold_call "$home" "$id"
+  printf '%s\n' "$lock_pid" > "$home/state/.lock"
+  printf 'Go.\n' > "$home/go.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/go.txt" --release >/dev/null \
+    || fail "the owning session's answer failed"
+  [ "$(inbox_notes "$home")" = 0 ] || fail "the owning session's own answer queued a wake for itself"
+  pass "an answer recorded by the session holding the home's lock wakes nobody"
+}
+
+# An answer recorded inside a local secondmate home wakes the mate itself
+# through the steering lane its parent steers it through, with one doorbell,
+# beside the resolved line the parent channel already receives. Replays ring
+# nothing, also after the mate acknowledged the wake.
+test_secondmate_answer_wakes_its_own_lane() {
+  local parent mate id other channel lane out rec
+  parent=$(make_home answer-wake-parent)
+  mate=$(make_mate_home answer-wake-mate wake-mate "$parent" local)
+  fm_write_secondmate_meta "$parent/state/wake-mate.meta" "$mate" "sess:fm-wake-mate" sample claude
+  channel="$parent/state/wake-mate.status"
+  lane="$parent/state/wake-mate.inbox"
+  id=sample-mate-call
+  other=sample-other-call
+  hold_call "$mate" "$id"
+  hold_call "$mate" "$other"
+
+  out=$(printf '%s\tgo\tGo\trelease\n' "$id" \
+    | run_captain "$mate" answers --source "deck fixture" 2>&1) \
+    || fail "the mate's answer was refused: $out"
+  assert_contains "$out" "closed: $id" "the mate's answer did not release the hold"
+  [ "$(grep -cF "resolved [key=captain-hold-$id-1]" "$channel")" = 1 ] \
+    || fail "the answer did not publish exactly one resolved line: $(cat "$channel")"
+  rec="$lane/001.msg"
+  assert_present "$rec" "the answer did not wake the mate through its steering lane"
+  assert_grep "delivery=fire-and-forget" "$rec" "the lane wake is not a fire-and-forget record"
+  assert_grep "held call $id (released)" "$rec" "the lane wake does not name the released call"
+  assert_grep "Answer: go" "$rec" "the lane wake does not carry the recorded answer"
+  [ "$(grep -cF "wake-mate.inbox" "$mate/fakebin/doorbell.log")" = 1 ] \
+    || fail "the lane wake did not ring the mate exactly once: $(cat "$mate/fakebin/doorbell.log")"
+  assert_no_grep "$other" "$rec" "the lane wake named the unrelated open call"
+  [ ! -e "$parent/state/inbox" ] || [ "$(inbox_notes "$parent")" = 0 ] \
+    || fail "the mate's answer woke the parent's captain inbox"
+
+  printf '%s\tgo\tGo\trelease\n' "$id" \
+    | run_captain "$mate" answers --source "deck fixture" >/dev/null 2>&1 \
+    || fail "the mate's answer replay was refused"
+  [ "$(lane_records "$lane")" = 1 ] || fail "a replay woke the mate a second time"
+  mv "$rec" "$lane/handled/"
+  printf '%s\tgo\tGo\trelease\n' "$id" \
+    | run_captain "$mate" answers --source "deck fixture" >/dev/null 2>&1 \
+    || fail "the replay after acknowledgement was refused"
+  [ "$(lane_records "$lane")" = 1 ] || fail "a replay after acknowledgement woke the mate again"
+  [ "$(grep -cF "wake-mate.inbox" "$mate/fakebin/doorbell.log")" = 1 ] \
+    || fail "a replay rang the mate again"
+  pass "a secondmate answer wakes the owning mate's own lane once"
+}
+
+# A remote secondmate's lane lives host-local in its own state/parent-route,
+# and its parent channel in its own state/parent-replies.status.
+test_remote_secondmate_answer_wakes_its_host_local_lane() {
+  local mate id lane out
+  mate=$(make_mate_home remote-answer-mate remote-mate "" remote)
+  mkdir -p "$mate/state/parent-route"
+  fm_write_secondmate_meta "$mate/state/parent-route/remote-mate.meta" "$mate" \
+    "sess:fm-remote-mate" sample claude
+  lane="$mate/state/parent-route/remote-mate.inbox"
+  id=sample-remote-call
+  hold_call "$mate" "$id"
+  out=$(printf '%s\tgo\tGo\trelease\n' "$id" | run_captain "$mate" answers --source "deck" 2>&1) \
+    || fail "the remote mate's answer was refused: $out"
+  [ "$(grep -cF "resolved [key=captain-hold-$id-1]" "$mate/state/parent-replies.status")" = 1 ] \
+    || fail "the remote mate's answer did not reach its parent channel"
+  assert_grep "held call $id (released)" "$lane/001.msg" "the remote mate's lane was not woken"
+  [ "$(grep -cF "remote-mate.inbox" "$mate/fakebin/doorbell.log")" = 1 ] \
+    || fail "the remote mate was not rung exactly once"
+  pass "a remote secondmate's answer wakes its host-local lane"
+}
+
+# A reconcile request asks firstmate to re-check a call, so it wakes the owning
+# home once; a replayed request wakes nothing again, and an announced one
+# nothing at all.
+test_reconcile_request_wakes_the_owning_home_once() {
+  local home id quiet queue
+  home=$(make_home reconcile-wake-main)
+  id=sample-reconcile-wake
+  quiet=sample-reconcile-announced
+  hold_call "$home" "$id"
+  hold_call "$home" "$quiet"
+  request_reconciles "$home" reconcile-board "$id" || fail "could not request the reconciliation"
+  [ "$(grep -cF "Captain asked to reconcile held call $id" "$home/state/.wake-queue")" = 1 ] \
+    || fail "the reconcile request did not wake the home exactly once: $(cat "$home/state/.wake-queue" 2>/dev/null)"
+  queue=$(cat "$home/state/.wake-queue")
+  request_reconciles "$home" reconcile-board "$id" || fail "could not replay the reconciliation request"
+  [ "$(cat "$home/state/.wake-queue")" = "$queue" ] || fail "a replayed reconcile request woke the home again"
+  printf '%s\n' "$quiet" \
+    | FM_CAPTAIN_ANSWER_ANNOUNCED=1 run_captain "$home" reconcile-requests --source-id reconcile-board \
+        --source "announced review result" >/dev/null || fail "the announced reconcile request was refused"
+  [ "$(cat "$home/state/.wake-queue")" = "$queue" ] || fail "an announced reconcile request woke the home"
+  pass "a reconcile request wakes the owning home once"
+}
+
 test_secondmate_reconcile_publishes_before_request_retirement() {
   local parent mate channel evidence out show rc request
   parent=$(make_home reconcile-parent-channel)
@@ -2297,13 +2559,19 @@ SH
   queue=$(cat "$home/state/.wake-queue" 2>/dev/null || true)
   assert_contains "$queue" "check: procevent lavish $sid 1" \
     "the captured board answer produced no wake: $queue"
+  # The capture's own wake already tells this home about the answer, so the
+  # answer adds no captain-inbox wake of its own: one answer, one notification.
+  [ "$(printf '%s\n' "$queue" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "one board answer did not produce exactly one notification: $queue"
+  [ ! -e "$home/state/inbox" ] || [ -z "$(find "$home/state/inbox" -name '*.note')" ] \
+    || fail "the board answer also left a captain-inbox wake: $(cat "$home/state/inbox"/*.note)"
 
   show=$(tasks_in "$home" show sample-board-call --full)
   assert_contains "$show" "state: done" "the board answer did not close the captain call"
   assert_contains "$show" "north" "the board answer lost the captain's selection"
   assert_contains "$show" "the captured result $sid sequence 1" \
     "the recorded answer did not name the board result that carried it"
-  pass "a board answer reaches the keyed-answer intake and wakes firstmate"
+  pass "a board answer reaches the keyed-answer intake and wakes firstmate once"
 }
 
 # The intake is channel-agnostic, so chat must reach it the same way a captured
@@ -4790,6 +5058,12 @@ test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_secondmate_home_publishes_holds_and_answers
+test_answer_wakes_a_main_home_once
+test_announced_answer_wakes_nobody_twice
+test_answer_from_the_owning_session_wakes_nobody
+test_secondmate_answer_wakes_its_own_lane
+test_remote_secondmate_answer_wakes_its_host_local_lane
+test_reconcile_request_wakes_the_owning_home_once
 test_secondmate_reconcile_publishes_before_request_retirement
 test_bound_channel_answers_close_at_answer_time
 test_reconcile_never_closes_through_the_keyed_answer_intake

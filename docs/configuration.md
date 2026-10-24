@@ -2720,6 +2720,7 @@ Some built-in sources carry the captain's answer to a captain-held task, and wha
 
 - An explicitly captured review artifact may use the parallel optional `reconciles` adapter command and binding-verified `reconcile-requests` intake rather than entering keyed answers; the static Ops board never emits that selection or binds an answer source, and [`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#evidence-backed-reconciliation-is-not-a-board-control) owns the lifecycle semantics.
 - Feeding is independent of handling: it never acknowledges a result and never suppresses a wake, because recording the answer or request is transcription while acting on it is firstmate's judgement.
+- A capture announced as the home's own `check` wake is the fed answer's or request's one notification, so the feed tells the intake to queue no second wake for it ([`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#waking-the-home-that-owns-the-call)).
 - An unbound built-in source, a built-in adapter without the corresponding command, and a failure on either side all leave the capture untouched and still announced.
 - External binding responses never enter either authority-bearing intake.
 
