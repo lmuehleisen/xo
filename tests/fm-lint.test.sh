@@ -214,7 +214,7 @@ test_canonical_partitions_preserve_full_lint() {
   done
   [ "$(LC_ALL=C sort "$tmp/union2")" = "$all" ] || fail "1of2/2of2 lint partitions lose or duplicate canonical roots"
   [ "$(LC_ALL=C sort "$tmp/union3")" = "$all" ] || fail "Nof3 lint partitions lose or duplicate canonical roots"
-  for option in 0of2 3of2 1of0 2of1 xof2 1of2of3; do
+  for option in 0of2 3of2 1of0 2of1 xof2 1of2of3 00of3 01of3 08of9 3of03 000of9; do
     rc=0
     "$LINT" --partition "$option" --list-files > "$tmp/refused" 2>&1 || rc=$?
     [ "$rc" = 2 ] || fail "invalid partition $option was not refused"

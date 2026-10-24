@@ -783,9 +783,15 @@ case "$PARTITION" in
   *of*)
     PARTITION_WANT=${PARTITION%%of*}
     PARTITION_COUNT=${PARTITION##*of}
-    case "$PARTITION_WANT" in ''|*[!0-9]*|0) PARTITION_WANT= ;; esac
-    case "$PARTITION_COUNT" in ''|*[!0-9]*|0) PARTITION_COUNT= ;; esac
+    case "$PARTITION_WANT" in ''|*[!0-9]*) PARTITION_WANT= ;; esac
+    case "$PARTITION_COUNT" in ''|*[!0-9]*) PARTITION_COUNT= ;; esac
+    # Integer tests treat leading zeros as octal (08/09 error out); convert
+    # to base 10 before comparing, which also lets the canonical-form check
+    # reject redundant spellings like 01of3 or 00of9.
+    [ -n "$PARTITION_WANT" ] && PARTITION_WANT=$((10#$PARTITION_WANT))
+    [ -n "$PARTITION_COUNT" ] && PARTITION_COUNT=$((10#$PARTITION_COUNT))
     if [ -z "$PARTITION_WANT" ] || [ -z "$PARTITION_COUNT" ] \
+      || [ "$PARTITION_WANT" -eq 0 ] || [ "$PARTITION_COUNT" -eq 0 ] \
       || [ "$PARTITION" != "${PARTITION_WANT}of${PARTITION_COUNT}" ] \
       || [ "$PARTITION_WANT" -gt "$PARTITION_COUNT" ]; then
       printf 'fm-lint.sh: --partition must be NofM with 1 <= N <= M, got %s.\n' "$PARTITION" >&2
