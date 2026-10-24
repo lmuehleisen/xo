@@ -20,6 +20,7 @@ For a Lavish board-backed handoff, pass the reply through `bin/fm-procevent-lavi
 Prefer holding the work item the question gates over minting a new row; create a new task only when no work item exists to hold.
 The originating investigation or review is never its own inventory entry, so hold a separate task for the call and pass `--origin <origin-id>` so `complete` can check it.
 Put the question and its options in the hold reason, and keep one held task per genuine gate: a multi-question review is one held task pointing at its report, not a row per question. Represent that task with exactly one board card that consolidates its questions and options; never fan one task id into duplicate same-key cards.
+Raise that card through `bin/fm-captain-hold.sh hold` with the call, not later, so the deck shows the real options the moment the captain looks; use its `card` subcommand to refresh an open call instead of re-authoring the card in a board payload.
 Register or re-hold through `bin/fm-captain-hold.sh hold`, which is idempotent per task id.
 For a completed ship awaiting merge approval, use that owner rather than bare `tasks-axi hold`; it also records the declared wait when the worker reported only `done:`.
 After verifying the branch and test evidence and confirming no further worker work is wanted, load `harness-adapters` and stop the finished worker through `bin/fm-control.sh <id> exit`, preserving its branch, worktree, and task.
@@ -71,5 +72,5 @@ The absence of a routed work item is not a divergence and the guard never requir
 6. Close each call only through `answer` (or a channel that feeds `answers`), close a captured-source reconcile request through evidence-backed `reconcile close`, record a still-active reconciliation through `reconcile note`, use `--until` when the captain defers it, or confirm a channel already closed it.
 7. Confirm Ops reflects the outcome: answered or reconciled-moot calls leave Captain's Call, released work resumes, active reconciliations remain held, and deferred calls sit in Charted Next with their date.
 
-`bin/fm-captain-hold.sh --help` owns command syntax, close modes, legacy-identity compatibility, completion attestation, retry behavior, and close ordering.
+`bin/fm-captain-hold.sh --help` owns command syntax, card input forms, close modes, legacy-identity compatibility, completion attestation, retry behavior, and close ordering.
 `docs/captain-hold-lifecycle.md` records the mechanism and regression evidence without restating this policy.

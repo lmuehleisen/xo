@@ -625,6 +625,40 @@ test_ask_user_escalation_format() {
   pass "fm-brief: all modes preserve verification and ordinary escalation without pipeline gates"
 }
 
+# A needs-decision's options, recommendation, and context must reach the
+# supervisor through a recognized status event: `note:` lines surface in the
+# drain's UNREAD STATUS, while bare continuation bullets under the summary are
+# dropped by every presentation path - and appended after the call they would
+# also displace needs-decision as the newest status event, hiding the wait from
+# status_worker_wait_verb. Both generated briefs must teach the note-line form
+# with the needs-decision append last.
+test_decision_details_ride_note_events() {
+  local home brief
+  home="$TMP_ROOT/decision-detail-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-decship some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero"
+  brief="$home/data/brief-decship/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+  assert_grep 'note [at=<epoch>]: - value: label - hint' "$brief" \
+    "ship brief must carry decision options as recognized note: status events"
+  assert_grep 'appended BEFORE the needs-decision line' "$brief" \
+    "ship brief must keep the needs-decision line the newest status event"
+  assert_no_grep 'options under that summary' "$brief" \
+    "ship brief still instructs continuation bullets no supervision surface reads"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-decscout alpha --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  brief="$home/data/brief-decscout/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_grep 'note [at=<epoch>]: - value: label - hint' "$brief" \
+    "scout brief must carry decision options as recognized note: status events"
+  assert_grep 'appended BEFORE the needs-decision line' "$brief" \
+    "scout brief must keep the needs-decision line the newest status event"
+  pass "fm-brief: ship and scout briefs carry decision details as recognized note: events"
+}
+
 # The project-memory section bounds crewmate edits of a project's AGENTS.md or
 # CLAUDE.md to corrections of factually wrong information - including wrong
 # information the task itself introduced - and never invites additions of
@@ -1734,6 +1768,7 @@ test_no_mistakes_pipeline_opt_in
 test_no_mistakes_dod_green_detection
 test_pr_based_dod_requires_non_draft
 test_ask_user_escalation_format
+test_decision_details_ride_note_events
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path

@@ -5043,6 +5043,302 @@ test_historical_self_inventory_has_workable_repair
 test_inventory_compares_backend_identities
 test_origin_is_never_its_own_inventory_entry
 test_complete_refuses_an_entry_held_for_another_origin
+
+test_hold_writes_a_raise_time_decision_card() {
+  local home store mode
+  home=$(make_home raise-time-card)
+  store="$home/state/decision-cards/sample-card-call.json"
+  run_captain "$home" hold sample-card-call --title "Decide the sample route" \
+    --reason "captain route choice" --repo sample --card-title "Pick the sample route" \
+    --about "two viable routes" --option "route-a:Route A:reversible" \
+    --option "route-b:Route B" --recommend route-a --close release \
+    --decide "choose one" >/dev/null \
+    || fail "hold did not accept the card flags"
+  jq -e '.schema == "fm-decision-card.v1"
+         and (.card.key == "sample-card-call")
+         and (.card.title == "Pick the sample route")
+         and (.card.repo == "sample")
+         and (.card.decide == "choose one")
+         and (.card.about == "two viable routes")
+         and ([.card.options[].value] == ["route-a", "route-b"])
+         and (.card.recommend_value == "route-a")
+         and (.card.close == "release")
+         and (any(.card.options[]; .value == "reconcile") | not)' "$store" >/dev/null \
+    || fail "the raise-time card is not a valid authored fm-decision-card.v1 record"
+  mode=$(stat -c %a "$store" 2>/dev/null || stat -f %Lp "$store")
+  [ "$mode" = "600" ] || fail "the raise-time card is not 0600: $mode"
+  pass "hold writes the raise-time decision card into the durable store"
+}
+
+test_hold_refuses_an_invalid_card_before_any_mutation() {
+  local home
+  home=$(make_home card-refusal)
+  if run_captain "$home" hold sample-bad-card --title "Bad card" --reason "captain choice" \
+      --card-title "Bad card" --option "a:Option A" --recommend nowhere \
+      > "$home/out" 2> "$home/err"; then
+    fail "hold accepted a card whose recommendation names no option"
+  fi
+  assert_contains "$(cat "$home/err")" "recommend_value" "the refusal does not name the broken field"
+  assert_absent "$home/state/decision-cards/sample-bad-card.json" "a refused card was still stored"
+  if grep -q "sample-bad-card" "$home/data/backlog.md"; then
+    fail "a refused card still created the task"
+  fi
+  if run_captain "$home" hold sample-reserved-card --title "Reserved" --reason "captain choice" \
+      --card-title "Reserved" --option "reconcile:Reconcile it" > "$home/out" 2> "$home/err"; then
+    fail "hold accepted the reserved reconcile option value"
+  fi
+  assert_contains "$(cat "$home/err")" "reconcile is reserved" \
+    "the refusal does not name the reserved value"
+  pass "hold refuses an invalid card before any mutation"
+}
+
+test_card_rewrites_an_open_call_and_a_rehold_preserves_it() {
+  local home store
+  home=$(make_home card-update)
+  store="$home/state/decision-cards/sample-card-call.json"
+  run_captain "$home" hold sample-card-call --title "Decide the sample route" \
+    --reason "captain route choice" --repo sample --card-title "First copy" \
+    --option "a:Option A" >/dev/null || fail "hold with a card failed"
+  run_captain "$home" card sample-card-call --card-title "Second copy" \
+    --option "a:Option A" --option "b:Option B" >/dev/null \
+    || fail "card did not rewrite an open call"
+  jq -e '.card.title == "Second copy" and ([.card.options[].value] == ["a", "b"])' "$store" >/dev/null \
+    || fail "the rewritten card is not the stored record"
+  run_captain "$home" hold sample-card-call --reason "captain route choice" >/dev/null \
+    || fail "re-holding an active call failed"
+  jq -e '.card.title == "Second copy"' "$store" >/dev/null \
+    || fail "a re-hold without card flags clobbered the stored card"
+  if run_captain "$home" card sample-absent-call --card-title "Absent" --option "a:A" \
+      > "$home/out" 2> "$home/err"; then
+    fail "card accepted a task that is not an open captain call"
+  fi
+  assert_absent "$home/state/decision-cards/sample-absent-call.json" \
+    "a card was written for a task that is not an open call"
+  pass "card rewrites an open call and a re-hold preserves the stored copy"
+}
+
+# A card belongs to a live call: once the call is answered, `card` refuses and
+# the stored record the captain was shown stays untouched.
+test_card_refuses_a_closed_call() {
+  local home store out rc
+  home=$(make_home card-closed)
+  store="$home/state/decision-cards/sample-closed-card.json"
+  run_captain "$home" hold sample-closed-card --title "Decide the closed route" \
+    --reason "captain closed-route choice" --repo sample --card-title "Shown copy" \
+    --option "a:Option A" >/dev/null || fail "hold with a card failed"
+  printf 'Go with A.\n' > "$home/go.txt"
+  run_captain "$home" answer sample-closed-card --decision-file "$home/go.txt" >/dev/null \
+    || fail "answer failed on the card fixture"
+  set +e
+  out=$(run_captain "$home" card sample-closed-card --card-title "Late copy" \
+    --option "b:Option B" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "card accepted a call that is no longer open"
+  assert_contains "$out" "not an open captain call" \
+    "the closed-call refusal did not name the reason: $out"
+  jq -e '.card.title == "Shown copy"' "$store" >/dev/null \
+    || fail "the refused card overwrote the stored record"
+  pass "card refuses a closed call and leaves the stored record untouched"
+}
+
+# A flag-built card records the repository its task carries: the one hold
+# creates the task with from its origin or the default, the one an existing
+# backlog row already names, or, for a row that names none, the one the stored
+# card already holds. A card refresh never turns a known repository into null.
+test_card_records_the_task_repository() {
+  local home store
+  home=$(make_home card-repo)
+  store="$home/state/decision-cards"
+  printf 'project=%s/projects/sample\n' "$home" > "$home/state/sample-repo-origin.meta"
+  run_captain "$home" hold sample-origin-card --title "Decide the origin route" \
+    --reason "captain origin-route choice" --origin sample-repo-origin \
+    --card-title "Origin copy" --option "a:Option A" >/dev/null \
+    || fail "hold with an origin and a card failed"
+  jq -e '.card.repo == "sample"' "$store/sample-origin-card.json" >/dev/null \
+    || fail "a card for a task created from its origin lost the origin's repository"
+  run_captain "$home" hold sample-default-card --title "Decide the default route" \
+    --reason "captain default-route choice" --card-title "Default copy" \
+    --option "a:Option A" >/dev/null || fail "hold with a default-repository card failed"
+  jq -e '.card.repo == "firstmate"' "$store/sample-default-card.json" >/dev/null \
+    || fail "a card for a task created in the default repository recorded another one"
+  tasks_in "$home" add sample-row-card "Decide the row route" --repo sample >/dev/null \
+    || fail "could not add the backlog row fixture"
+  run_captain "$home" hold sample-row-card --reason "captain row-route choice" \
+    --card-title "Row copy" --option "a:Option A" >/dev/null \
+    || fail "hold with a card on an existing backlog row failed"
+  jq -e '.card.repo == "sample"' "$store/sample-row-card.json" >/dev/null \
+    || fail "a card on an existing backlog row lost the row's repository"
+  run_captain "$home" card sample-origin-card --card-title "Refreshed copy" \
+    --option "a:Option A" >/dev/null || fail "card did not refresh the origin call"
+  jq -e '.card.title == "Refreshed copy" and .card.repo == "sample"' \
+    "$store/sample-origin-card.json" >/dev/null \
+    || fail "a card refresh replaced the task's repository"
+  tasks_in "$home" add sample-bare-card "Decide the bare route" >/dev/null \
+    || fail "could not add the repository-less backlog row fixture"
+  jq -n '{key:"sample-bare-card", type:"decision", repo:"sample", title:"File copy",
+    options:[{value:"a", label:"Option A"}]}' > "$home/bare-card.json"
+  run_captain "$home" hold sample-bare-card --reason "captain bare-route choice" \
+    --card-file "$home/bare-card.json" >/dev/null || fail "hold with a card file failed"
+  run_captain "$home" card sample-bare-card --card-title "Flag copy" \
+    --option "a:Option A" >/dev/null || fail "card did not refresh the bare call"
+  jq -e '.card.title == "Flag copy" and .card.repo == "sample"' \
+    "$store/sample-bare-card.json" >/dev/null \
+    || fail "a card refresh dropped the stored card's repository"
+  pass "a flag-built card records its task's repository and a refresh keeps it"
+}
+
+# --card-file takes a card out of an envelope only when the envelope declares
+# fm-decision-card.v1, and the refusal lands before any mutation; a bare card
+# stays acceptable.
+test_card_file_refuses_an_envelope_of_another_schema() {
+  local home
+  home=$(make_home card-envelope)
+  jq -n '{schema:"fm-decision-card.v0", generated:"2026-08-19T00:00:00Z",
+    card:{key:"sample-envelope-card", type:"decision", repo:"sample", title:"File copy",
+      options:[{value:"a", label:"Option A"}]}}' > "$home/old-envelope.json"
+  if run_captain "$home" hold sample-envelope-card --title "Decide the envelope route" \
+      --reason "captain envelope choice" --card-file "$home/old-envelope.json" \
+      > "$home/out" 2> "$home/err"; then
+    fail "hold accepted an envelope that names another schema"
+  fi
+  assert_contains "$(cat "$home/err")" "envelope schema must be fm-decision-card.v1" \
+    "the refusal does not name the required schema"
+  assert_absent "$home/state/decision-cards/sample-envelope-card.json" \
+    "a refused envelope was still stored"
+  if grep -q "sample-envelope-card" "$home/data/backlog.md"; then
+    fail "a refused envelope still created the task"
+  fi
+  jq '.card' "$home/old-envelope.json" > "$home/bare-card.json"
+  run_captain "$home" hold sample-envelope-card --title "Decide the envelope route" \
+    --reason "captain envelope choice" --card-file "$home/bare-card.json" >/dev/null \
+    || fail "hold refused the same card supplied bare"
+  jq -e '.schema == "fm-decision-card.v1" and .card.title == "File copy"' \
+    "$home/state/decision-cards/sample-envelope-card.json" >/dev/null \
+    || fail "the bare card file was not stored as an fm-decision-card.v1 record"
+  pass "card file refuses an envelope of another schema and accepts a bare card"
+}
+
+# A card value flag whose next token is another flag must refuse rather than
+# store the flag's name as copy and silently skip the real flag.
+test_card_value_flags_never_swallow_the_next_flag() {
+  local home out rc
+  home=$(make_home card-flag-values)
+  run_captain "$home" hold flag-value-call --title "Decide the flag route" \
+    --reason "captain flag choice" >/dev/null || fail "hold failed"
+  set +e
+  out=$(run_captain "$home" card flag-value-call --card-title --no-freeform 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "card consumed --no-freeform as the --card-title value"
+  assert_contains "$out" "--card-title needs a value" \
+    "the refusal does not name the starved flag: $out"
+  set +e
+  out=$(run_captain "$home" hold flag-hold-call --title "Hold flags" \
+    --reason "captain choice" --card-title --reason 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "hold consumed --reason as the --card-title value"
+  assert_contains "$out" "--card-title needs a value" \
+    "the hold refusal does not name the starved flag: $out"
+  assert_absent "$home/state/decision-cards/flag-hold-call.json" \
+    "a refused flag pairing still stored a card"
+  pass "card value flags refuse a following flag instead of consuming it"
+}
+
+# call_item is the contract: a card whose owner is not a string fails it, and
+# the reasons ladder must still name the broken field instead of passing the
+# card through with no explanation.
+test_card_file_refuses_a_non_string_owner() {
+  local home out rc
+  home=$(make_home card-owner)
+  jq -n '{key:"sample-owner-card", type:"decision", repo:"sample",
+    title:"Owned copy", owner:5,
+    options:[{value:"a", label:"Option A"}]}' > "$home/owner-card.json"
+  set +e
+  out=$(run_captain "$home" hold sample-owner-card --title "Decide the owned route" \
+    --reason "captain owner choice" --card-file "$home/owner-card.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "hold accepted a card whose owner is not a string"
+  assert_contains "$out" "owner" \
+    "the refusal does not name the broken field: $out"
+  assert_absent "$home/state/decision-cards/sample-owner-card.json" \
+    "a refused card was still stored"
+  if grep -q "sample-owner-card" "$home/data/backlog.md"; then
+    fail "a refused card still created the task"
+  fi
+  pass "hold refuses a card whose owner is not a string"
+}
+
+# A merge card lives under its merge.<task> key while the open call lives on
+# the task: `card merge.<task>` is the supported refresh path, still gated on
+# the underlying call being open.
+test_card_refreshes_a_merge_card_under_its_merge_key() {
+  local home out rc store
+  home=$(make_home card-merge-key)
+  store="$home/state/decision-cards"
+  tasks_in "$home" add merge-gate-work "Ship the merge gate" --repo sample >/dev/null \
+    || fail "could not add the work row fixture"
+  run_captain "$home" hold merge-gate-work --reason "merge needs the captain" >/dev/null \
+    || fail "hold on the work row failed"
+  jq -n '{key:"merge.merge-gate-work", type:"merge", repo:"sample",
+    title:"Merge the gate", risk:"touches the release path", close:"release",
+    options:[{value:"merge", label:"Merge it"}]}' > "$home/merge-card.json"
+  run_captain "$home" card merge.merge-gate-work --card-file "$home/merge-card.json" \
+    >/dev/null || fail "card refused the merge.<task> key of an open call"
+  jq -e '.schema == "fm-decision-card.v1" and .card.key == "merge.merge-gate-work"
+         and .card.type == "merge" and (.card.risk == "touches the release path")
+         and (.card.close == "release")' "$store/merge.merge-gate-work.json" >/dev/null \
+    || fail "the merge.<task> card was not stored under its merge key"
+  assert_absent "$store/merge-gate-work.json" \
+    "the merge key wrote a record under the bare task id"
+  run_captain "$home" card merge.merge-gate-work --card-title "Revised merge copy" \
+    --type merge --risk "revised risk" --option "merge:Merge it" >/dev/null \
+    || fail "the flag-built path refused a merge.<task> refresh"
+  jq -e '.card.title == "Revised merge copy" and .card.repo == "sample"' \
+    "$store/merge.merge-gate-work.json" >/dev/null \
+    || fail "a flag-built merge.<task> refresh lost the underlying task repository"
+  jq -n '{key:"merge.unheld-work", type:"merge", repo:null,
+    title:"Merge nothing", risk:"none",
+    options:[{value:"merge", label:"Merge it"}]}' > "$home/unheld-card.json"
+  tasks_in "$home" add unheld-work "Unheld work" >/dev/null \
+    || fail "could not add the unheld row fixture"
+  set +e
+  out=$(run_captain "$home" card merge.unheld-work --card-file "$home/unheld-card.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "card accepted a merge.<task> key for a task that is not an open call"
+  assert_contains "$out" "not an open captain call" \
+    "the merge.<task> refusal does not name the open-call gate: $out"
+  assert_absent "$store/merge.unheld-work.json" \
+    "a card was stored for a merge key whose task is not held"
+  pass "card refreshes a merge.<task> record against the underlying open call"
+}
+
+# open's own exit 2 (an unreadable backlog, an unresolvable data dir, an
+# incompatible tasks-axi) must reach the operator as a reported refusal,
+# not a silent status-2 death for `card` with zero output.
+test_card_reports_an_unestablishable_open_check() {
+  local home out rc
+  home=$(make_home card-open-fail)
+  tasks_in "$home" add open-fail-task "Decide the open failure" --kind captain >/dev/null \
+    || fail "could not add the call fixture"
+  run_captain "$home" hold open-fail-task --reason "gate" >/dev/null \
+    || fail "hold on the call fixture failed"
+  chmod 000 "$home/data/backlog.md"
+  set +e
+  out=$(run_captain "$home" card open-fail-task --card-title "Decide it" 2>&1)
+  rc=$?
+  set -e
+  chmod 600 "$home/data/backlog.md"
+  [ "$rc" -ne 0 ] || fail "card accepted an unestablishable open check"
+  [ -n "$out" ] || fail "card died silently on an unestablishable open check"
+  assert_contains "$out" "captain call" \
+    "the open-check failure was not reported to the operator: $out"
+  pass "card reports an unestablishable open check instead of dying silently"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
@@ -5106,3 +5402,13 @@ test_captain_hold_mutations_address_the_beads_backend
 test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type
 test_archived_answered_hold_still_satisfies_the_gate
 test_archived_answer_in_a_user_configured_archive_satisfies_the_gate
+test_hold_writes_a_raise_time_decision_card
+test_hold_refuses_an_invalid_card_before_any_mutation
+test_card_rewrites_an_open_call_and_a_rehold_preserves_it
+test_card_refuses_a_closed_call
+test_card_records_the_task_repository
+test_card_file_refuses_an_envelope_of_another_schema
+test_card_value_flags_never_swallow_the_next_flag
+test_card_file_refuses_a_non_string_owner
+test_card_refreshes_a_merge_card_under_its_merge_key
+test_card_reports_an_unestablishable_open_check

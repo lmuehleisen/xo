@@ -21,7 +21,9 @@
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
+#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
+#     [<card flags>]
+#   fm-captain-hold.sh card <task-id | merge.<task-id>> <card flags>
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
@@ -36,6 +38,16 @@
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
 #   fm-captain-hold.sh reconcile note <task-id> --note-file <path>
+#
+# Card flags - the raise-time decision card, written straight into the same
+# durable store the board build persists (state/decision-cards/<task>.json):
+#   --card-file <path>     a bare card or an fm-decision-card.v1 envelope
+#   --card-title <text>    short noun phrase; defaults to --title
+#   --type <decision|merge|credential>   --about <text>   --decide <text>
+#   --detail <text>        --option <value:label[:hint]> (repeatable)
+#   --recommend <value>    --close <done|release>
+#   --pr-url <https-url>   --risk <text>
+#   --no-freeform          --freeform-hint <text>
 #
 # `hold` places an existing task under an active captain hold, or creates the
 # task first when no work item exists to hold (--title required to create; the
@@ -72,6 +84,18 @@
 # repairs the same transition when its inventory explicitly includes that ship.
 # Neither command exits an agent, merges work, or suppresses a new worker event;
 # the watcher admits a quiet ordinary-worker wait only after verified agent exit.
+#
+# A structured card is supplied where the question is raised, not re-derived
+# later by a composition. `hold` accepts the card flags above and writes the
+# fm-decision-card.v1 record the board build persists into the same durable
+# store, so the captain's deck shows the call's title, context, options, and
+# recommendation the moment it is raised; `card` rewrites that record for an
+# open call, and `card merge.<task-id>` addresses a merge card by its store
+# key while checking the underlying task is still an open call. The store is
+# then a source as well as a sink: bin/fm-bearings-board.sh
+# merges a stored record FIRST for its key, so an older composed copy can never
+# shadow the card written at raise time. Validation is fail-closed and runs
+# before the hold's first mutation, so a malformed card changes nothing.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -275,6 +299,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-session-lock-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-decision-card-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-decision-card-lib.sh"
 
 PARENT_HOLD_PUBLISHED=0
 publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
@@ -293,6 +320,10 @@ CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
 CAPTAIN_CONTROL_LOCK_HELD=0
 captain_hold_cleanup() {
+  if [ -n "${DECISION_CARD_TMP:-}" ]; then
+    rm -f -- "$DECISION_CARD_TMP"
+    DECISION_CARD_TMP=
+  fi
   if [ "$CAPTAIN_META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CAPTAIN_META_LOCK" || true
     CAPTAIN_META_LOCK_HELD=0
@@ -1198,6 +1229,218 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
   printf '%s %s %s\n' "$id" "$how" "$origin_state"
 }
 
+# --- the raise-time decision card --------------------------------------------
+# A call is answerable the moment it is raised, but the captain's deck shows
+# options, context, and a recommendation only when a card carries them. That
+# structure exists in the agent that raises the call and in nothing later, so
+# `hold` writes the same fm-decision-card.v1 record the board build persists
+# into the same durable store, and `card` rewrites it for an open call. The
+# authored-card contract is owned once by bin/fm-decision-card-lib.sh, the same
+# definitions the board's payload validator splices in, so the CLI and the
+# board can never disagree about what a valid card is. The reserved `reconcile`
+# choice is never authored here - the board build injects it.
+#
+# Validation is fail-closed and runs before the hold's first mutation, so a
+# malformed card leaves the task, the backlog, and the store untouched. The
+# flag form and --card-file are mutually exclusive; a file is written verbatim
+# after validation, as a bare card or an envelope, which must declare
+# fm-decision-card.v1.
+
+CARD_USED=0
+CARD_FILE=
+CARD_FLAG_ARGC=0
+CARD_TITLE=
+CARD_TYPE=
+CARD_ABOUT=
+CARD_DECIDE=
+CARD_DETAIL=
+CARD_OPTIONS=
+CARD_RECOMMEND=
+CARD_FREEFORM=1
+CARD_FREEFORM_HINT=
+CARD_CLOSE=
+CARD_PR_URL=
+CARD_RISK=
+DECISION_CARD_TMP=
+
+# A value flag whose next token is another known flag swallowed that flag as
+# its value, e.g. `--card-title --no-freeform` set the title to the literal
+# string and silently skipped the real flag. Card prose may legitimately start
+# with `--`, so only the parser's own flag names are refused as a value.
+card_need_value() {  # <flag> <value> [shape-suffix]
+  case "${2-}" in
+    ''|--card-file|--card-title|--type|--about|--decide|--detail|--option|--recommend|--close|--pr-url|--risk|--freeform-hint|--no-freeform|--title|--reason|--repo|--origin|--until)
+      fail "$1 needs a value${3-}" ;;
+  esac
+}
+
+card_flag_consume() {  # <argv...>; sets CARD_FLAG_ARGC when a card flag was consumed
+  local flag=${1-} value=${2-}
+  CARD_FLAG_ARGC=0
+  case "$flag" in
+    --card-file) card_need_value --card-file "$value" " (a path)"; CARD_FILE=$value; CARD_FLAG_ARGC=2 ;;
+    --card-title) card_need_value --card-title "$value"; CARD_TITLE=$value; CARD_FLAG_ARGC=2 ;;
+    --type) card_need_value --type "$value"; CARD_TYPE=$value; CARD_FLAG_ARGC=2 ;;
+    --about) card_need_value --about "$value"; CARD_ABOUT=$value; CARD_FLAG_ARGC=2 ;;
+    --decide) card_need_value --decide "$value"; CARD_DECIDE=$value; CARD_FLAG_ARGC=2 ;;
+    --detail) card_need_value --detail "$value"; CARD_DETAIL=$value; CARD_FLAG_ARGC=2 ;;
+    --option) card_need_value --option "$value" ":label[:hint]"; CARD_OPTIONS=$CARD_OPTIONS$value$'\n'; CARD_FLAG_ARGC=2 ;;
+    --recommend) card_need_value --recommend "$value"; CARD_RECOMMEND=$value; CARD_FLAG_ARGC=2 ;;
+    --close) card_need_value --close "$value"; CARD_CLOSE=$value; CARD_FLAG_ARGC=2 ;;
+    --pr-url) card_need_value --pr-url "$value"; CARD_PR_URL=$value; CARD_FLAG_ARGC=2 ;;
+    --risk) card_need_value --risk "$value"; CARD_RISK=$value; CARD_FLAG_ARGC=2 ;;
+    --no-freeform) CARD_FREEFORM=0; CARD_FLAG_ARGC=1 ;;
+    --freeform-hint) card_need_value --freeform-hint "$value"; CARD_FREEFORM_HINT=$value; CARD_FLAG_ARGC=2 ;;
+    *) return 1 ;;
+  esac
+  CARD_USED=1
+  return 0
+}
+
+# The repository `hold` creates a new captain task with: the explicit --repo,
+# else the origin's project, else firstmate.
+new_task_repo() {  # <explicit-repo> <origin-id>
+  local repo=$1 origin=$2
+  if [ -z "$repo" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
+    repo=$(meta_value "$STATE/$origin.meta" project)
+    repo=${repo%/}
+    repo=${repo##*/}
+  fi
+  printf '%s\n' "${repo:-firstmate}"
+}
+
+# The repository a flag-built card records: the explicit --repo, else the
+# task's own metadata, else the repository an existing backlog row already
+# names, else the one `hold` is about to create the task with. An existing row
+# that names none keeps the stored card's repository, so a `card` refresh never
+# turns a known repository into null. Runs outside a command substitution so a
+# backlog read that hits its bound still stops the command by name.
+CARD_REPO=
+resolve_card_repo() {  # <task-id> <explicit-repo> <origin-id>; sets CARD_REPO
+  local id=$1 origin=$3 file value
+  CARD_REPO=$2
+  [ -z "$CARD_REPO" ] || return 0
+  file="$STATE/$id.meta"
+  if [ -f "$file" ] && [ ! -L "$file" ]; then
+    value=$(meta_value "$file" project)
+    value=${value%/}
+    CARD_REPO=${value##*/}
+    [ -z "$CARD_REPO" ] || return 0
+  fi
+  if task_show "$id"; then
+    CARD_REPO=$(show_field_value "$TASK_SHOW_OUTPUT" repo)
+    [ -z "$CARD_REPO" ] || return 0
+    file="$STATE/decision-cards/$id.json"
+    if [ -f "$file" ] && [ ! -L "$file" ]; then
+      CARD_REPO=$(jq -r "$FM_DECISION_CARD_JQ_DEFS"'
+        if (envelope_reasons | length) == 0 and (.card.repo | type) == "string"
+          then .card.repo else empty end' "$file" 2>/dev/null) || CARD_REPO=
+    fi
+    return 0
+  fi
+  CARD_REPO=$(new_task_repo '' "$origin")
+}
+
+validate_decision_card() {  # <card.json> <context>
+  local card=$1 context=$2 reasons
+  command -v jq >/dev/null 2>&1 || fail "jq is required for a structured decision card"
+  jq -e 'type == "object"' "$card" >/dev/null 2>&1 \
+    || fail "$context must be a JSON object"
+  reasons=$(jq -r "$FM_DECISION_CARD_JQ_DEFS"'
+    if call_item then "" else (failure_reasons | join("; ")) end' "$card" 2>/dev/null) \
+    || fail "$context could not be validated"
+  [ -z "$reasons" ] || fail "invalid $context: $reasons"
+}
+
+stage_authored_card() {  # <card-key> <title> <explicit-repo> <origin-id> [<repo-task-id>]; sets DECISION_CARD_TMP
+  local id=$1 title=$2 repo=$3 origin=$4 repo_task=${5:-$1} title_value envelope
+  DECISION_CARD_TMP=
+  [ "$CARD_USED" -eq 1 ] || return 0
+  if [ -n "$CARD_FILE" ]; then
+    case "$CARD_TITLE$CARD_TYPE$CARD_ABOUT$CARD_DECIDE$CARD_DETAIL$CARD_OPTIONS$CARD_RECOMMEND$CARD_CLOSE$CARD_PR_URL$CARD_RISK$CARD_FREEFORM_HINT" in
+      '') : ;;
+      *) fail "--card-file cannot be combined with the card flags; put everything in the file" ;;
+    esac
+    [ "$CARD_FREEFORM" -eq 1 ] \
+      || fail "--card-file cannot be combined with --no-freeform; put everything in the file"
+    [ -f "$CARD_FILE" ] && [ ! -L "$CARD_FILE" ] || fail "card file does not exist: $CARD_FILE"
+    envelope=$(jq -r "$FM_DECISION_CARD_JQ_DEFS"'
+      if card_envelope then envelope_reasons | join("; ") else "" end' "$CARD_FILE" 2>/dev/null) \
+      || fail "card file is not a JSON card: $CARD_FILE"
+    [ -z "$envelope" ] || fail "invalid card file $CARD_FILE: $envelope"
+    DECISION_CARD_TMP=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-decision-card.XXXXXX") \
+      || fail "cannot stage the decision card"
+    if ! jq -c "$FM_DECISION_CARD_JQ_DEFS"'if card_envelope then .card else . end' "$CARD_FILE" \
+        > "$DECISION_CARD_TMP"; then
+      rm -f -- "$DECISION_CARD_TMP"
+      DECISION_CARD_TMP=
+      fail "card file is not a JSON card: $CARD_FILE"
+    fi
+    validate_decision_card "$DECISION_CARD_TMP" "card file $CARD_FILE"
+  else
+    title_value=${CARD_TITLE:-$title}
+    [ -n "$title_value" ] || fail "--card-title (or --title) is required with the card flags"
+    resolve_card_repo "$repo_task" "$repo" "$origin"
+    DECISION_CARD_TMP=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-decision-card.XXXXXX") \
+      || fail "cannot stage the decision card"
+    if ! jq -n \
+        --arg key "$id" --arg title "$title_value" --arg repo "$CARD_REPO" \
+        --arg type "${CARD_TYPE:-decision}" --arg about "$CARD_ABOUT" \
+        --arg decide "$CARD_DECIDE" --arg detail "$CARD_DETAIL" \
+        --arg options "$CARD_OPTIONS" --arg recommend "$CARD_RECOMMEND" \
+        --arg freeform_hint "$CARD_FREEFORM_HINT" --arg close "$CARD_CLOSE" \
+        --arg pr_url "$CARD_PR_URL" --arg risk "$CARD_RISK" \
+        --arg freeform "$CARD_FREEFORM" '
+        ($options | split("\n") | map(select(length > 0))
+          | map(split(":")
+            | if length > 3 then error("option") else . end
+            | {value: .[0], label: (.[1] // .[0]), hint: (.[2] // "")}
+            | if .hint == "" then del(.hint) else . end)) as $opts
+        | {key: $key, type: $type, repo: (if $repo == "" then null else $repo end),
+           title: $title, options: $opts, allow_freeform: ($freeform == "1")}
+        + (if $about == "" then {} else {about: $about} end)
+        + (if $decide == "" then {} else {decide: $decide} end)
+        + (if $detail == "" then {} else {detail: $detail} end)
+        + (if $freeform_hint == "" then {} else {freeform_hint: $freeform_hint} end)
+        + (if $close == "" then {} else {close: $close} end)
+        + (if $pr_url == "" then {} else {pr_url: $pr_url} end)
+        + (if $risk == "" then {} else {risk: $risk} end)
+        + (if $recommend == "" then {} else {recommend_value: $recommend} end)' \
+        > "$DECISION_CARD_TMP"; then
+      rm -f -- "$DECISION_CARD_TMP"
+      DECISION_CARD_TMP=
+      fail "cannot compose the decision card (an option is value:label[:hint]) "
+    fi
+  fi
+  validate_decision_card "$DECISION_CARD_TMP" "decision card"
+  [ "$(jq -r '.key' "$DECISION_CARD_TMP")" = "$id" ] \
+    || fail "decision card key must be the task id: $id"
+}
+
+write_decision_card() {  # <card.json>
+  local card=$1 dir key envelope tmp
+  dir="$STATE/decision-cards"
+  if [ -d "$dir" ] && [ ! -L "$dir" ]; then
+    :
+  elif ! (umask 077; mkdir -p "$dir"); then
+    fail "cannot create $dir"
+  fi
+  [ -d "$dir" ] && [ ! -L "$dir" ] || fail "$dir is not a usable directory"
+  key=$(jq -r '.key' "$card") || fail "cannot read the decision card key"
+  validate_slug task-id "$key"
+  envelope=$(jq -c --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{schema:"fm-decision-card.v1", generated:$generated, card:.}' "$card") \
+    || fail "cannot wrap the decision card"
+  tmp=$(umask 077; mktemp "$dir/.card.XXXXXX") || fail "cannot stage the decision card"
+  if printf '%s\n' "$envelope" > "$tmp" \
+    && chmod 0600 "$tmp" \
+    && mv -f -- "$tmp" "$dir/$key.json"; then
+    return 0
+  fi
+  rm -f -- "$tmp"
+  fail "cannot publish the decision card under $dir"
+}
+
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 superseded_reason='' decoded_show shown_reason
@@ -1211,7 +1454,9 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
-      *) usage >&2; exit 2 ;;
+      *)
+        if card_flag_consume "$@"; then shift "$CARD_FLAG_ARGC"; continue; fi
+        usage >&2; exit 2 ;;
     esac
     shift
   done
@@ -1233,6 +1478,10 @@ command_hold() {
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) : ;;
     *) fail "FM_CAPTAIN_HOLD_NOW must be a UTC YYYY-MM-DDTHH:MM:SSZ timestamp" ;;
   esac
+  # The card is staged and validated before the lock and before every
+  # mutation, so a malformed card leaves the task, the backlog, and the store
+  # exactly as they were.
+  stage_authored_card "$id" "$title" "$repo" "$origin"
   acquire_task_control_lock "$id"
   require_tasks_axi
   if task_show "$id"; then
@@ -1271,12 +1520,7 @@ command_hold() {
   else
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
-    if [ -z "$repo" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
-      repo=$(meta_value "$STATE/$origin.meta" project)
-      repo=${repo%/}
-      repo=${repo##*/}
-    fi
-    [ -n "$repo" ] || repo=firstmate
+    repo=$(new_task_repo "$repo" "$origin")
     validate_one_line repo "$repo"
     [ -z "$origin" ] || body=$(printf 'Origin: %s' "$origin")
     # tasks-axi add never passes --due. Beads due.required would refuse this
@@ -1349,6 +1593,11 @@ command_hold() {
   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
+  if [ -n "$DECISION_CARD_TMP" ]; then
+    write_decision_card "$DECISION_CARD_TMP"
+    rm -f -- "$DECISION_CARD_TMP"
+    DECISION_CARD_TMP=
+  fi
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
   declare_completed_ship_hold "$id"
   printf '%s\n' "$id"
@@ -1391,6 +1640,46 @@ body_with_record() {  # <shown-body> <record>
     new_body=$(printf '%s\n\n%s' "$new_body" "$body")
   fi
   printf '%s' "$new_body"
+}
+
+command_card() {  # <task-id | merge.<task-id>> <card flags>
+  local id=${1:-} card open_id
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    if card_flag_consume "$@"; then shift "$CARD_FLAG_ARGC"; continue; fi
+    usage >&2; exit 2
+  done
+  validate_slug task-id "$id"
+  # A merge.<task> key addresses that call's durable merge card; the open
+  # check and control lock still follow the underlying held task.
+  case "$id" in merge.*) open_id=${id#merge.} ;; *) open_id=$id ;; esac
+  validate_slug task-id "$open_id"
+  [ "$CARD_USED" -eq 1 ] || fail "card needs --card-file or the card flags"
+  stage_authored_card "$id" "" "" "" "$open_id"
+  # The open check runs under the same task lock answer takes, so a call closed
+  # while this command waited cannot receive a card afterwards. Command
+  # substitution turns open's own `exit 2` (unreadable backlog, unresolvable
+  # data dir, incompatible tasks-axi) into a status we can report, instead of
+  # killing card with no output.
+  acquire_task_control_lock "$open_id"
+  local open_rc=0 open_err
+  open_err=$(command_open "$open_id" --distinguish-absent 2>&1 >/dev/null) || open_rc=$?
+  if [ "$open_rc" -eq 2 ]; then
+    rm -f -- "$DECISION_CARD_TMP"
+    DECISION_CARD_TMP=
+    fail "cannot establish whether task $open_id is an open captain call: ${open_err:-no detail}"
+  fi
+  if [ "$open_rc" -ne 0 ]; then
+    rm -f -- "$DECISION_CARD_TMP"
+    DECISION_CARD_TMP=
+    fail "task $open_id is not an open captain call; a card belongs to a live hold"
+  fi
+  write_decision_card "$DECISION_CARD_TMP"
+  card=$DECISION_CARD_TMP
+  rm -f -- "$card"
+  DECISION_CARD_TMP=
+  printf '%s\n' "$id"
 }
 
 # Record a resolution block beneath any leading active hold-set stamp,
@@ -2581,6 +2870,7 @@ command_decision() {  # <task-id>
 
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
+  card) shift; command_card "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;

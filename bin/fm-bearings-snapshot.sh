@@ -38,9 +38,14 @@
 # buckets are total and mutually exclusive, so every captain hold appears in
 # exactly one decision bucket and none can fall through both. An actively worked
 # held task may also appear in Underway. A "live" hold is a default Captain's Call
-# entry; "blocked", "dated", and "aged" leave the default Captain's Call, render
-# as Charted Next gates stating why (the blocking work, the until date, or the
-# floored age), and are counted in omitted[].
+# entry; "reconciling", "blocked", "dated", and "aged" leave the default
+# Captain's Call, render as Charted Next gates stating why (the pending
+# reconcile request, the blocking work, the until date, or the floored age),
+# and are counted in omitted[]. Each of this home's own decisions_open rows
+# carries `close`, the hold's resolution mode: "done" when the held row is the
+# question itself (kind captain) and "release" when it is a captain-gated work
+# item, so a composed decision card's answer releases the hold instead of
+# closing unfinished work.
 # --all-decisions reveals every captain hold available within the bounded snapshot
 # and drops its gate, so a hold is never in both Captain's Call and Charted Next.
 # Aging is a projection safety net only; the durable
@@ -148,7 +153,7 @@ remote homes under one shared snapshot budget and may refresh the parent-side ca
 Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,name,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
-  decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
+  decisions_open{id,key,verb,summary,owner,title,reason,close}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner,filed}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 Default gates are selected newest filed first before their bound; undated gates
@@ -411,6 +416,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
     elif .hold_bucket == "dated" then ("until " + (.hold_until // "-"))
     elif .hold_bucket == "aged" and .hold_age_days != null then
       ("held " + (.hold_age_days | tostring) + "d")
+    elif .hold_bucket == "reconciling" then
+      ("reconcile requested "
+       + ((.reconcile_requested // "") | if . == "" then "-" else . end))
     else null end;
   def hold_gate_reason:
     (.hold_reason // .blocked_reason // "-") as $base
@@ -428,10 +436,13 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         end
       end;
   def as_gate($owner):
-    {id, title:(.title | trunc(60)),
-     blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-     reason:(hold_gate_reason | trunc(40)), owner:$owner,
-     filed:((.since // null) | trunc(40))};
+    # The reconcile note already spends the whole 40-column reason budget on
+    # the request time; widen the cap so the hold reason survives beside it.
+    (if .hold_bucket == "reconciling" then 80 else 40 end) as $reason_n
+    | {id, title:(.title | trunc(60)),
+       blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
+       reason:(hold_gate_reason | trunc($reason_n)), owner:$owner,
+       filed:((.since // null) | trunc(40))};
   def round_robin_landed($n):
     . as $groups
     | [range(0; (($groups | map(length) | max) // 0)) as $i
@@ -526,15 +537,24 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | . as $record
          | select(.structured and .hold_bucket != null)
          | select(($all_decisions == 1) or live_captain_call)
+         # A captain-kind row IS the question, so its answer completes it; any
+         # other held row is a captain-gated work item whose answer releases
+         # the hold instead of closing unfinished work. Only rows this home
+         # owns carry close - a remote call mode is its own home to declare.
          | {id,key:.id,verb:"captain-hold",
-            summary:hold_summary(.title; .hold_reason),owner:"(main)"} ]
+            summary:hold_summary(.title; .hold_reason),owner:"(main)",
+            title:(.title | trunc(120)),
+            reason:((.hold_reason // .blocked_reason // "") | trunc(200)),
+            close:(if .kind == "captain" then "done" else "release" end)} ]
      + [ (.secondmate_current.records // [])[] as $m
          | ([ $m.decisions_open[]?
               | select(.source == "backlog" and .verb == "captain-hold")
               | select(($all_decisions == 1) or live_captain_call)
               | {id:($m.id + "/" + .id),key,verb,
                  summary:hold_summary((.summary // .id);
-                                      (.reason // "captain decision pending")),owner:$m.id} ]
+                                      (.reason // "captain decision pending")),owner:$m.id,
+                 title:((.summary // .id) | trunc(120)),
+                 reason:((.reason // "") | trunc(200))} ]
             + [ $m.queued[]?
                 | select($all_decisions == 1 and .hold_kind == "captain")
                 | select(.id as $id
@@ -544,7 +564,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                          | index($id) | not)
                 | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",
                    summary:hold_summary((.title // .id);
-                                        (.hold_reason // "captain decision pending")),owner:$m.id} ])[] ]) as $decisions_all
+                                        (.hold_reason // "captain decision pending")),owner:$m.id,
+                   title:((.title // .id) | trunc(120)),
+                   reason:((.hold_reason // "") | trunc(200))} ])[] ]) as $decisions_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and projected_deferred_hold) ]

@@ -9,7 +9,31 @@
 #
 # Usage:
 #   fm-bearings-board.sh build <data.json> [--lavish <off|view|answers>]
+#   fm-bearings-board.sh compose <dest.json>
+#   fm-bearings-board.sh refresh
 #   fm-bearings-board.sh path
+#
+# compose    Write a deterministic fm-bearings-board.v1 payload built from the
+#            canonical snapshot (bin/fm-bearings-snapshot.sh --json): the fleet
+#            rows, one card per open captain call, and nothing an agent would
+#            have to judge. A call's card is a fallback carrying its durable
+#            summary as the title, no options, freeform answers only, and the
+#            snapshot's declared hold close mode, so answering a captain-gated
+#            work item releases its hold instead of closing the task,
+#            unless the durable store already holds that call's card: a stored
+#            merge.<task> card replaces the fallback here, and build's
+#            store-first merge supplies the raise-time record's real options
+#            whenever one was written.
+#            A Charted Next gate is composed dispatchable=false and only the
+#            parenthesized sentinel ids are classified as warnings, because
+#            the snapshot proves neither a cleared blocker-and-time gate nor a
+#            richer kind, and prose is never read to guess either.
+# refresh    compose to a temporary path, then build it. This is the scheduled
+#            path that keeps the board current with no agent turn: a cron or
+#            timer pass runs `refresh` and Lavish's live reload redraws every
+#            open review, phone included. It never invents the richer copy or
+#            the dispatch picker a /bearings lavish composition owns; re-run
+#            that composition when the board needs them.
 #
 # build      Validate the payload, drop the Captain's Call cards whose subject
 #            already landed, and inject the effective payload into a fresh copy
@@ -85,6 +109,36 @@
 # hidden is worse than a card wrongly shown. Cleanup is therefore a normal
 # rebuild effect rather than a committed migration or direct state mutation.
 #
+# THE RECONCILE CHOICE. Every decision card carries the standard `reconcile`
+# option, injected here so the guarantee does not depend on the composer's
+# memory, and the payload validator reserves that value across every card type.
+# The validator's reservation scope must equal the adapter's reconcile
+# classification scope, which is all card types because the captured payload
+# carries no card type. Its meaning, and the reason it can never reach the
+# keyed-answer intake as a blind close, are owned by
+# docs/captain-hold-lifecycle.md.
+#
+# DURABLE DECISION CARDS. `build` also writes every surviving decision card to
+# state/decision-cards/<task>.json (schema fm-decision-card.v1), because the
+# board page is rebuilt from scratch and a card absent from the newest payload
+# would otherwise be lost to later readers such as the captain's deck. The stored
+# record is the EFFECTIVE card, reconcile choice included. A record whose task
+# is definitely no longer an open captain call is pruned; an absent or
+# unestablished task keeps its record, because a card wrongly hidden is worse
+# than one wrongly shown.
+#
+# The store has a second writer: bin/fm-captain-hold.sh writes the same record
+# when a call is RAISED with structured options, so the Deck shows the options,
+# context, and recommendation the asking agent already had instead of waiting
+# for a composition to re-derive them. The store is therefore a source for a
+# key as well as a sink, and its precedence rule is STORE-FIRST: for a key the
+# payload also carries, the stored record is the effective card, because it was
+# authored where the question was raised and can be newer than the payload's
+# snapshot; the payload's copy is used only for a key the store does not hold.
+# Every merged record is re-validated in its stored form and a malformed record
+# is reported and left out rather than failing the build, so a damaged file can
+# never take the board down.
+#
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
 # the fm-bearings-board.v1 types and item invariants below. Every fleet row and
@@ -116,7 +170,15 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-decision-card-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-decision-card-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
+SNAPSHOT_BIN="${FM_BEARINGS_BOARD_SNAPSHOT:-$SCRIPT_DIR/fm-bearings-snapshot.sh}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SCHEMA=fm-bearings-board.v1
 
@@ -137,12 +199,165 @@ board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
 # shellcheck source=bin/fm-lavish-lib.sh
 . "$SCRIPT_DIR/fm-lavish-lib.sh"
+# --- deterministic refresh ---------------------------------------------------
+# The floor under the agent composition: rows the snapshot proves, a fallback
+# card per open call, and the durable store merged in by build. Nothing here
+# reads prose to classify anything, and nothing here invents ranking judgment.
+compose_payload() {  # <dest.json>
+  local dest=$1 snapshot tmp file key extra='[]' card=''
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  [ -x "$SNAPSHOT_BIN" ] || fail "the bearings snapshot is missing: $SNAPSHOT_BIN"
+  snapshot=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-snapshot.XXXXXX") \
+    || fail "cannot stage the snapshot"
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-composed.XXXXXX") \
+    || { rm -f -- "$snapshot"; fail "cannot stage the composed payload"; }
+  if ! "$SNAPSHOT_BIN" --json > "$snapshot" 2>/dev/null; then
+    rm -f -- "$snapshot" "$tmp"
+    fail "the bearings snapshot failed: $SNAPSHOT_BIN --json"
+  fi
+  if ! jq -e '.schema == "fm-bearings.v1"' "$snapshot" >/dev/null 2>&1; then
+    rm -f -- "$snapshot" "$tmp"
+    fail "the bearings snapshot is not fm-bearings.v1: $SNAPSHOT_BIN"
+  fi
+  if ! jq --slurpfile fleet "$snapshot" '
+    def artifact_url: (.artifact // "") | select(test("^https://"));
+    def artifact_repo:
+      (.artifact // "")
+      | if test("^https://github\\.com/[^/]+/[^/]+")
+        then capture("^https://github\\.com/[^/]+/(?<repo>[^/]+)").repo
+        else null end;
+    def home_repo: if (.owner // "") == "(main)" then null else .owner end;
+    $fleet[0] as $s
+    | {
+        schema: "fm-bearings-board.v1",
+        home: $s.home,
+        generated: $s.generated,
+        prs_live: false,
+        captains_call: [
+          $s.decisions_open[]?
+          | {key: (.key // .id), type: "decision", repo: null,
+             title: (.summary // .id), options: [], allow_freeform: true,
+             synthesized: true}
+            + (if (.owner // "") == "" then {} else {owner: .owner} end)
+            + (if .close == null then {} else {close: .close} end)
+        ],
+        underway: [
+          $s.in_flight[]?
+          | {id: .id, state: .state,
+             doing: (if (.doing // "") == "" then "-" else .doing end),
+             kind: .kind, name: .name, repo: (.repo // home_repo)}
+        ],
+        landed: [
+          $s.landed[]?
+          | {id: .id, what: .what, owner: .owner, repo: artifact_repo}
+          + (if (artifact_url // "") == "" then {} else {pr_url: artifact_url} end)
+        ],
+        charted: [
+          $s.gates[]?
+          | {id: (.id | if test("^\\(") then gsub("[^A-Za-z0-9._-]"; "") else . end),
+             title: .title, reason: (.reason // ""), repo: home_repo,
+             dispatchable: false,
+             kind: (if (.id | test("^\\(")) then "warning" else "queued" end)}
+          + (if (.filed // null) == null then {} else {filed: .filed} end)
+        ],
+        charted_more: ([$s.omitted[]?
+          | select(.surface | test("^gates showing [0-9]+ of [0-9]+$"))
+          | .surface
+          | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)$")
+          | ((.total | tonumber) - (.shown | tonumber))] | add // 0),
+        charted_warning_more: 0
+      }' "$snapshot" > "$tmp"; then
+    rm -f -- "$snapshot" "$tmp"
+    fail "cannot compose the board payload from the snapshot"
+  fi
+  rm -f -- "$snapshot"
+  # The durable store is a SOURCE for a card the composed payload cannot author
+  # itself: an agent-authored `merge.<task>` card for a call the snapshot still
+  # lists as live. A stored card for a blocked, dated, reconciling, or aged hold
+  # must stay out of Captain's Call - those holds belong to the disclosed
+  # Charted Next gates, and the durable record remains in the store until the
+  # call is live again. Every merged record is re-validated in its stored form; a
+  # malformed one is named on stderr and skipped rather than failing the whole
+  # refresh. The injected reconcile choice is stripped before appending because
+  # the authored contract reserves it and build injects exactly one itself.
+  if [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ]; then
+    for file in "$DECISION_CARDS_DIR"/*.json; do
+      [ -f "$file" ] && [ ! -L "$file" ] || continue
+      key=$(basename "$file" .json)
+      case "$key" in merge.*) ;; *) continue ;; esac
+      jq -e --arg key "$key" '[.captains_call[]?.key] | index($key) != null' "$tmp" >/dev/null 2>&1 && continue
+      jq -e --arg task "${key#merge.}" '
+        [.captains_call[]? | select(.key == $task and (.owner // "(main)") == "(main)")]
+        | length > 0' "$tmp" >/dev/null 2>&1 || continue
+      if ! read_store_card "$file"; then
+        printf 'ignored-store-card: %s (%s)\n' "$key" "$STORE_CARD_REASONS" >&2
+        continue
+      fi
+      card=$STORE_CARD
+      if [ "$(jq -r '.card.key? // empty' "$file" 2>/dev/null)" != "$key" ]; then
+        printf 'ignored-store-card: %s (record key does not match its file name)\n' "$key" >&2
+        continue
+      fi
+      card=$(printf '%s' "$card" | jq -c '
+        .options = [(.options // [])[] | select(.value != "reconcile")]') || continue
+      extra=$(printf '%s' "$extra" | jq -c --argjson card "$card" '. + [$card]') || continue
+    done
+  fi
+  if [ "$extra" != '[]' ]; then
+    if ! jq --argjson extra "$extra" '
+      ($extra | map(.key | sub("^merge\\."; ""))) as $replaced
+      | .captains_call = ([.captains_call[]
+          | . as $card
+          | select(($replaced | index($card.key)) == null
+              or ((.owner // "(main)") != "(main)"))] + $extra)' \
+        "$tmp" > "$tmp.next"; then
+      rm -f -- "$tmp" "$tmp.next"
+      fail "cannot add the durable decision cards to the composed payload"
+    fi
+    mv -f -- "$tmp.next" "$tmp" || { rm -f -- "$tmp" "$tmp.next"; fail "cannot publish the composed payload"; }
+  fi
+  if ! validate_payload "$tmp"; then
+    rm -f -- "$tmp"
+    fail "the composed payload does not satisfy $BOARD_SCHEMA"
+  fi
+  mv -f -- "$tmp" "$dest" || { rm -f -- "$tmp"; fail "cannot write the composed payload: $dest"; }
+}
+
+command_compose() {  # <dest.json>
+  local dest=${1-}
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  [ -n "$dest" ] || { usage >&2; exit 2; }
+  compose_payload "$dest"
+  printf 'composed: %s\n' "$dest"
+}
+
+command_refresh() {
+  local data
+  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+  data=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-refresh.XXXXXX") \
+    || fail "cannot stage the refreshed payload"
+  # A fail inside compose or build exits the process before the rm lines
+  # below run; the EXIT trap owns the staged payload until it is cleared.
+  REFRESH_DATA_TMP=$data
+  if ! compose_payload "$data"; then
+    rm -f -- "$data"
+    REFRESH_DATA_TMP=
+    fail "cannot refresh the board from the snapshot"
+  fi
+  if ! command_build "$data"; then
+    rm -f -- "$data"
+    REFRESH_DATA_TMP=
+    fail "cannot build the refreshed board"
+  fi
+  rm -f -- "$data"
+  REFRESH_DATA_TMP=
+}
 
 validate_payload() {  # <data.json>
-  jq -e --arg schema "$BOARD_SCHEMA" '
-    def nonempty_string: type == "string" and length > 0;
-    def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
-    def repo_marker: has("repo") and (.repo == null or (.repo | type == "string"));
+  # The authored-card contract is shared with the raise-time writer
+  # (bin/fm-captain-hold.sh) and owned once by bin/fm-decision-card-lib.sh, so
+  # the payload validator and the CLI can never disagree about a valid card.
+  jq -e --arg schema "$BOARD_SCHEMA" "$FM_DECISION_CARD_JQ_DEFS"'
     def name_marker: has("name") and (.name | nonempty_string);
     def valid_filed:
       . as $filed
@@ -154,49 +369,8 @@ validate_payload() {  # <data.json>
         end);
     def optional_filed:
       (has("filed") | not) or (.filed == null) or (.filed | valid_filed);
-    def optional_string($name): (has($name) | not) or (.[$name] | type == "string");
-    def optional_https_url($name):
-      (has($name) | not)
-      or (.[$name]
-        | type == "string"
-          and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
-    def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
-    def optional_subject:
-      (has("subject") | not)
-      or (.subject
-        | type == "object"
-          and (keys | sort) == ["artifact", "version"]
-          and (.artifact | slug(128))
-          and (.version | version));
-    def call_item:
-      type == "object"
-      and (.key | slug(128))
-      and (.type == "decision" or .type == "merge" or .type == "credential")
-      and repo_marker
-      and (.title | nonempty_string)
-      and (.options | type == "array")
-      and ((.options | length) > 0 or .allow_freeform == true)
-      and ([.options[]
-        | type == "object"
-          and (.value | slug(128))
-          and (.label | nonempty_string)
-          and optional_string("hint")] | all)
-      and (optional_string("about"))
-      and (optional_string("decide"))
-      and (optional_string("detail"))
-      and (optional_https_url("pr_url"))
-      and optional_subject
-      and (if has("subject") then .type == "decision" else true end)
-      and (optional_string("freeform_hint"))
-      and (optional_string("owner"))
-      and ((has("close") | not) or (.close == "done" or .close == "release"))
-      and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
-      and ((has("recommend_value") | not)
-        or ((.recommend_value | slug(128))
-          and (.recommend_value as $recommend
-            | ([.options[].value] | index($recommend) != null))))
-      and ([.options[].value] | index("reconcile") == null)
-      and (if .type == "merge" then (.risk | nonempty_string) else true end);
+    # slug, repo_marker, optional_*, version, optional_subject, and call_item
+    # are spliced in from bin/fm-decision-card-lib.sh above.
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
       and (.state | nonempty_string) and (.doing | nonempty_string) and (.kind | nonempty_string);
@@ -410,12 +584,95 @@ decision_card_is_stale() {  # <task-id> <landed-0-or-1>
 
 # Drop every stale decision card while preserving every surviving input field.
 # The build alone decides `interactive` and each card's `answerable`: set true
-# only in answers mode, for decision cards owned by this home (`owner` is the
-# snapshot's "(main)") whose call this home holds open, and removed otherwise, so an off board embeds the input payload unchanged. Only
-# those answerable cards get the standard reconcile choice. The validator
-# reserves that value, so no composer can author it;
-# docs/captain-hold-lifecycle.md owns what it means.
+# only in answers mode, for decision cards owned by this home whose call this
+# home holds open, and removed otherwise. Every surviving decision card gets
+# the standard reconcile choice; the validator reserves that value, so no
+# composer can author it; docs/captain-hold-lifecycle.md owns what it means.
+# Read one durable record in its stored form: an fm-decision-card.v1 envelope
+# whose card passes `stored_call_item`, both owned by
+# bin/fm-decision-card-lib.sh. Sets STORE_CARD to the compact card and returns
+# 0, or sets STORE_CARD_REASONS for the caller's ignored-store-card line and
+# returns 1, so an envelope that names another schema is never merged.
+STORE_CARD=
+STORE_CARD_REASONS=
+read_store_card() {  # <file>
+  STORE_CARD=
+  STORE_CARD_REASONS=$(jq -r "$FM_DECISION_CARD_JQ_DEFS"'
+    if (envelope_reasons | length) > 0 then envelope_reasons | join("; ")
+    elif (.card | stored_call_item) then ""
+    else .card | failure_reasons | join("; ") end' "$1" 2>/dev/null) \
+    || STORE_CARD_REASONS='unreadable record'
+  [ -z "$STORE_CARD_REASONS" ] || return 1
+  STORE_CARD=$(jq -c '.card' "$1" 2>/dev/null) && [ -n "$STORE_CARD" ] && return 0
+  STORE_CARD_REASONS='unreadable record'
+  return 1
+}
+
+# Drop every stale decision card, then give every surviving decision card the
+# standard reconcile choice. Injecting it here is what makes "every decision
+# card offers reconcile" a property of the board rather than of the composer's
+# memory; the validator prevents duplicate decision options.
+merge_store_cards() {  # <data.json> <dest.json>
+  # STORE-FIRST. A durable record written at raise time (or by an earlier
+  # build) replaces the payload's card for the same key; the payload card is
+  # used only where the store holds nothing. Order is preserved, and a record
+  # that fails the stored form of the shared contract is named on stderr and
+  # skipped rather than failing the build.
+  local data=$1 dest=$2 key file staged
+  cp -- "$data" "$dest" || return 1
+  [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ] || return 0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    file="$DECISION_CARDS_DIR/$key.json"
+    [ -f "$file" ] && [ ! -L "$file" ] || continue
+    if ! read_store_card "$file"; then
+      printf 'ignored-store-card: %s (%s)\n' "$key" "$STORE_CARD_REASONS" >&2
+      continue
+    fi
+    if [ "$(jq -r '.card.synthesized // false' "$file" 2>/dev/null)" = 'true' ]; then
+      continue
+    fi
+    # A record answers for its own key only: a file whose card names another
+    # task would otherwise be merged into this key's slot.
+    if [ "$(jq -r '.card.key? // empty' "$file" 2>/dev/null)" != "$key" ]; then
+      printf 'ignored-store-card: %s (record key does not match its file name)\n' "$key" >&2
+      continue
+    fi
+    # A card another home owns is display-only here: the local store must
+    # never replace its content, or a remote call would inherit the local
+    # question. The check is per entry, not per key - a payload can carry the
+    # same key once for the local call and once for a secondmate's, and
+    # checking only the first entry's owner would either paste the local card
+    # onto the remote question or skip the local replacement entirely.
+    staged=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-card.XXXXXX") || return 1
+    if ! jq --arg key "$key" --slurpfile record "$file" '
+          .captains_call = [.captains_call[]
+            | if (.key == $key) and ((.owner // "(main)") == "(main)")
+              then (. as $orig | $record[0].card | del(.answerable)
+                    | if $orig | has("owner") then .owner = $orig.owner
+                      else del(.owner) end)
+              else . end]' "$dest" > "$staged"; then
+      rm -f -- "$staged"
+      return 1
+    fi
+    mv -f -- "$staged" "$dest" || { rm -f -- "$staged"; return 1; }
+  done < <(jq -r '.captains_call[]?.key' "$data")
+  return 0
+}
+
 effective_payload() {  # <data.json> <dest.json> <lavish-mode>
+  local data=$1 dest=$2 mode=$3 merged rc=0
+  merged=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-merged.XXXXXX") || return 1
+  if ! merge_store_cards "$data" "$merged"; then
+    rm -f -- "$merged"
+    return 1
+  fi
+  landed_drop_and_inject "$merged" "$dest" "$mode" || rc=$?
+  rm -f -- "$merged"
+  return "$rc"
+}
+
+landed_drop_and_inject() {  # <data.json> <dest.json> <lavish-mode>
   local data=$1 dest=$2 mode=$3 landed_keys key reason drop='' tmp landed=0 here='' here_json
   landed_keys=$(jq -c '
     def version_parts: split(".") | map(tonumber);
@@ -466,13 +723,157 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
       | if $mode == "answers" and .type == "decision" and .owner? == "(main)"
           and (($here | index($card.key)) != null)
         then .answerable = true
-          | .options += [{
-            value: "reconcile",
-            label: "Reconcile",
-            hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
-          }]
+        else . end
+      | if .type == "decision"
+          and ([.options[]? | select(type == "object" and .value == "reconcile")] | length == 0)
+        then .options += [{
+          value: "reconcile",
+          label: "Reconcile",
+          hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
+        }]
         else . end
     ]' "$data" > "$dest" || return 1
+}
+
+# --- durable decision cards ---------------------------------------------------
+# The board is rebuilt from scratch on every composition, so a card that is not
+# in the newest payload disappears with it. The Deck and any later reader still
+# need the options the captain was shown, so every surviving card is persisted
+# per task under state/decision-cards/. Exactly one card per key is written,
+# the first payload entry for that key: a payload can list the same call twice,
+# and a store file that carries two JSON documents makes a later reader refuse
+# the whole record. A record whose task is definitely no longer an open captain
+# call is pruned; a task whose state cannot be established is kept, because a
+# card wrongly hidden is worse than one wrongly shown - the same asymmetry as
+# the card hygiene above.
+
+DECISION_CARDS_DIR="$STATE/decision-cards"
+DECISION_CARD_LOCKS=()
+DECISION_CARD_LOCK_COUNT=0
+
+release_decision_card_locks() {
+  local index lock rc=0
+  index=$DECISION_CARD_LOCK_COUNT
+  while [ "$index" -gt 0 ]; do
+    index=$((index - 1))
+    lock=${DECISION_CARD_LOCKS[$index]}
+    fm_lock_release "$lock" || rc=1
+    unset "DECISION_CARD_LOCKS[$index]"
+    DECISION_CARD_LOCK_COUNT=$index
+  done
+  return "$rc"
+}
+
+REFRESH_DATA_TMP=
+bearings_board_cleanup() {
+  if [ -n "$REFRESH_DATA_TMP" ]; then
+    rm -f -- "$REFRESH_DATA_TMP"
+    REFRESH_DATA_TMP=
+  fi
+  release_decision_card_locks || true
+}
+trap bearings_board_cleanup EXIT
+
+decision_card_key_valid() {  # <key>
+  jq -ne --arg key "$1" "$FM_DECISION_CARD_JQ_DEFS"'$key | slug(128)' >/dev/null 2>&1
+}
+
+# Raw card keys on stdin become the deduplicated control-lock names on
+# stdout: an out-of-contract name is named and skipped, and a merge.<task>
+# card maps to its underlying task's lock, because every hold-side writer
+# (answer, card, card merge.<task>) serializes on the task id - a
+# merge-prefixed lock would let this read/write cycle race a refresh of the
+# very card it persists. Normalizing before the caller's sort means two
+# builds holding different key sets still take shared locks in the same
+# order. Kept outside the process substitution: a parenthesis inside the
+# message text defeats bash's runtime re-scan of the <( ) body.
+emit_decision_card_lock_names() {
+  local key
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    if ! decision_card_key_valid "$key"; then
+      printf 'ignored-store-card: %s (file name is not a valid card key)\n' "$key" >&2
+      continue
+    fi
+    printf '%s\n' "${key#merge.}"
+  done
+}
+
+acquire_decision_card_locks() {  # <payload.json>
+  local data=$1 file key lock lockname
+  while IFS= read -r lockname; do
+    [ -n "$lockname" ] || continue
+    lock="$STATE/.control-$lockname.lock"
+    fm_lock_acquire_wait "$lock" || return 1
+    DECISION_CARD_LOCKS[DECISION_CARD_LOCK_COUNT]=$lock
+    DECISION_CARD_LOCK_COUNT=$((DECISION_CARD_LOCK_COUNT + 1))
+  done < <(
+    {
+      jq -r '.captains_call[]?.key' "$data"
+      if [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ]; then
+        for file in "$DECISION_CARDS_DIR"/*.json; do
+          [ -f "$file" ] && [ ! -L "$file" ] || continue
+          key=$(basename "$file" .json)
+          printf '%s\n' "$key"
+        done
+      fi
+    } | emit_decision_card_lock_names | LC_ALL=C sort -u
+  )
+}
+
+persist_decision_cards() {  # <effective-payload.json>
+  local data=$1 key card tmp existing task live_task rc entry keep=''
+  if [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ]; then
+    :
+  elif ! (umask 077; mkdir -p "$DECISION_CARDS_DIR"); then
+    return 1
+  fi
+  [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ] || return 1
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    keep=$keep$key$'\n'
+    # Another home's decision card is display-only here and stays out of
+    # this home's durable store, so it can never be merged back as local.
+    # A key can appear once per home, so read the locally owned entry - a
+    # remote entry sharing the key must neither suppress the local card's
+    # persistence nor pose as its content.
+    entry=$(jq -c --arg key "$key" '
+      first(.captains_call[] | select(.key == $key)
+        | select((.owner // "(main)") == "(main)"))' "$data") || return 1
+    [ -n "$entry" ] && [ "$entry" != 'null' ] || continue
+    # A synthesized fallback tracks the snapshot, not the store: persisting
+    # it would give a stale copy store-first precedence over the next one.
+    if [ "$(jq -r '.synthesized // false' <<< "$entry")" = 'true' ]; then
+      continue
+    fi
+    card=$(jq -c --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{schema:"fm-decision-card.v1",generated:$generated,card:(. | del(.answerable))}' <<< "$entry") || return 1
+    [ -n "$card" ] || return 1
+    tmp=$(umask 077; mktemp "$DECISION_CARDS_DIR/.card.XXXXXX") || return 1
+    if printf '%s\n' "$card" > "$tmp" \
+      && chmod 0600 "$tmp" \
+      && mv -f -- "$tmp" "$DECISION_CARDS_DIR/$key.json"; then
+      continue
+    fi
+    rm -f -- "$tmp"
+    return 1
+  done < <(jq -r '.captains_call[]?.key' "$data")
+  for existing in "$DECISION_CARDS_DIR"/*.json; do
+    [ -f "$existing" ] && [ ! -L "$existing" ] || continue
+    task=$(basename "$existing" .json)
+    case $'\n'"$keep" in
+      *$'\n'"$task"$'\n'*) continue ;;
+    esac
+    live_task=$task
+    if jq -e '.card.type == "merge"' "$existing" >/dev/null 2>&1; then
+      case "$live_task" in merge.*) live_task=${live_task#merge.} ;; esac
+    fi
+    rc=0
+    "$SCRIPT_DIR/fm-captain-hold.sh" open "$live_task" --distinguish-absent >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ] || continue
+    rm -f -- "$existing" || return 1
+  done
+  return 0
 }
 
 command_build() {
@@ -498,10 +899,18 @@ command_build() {
 
   effective=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-payload.XXXXXX") \
     || fail "cannot stage the board payload"
+  acquire_decision_card_locks "$data" \
+    || { rm -f -- "$effective"; fail "cannot lock the decision-card store"; }
   if ! effective_payload "$data" "$effective" "$FM_LAVISH_MODE"; then
     rm -f -- "$effective"
     fail "cannot reconcile the board payload against landed work"
   fi
+  persist_decision_cards "$effective" || {
+    rm -f -- "$effective"
+    fail "cannot persist the decision cards under $DECISION_CARDS_DIR"
+  }
+  release_decision_card_locks \
+    || { rm -f -- "$effective"; fail "cannot unlock the decision-card store"; }
   json=$(jq -c . "$effective") || { rm -f -- "$effective"; fail "cannot compact the board data"; }
   rm -f -- "$effective"
   # `<` never appears in JSON syntax outside strings, so escaping every
@@ -538,7 +947,7 @@ command_build() {
     return 0
   fi
   if [ -n "$static_page" ]; then
-    trap 'rm -f -- "$page"' EXIT
+    trap 'bearings_board_cleanup; rm -f -- "$page"' EXIT
   fi
   establish_board_session "$board"
   printf 'served: %s\n' "$board"
@@ -556,6 +965,8 @@ command_build() {
 
 case "${1-}" in
   build) shift; command_build "$@" ;;
+  compose) shift; command_compose "$@" ;;
+  refresh) shift; command_refresh "$@" ;;
   path) board_path ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;

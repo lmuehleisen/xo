@@ -52,3 +52,35 @@ EOF
 }
 
 test_inflight_captain_hold_actionability
+
+test_large_done_archive_still_snapshots() {
+  local home fakebin out i
+  home=$(make_home large-archive)
+  fakebin=$(fm_fakebin "$home")
+  fm_fake_exit0 "$fakebin" tmux no-mistakes
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] blocked - Dependent approval blocked-by: archived-blocker-0000000000000000000000000000000000000000000001 (repo: alpha) (kind: ship) (hold: choose route) (hold-kind: captain)
+
+## Queued
+
+## Done
+EOF
+  {
+    printf '%s\n' '- [x] archived-blocker-0000000000000000000000000000000000000000000001 - landed blocker'
+    i=0
+    while [ "$i" -lt 2000 ]; do
+      printf -- '- [x] archived-task-%064d - landed work\n' "$i"
+      i=$((i + 1))
+    done
+  } > "$home/data/done-archive.md"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-09-09T12:00:00Z "$SNAPSHOT" --json) \
+    || fail "a large Done archive broke the fleet snapshot"
+  printf '%s' "$out" | jq -e '
+    (.backlog.records[] | select(.id == "blocked")
+      | .unresolved_blocker_ids == [] and .hold_bucket == "live")
+  ' >/dev/null || fail "an archived blocker was not resolved from the large archive: $out"
+  pass "a large Done archive still snapshots and resolves its blockers"
+}
+
+test_large_done_archive_still_snapshots

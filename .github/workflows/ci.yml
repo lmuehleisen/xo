@@ -467,16 +467,16 @@ jobs:
           captain_hold_snapshot_output=$(/bin/bash tests/fm-fleet-snapshot-captain-hold.test.sh)
           printf '%s\n' "$captain_hold_snapshot_output"
           captain_hold_snapshot_count=$(printf '%s\n' "$captain_hold_snapshot_output" | grep -c '^ok - ')
-          [ "$captain_hold_snapshot_count" -eq 1 ] || {
-            echo "::error::expected 1 captain-hold snapshot test, got $captain_hold_snapshot_count"
+          [ "$captain_hold_snapshot_count" -eq 2 ] || {
+            echo "::error::expected 2 captain-hold snapshot tests, got $captain_hold_snapshot_count"
             exit 1
           }
 
           bearings_output=$(/bin/bash tests/fm-bearings-snapshot.test.sh)
           printf '%s\n' "$bearings_output"
           bearings_count=$(printf '%s\n' "$bearings_output" | grep -c '^ok - ')
-          [ "$bearings_count" -eq 60 ] || {
-            echo "::error::expected 60 Bearings tests, got $bearings_count"
+          [ "$bearings_count" -eq 63 ] || {
+            echo "::error::expected 63 Bearings tests, got $bearings_count"
             exit 1
           }
 
