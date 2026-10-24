@@ -385,7 +385,7 @@ Ordinary typed input, wrapped text, and a shell below a stale composer remain pr
 
 ### Log-only tool observer
 
-Verified on 2026-09-17 with agy 1.2.5 on macOS on Apple silicon: the worker hook file `bin/fm-agy-hook.sh install-worker` writes carries `PreToolUse` and `PostToolUse` matcher groups that append one JSONL line per tool call to `state/agy-permission-log.jsonl` and abstain.
+Verified on 2026-09-17 with agy 1.2.5 on macOS on Apple silicon: the worker hook file written by `bin/fm-agy-hook.sh install-worker` carries `PreToolUse` and `PostToolUse` matcher groups, each appending one JSONL line per tool call to `state/agy-permission-log.jsonl` and abstaining.
 A real headless run (`-p`, `gemini-3.6-flash-low`, cheapest tier) with the installed hook directory granted emitted both lines while the observed `run_command` executed unchanged - the abstain contract holds against the real emitter.
 The direct bypass in this lab command lets the headless tool run; worker launches use the same flag only with Firstmate's permission policy after the spawn gates pass.
 
