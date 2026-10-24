@@ -880,15 +880,18 @@ fm_remote_job_reap_stale() { # <account-home>
         && mv -f -- "$tmp" "$marker"; then
         # One depth-first walk, still ! -newer whole-second mtime <= cutoff:
         # an expired .owner token is deleted before its claim directory is
-        # reached, so the directory delete below sees it empty. Checking the
-        # directory's mtime after the token unlink is also what keeps a token
-        # delete from resetting the claim's expiry: -delete processes children
-        # first, a token that landed fresh since keeps its directory
-        # non-empty, and any other non-empty claim fails closed the same way.
+        # reached, so the batched rmdir below sees it empty. Checking the
+        # directory's stat captured before the token unlink is also what
+        # keeps a token delete from resetting the claim's expiry; a token
+        # that landed fresh since keeps its directory non-empty so rmdir
+        # fails closed, the same as any other non-empty claim. The directory
+        # side must stay an exec'd rmdir: fault-injection shims instrument
+        # that binary, which find's own -delete never invokes.
         find "$FM_REMOTE_JOB_SEQ_CLAIMS" -depth -mindepth 1 -maxdepth 2 \
-          \( \( -type f -name .owner \) -o \
-             \( -type d -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 \) \) \
-          ! -newer "$ref" -delete 2>/dev/null || true
+          ! -newer "$ref" \
+          \( \( -type f -name .owner -delete \) -o \
+             \( -type d -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 \
+                -exec rmdir {} + \) \) 2>/dev/null || true
       else
         [ -z "$tmp" ] || rm -f -- "$tmp"
       fi
