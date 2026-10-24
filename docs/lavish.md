@@ -89,14 +89,13 @@ Boards opened meanwhile get a `127.0.0.1` link, so ask for the board again once 
 | `403 Forbidden` | The link was opened with a hostname other than the address Lavish printed, such as the machine's MagicDNS name | Use the link exactly as printed |
 | The link shows `127.0.0.1` | The board was opened before `config/lavish-axi-host` was set, or while Tailscale was down on the Firstmate machine | Ask Firstmate to reopen the board, or use the ssh path below |
 
-### What was and was not tested over Tailscale
+### Test coverage over Tailscale
 
-This path was proven on the Firstmate machine itself; [`docs/verification/lavish-tailnet.md`](verification/lavish-tailnet.md) records the commands and results.
-The server listened on the tailnet address and loopback only, served the board over the tailnet address, and refused a connection on the LAN address.
+[`docs/verification/lavish-tailnet.md`](verification/lavish-tailnet.md) records this path verified: the server binds the tailnet address and loopback only, serves the board over the tailnet address, and refuses a connection on the LAN address.
 
-These could not be tested without the laptop itself:
+Unproven without a second tailnet device:
 
-- the laptop browser fetching the board over the tailnet, including after the laptop sleeps or changes network;
+- the other device's browser fetching the board over the tailnet, including after it sleeps or changes network;
 - the live update channel and Send to Agent from another device;
 - a connection attempt from any other tailnet device.
 
@@ -139,15 +138,14 @@ Closing the first session closes the forward, even while other sessions stay ope
 | `403 Forbidden` | The link was opened with a hostname other than `127.0.0.1` or `localhost` | Use the link exactly as printed |
 | Firstmate reports the board session is not open | You ended that review from the browser | Ask for the board again; a fresh `/ops lavish` reopens it once |
 
-### What was and was not tested over ssh
+### Test coverage over ssh
 
-This path was proven on the Firstmate machine itself, with a second ssh server on another loopback port standing in for the laptop; [`docs/verification/lavish-remote-forward.md`](verification/lavish-remote-forward.md) records the commands and results.
-Through a real `LocalForward`, the review page, the artifact, and the live update channel all loaded, a headless browser answered a board decision, and that answer closed the held decision through the keyed-answer intake.
+[`docs/verification/lavish-remote-forward.md`](verification/lavish-remote-forward.md) records this path verified through a real `LocalForward`: the review page, the artifact, and the live update channel all load, and a headless browser's board answer closes the held decision through the keyed-answer intake.
 
-These could not be tested without the laptop itself:
+Unproven without the second computer itself:
 
-- the laptop's own ssh client and its proxy hop to the Firstmate machine;
-- the laptop browser over the real link, including how the page behaves when the laptop sleeps or changes network;
-- whether something on the laptop already uses port 4387.
+- its own ssh client and its proxy hop to the Firstmate machine;
+- its browser over the real link, including how the page behaves when it sleeps or changes network;
+- whether something on it already uses port 4387.
 
-The first real review from the laptop is the confirmation; the troubleshooting table covers the failures those gaps could produce.
+The first real review from the second computer is the confirmation; the troubleshooting table covers the failures those gaps could produce.

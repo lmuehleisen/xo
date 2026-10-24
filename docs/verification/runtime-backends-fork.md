@@ -70,7 +70,7 @@ The generated lease command is also exercised in a real private tmux pane: the c
 On 2026-09-26, `tests/fm-spawn-prelaunch-rollback.test.sh` passed on macOS on Apple silicon with tmux 3.7c on a private `-S` socket and the fixture treehouse from `tests/lib.sh`.
 It drives the real spawn entry point into two refusals after the slot was leased and before launch delivery - an `--agy-bypass` scout over a tracked `.agents/hooks.json`, and a non-private staged-launch directory after the task record was published - and checks that each closes its window, returns the slot with `treehouse return --force`, and leaves no lease receipt, busy-state, task record, or agy wiring behind.
 A third refusal over a slot holding a file the spawn did not write closes the window but keeps the lease, its receipt, and the file.
-The same suite spawns a raw agy launch command, which no longer aborts on an unresolved agy executable.
+The same suite spawns a raw agy launch command without resolving the agy executable.
 
 ```
 $ bash tests/fm-spawn-prelaunch-rollback.test.sh
@@ -151,8 +151,8 @@ The operator boundary is [tmux shell command submission](../tmux-backend.md#shel
 
 ## Claude Code operational input
 
-Claude Code 2.1.277 added removal of invisible Unicode formatting characters from every submitted prompt, and U+2063 is always removed.
-An interactive submit that removed a character holds the cleaned text with `Removed 1 invisible character · review and press Enter to send`, and the next Enter sends it; the argv launch prompt is cleaned and sent at once.
+Claude Code 2.1.277 and later remove invisible Unicode formatting characters from every submitted prompt; U+2063 is always removed.
+An interactive submit that removes a character holds the cleaned text with `Removed 1 invisible character · review and press Enter to send`, and the next Enter sends it; the argv launch prompt is cleaned and sent at once.
 A Firstmate operational envelope therefore reaches a Claude transcript as the same `FIRSTMATE_OP: v1 <kind>: <body>` header without its leading mark, and `bin/fm-operational-input.sh` parses that exact mark-less header as the same current kind.
 The daemon's ordinary Enter retry sends the cleaned text, so delivery is still confirmed.
 
@@ -178,8 +178,8 @@ Claude Code folds a long typed burst, so an away-mode digest typed inline loses 
 The typed-envelope carrier in `escalate_flush` uses `INJECT_INLINE_MAX_DEFAULT` (480 characters) as its threshold for a pointer line naming a digest file.
 On 2.1.281 a 501-character line typed mid-turn arrived intact, while a line of about 1,300 characters was folded mid-turn and lines of 2,800 to 3,200 characters were folded on an idle pane; on 2.1.280 folding began at about 950 characters on an idle pane.
 The daemon's Claude busy guard reads a Claude turn only when the daemon knows the primary harness, which the detached launch hands over as `FM_DAEMON_PRIMARY_HARNESS`.
-Since the integration of upstream `30ef650d`, a daemon that knows its primary is Claude Code types the owner's record-backed doorbell instead of the envelope, and now stores the complete digest directly in that record without a second pointer file.
-The historical typed-envelope runs below establish the reason for that carrier's threshold; [the current live guard](runtime-backends.md#claude-record-backed-long-digests) refreshes the record-backed delivery and owned-input recovery evidence.
+With upstream `30ef650d` integrated, a daemon that knows its primary is Claude Code types the owner's record-backed doorbell instead of the envelope and stores the complete digest directly in that record without a second pointer file.
+The typed-envelope runs below establish the reason for that carrier's threshold; [the live guard](runtime-backends.md#claude-record-backed-long-digests) refreshes the record-backed delivery and owned-input recovery evidence.
 
 Verified on 2026-09-23 on macOS with tmux 3.7c on a private socket, against Claude Code 2.1.281 with a tool-less Haiku stand-in:
 
@@ -194,7 +194,7 @@ ok - Claude Code 2.1.281 (Claude Code): a digest of more than 2,000 characters t
 ok - Claude Code 2.1.281 (Claude Code): a long digest arrives as a 336-character pointer line that classifies as away-supervisor, with every event in its file
 ok - Claude Code 2.1.281 (Claude Code): a mid-turn escalation defers on the Claude busy guard and arrives intact after the turn
 ```
-The guard now refreshes the current record-backed carrier after a Claude Code upgrade.
+The guard refreshes the record-backed carrier after a Claude Code upgrade.
 
 The same guard proves the daemon's recovery of a digest left in the composer (`recover_owned_input` in `bin/fm-supervise-daemon.sh`).
 Claude Code holds a marked digest under its review banner after the first Enter, with the composer reading pending and its rows, read across their wrap breaks, showing the typed digest without U+2063; one Ctrl+U deletes one wrapped row, so a two-row digest clears in two presses.
@@ -231,9 +231,9 @@ This guard is the refresh command after a Claude Code upgrade.
 
 ## Composer classification matrix
 
-### 2026-09-10 Codex pane re-read refresh
+### Codex pane re-read refresh
 
-The 2026-09-10 command below classifies the visible surfaces of two prepared Codex panes, one idle and one holding typed input, through the Herdr lab helper without launching or closing panes.
+Verified 2026-09-10. The command below classifies the visible surfaces of two prepared Codex panes, one idle and one holding typed input, through the Herdr lab helper without launching or closing panes.
 Preparing those panes, including the OSC 10/11 animation setup, is outside this command, so this record does not reproduce that setup or tie the panes to the Codex version on its own:
 
 ```sh
@@ -246,7 +246,7 @@ ok - codex-cli 0.154.0: real Codex TYPED composer classifies pending
 ```
 
 The portable capture regression is `tests/fm-composer-ghost.test.sh`; removing the classifier change fails with `Codex idle: expected empty, got pending`.
-This refresh covers Codex animation only; the historical multi-harness [matrix](runtime-backends.md#composer-classification-matrix) retains its original version bounds.
+This refresh covers Codex animation only; the shared multi-harness [matrix](runtime-backends.md#composer-classification-matrix) keeps its own version bounds.
 
 ### Braille-only drafts outside the animation
 
@@ -256,7 +256,7 @@ The glyph-row strip applies only to a styled capture whose every braille cell ca
 
 ### Stranded-doorbell recovery
 
-The same guard also types a doorbell with no Enter, records the stranded memory, and requires one ordinary re-ring to submit it with Enter alone.
+The doorbell live guard also types a doorbell with no Enter, records the stranded memory, and requires one ordinary re-ring to submit it with Enter alone.
 Verified on 2026-09-13, tmux 3.7c, macOS on Apple silicon, private socket:
 
 ```sh
@@ -277,7 +277,7 @@ On a Claude worker launched without that flag, the same typed doorbell plus stra
 
 ### Merge-grant gate under the words model, verified 2026-09-24
 
-This fork took the words model recorded under [Pi supervision branch](runtime-backends.md#pi-supervision-branch) except its merge gate: while the away-posture record exists a merge still proceeds only for a task whose yolo posture is on or whose id the captain granted with `--grant` at `/afk`, so the merge-gate lines of the 2026-09-20 entry do not describe this fork.
+This fork takes the words model recorded under [Pi supervision branch](runtime-backends.md#pi-supervision-branch) except its merge gate: while the away-posture record exists, a merge proceeds only for a task whose yolo posture is on or whose id the captain granted with `--grant` at `/afk`; the merge-gate lines of the 2026-09-20 entry in that record do not describe this fork.
 The suites were run on macOS on Apple silicon, Node v26.4.0, with tasks-axi 0.2.6 and quota-axi 0.1.51 first on `PATH`; no model was selected or prompted and no provider call was made.
 
 ```sh
@@ -300,7 +300,7 @@ ok - away yolo delivery is fleet work without granting merge authority
 ## agy (Antigravity CLI)
 
 The agy crewmate adapter was verified on 2026-09-10 with agy 1.2.0 on macOS on Apple silicon, tmux 3.6a.
-The current live guard uses throwaway workspaces on a private tmux socket and checks that the operator's global trusted-workspace list stays unchanged.
+The live guard uses throwaway workspaces on a private tmux socket and checks that the operator's global trusted-workspace list stays unchanged.
 agy updates itself, so re-run the live guard after any upgrade before trusting these facts.
 
 ### accept-edits covers file edits, not shell commands
@@ -367,9 +367,8 @@ The production worker installer preserves the project hook file and writes its o
 `PreInvocation` reports busy, and a `Stop` with `fullyIdle=true` reports idle and signals turn-end for the bound generation and conversation.
 An approval wait remains busy.
 Escape emits no Stop, so the semantic state conservatively stays busy and control reports cancellation unconfirmed.
-This positive guard supersedes the earlier negative hook probe, which used an incompatible schema.
-Re-verified on 2026-09-14 with Agy 1.2.2 on macOS on Apple silicon: the `-i` opening prompt of a launch with the production worker hooks replaced the spawn seed with an `agy-hook` record and settled to `idle agy-hook`.
-That record is the signal `bin/fm-spawn.sh` now waits for before reporting an agy ship or scout spawn, and `tests/fm-agy-harness.test.sh` pins the gate's success and fail-and-close paths portably.
+Verified on 2026-09-14 with Agy 1.2.2 on macOS on Apple silicon: the `-i` opening prompt of a launch with the production worker hooks replaces the spawn seed with an `agy-hook` record and settles to `idle agy-hook`.
+That record is the signal `bin/fm-spawn.sh` waits for before reporting an agy ship or scout spawn, and `tests/fm-agy-harness.test.sh` pins the gate's success and fail-and-close paths portably.
 
 ```sh
 FM_AGY_SIGNALS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-signals-live-e2e.test.sh
@@ -386,7 +385,7 @@ Ordinary typed input, wrapped text, and a shell below a stale composer remain pr
 
 ### Log-only tool observer
 
-Verified on 2026-09-17 with agy 1.2.5 on macOS on Apple silicon: the worker hook file `bin/fm-agy-hook.sh install-worker` writes now carries `PreToolUse` and `PostToolUse` matcher groups that append one JSONL line per tool call to `state/agy-permission-log.jsonl` and abstain.
+Verified on 2026-09-17 with agy 1.2.5 on macOS on Apple silicon: the worker hook file written by `bin/fm-agy-hook.sh install-worker` carries `PreToolUse` and `PostToolUse` matcher groups, each appending one JSONL line per tool call to `state/agy-permission-log.jsonl` and abstaining.
 A real headless run (`-p`, `gemini-3.6-flash-low`, cheapest tier) with the installed hook directory granted emitted both lines while the observed `run_command` executed unchanged - the abstain contract holds against the real emitter.
 The direct bypass in this lab command lets the headless tool run; worker launches use the same flag only with Firstmate's permission policy after the spawn gates pass.
 
@@ -404,9 +403,9 @@ The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the fi
 ### Bypass permission layer
 
 Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the 1.3.1, 1.3.5, 1.3.6, and 1.4.0 refreshes below extend the layer's live-verified set to `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0`.
-A version without that evidence, including 1.2.8 through 1.2.10, 1.3.0, and 1.3.2 through 1.3.4, stays outside the set; later releases require their own live verification.
-That set is now the historical manual baseline: policy-layer launches require the executable-bound admission recorded below, which a version string alone never satisfies.
+The manually verified release set is `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4`; `bin/fm-agy-permission-policy.sh verified-versions` prints it, and the per-release refresh evidence is below.
+A version without that evidence - 1.2.8 through 1.2.10, 1.3.0, 1.3.2 through 1.3.4, and 1.4.1 through 1.4.3 - stays outside the set.
+A policy-layer launch requires an executable-bound receipt regardless: `bin/fm-agy-admission.sh ensure` proves a candidate in the `>=1.4.4,<1.5.0` family with the full live guards, and `manual-baseline` runs the same checks on a release in this set.
 
 ```sh
 FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
@@ -430,7 +429,7 @@ Admission checks beyond the guard, on agy 1.2.11 (2026-09-25) with the productio
 - Hook firing per tool class: `run_command`, `view_file`, `write_to_file`, `replace_file_content`, `read_url_content`, `invoke_subagent`, and `send_message` each emitted `PreToolUse`, and the first four also emitted `PostToolUse` when their call ran.
   A subagent started through `invoke_subagent` ran its own `run_command` through the same hooks under its own `conversationId`, so delegated calls are policed rather than escaping the layer.
   The 1.2.11 print-mode toolset for `gemini-3.6-flash-low` has no `list_dir`, `grep_search`, or `search_web`; directory listing and search go through `run_command`, so those three tool names have no live call to observe.
-  The payload shape was unchanged: `run_command` args still carry `CommandLine`, `Cwd`, `WaitMsBeforeAsync`, `toolAction`, and `toolSummary`.
+  The payload shape matched: `run_command` args carried `CommandLine`, `Cwd`, `WaitMsBeforeAsync`, `toolAction`, and `toolSummary`.
 - Held calls, with a 1-second judge timeout: a denied `python3 -c` write leaves a pending marker `agy-permission-<conversationId>-s<step>` and a `needs-decision` line; once that call is approved, the model's retry in the same conversation runs with decider `cache` and no new escalation, and once it is declined, the retry is refused by policy with no new marker or `needs-decision` line.
   Retries from separate headless conversations do not share a cache key, because the model writes a fresh `toolAction`, `toolSummary`, and `WaitMsBeforeAsync` per conversation; the worker retry path is the same-conversation one above.
 - Physical-path write guards: a `write_to_file` through an in-worktree symlink to a directory outside every write root was refused (`write_to_file outside the task write roots (...) is refused by firstmate policy`) and nothing landed, and a `write_to_file` into the worktree's `.agents/` was refused as agent or git configuration.
@@ -441,154 +440,18 @@ Admission checks beyond the guard, on agy 1.2.11 (2026-09-25) with the productio
 `--sandbox` composition probe, 2026-09-19, agy 1.2.7: the flag composes with the bypass launch in headless mode, but the probe found no containment the adapter could rely on in that mode, and its interactive-session behaviour under a spawned pane is unverified.
 The launch therefore stays on `--dangerously-skip-permissions` alone, with the policy layer's write guards as the write restriction.
 
-#### 1.3.1 refresh (2026-10-07)
+#### Release refreshes
 
-Refreshed on 2026-10-07 with agy 1.3.1 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-Agy policy-layer launches then refused versions outside the allowlist, so 1.3.1 required this refresh before it could launch on that path.
-Nothing in the version-sensitive hook contract changed: the same six live checks and the observer live check passed unchanged, and the `agy models` catalog still lists `gemini-3.6-flash-low`, so no part of the layer needed adapting beyond adding 1.3.1 to the allowlist.
-1.3.0 has no live evidence and stays outside the set.
+Each release below passed the guards above on macOS on Apple silicon in scratch workspaces under the task temp root, with the version-sensitive hook contract unchanged: a named `hooks.json` registry carrying `PreInvocation`, `Stop`, `PreToolUse`, and `PostToolUse` command groups loads, and deny, abstain, timeout, and `force_ask` behavior match the 1.2.11 run.
 
-```sh
-FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
-```
+- 1.2.6 (2026-09-18) and 1.2.7 (2026-09-20): the six bypass checks on `gemini-3.6-flash-low` headless runs; 1.2.4 and 1.2.5 carry the earlier hook-contract facts.
+- 1.3.1 (2026-10-07): the six bypass checks and the observer check on `gemini-3.6-flash-low`; the `agy models` catalog still listed `gemini-3.6-flash-low`.
+- 1.3.5 (2026-10-14): the six bypass checks and the observer check on `gemini-3.8-flash-low`; a raw hook-stdin capture confirmed matching pre/post `conversationId`, `stepIdx`, and `toolCall`, intact `workspacePaths`, `modelName`, `transcriptPath`, and `artifactDirectoryPath`, and a successful post-tool `error` of `""`; `run_command` args also carried the optional `RunPersistent` and `IsDaemon`.
+- 1.3.6 (2026-10-15): the six bypass checks plus the credential-reads deny check and the observer check on `gemini-3.8-flash-low`; `RunPersistent` and `IsDaemon` were absent from this capture, and no layer code reads them.
+- 1.4.0 (2026-10-16): the same checks on `gemini-3.8-flash-low`; `write_to_file` args carried `TargetFile`, `CodeContent`, `Description`, `Overwrite`, `toolAction`, and `toolSummary`.
+  1.4.0's model does not volunteer a denied call's reason in its final reply, so the deny check's prompt asks for a verbatim quote: the assertion still proves the reason reached the model as the tool result (independently confirmed in agy's own conversation transcript), while the outside-root call stayed blocked and logged `refuse`.
 
-```text
-ok - agy 1.3.1: a policy deny blocks a bypassed call and the reason reaches the model
-ok - agy 1.3.1: an abstained task-local file op runs unchanged and the armed heartbeat logged
-ok - agy 1.3.1: a timed-out judge denies, holds the call for firstmate, and never abstains
-ok - agy 1.3.1: install-worker refuses a malformed merged hooks.json before any launch
-ok - agy 1.3.1: a force_ask decision under bypass did not block the call - no prompt exists to force
-ok - agy 1.3.1: a bypass session whose hook never logs leaves no armed line for the canary to trust
-# agy bypass permission layer live checks passed (agy 1.3.1)
-```
-
-```sh
-FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
-```
-
-```text
-ok - agy 1.3.1: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
-# agy observer live checks passed (agy 1.3.1)
-```
-
-The portable `tests/fm-agy-harness.test.sh` passed, and `tests/fm-agy-permission-policy.test.sh` passed every case except `fm-agy-permission-policy: exact shell inbox acknowledgements pass; siblings, globs and symlinks refuse`, which fails on a sibling-inbox `mkdir -p` the shared command policy abstains rather than denies.
-That case fails independently of the agy bypass layer and this allowlist change: it exercises `bin/fm-command-policy-lib.sh`, which this change does not touch, and is tracked separately.
-
-Portable permission-policy checks, refreshed on 2026-10-02 with fixture judges and ShellCheck 0.11.0:
-
-```sh
-bin/fm-test-run.sh tests/fm-agy-permission-policy.test.sh tests/fm-devin-permission-policy.test.sh
-bin/fm-lint.sh
-```
-
-```text
-FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=63124
-```
-
-These checks cover exact numeric inbox acknowledgements and symlink/sibling refusals, interpreter routing, read-exclusion context beyond bounded brief excerpts, one-shot exact-batch credential approvals, and generation-bound audit retention.
-The fixtures verify policy transport and enforcement, not model agreement with the revised prompt or native background-task ownership.
-They do not extend the live-verified agy version set above.
-
-#### 1.3.5 refresh (2026-10-14)
-
-Refreshed on 2026-10-14 with agy 1.3.5 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.8-flash-low` headless runs.
-The same six bypass checks and the observer live check passed unchanged from the 1.3.1 guard, apart from the model update to `gemini-3.8-flash-low`, which the `agy models` catalog lists.
-The version-sensitive contract used by the layer is unchanged: named `hooks.json` registrations still load matcher groups containing command hooks, and deny, abstain, timeout, and `force_ask` behavior match the prior refresh.
-A scratch capture confirmed matching pre/post `conversationId`, `stepIdx`, and `toolCall`, with `workspacePaths`, `modelName`, `transcriptPath`, and `artifactDirectoryPath` intact and a successful post-tool `error` of `""`.
-The `run_command` args still carry `CommandLine`, `Cwd`, `WaitMsBeforeAsync`, `toolAction`, and `toolSummary`; optional `RunPersistent` and `IsDaemon` arguments were also observed.
-No layer adaptation was needed beyond admitting 1.3.5; 1.3.2 through 1.3.4 have no live evidence and stay outside the set.
-
-```sh
-FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
-```
-
-```text
-ok - agy 1.3.5: a policy deny blocks a bypassed call and the reason reaches the model
-ok - agy 1.3.5: an abstained task-local file op runs unchanged and the armed heartbeat logged
-ok - agy 1.3.5: a timed-out judge denies, holds the call for firstmate, and never abstains
-ok - agy 1.3.5: install-worker refuses a malformed merged hooks.json before any launch
-ok - agy 1.3.5: a force_ask decision under bypass did not block the call - no prompt exists to force
-ok - agy 1.3.5: a bypass session whose hook never logs leaves no armed line for the canary to trust
-# agy bypass permission layer live checks passed (agy 1.3.5)
-```
-
-```sh
-FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
-```
-
-```text
-ok - agy 1.3.5: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
-# agy observer live checks passed (agy 1.3.5)
-```
-
-#### 1.3.6 refresh (2026-10-15)
-
-Refreshed on 2026-10-15 with agy 1.3.6 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.8-flash-low` headless runs.
-Agy policy-layer launches then refused versions outside the allowlist, so 1.3.6 required this refresh before it could launch on that path.
-The same six bypass checks and the observer live check passed unchanged from the 1.3.5 refresh, on the same catalog model.
-The version-sensitive contract used by the layer is unchanged: a named `hooks.json` registry carrying `PreInvocation`, `Stop`, `PreToolUse`, and `PostToolUse` command groups still loads, and deny, abstain, timeout, and `force_ask` behavior match the prior refresh.
-A scratch capture of the raw hook stdin on `write_to_file` and `run_command` calls confirmed the same top-level fields (`conversationId`, `stepIdx`, `toolCall`, `workspacePaths`, `modelName`, `transcriptPath`, `artifactDirectoryPath`, plus `error` on the post call alone), matching pre/post pairs on `conversationId`, `stepIdx`, and `toolCall`, and a post-tool `error` of `""`.
-The `run_command` args still carry `CommandLine`, `Cwd`, `WaitMsBeforeAsync`, `toolAction`, and `toolSummary`; the optional `RunPersistent` and `IsDaemon` arguments were not emitted in this capture, and no layer code reads them.
-No layer adaptation was needed beyond admitting 1.3.6.
-
-```sh
-FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
-```
-
-```text
-ok - agy 1.3.6: shell and native credential reads are denied before disclosure
-ok - agy 1.3.6: a policy deny blocks a bypassed call and the reason reaches the model
-ok - agy 1.3.6: an abstained task-local file op runs unchanged and the armed heartbeat logged
-ok - agy 1.3.6: a timed-out judge denies, holds the call for firstmate, and never abstains
-ok - agy 1.3.6: install-worker refuses a malformed merged hooks.json before any launch
-ok - agy 1.3.6: a force_ask decision under bypass did not block the call - no prompt exists to force
-ok - agy 1.3.6: a bypass session whose hook never logs leaves no armed line for the canary to trust
-# agy bypass permission layer live checks passed (agy 1.3.6)
-```
-
-```sh
-FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
-```
-
-```text
-ok - agy 1.3.6: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
-# agy observer live checks passed (agy 1.3.6)
-```
-
-#### 1.4.0 refresh (2026-10-16)
-
-Refreshed on 2026-10-16 with agy 1.4.0 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.8-flash-low` headless runs.
-Agy policy-layer launches then refused versions outside the allowlist, so 1.4.0 required this refresh before it could launch on that path.
-The bypass and observer live checks passed on the same catalog model.
-The version-sensitive contract used by the layer is unchanged: a named `hooks.json` registry carrying `PreInvocation`, `Stop`, `PreToolUse`, and `PostToolUse` command groups still loads, and deny, abstain, timeout, and `force_ask` behavior match the prior refresh.
-A scratch capture of the raw hook stdin on `write_to_file` and `run_command` calls confirmed the same top-level fields (`conversationId`, `stepIdx`, `toolCall`, `workspacePaths`, `modelName`, `transcriptPath`, `artifactDirectoryPath`, plus `error` on the post call alone), matching pre/post pairs on `conversationId`, `stepIdx`, and `toolCall`, and a post-tool `error` of `""`.
-The `run_command` args still carry `CommandLine`, `Cwd`, `WaitMsBeforeAsync`, `toolAction`, and `toolSummary`; the `write_to_file` args carry `TargetFile`, `CodeContent`, `Description`, `Overwrite`, `toolAction`, and `toolSummary`.
-One check needed adapting rather than the layer: 1.4.0's model does not volunteer a denied call's reason in its final reply, so the deny check's prompt now asks for a verbatim quote - the assertion still proves the reason reached the model as the tool result (independently confirmed in agy's own conversation transcript), while the outside-root call stayed blocked and logged `refuse`.
-No layer adaptation was needed beyond admitting 1.4.0.
-
-```sh
-FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
-```
-
-```text
-ok - agy 1.4.0: shell and native credential reads are denied before disclosure
-ok - agy 1.4.0: a policy deny blocks a bypassed call and the reason reaches the model
-ok - agy 1.4.0: an abstained task-local file op runs unchanged and the armed heartbeat logged
-ok - agy 1.4.0: a timed-out judge denies, holds the call for firstmate, and never abstains
-ok - agy 1.4.0: install-worker refuses a malformed merged hooks.json before any launch
-ok - agy 1.4.0: a force_ask decision under bypass did not block the call - no prompt exists to force
-ok - agy 1.4.0: a bypass session whose hook never logs leaves no armed line for the canary to trust
-# agy bypass permission layer live checks passed (agy 1.4.0)
-```
-
-```sh
-FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
-```
-
-```text
-ok - agy 1.4.0: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged
-# agy observer live checks passed (agy 1.4.0)
-```
+The bypass checks gained the credential-reads deny case at 1.3.6 and the native-write deny and judge cases at 1.4.4; the refresh for each release is the check list at that point.
 
 #### 1.4.4 native file-tool refresh (2026-10-21)
 
@@ -639,12 +502,12 @@ The interrupt receipt remained `cancel=unconfirmed`, preserving the existing sem
 The lab helper verified unchanged default-session state after teardown.
 
 The focused portable harness, permission-policy, composer, send-confirmation, and submit-busy suites and canonical lint passed for the implementation.
-The historical manual baseline admits 1.4.4 only after the real checks above; patch releases use the executable-bound admission path below.
+1.4.4 entered the manual baseline only after these real checks; patch releases use the executable-bound admission path below.
 Headless primary supervision, compaction refresh, semantic cancellation acknowledgement, and remote secondmate launch remain outside this evidence.
 
 #### Executable-bound patch admission (2026-10-23)
 
-Verified with agy 1.4.6 on macOS Apple silicon (executable SHA-256 `cab004f3c5c6cb7dc8b8712d3bc30431bd4480b17ff38a07eb1865abeffd2f27`) in an isolated Firstmate home, with `gemini-3.8-flash-low` as both worker and judge model. The 1.4.6 binary is not added to the historical `verified-versions` baseline: it is an eligible patch candidate that receives support only through its matching executable-bound receipt.
+Verified with agy 1.4.6 on macOS Apple silicon (executable SHA-256 `cab004f3c5c6cb7dc8b8712d3bc30431bd4480b17ff38a07eb1865abeffd2f27`) in an isolated Firstmate home, with `gemini-3.8-flash-low` as both worker and judge model. The 1.4.6 binary is not in the manual `verified-versions` baseline: it is an eligible patch candidate that receives support only through its matching executable-bound receipt.
 [`bin/fm-agy-admission.sh`](../../bin/fm-agy-admission.sh) treated 1.4.6 as an eligible patch candidate, ran the complete bypass, observer, and signals guards before any real brief, and published a private receipt bound to that executable, platform, integration and guard bytes, worker model and effort, and judge.
 Each guard records completion only after all of its cases pass with real tool attempts observed.
 The outside-root shell probe targets a separate reserved `/tmp/fm-*` fixture, because `/tmp` and `$TMPDIR` scratch files are permitted write roots.
@@ -689,7 +552,7 @@ Only worktree acquisition came from a fixture, and interrupt cancellation remain
 `tests/fm-agy-admission.test.sh` pins the portable receipt and admission behavior.
 A receipt covers finite fixtures only; it does not prove arbitrary commands, untested tool shapes, or unchanged server-side model behavior.
 
-After rebasing onto the PR 92 admission change, changed-file lint and these four focused portable suites passed on the configured remote runner at task commit `2a20ef27` (0 failures, 0 gated skips): `fm-agy-admission.test.sh`, `fm-agy-permission-policy.test.sh`, `fm-agy-harness.test.sh`, and `fm-spawn-prelaunch-rollback.test.sh`.
+Changed-file lint and the four focused portable suites `fm-agy-admission.test.sh`, `fm-agy-permission-policy.test.sh`, `fm-agy-harness.test.sh`, and `fm-spawn-prelaunch-rollback.test.sh` passed on the configured remote runner (0 failures, 0 gated skips).
 
 ### Primary and secondmate supervision
 
@@ -926,7 +789,7 @@ No hooks execute while blocked on trust.
 Devin CLI reads configuration from `~/.config/devin/config.json`, committed project hooks from `.devin/hooks.v1.json`, and project local overrides from `.devin/config.local.json`.
 Passing `--config <path>` replaces only the user layer, so Firstmate passes a private copy of the user config, `state/<id>.devin-config.json`, rather than a fresh file that would discard the captain's user settings.
 Upstream's `bin/fm-devin-config.sh` writes that copy with the busy-state and turn-end hooks appended, and the fork's `bin/fm-devin-lib.sh` layers the non-destructive `Exec(...)` allow set, the `git push` force-spelling denies, the permission policy hooks, and the rate-limit retry hooks onto it, restoring the user's own `read_config_from`.
-Nothing is written into the worktree; the two worktree files older incarnations wrote are retired only with ownership evidence.
+Nothing is written into the worktree; legacy worktree wiring files are retired only with ownership evidence.
 The file pins `"attribution": false`, which the vendor documents as a user-scope key.
 The lifecycle hooks are:
 - `UserPromptSubmit`: applies `busy` with event `user-prompt-submit`.
@@ -947,7 +810,7 @@ Verified live on 2026-09-25 with `devin 3000.11.3 (9c803229faa4)` on macOS arm64
 - The busy record moves `busy` then `idle source=devin-hook event=stop` and touches the task's turn-ended file, plain `exit` records `idle ... event=session-end`, the rate-limit retry hook records the turn end, and the footer reads `SWE-2 Max`.
 - A launch with `--permission-mode smart` renders `(smart mode on)` and settles the same way.
 
-The portable regressions in `tests/fm-devin-harness.test.sh` (the base writer and stale-`Stop` suppression) and `tests/fm-devin-fork-harness.test.sh` (the composition, user-config preservation, and refusal on a failed compose) pin this; the three live guards under Verification suite now drive the generated launch, so one command refreshes each part.
+The portable regressions in `tests/fm-devin-harness.test.sh` (the base writer and stale-`Stop` suppression) and `tests/fm-devin-fork-harness.test.sh` (the composition, user-config preservation, and refusal on a failed compose) pin this; the three live guards under Verification suite drive the generated launch, so one command refreshes each part.
 
 ### Turn-ending errors and the rate-limit retry
 
@@ -964,7 +827,7 @@ A single Escape renders `(esc again to interrupt)` for under 5 seconds, while bu
 Interruption prints `✱ Canceled. What should Devin do?` and leaves the composer empty.
 Interruption emits no `Stop` hook and leaves the busy state unchanged, matching the behavior of agy and Claude.
 Typing `/exit` or `exit` quits the session cleanly, firing `SessionEnd` (reason `prompt_input_exit`).
-The earlier control path used plain `exit` to avoid `/exit` selecting Devin's `/revert <step>` fuzzy command search; [the current `/quit` refresh](runtime-backends.md#devin-exit-and-native-resume) verifies upstream's command through the control plane.
+The control plane issues `/quit` rather than `/exit`, which can select Devin's `/revert <step>` fuzzy command search; [the `/quit` refresh](runtime-backends.md#devin-exit-and-native-resume) verifies upstream's command through the control plane.
 On exit, Devin prints `Resume this session with devin -r <id>`, where `<id>` is a hyphenated word pair of the form `<word>-<word>`.
 
 ### Composer classification

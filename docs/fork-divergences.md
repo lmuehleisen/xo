@@ -147,7 +147,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: the fork's prose describes the fork rather than upstream: README "Fork: what differs" and every fork wording in shared prose that states the behavior of another entry here, plus the inventory rows that register fork-only prose.
 - Class: intended.
-- Seam: any shared prose surface, including `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `VISION.md`, `docs/` (for example `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`), and skill prose under `.agents/skills/`, limited to hunks that describe another entry's behavior, plus the Polytoken license comment in `bin/fm-spawn.sh`, which drops upstream's dated operator-decision note to keep the public surface free of operator-direction narrative; fork-only records such as `docs/verification/runtime-backends-fork.md`, replacing upstream-only `docs/verification/agy.md` and `docs/verification/devin.md` evidence that describes different adapter behavior; and the `docs/documentation-audiences.json` rows that classify fork-only surfaces such as this ledger and `docs/upstream-integration.md`, while any other hunk in these files is still classified on its own.
+- Seam: any shared prose surface, including `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `VISION.md`, `docs/` (for example `docs/configuration.md`, `docs/architecture.md`, and `docs/scripts.md`), and skill prose under `.agents/skills/`, limited to hunks that describe another entry's behavior, plus the Polytoken license comment in `bin/fm-spawn.sh`, which drops upstream's dated operator-decision note to keep the public surface free of operator-direction narrative; fork-only records such as `docs/verification/runtime-backends-fork.md`, replacing upstream-only `docs/verification/agy.md` and `docs/verification/devin.md` evidence that describes different adapter behavior; and the `docs/documentation-audiences.json` rows that classify fork-only surfaces such as this ledger and `docs/upstream-integration.md`, while any other hunk in these files is classified on its own.
 - Guard: none; the integration run's ledger-update step reviews these files against the fork each run.
 - Upstream: describes upstream's own tools, pipeline, and permission defaults.
 
@@ -213,7 +213,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: intended.
 - Seam: fork-only `.opencode/plugins/lib/fm-process.js`, `.opencode/plugins/lib/fm-v2-plugin.js`, `tests/opencode-v2-live.sh`, and `tests/opencode-v2-herdr-live.sh`, plus the OpenCode hunks in `bin/fm-spawn.sh`, `bin/fm-composer-lib.sh`, `bin/fm-control.sh`, `bin/fm-control-lib.sh`, `bin/fm-harness.sh`, `bin/fm-busy-event.sh` (`--if-seq`), `bin/fm-busy-lib.sh`, `bin/fm-remote-doctor.sh`, `bin/fm-remote-entrypoint.sh`, `bin/fm-remote-secondmate-control.sh`, and the legacy `.opencode/plugins/fm-primary-*.js` modules, the omitted upstream V2 primary entry points, the event-subscription cleanup and awaited tool-hook registration in the shared upstream helper `.opencode/plugins/lib/fm-opencode2.js`, the shared upstream fixture `tests/opencode-v2-live-fixture.py` retargeted at the worker plugin, the OpenCode harness reference, its evidence in `docs/verification/runtime-backends.md` and `docs/verification/supervision.md`, and the "OpenCode V1" primary wording in shared docs (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_opencode_*` cases; `tests/fm-control-relaunch.test.sh` `test_opencode_*` cases; `tests/fm-spawn-prelaunch-rollback.test.sh` `test_opencode_*` cases; `tests/fm-composer-lib.test.sh` `test_matrix_opencode_leftbar_signals`; `tests/fm-busy-adapter-wiring.test.sh` `test_opencode_plugin_semantic_lifecycle`, `test_opencode_v2_cleanup_aborts_the_stream_and_reports_failures`, `test_opencode_v2_boundary_registers_tool_hook_before_setup_resolves`, and `test_secondmate_opencode_is_refused_without_busy_wiring`; `tests/fm-busy-state.test.sh` sequence cases; `tests/fm-remote-doctor.test.sh`; live, `tests/fm-opencode-primary-live-e2e.test.sh`, whose token-free half drives `tests/opencode-v2-live-fixture.py` and whose credentialed half drives `tests/opencode-v2-live.sh`.
-- Upstream: now supports both OpenCode major versions and V2 primary plugins; XO shares its V2 event and tool helper and live-fixture technique but retains its verified worker-only V2 adapter, private plugin configuration, shutdown-aware session identity, bare launch with guarded brief delivery, and deferred V2 primary/secondmate boundary until those guarantees have equivalent proof.
+- Upstream: supports both OpenCode major versions and V2 primary plugins; XO shares its V2 event and tool helper and live-fixture technique but retains its verified worker-only V2 adapter, private plugin configuration, shutdown-aware session identity, bare launch with guarded brief delivery, and deferred V2 primary/secondmate boundary until those guarantees have equivalent proof.
 
 ### native-launch-optins
 
@@ -267,11 +267,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### devin-adapter-mechanics
 
-- Intent: the fork's own Devin adapter, which predates upstream's; converged onto upstream's private config writer and its common portable suite and live guard (the change that added `tests/fm-devin-fork-harness.test.sh`).
+- Intent: the fork's own Devin adapter alongside upstream's; converged onto upstream's private config writer and its common portable suite and live guard (the change that added `tests/fm-devin-fork-harness.test.sh`).
 - Class: carried; the remaining fork mechanics are the SWE-2 Max default, preservation of the user's Claude configuration import choice, the full-frame composer selector, and legacy worktree-wiring cleanup.
 - Seam: fork-only `bin/fm-devin-lib.sh`, `bin/fm-composer-devin-lib.sh`, and `tests/devin-live-helpers.sh`; the Devin launch and resolver calls in `bin/fm-spawn.sh`, the fork adaptations in `tests/fm-devin-harness.test.sh` and `tests/fm-devin-signals-live-e2e.test.sh`, and the Devin selector's source line and calls in `bin/fm-composer-lib.sh`.
 - Guard: `tests/fm-devin-harness.test.sh`; `tests/fm-devin-fork-harness.test.sh`; `tests/fm-composer-devin.test.sh`; `tests/fm-control-relaunch-bindings.test.sh` (relaunch away from Devin retires only firstmate-owned wiring); the opt-in live guards `tests/fm-devin-signals-live-e2e.test.sh` and `tests/fm-devin-rate-limit-retry-live-e2e.test.sh`.
-- Upstream: the fork now uses upstream's executable resolver and `/quit` exit command; upstream otherwise uses its native default model, disables Claude configuration import, reads the composer through generic glyph rules, and recognizes only `esc twice`.
+- Upstream: the fork uses upstream's executable resolver and `/quit` exit command; upstream otherwise uses its native default model, disables Claude configuration import, reads the composer through generic glyph rules, and recognizes only `esc twice`.
   Keep the stronger frame reader and both interrupt signals until upstream can classify the same cursorless and interrupted screens; retire legacy cleanup only when no supported task can retain the older worktree wiring.
 
 ### agy-adapter-mechanics
@@ -290,7 +290,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-worktree-claims-lib.sh`, plus its shared callers, including spawn lease receipts and prelaunch rollback in `bin/fm-spawn.sh`, records-only stale-claim retirement in `bin/fm-teardown.sh`, and the lease fakes and per-spawn slots that upstream adapter suites such as `tests/fm-commandcode-harness.test.sh` and `tests/fm-polytoken-harness.test.sh` need.
 - Guard: fork-only `tests/fm-control-relaunch-bindings.test.sh` (a relaunch reuses its own claim and refuses another task's); `tests/fm-spawn-prelaunch-lease-return.test.sh`; `tests/fm-spawn-prelaunch-rollback.test.sh`; `tests/fm-polytoken-harness.test.sh` lease compatibility cases; `tests/fm-teardown-endpoint-safety.test.sh` recorded-branch and stale-claim cases.
 - Upstream: binds slot-owner claims to process lifetimes, permitting clean slots to be reused after their owner dies; the durable lease instead protects a task's existing checkout until explicit guarded return.
-  Upstream #6213 permits records-only retirement when a slot claim names another task; the fork requires independent landed, endpoint, recorded-branch and current-owner proof, and still refuses a lease held by another holder.
+  Upstream #6213 permits records-only retirement when a slot claim names another task; the fork requires independent landed, endpoint, recorded-branch and current-owner proof, and refuses a lease held by another holder.
   Generic prelaunch rollback returns a provably unstarted clean lease; post-launch adapter cleanup otherwise follows upstream and retains unresolved lease receipts for explicit recovery.
 
 ### claude-trust-escape
@@ -299,7 +299,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: `bin/fm-claude-trust.sh` (shared).
 - Guard: `tests/fm-claude-trust.test.sh`.
-- Upstream: still refuses on an Escape dismissal; drop once upstream adopts the fork's rule.
+- Upstream: refuses on an Escape dismissal; drop once upstream adopts the fork's rule.
 
 ### pr-poll-identity
 
@@ -315,7 +315,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: steering doorbell delivery in `bin/fm-send.sh`, `bin/fm-task-inbox-lib.sh`, `bin/fm-remote-secondmate-control.sh`, `bin/fm-watch.sh`, and `bin/fm-composer-lib.sh` (shared).
 - Guard: `tests/fm-task-inbox.test.sh` stranded, exact-row, provenance and retry cases; `tests/fm-send-inbox.test.sh` stranded-delivery cases.
-- Upstream: #4485 was superseded by merged #5374, but its whitespace-compacting match is broader than the fork's exact owned-doorbell match.
+- Upstream: merged #5374 supersedes #4485, but its whitespace-compacting match is broader than the fork's exact owned-doorbell match.
   Keep the stricter match and bounded retry until upstream preserves user drafts and the same provenance checks; a blank or unreadable composer alone is not proof that an owned doorbell remains there.
 
 ### tmux-presence
@@ -324,7 +324,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: `fm_backend_tmux_target_presence` and its consumers in the tmux backend, `bin/fm-backend.sh`, and `bin/fm-crew-state.sh`, plus immutable window identity recorded by `bin/fm-spawn.sh` and checked before endpoint cleanup in `bin/fm-teardown.sh` (shared).
 - Guard: `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-tmux-agent-liveness.test.sh` exact inventory cases; `tests/fm-teardown.test.sh` missing and replaced window cases.
-- Upstream: now ships exact-membership `fm_backend_tmux_target_exists`, including the rule that a pane suffix splits only from a window index, which the fork takes as its boolean probe; drop the remainder once upstream distinguishes an unreadable inventory from a missing endpoint and binds cleanup to window ids.
+- Upstream: ships exact-membership `fm_backend_tmux_target_exists`, including the rule that a pane suffix splits only from a window index, which the fork takes as its boolean probe; drop the remainder once upstream distinguishes an unreadable inventory from a missing endpoint and binds cleanup to window ids.
 
 ### rehold-reason
 
@@ -375,7 +375,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: fork-only `bin/fm-afk-sentinel.sh`, plus its start and stop call sites in `bin/fm-afk-launch.sh`, its gap lines and marker cleanup in `bin/fm-afk-return.sh`, its row in `docs/scripts.md`, its trigger in `docs/wedge-alarm.md`, and its family entry in `bin/fm-test-run.sh` (shared).
 - Guard: fork-only `tests/fm-afk-sentinel.test.sh`; `tests/fm-afk-return.test.sh` `test_return_brief_reports_away_watchdog_findings`.
-- Upstream: has no watchdog outside the fleet's tmux server, and its supervision host, on by default for Claude primaries since upstream #6124, shares that failure domain; drop once upstream reports a lost fleet server equivalently.
+- Upstream: has no watchdog outside the fleet's tmux server, and its supervision host, on by default for Claude primaries under upstream #6124, shares that failure domain; drop once upstream reports a lost fleet server equivalently.
 
 ### worker-tmux-isolation
 
@@ -392,7 +392,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-claude-lib.sh` and `tests/fm-claude-desktop-identity-live-e2e.test.sh`, plus its call sites in `fm_harness_process_matches` in `bin/fm-session-lock-lib.sh` and `harness_process_verdict` in `bin/fm-harness.sh`, its sibling entries in `bin/fm-backend.sh`, its family and weight entries in `bin/fm-test-run.sh`, its evidence in `docs/verification/runtime-backends.md`, and the fixture copies in suites that source those scripts (shared).
 - Guard: `tests/fm-session-lock-ancestry.test.sh` desktop cases; `tests/fm-harness-precedence.test.sh` `test_desktop_app_session_resolves_claude`; the default-on live guard `tests/fm-claude-desktop-identity-live-e2e.test.sh`.
 - Upstream: does not recognize the desktop app's version-named session executable, so a desktop-app session starts read-only; drop once upstream identifies it equivalently.
-  The shared backend loader now uses upstream's positional-parameter iteration for zsh compatibility, retaining only the fork's additional Claude helper in that list.
+  The shared backend loader uses upstream's positional-parameter iteration for zsh compatibility, retaining only the fork's additional Claude helper in that list.
 
 ### devin-rate-limit-retry
 
@@ -524,7 +524,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### scout-readonly-cleanup
 
-- Intent: a scratch scout copy whose work made directories read-only is restored to owner write before return, never across another device, so it can be cleaned; a ship with unlanded read-only content is still refused.
+- Intent: a scratch scout copy whose work made directories read-only is restored to owner write before return, never across another device, so it can be cleaned; a ship with unlanded read-only content is refused.
 - Class: carried.
 - Seam: `prepare_scout_scratch_for_return` and its call in `bin/fm-teardown.sh` (shared), which runs before upstream's scratch scrub.
 - Guard: fork-only `tests/fm-teardown-scout-readonly.test.sh`.
@@ -541,7 +541,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 ### codex-composer-extraction
 
 - Intent: distinguish animation and ghost decoration from draft text while preserving exact composer text for owned-input recovery.
-- Class: carried; the original busy-animation motivation was superseded, but the extraction behavior remains independently necessary.
+- Class: carried; the original busy-animation motivation is superseded, but the extraction behavior remains independently necessary.
 - Seam: animation, painted-braille, and ghost extraction in `bin/fm-composer-lib.sh`; `tests/fixtures/codex-animation/`; the prepared-lab animation mode in `tests/fm-composer-matrix-live-e2e.test.sh` and the same reader assertions in `tests/fm-backend-zellij.test.sh`.
 - Guard: `tests/fm-composer-ghost.test.sh`; `tests/fm-composer-lib.test.sh` animation and painted-braille cases.
 - Upstream: replaced #4297 with #4532; retire these extraction seams only when its reader preserves draft characters and excludes decoration in the same cases.
@@ -608,7 +608,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - `pi-package-discovery`: fork-only `tests/pi-package.sh` and its callers in `tests/fm-calm-pi-extension.test.sh`, `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-branch-live-e2e.test.sh` let SDK suites find a Homebrew Pi install; offer the discovery helper upstream and realign when taken.
 - `hold-doc-layout`: `docs/captain-hold-lifecycle.md` keeps the fork's condensed layout around the hunks its entries own; realign the layout when convenient.
 - `codex-verification`: the Codex busy-negotiation sentence in `bin/fm-busy-lib.sh` keeps the fork's verification wording; realign when convenient.
-- `pi-custom-run-cases`: the custom-triggered run cases in `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-watch-extension.test.sh` outlived their dropped entry and now pin upstream's own handling; realign when convenient.
+- `pi-custom-run-cases`: the custom-triggered run cases in `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-watch-extension.test.sh` pin upstream's own handling with no divergent behavior of their own; realign when convenient.
 - `pi-compatibility-notes`: Pi 1.0.3 provider, thinking, TUI and trust-dialog observations in the Pi harness reference, `bin/fm-busy-lib.sh` and `docs/verification/runtime-backends.md`, plus the regular-TUI fixture in `tests/fm-calm-pi-extension.test.sh`; consolidate into the upstream reference when it covers those versions.
 - `test-fixture-portability`: host-independent PATH and process-holder fixtures in `tests/fm-on.test.sh`, `tests/fm-remote-doctor.test.sh` and `tests/fm-remote-herdr-guard.test.sh`, Git-version-neutral hook refusal checks in `tests/fm-git-strip-ai-trailers.test.sh`, the open but unwritable stdout fixture in `tests/fm-public-followup.test.sh`, and condition-based waits in `tests/fm-watch-arm.test.sh`, `tests/fm-remote-job.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh` and `tests/fm-herdr-groups.test.sh`, including the latter's physical temporary-socket path; realign when upstream fixtures preserve the same assertions on supported hosts.
 - `fixture-diagnostics`: failure-only output improvements in `tests/fm-gotmp.test.sh`, `tests/fm-remote-secondmate-lifecycle-e2e.test.sh`, `tests/fm-spawn-pool-base-freshen.test.sh`, `tests/fm-remote-job-launchagent.test.sh` and `tests/fm-calm-pi-extension.test.sh`, plus whitespace-only layout in `tests/fm-remote-doctor.test.sh`; offer the fixes upstream and realign when taken.

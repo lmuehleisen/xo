@@ -231,7 +231,7 @@ Ops invocation examples:
 - Owned-contribution follow-up comes from the cached coverage projection; `include PRs` remains the opt-in for repository-wide live PR enrichment.
 - `/ops include PRs` keeps chat-only mode and opts into live PR enrichment.
 - `/ops file` replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch and links it from the four-section chat digest.
-- `/ops lavish` adds the fleet board; `off`, `view`, and `answers` keep their existing per-request behavior.
+- `/ops lavish` adds the fleet board; `off`, `view`, and `answers` select the per-request mode.
 - `/ops file include PRs` combines the dated report with live PR enrichment.
 
 Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
