@@ -25,9 +25,13 @@
 #   verify     read-only checks of what was published
 #   restore    put every block back, then exit nonzero unless the blocked
 #              state verifies; it must be safe to run from any state
-# Each step runs with stdin from /dev/null, its working directory at the
-# procedure directory, and FM_PUBLISH_TASK, FM_PUBLISH_DIR, and FM_PUBLISH_LOG
-# in its environment. A step output line starting with `result: ` is repeated
+# `run` copies the procedure directory once, read-only, into a private
+# directory and checks the approval against that copy, so an edit to
+# data/<task-id>/publish/ after the check never reaches the run. Each step
+# runs from the copy, with stdin from /dev/null, its working directory at the
+# copy, and in its environment FM_PUBLISH_TASK, FM_PUBLISH_DIR (the copy),
+# FM_PUBLISH_DATA (data/<task-id>, for state outside the digest), and
+# FM_PUBLISH_LOG. A step output line starting with `result: ` is repeated
 # in the summary. An optional `stop-patterns` file holds extended regular
 # expressions, one per line (blank and # lines ignored); a publish or verify
 # output line matching one stops the run, as does any line containing REFUSED.
@@ -46,7 +50,10 @@
 # a time. It then runs preflight, lift, publish, and verify. The first failing
 # step ends the run: nothing is answered, approved, retried, or overridden.
 # Restore runs exactly once on every exit after preflight starts, including
-# INT, TERM, and HUP, which it ignores while restoring. The full output goes to
+# INT, TERM, and HUP, which it ignores while restoring. A signal during a step
+# first stops that step and every process it started (TERM, then KILL after
+# ten seconds), so nothing the step began keeps publishing while or after
+# restore runs. The full output goes to
 # the terminal and to data/<task-id>/publish-logs/<UTC stamp>-<pid>.log,
 # ending in a summary.
 #
@@ -108,11 +115,12 @@ parse_args() {  # <command> <args...>
   case "$APPROVAL" in ''|*[!A-Za-z0-9._-]*) usage >&2; exit 2 ;; esac
 }
 
-# Validate data/<task>/publish/ and compute its digest. Refuses (exit 3) on
-# anything the runner would not run.
-load_procedure() {
+# Validate a procedure directory, data/<task>/publish/ or the run's copy of
+# it, and compute its digest. Refuses (exit 3) on anything the runner would
+# not run.
+load_procedure() {  # <directory>
   local bad nl=$'\n'
-  PROC_DIR=$DATA/$TASK/publish
+  PROC_DIR=$1
   PROC=$PROC_DIR/procedure
   [ -d "$PROC_DIR" ] && [ ! -L "$PROC_DIR" ] \
     || refuse "no procedure directory $PROC_DIR"
@@ -165,6 +173,7 @@ check_approval() {
 
 LOG='' RUN_TMP='' LOCK='' LOCK_HELD=0 RESTORE_ARMED=0 STAGE=start
 STEPS='' RESULTS='' NOTES='' RESTORED='not needed' STOP_WHY=''
+STEP_PID='' TEE_PID=''
 
 say() {
   printf '%s\n' "$*"
@@ -184,6 +193,70 @@ stop() {  # <code> <why>
   exit "$code"
 }
 
+# Print <pid> and every process descended from it, one per line.
+process_tree() {  # <pid>
+  ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$1" '
+    { kids[$2] = kids[$2] " " $1 }
+    END {
+      todo = root
+      while (todo != "") {
+        n = split(todo, list, " ")
+        todo = ""
+        for (i = 1; i <= n; i++) {
+          if (list[i] in seen) continue
+          seen[list[i]] = 1
+          print list[i]
+          if (list[i] in kids) todo = todo kids[list[i]]
+        }
+      }
+    }
+  '
+}
+
+signal_pids() {  # <signal> <pid>...
+  local sig=$1 pid
+  shift
+  for pid in "$@"; do kill "-$sig" "$pid" 2>/dev/null; done
+  return 0
+}
+
+any_alive() {  # <pid>...
+  local pid
+  for pid in "$@"; do kill -0 "$pid" 2>/dev/null && return 0; done
+  return 1
+}
+
+# End a step that a signal interrupted, and every process it started, before
+# restore runs: TERM, then KILL whatever is still alive ten seconds later.
+stop_step() {
+  local i=0
+  [ -n "$STEP_PID" ] || return 0
+  note "stopping the interrupted $STAGE step and every process it started"
+  # shellcheck disable=SC2046 # process_tree prints one pid per word
+  set -- $(process_tree "$STEP_PID")
+  signal_pids TERM "$@"
+  while [ "$i" -lt 50 ] && any_alive "$@"; do sleep 0.2; i=$((i + 1)); done
+  if any_alive "$@"; then
+    # shellcheck disable=SC2046
+    set -- "$@" $(process_tree "$STEP_PID")
+    signal_pids KILL "$@"
+    note "the $STAGE step was still running ten seconds after TERM and was killed"
+  fi
+  wait "$STEP_PID" 2>/dev/null
+  STEP_PID=''
+}
+
+# Let an interrupted step's output copy finish, killing it only when a process
+# the step left behind still holds the output open ten seconds later.
+drain_output() {
+  local i=0
+  [ -n "$TEE_PID" ] || return 0
+  while [ "$i" -lt 50 ] && kill -0 "$TEE_PID" 2>/dev/null; do sleep 0.2; i=$((i + 1)); done
+  kill -KILL "$TEE_PID" 2>/dev/null
+  wait "$TEE_PID" 2>/dev/null
+  TEE_PID=''
+}
+
 # Run one procedure step, its output on the terminal and in the log. Publish
 # and verify output is also scanned for REFUSED and the stop patterns.
 run_step() {  # <step>
@@ -191,10 +264,23 @@ run_step() {  # <step>
   STAGE=$step
   say ""
   say "== $step ($(now))"
-  out=$(mktemp "$RUN_TMP/$step.XXXXXX") || { STEPS="$STEPS $step=no-output-file"; return 1; }
-  (cd "$PROC_DIR" && exec "$PROC" "$step") </dev/null 2>&1 \
-    | (trap '' INT TERM HUP; exec tee -a "$LOG" "$out")
-  rc=${PIPESTATUS[0]}
+  if ! out=$(mktemp "$RUN_TMP/$step.XXXXXX") || ! mkfifo "$out.fifo"; then
+    STEPS="$STEPS $step=no-output-file"
+    STOP_WHY="cannot create the $step output files under $RUN_TMP"
+    return 1
+  fi
+  # The step runs in the background while the runner waits for it, so a
+  # signal reaches on_signal at once rather than when the step ends, and
+  # stop_step can end the step before restore. tee copies its output.
+  (trap '' INT TERM HUP; exec tee -a "$LOG" "$out") <"$out.fifo" &
+  TEE_PID=$!
+  (cd "$PROC_DIR" && exec "$PROC" "$step") </dev/null >"$out.fifo" 2>&1 &
+  STEP_PID=$!
+  wait "$STEP_PID"
+  rc=$?
+  STEP_PID=''
+  wait "$TEE_PID"
+  TEE_PID=''
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     RESULTS="$RESULTS
@@ -236,6 +322,8 @@ on_signal() {  # <signal>
 finish() {  # <exit-code>
   local rc=$1 meaning stopped_at=$STAGE
   trap '' INT TERM HUP PIPE
+  stop_step
+  drain_output
   if [ "$RESTORE_ARMED" = 1 ]; then
     if run_step restore; then
       RESTORED=restored
@@ -265,38 +353,48 @@ finish() {  # <exit-code>
   [ -z "$RESULTS" ] || say "  results:$RESULTS"
   [ -z "$NOTES" ] || say "  notes:$NOTES"
   say "Full log: $LOG"
-  [ "$LOCK_HELD" = 0 ] || fm_lock_release "$LOCK" || true
-  rm -rf "$RUN_TMP"
+  cleanup_run
   exit "$rc"
 }
 
+cleanup_run() {
+  [ "$LOCK_HELD" = 0 ] || fm_lock_release "$LOCK" || true
+  LOCK_HELD=0
+  [ -z "$RUN_TMP" ] || { chmod -R u+w "$RUN_TMP" 2>/dev/null; rm -rf "$RUN_TMP"; }
+}
+
 command_run() {
-  local stamp
-  load_procedure
-  check_approval
+  local stamp live=$DATA/$TASK/publish
+  load_procedure "$live"
   LOCK=$STATE/.approved-publish-$TASK.lock
   fm_lock_try_acquire "$LOCK" \
     || refuse "a publication run for $TASK is already in progress (pid ${FM_LOCK_HELD_PID:-unknown})"
   LOCK_HELD=1
+  trap cleanup_run EXIT
   RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-approved-publish.XXXXXX") || {
-    fm_lock_release "$LOCK"
+    RUN_TMP=''
     refuse "cannot create a temporary directory"
   }
+  # Every step runs from this read-only copy, and the approval is checked
+  # against the copy's own digest, so a later edit to the live directory
+  # cannot reach the run.
+  if ! { cp -Rp "$live" "$RUN_TMP/procedure" && chmod -R a-w "$RUN_TMP/procedure"; }; then
+    refuse "cannot copy $live for this run"
+  fi
+  load_procedure "$RUN_TMP/procedure"
+  check_approval
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   LOG=$DATA/$TASK/publish-logs/$stamp-$$.log
-  if ! { mkdir -p "$DATA/$TASK/publish-logs" && : >>"$LOG"; }; then
-    fm_lock_release "$LOCK"
-    rm -rf "$RUN_TMP"
-    refuse "cannot create the run log under $DATA/$TASK/publish-logs"
-  fi
-  export FM_PUBLISH_TASK=$TASK FM_PUBLISH_DIR=$PROC_DIR FM_PUBLISH_LOG=$LOG
+  { mkdir -p "$DATA/$TASK/publish-logs" && : >>"$LOG"; } \
+    || refuse "cannot create the run log under $DATA/$TASK/publish-logs"
+  export FM_PUBLISH_TASK=$TASK FM_PUBLISH_DIR=$PROC_DIR FM_PUBLISH_DATA=$DATA/$TASK FM_PUBLISH_LOG=$LOG
   trap 'finish $?' EXIT
   trap 'on_signal INT' INT
   trap 'on_signal TERM' TERM
   trap 'on_signal HUP' HUP
   say "=== fm-approved-publish run started $(now)"
   say "runner:     $SCRIPT_DIR/fm-approved-publish.sh"
-  say "procedure:  $PROC_DIR ($DIGEST)"
+  say "procedure:  $live, run from a read-only copy ($DIGEST)"
   say "approval:   newest captain decision on $APPROVAL carries: $APPROVAL_LINE"
   RESTORE_ARMED=1
   run_step preflight || stop 4 "$STOP_WHY; refusing to lift anything"
@@ -316,11 +414,11 @@ esac
 
 case "$command" in
   approval)
-    load_procedure
+    load_procedure "$DATA/$TASK/publish"
     printf '%s\n' "$APPROVAL_LINE"
     ;;
   check)
-    load_procedure
+    load_procedure "$DATA/$TASK/publish"
     check_approval
     printf 'approved: the newest captain decision on %s carries %s\n' "$APPROVAL" "$APPROVAL_LINE"
     ;;

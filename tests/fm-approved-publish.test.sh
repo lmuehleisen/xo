@@ -47,26 +47,35 @@ run_publish() {  # <home> <command args...>
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-approved-publish.sh" "$@"
 }
 
-# A procedure that records every step it runs in data/<task>/trace. Marker
-# files beside the procedure directory, outside the digest the way a real
-# publisher's state is, make a step print text, signal the runner, or fail.
+# A procedure that records every step it runs in data/<task>/trace and prints
+# its covered `message` file. Marker files in data/<task>, outside the digest
+# the way a real publisher's state is, make a step print text, rewrite the
+# live message, signal the runner, hang, or fail.
 write_procedure() {  # <home> <task>
   local dir="$1/data/$2/publish"
   mkdir -p "$dir"
   cat > "$dir/procedure" <<'SH'
 #!/usr/bin/env bash
 # Stand-in publisher: never pass --yes to anything here.
-d=$FM_PUBLISH_DIR/..
+d=$FM_PUBLISH_DATA
 printf '%s\n' "$1" >> "$d/trace"
 [ ! -e "$d/say-$1" ] || cat "$d/say-$1"
+[ ! -e "$d/edit-$1" ] || cp "$d/edit-$1" "$d/publish/message"
+printf 'message: %s\n' "$(cat message)"
 if [ -e "$d/signal-$1" ]; then
   kill -TERM "$PPID"
   sleep 1
+fi
+if [ -e "$d/hang-$1" ]; then
+  printf '%s\n' "$$" > "$d/hang-pid"
+  sleep 30
+  : > "$d/late-write"
 fi
 [ ! -e "$d/fail-$1" ] || exit 1
 exit 0
 SH
   chmod +x "$dir/procedure"
+  printf '%s\n' 'approved text' > "$dir/message"
   printf '%s\n' '# no-mistakes parks findings at a gate' '^[[:space:]]*gate:' > "$dir/stop-patterns"
 }
 
@@ -214,6 +223,55 @@ test_restore_always_runs() {
   pass "restore runs on every exit after preflight starts, and its failure takes precedence"
 }
 
+test_interrupt_stops_the_running_step() {
+  local home rc runner pid i=0 log
+  home=$(make_home interrupt)
+  write_procedure "$home" t1
+  approve "$home" t1 t1
+  : > "$home/data/t1/hang-publish"
+  (
+    PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+      FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_CONFIG_OVERRIDE="$home/config" exec "$ROOT/bin/fm-approved-publish.sh" run t1
+  ) >/dev/null 2>&1 &
+  runner=$!
+  while [ ! -s "$home/data/t1/hang-pid" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+  [ -s "$home/data/t1/hang-pid" ] || { kill -KILL "$runner" 2>/dev/null; fail "the publish step never started"; }
+  pid=$(cat "$home/data/t1/hang-pid")
+  kill -TERM "$runner"
+  rc=0
+  wait "$runner" || rc=$?
+  expect_code 130 "$rc" "a run interrupted during a long publish step"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null
+    fail "the interrupted publish step was still running after the runner exited"
+  fi
+  assert_absent "$home/data/t1/late-write" "the interrupted step made its later write"
+  assert_equals "preflight lift publish restore " "$(trace_of "$home" t1)" "an interrupt mid-step stops it, restores, and skips verify"
+  log=$(ls "$home"/data/t1/publish-logs/*.log) || fail "no run log for the interrupted run"
+  assert_grep "stopping the interrupted publish step" "$log" "the log must record that the step was stopped"
+  assert_grep "blocks:     restored" "$log" "the interrupted run's summary must report the restore"
+  pass "an interrupt stops the running step and every process it started before restore runs"
+}
+
+test_live_edits_never_reach_the_run() {
+  local home out rc
+  home=$(make_home snapshot)
+  write_procedure "$home" t1
+  approve "$home" t1 t1
+  printf '%s\n' 'unapproved text' > "$home/data/t1/edit-preflight"
+  rc=0
+  out=$(run_publish "$home" run t1 2>&1) || rc=$?
+  expect_code 0 "$rc" "approved run whose live procedure changed during preflight"
+  assert_grep 'unapproved text' "$home/data/t1/publish/message" "the preflight edit never reached the live procedure"
+  assert_not_contains "$out" "message: unapproved text" "a step ran a covered file edited after the approval check"
+  assert_contains "$out" "message: approved text" "every step must run the approved copy"
+  rc=0
+  run_publish "$home" check t1 >/dev/null 2>&1 || rc=$?
+  expect_code 3 "$rc" "check after the live procedure changed"
+  pass "every step runs a copy of the approved procedure, so a live edit during the run never reaches it"
+}
+
 test_refuses_auto_approval_flags() {
   local home rc out
   home=$(make_home flags)
@@ -251,5 +309,7 @@ test_refuses_without_recorded_approval
 test_refuses_when_the_approval_names_another_procedure
 test_approved_run_publishes_and_restores
 test_restore_always_runs
+test_interrupt_stops_the_running_step
+test_live_edits_never_reach_the_run
 test_refuses_auto_approval_flags
 test_reheld_approval_no_longer_counts
