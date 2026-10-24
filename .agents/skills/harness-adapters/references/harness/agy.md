@@ -1,6 +1,6 @@
 # agy (Antigravity CLI)
 
-Google's Antigravity CLI, with worker and primary compatibility refreshed on 2026-10-21 with agy 1.4.4.
+Google's Antigravity CLI, with worker and primary compatibility refreshed on 2026-10-23 with agy 1.4.6.
 Verified for interactive primary, secondmate, crewmate, and scout work.
 `../../../../../bin/fm-spawn.sh` owns the concrete launch and grant mechanics, through the fork-only `../../../../../bin/fm-agy-lib.sh` it sources.
 agy updates itself often and without asking, so treat every version-scoped fact here as refreshable rather than settled, and re-run the live guard after an upgrade.
@@ -122,7 +122,7 @@ An approval lands in the per-task verdict cache for ordinary calls; for a never-
 Markers deliberately survive `Stop` - nothing in a bypassed session is still waiting, so the marker means "firstmate still owes this call a decision" and closes only on approve, decline, a retried call's PostToolUse, or `retire`.
 
 File-tool writes are checked against the resolved physical path, and a target under `.agents/`, `.git/`, or firstmate's own worker wiring is refused outright.
-agy 1.4.4 emits `read_file`, `write_file`, and `edit_file` with an absolute `Path`; the adapter checks that operand through the same credential and write-root policy as the legacy file tools.
+agy 1.4.4 and 1.4.6 emit `read_file`, `write_file`, and `edit_file` with an absolute `Path`; the adapter checks that operand through the same credential and write-root policy as the legacy file tools.
 The observer records the path without file or replacement contents.
 Under bypass a statically visible exec write or removal outside the task write roots is refused rather than judged - there is no native prompt behind the judge to correct a bad verdict - while credential reads hold for firstmate.
 Static analysis cannot classify every command a worker can compose, so a command it cannot see into goes to the judge; this layer reduces risk and is not a security boundary.

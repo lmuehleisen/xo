@@ -578,6 +578,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-captain-hold-lifecycle.test.sh` owner-wake cases for main, local secondmate, and remote secondmate homes, the announced, owning-session, and reconcile-request cases, and the one-notification assertion in `test_board_answer_reaches_the_keyed_answer_intake`.
 - Upstream: an answer closes or releases the call and publishes a secondmate's parent line, but wakes no owning session; drop once upstream wakes the owner on answer.
 
+### teardown-archive-prune-bound
+
+- Intent: status-archive retention stays an in-process walk with batched age scans, so a home with hundreds of task directories cannot leave teardown spinning with its locks held, and a failed scan warns once.
+- Class: carried.
+- Seam: `teardown_collect_status_archives`, `teardown_prune_status_archives`, their call in `teardown_retire_status`, and the scan-failure sentence of the status-archive header in `bin/fm-teardown.sh`, plus the find-case assertion of `test_status_archive_pruning_failure_warns_and_completes` in `tests/fm-teardown.test.sh` (shared).
+- Guard: `tests/fm-teardown.test.sh` `test_status_archive_pruning_bounded_across_many_tasks`.
+- Upstream: streams one `find` per task directory through a process substitution, which macOS Bash 3.2 keeps open until teardown's top-level command returns and whose 256th descriptor corrupts the shell's heap, and warns per directory; drop once upstream bounds the walk without a per-directory process substitution.
+
 ### host-lease-release-skip
 
 - Intent: the supervision host skips its branch-lease release when no lease names the branch actor, so a slow main mutation holding the lease-command lock cannot delay a watcher cycle.

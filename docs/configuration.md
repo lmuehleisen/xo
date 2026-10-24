@@ -2181,6 +2181,41 @@ A fail-closed poll that already queued a wake, and a timeout, always print so th
 `FM_MAIL_CHECK_BUDGET` (default 15, valid 5..25) bounds one standing poll and is cut down to fit `FM_CHECK_TIMEOUT`.
 `bin/fm-mail-check.sh disarm` removes the standing check.
 
+## Captain alerts to Discord (.env)
+
+While the away posture stands, `bin/fm-captain-alert.sh` posts outcomes that need the captain to a Discord channel through a webhook.
+It is one-way: replies in Discord do nothing, nothing can be approved there, and anything that needs the captain still waits for the return.
+Quiet mode and attended sessions post nothing.
+The script header owns the row selection, coalescing and rate limits, failure handling, and secrecy rules; this section owns the configuration.
+
+It is off unless the home's gitignored `.env` provides a webhook URL:
+
+```sh
+FM_DISCORD_ALERT_WEBHOOK=          # required: the webhook URL; a bearer credential, never printed
+FM_DISCORD_ALERT_DETAIL=full       # optional: full (outcome summaries) or brief (counts only)
+FM_DISCORD_ALERT_MENTION_USER_ID=  # optional: numeric Discord user id mentioned in each post
+```
+
+Use a webhook created for these alerts alone, so rotating or deleting it touches nothing else that posts to Discord.
+Choose `brief` when anyone besides the captain can read the channel.
+The mention is only needed when the channel's notification level is Mentions.
+
+**Arm and test**
+
+`bin/fm-captain-alert.sh arm` registers the watcher check (`state/captain-alert.check.sh`) and starts its cursor at the current end of the outcome store, so nothing earlier is ever posted.
+`bin/fm-captain-alert.sh test` posts one labelled test message and prints the id Discord returned; it is a captain-authorized action.
+Discord accepting a post proves only that the message exists in the channel: whether the phone rings depends on the channel and server notification settings, desktop activity, and the phone's own settings, so confirm the test reached the phone.
+`bin/fm-captain-alert.sh status` prints the configuration and delivery state without the URL, and `disarm` removes the check and its records.
+
+**What the captain sees**
+
+The `/afk` entry announcement names the notify-only Discord reach and the last confirmed test only when the check is armed, configured, and not stopped by a rejected webhook; otherwise it says no phone channel is configured.
+A delivery failure becomes one notification when it starts, a one-time alarm through the away watchdog's channels ([wedge-alarm.md](wedge-alarm.md)), and a gap line in the return brief.
+A rejected webhook stops posting until `test` succeeds or the webhook value changes.
+
+Captain outcomes come from the supervision branch's outcome store, which the Pi branch and the supervision host both write.
+A home whose away supervision is the away daemon records no captain outcomes, so the check reports that once and posts nothing there.
+
 ## Relay (.env)
 
 Relay lets a firstmate instance answer public mentions and act on normal reversible mention requests through firstmate's normal lifecycle.
@@ -3066,6 +3101,12 @@ FM_IMAP_HOST=      # mail-plane IMAP server hostname
 FM_IMAP_PORT=993   # mail-plane IMAP server port
 FM_SMTP_HOST=      # mail-plane SMTP server hostname
 FM_SMTP_PORT=465   # mail-plane SMTP server port
+FM_DISCORD_ALERT_WEBHOOK=   # captain alerts webhook URL, from .env only (docs/configuration.md "Captain alerts to Discord")
+FM_DISCORD_ALERT_DETAIL=full   # captain alerts detail: full or brief
+FM_DISCORD_ALERT_MENTION_USER_ID=   # captain alerts: optional numeric user id to mention
+FM_CAPTAIN_ALERT_COOLDOWN_SECS=3600   # seconds before one task is headlined again in a captain alert
+FM_CAPTAIN_ALERT_HOURLY_CAP=6   # captain alert posts per rolling hour before one volume notice
+FM_CAPTAIN_ALERT_BUDGET=12   # seconds allowed for one captain alert post; 3..20
 FMX_PAIRING_TOKEN=      # Relay pairing token; .env opt-in authorizes replies and eligible lifecycle actions
 FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainly for local relay development
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env

@@ -342,7 +342,8 @@
 # Existing archive filenames are never overwritten. Each archival prunes owned
 # logs and orphaned staging files older than 30 completed days by mtime.
 # Pruning failures warn, never abort teardown, and leave other task data and
-# symlinks alone.
+# symlinks alone; a failed age scan warns once and leaves the remaining
+# retention to the next archival.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -442,29 +443,54 @@ teardown_archive_directory() {  # <directory>
   mkdir -p -- "$1"
 }
 
-teardown_prune_status_archives() {  # <task-directory>
+# The walk stays in-process: Bash 3.2 keeps every process substitution opened
+# inside a function until the top-level command returns, and one reaching
+# descriptor 256 corrupts its heap, so a stream per task directory spun
+# teardown in its own fault handler once data/ held a few hundred tasks.
+teardown_collect_status_archives() {  # <task-directory>
   local dir=$1 child file suffix
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 0
-  while IFS= read -r -d '' file; do
+  for file in "$dir"/status.log "$dir"/status.[0-9]*.log "$dir"/.status-archive.*; do
+    [ -f "$file" ] && [ ! -L "$file" ] || continue
     suffix=${file##*/}
     case "$suffix" in
       status.log|.status-archive.*) ;;
       *) suffix=${suffix#status.}; suffix=${suffix%.log}
          case "$suffix" in ''|*[!0-9]*) continue ;; esac ;;
     esac
-    rm -f -- "$file" || echo "warning: could not prune status archive: $file" >&2
-  done < <(find "$dir" -maxdepth 1 -type f \
-    \( -name status.log -o -name 'status.[0-9]*.log' -o -name '.status-archive.*' \) \
-    -mtime +30 -print0 || echo "warning: could not scan status archives: $dir" >&2)
+    TEARDOWN_STATUS_ARCHIVES+=("$file")
+  done
   [ ! -L "$dir/children" ] || return 0
   for child in "$dir/children"/*; do
-    teardown_prune_status_archives "$child"
+    teardown_collect_status_archives "$child"
+  done
+  return 0
+}
+
+# Age-test the collected logs in fixed-size find batches; a scan failure warns
+# once and leaves the rest of retention to the next archival.
+teardown_prune_status_archives() {  # <data-root>
+  local entry file i=0 batch=256
+  TEARDOWN_STATUS_ARCHIVES=()
+  for entry in "$1"/*; do
+    teardown_collect_status_archives "$entry"
+  done
+  while [ "$i" -lt "${#TEARDOWN_STATUS_ARCHIVES[@]}" ]; do
+    find "${TEARDOWN_STATUS_ARCHIVES[@]:i:batch}" -prune -type f -mtime +30 -print0 \
+      | while IFS= read -r -d '' file; do
+          rm -f -- "$file" || echo "warning: could not prune status archive: $file" >&2
+        done
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+      echo "warning: could not scan status archives under $1; retention resumes at the next archival" >&2
+      return 0
+    fi
+    i=$((i + batch))
   done
   return 0
 }
 
 teardown_retire_status() {  # <state> <task-id> [<archive-relative-directory>]
-  local state=$1 task=$2 relative=${3:-$2} dir part archive n=0 entry
+  local state=$1 task=$2 relative=${3:-$2} dir part archive n=0
   if [ ! -e "$CONFIG/status-archive" ]; then
     status_retire_presentation_task "$state" "$task"
     return $?
@@ -501,9 +527,7 @@ teardown_retire_status() {  # <state> <task-id> [<archive-relative-directory>]
     echo "error: status archival failed for $task; retaining live status for retry" >&2
     return 1
   }
-  for entry in "$DATA"/*; do
-    teardown_prune_status_archives "$entry"
-  done
+  teardown_prune_status_archives "$DATA"
 }
 
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
