@@ -77,7 +77,8 @@
 #   Prefer additive spendPressure once per snapshot when any scope publishes it;
 #   otherwise use legacy spendPriority. Missing selected scores stay unranked.
 #   Candidate output labels name the selected metric; unmetered policy scores
-#   retain their configured values.
+#   retain their configured values. Legacy planning overrides apply only to
+#   spendPriority; pressure snapshots disclose them as inactive.
 #
 # Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
 #   exists, every string value of the built request is checked against it

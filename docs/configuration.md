@@ -1512,7 +1512,7 @@ A different account lane, a reseller or API-key provider, or a route matched onl
 
 The horizon is rolling, not an assumed vendor reset.
 At each intake the typed resolver evaluates the override against the quota snapshot's `generatedAt`.
-When that instant precedes `expiresAt` and the horizon ends before the vendor reset, the resolver ranks the scope by a planning `spendPriority` that truncates the bounding window's published pace horizon at `generatedAt` plus `horizonSeconds`, capped by the vendor `resetsAt`.
+When the snapshot selects legacy `spendPriority`, that instant precedes `expiresAt`, and the horizon ends before the vendor reset, the resolver ranks the scope by a planning `spendPriority` that truncates the bounding window's published pace horizon at `generatedAt` plus `horizonSeconds`, capped by the vendor `resetsAt`.
 The calculation reuses the producer's published reserve and burn for that one window.
 A scope bounded by more than one window, an unknown or missing pace, a horizon at or beyond the reset, or unprovable account matching keeps the native value.
 Vendor remaining percent, `resetsAt`, runway, short-window exhaustion, zero-remaining, and unknown states are evaluated first and are never altered.
@@ -1520,6 +1520,7 @@ Vendor remaining percent, `resetsAt`, runway, short-window exhaustion, zero-rema
 Inspectable output distinguishes the assumption from observed data.
 An active override prints a `planning: active` line with its provider, account, window, horizon, and expiry, and each adjusted candidate prints its planning value as `spendPriority` beside `native_spendPriority`.
 An expired or otherwise inactive file prints `planning: inactive` and ranks exactly as the native snapshot does.
+Snapshots selecting `spendPressure` also leave these legacy overrides inactive and disclose that the selected metric is unchanged.
 A malformed file, including an unknown field, a non-positive horizon, an unparseable expiry, or a duplicate provider/account/window entry, refuses typed resolution with a `malformed planning file` diagnostic instead of being selected around.
 The file is evaluated on every intake, including after a restart, with no stored state.
 This file is not inherited into secondmate homes.

@@ -2285,6 +2285,25 @@ planning_first=$out
 run_lane code out err "$BRIEF" --lane plan --project xo
 assert_equals "$planning_first" "$out" "a repeated intake after restart reproduces the planning result with no state"
 
+# Legacy planning cannot substitute its burn-based score into pressure ranking.
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.8 |
+    (.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.9' "$LANE_QUOTA" > "$TMP_ROOT/planning-pressure.json"
+cp "$TMP_ROOT/planning-pressure.json" "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" "profile: --harness 'cursor'" "the legacy planning value cannot displace the pressure winner"
+assert_contains "$out" 'spendPressure=-0.9' "the published pressure remains unchanged by the active legacy override"
+assert_contains "$out" 'planning: inactive (selected spendPressure; overrides adjust spendPriority only)' "the inactive legacy override is disclosed"
+assert_not_contains "$out" 'native_spendPriority=' "pressure candidates never carry legacy planning evidence"
+
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection) |= del(.spendPressure)' "$TMP_ROOT/planning-pressure.json" > "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'eligible, unranked: spendPressure missing' "planning cannot fill in a missing pressure score"
+assert_contains "$out" "profile: --harness 'cursor'" "a missing pressure score never falls back to adjusted priority"
+
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.8' "$TMP_ROOT/planning-pressure.json" > "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'genuine spendPressure tie' "legacy planning cannot break a pressure tie"
+
 plan_quota '2026-11-01T04:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
 run_lane code out err "$BRIEF" --lane plan --project xo
 assert_contains "$out" "profile: --harness 'cursor'" "at the expiry instant the planning override is inactive and native ranking returns"
