@@ -436,10 +436,13 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         end
       end;
   def as_gate($owner):
-    {id, title:(.title | trunc(60)),
-     blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-     reason:(hold_gate_reason | trunc(40)), owner:$owner,
-     filed:((.since // null) | trunc(40))};
+    # The reconcile note already spends the whole 40-column reason budget on
+    # the request time; widen the cap so the hold reason survives beside it.
+    (if .hold_bucket == "reconciling" then 80 else 40 end) as $reason_n
+    | {id, title:(.title | trunc(60)),
+       blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
+       reason:(hold_gate_reason | trunc($reason_n)), owner:$owner,
+       filed:((.since // null) | trunc(40))};
   def round_robin_landed($n):
     . as $groups
     | [range(0; (($groups | map(length) | max) // 0)) as $i

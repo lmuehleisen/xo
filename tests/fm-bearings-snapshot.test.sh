@@ -1232,7 +1232,8 @@ EOF
     (.decisions_open | any(.[]; .id == "waiting-call"))
       and (.decisions_open | any(.[]; .id == "checking-call") | not)
       and (.gates | any(.[]; .id == "checking-call"
-                        and (.reason | startswith("reconcile requested 2026-07-14T09:30:00Z"))))
+                        and (.reason | startswith("reconcile requested 2026-07-14T09:30:00Z"))
+                        and (.reason | test(": verify the premise$"))))
   ' >/dev/null || fail "a reconcile-requested hold must leave Captain's Call for a dated gate: $json"
   rm -f "$home/state/reconcile-requests/checking-call.request"
   json=$(run "$home" "$fakebin" --json)
