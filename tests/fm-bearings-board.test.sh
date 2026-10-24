@@ -989,6 +989,66 @@ EOF
   pass "build prunes merge cards by their underlying captain-held task"
 }
 
+test_build_serializes_a_merge_card_on_the_underlying_task_lock() {
+  local home data lock acquired release locker_pid build_pid published=0
+  home=$(make_home merge-lock)
+  data="$home/payload.json"
+  lock="$home/state/.control-sample-task.lock"
+  acquired="$home/lock-acquired"
+  release="$home/release-lock"
+  write_valid_payload "$data"
+
+  # Hold the underlying task's control lock the way answer and
+  # `card merge.<task>` hold it; a merge.<task> card must serialize on that
+  # same lock or the build's read/modify/write cycle races a refresh of the
+  # very card it persists.
+  STATE="$home/state" FM_STATE_OVERRIDE="$home/state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait "$2"
+    : > "$3"
+    while [ ! -e "$4" ]; do sleep 0.05; done
+    fm_lock_release "$2"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$lock" "$acquired" "$release" &
+  locker_pid=$!
+  for _ in $(seq 1 100); do
+    [ -e "$acquired" ] && break
+    sleep 0.05
+  done
+  [ -e "$acquired" ] || fail "the card writer fixture did not acquire the task lock"
+
+  run_board "$home" build "$data" > "$home/build.out" 2>&1 &
+  build_pid=$!
+  for _ in $(seq 1 20); do
+    if [ -e "$home/.lavish/bearings-board.html" ]; then
+      published=1
+      break
+    fi
+    sleep 0.05
+  done
+  : > "$release"
+  wait "$locker_pid" || fail "the card writer fixture did not release the task lock"
+  wait "$build_pid" \
+    || fail "the build failed once the task lock was released: $(cat "$home/build.out")"
+
+  [ "$published" -eq 0 ] || fail "the board published while the underlying task lock was held"
+  pass "build serializes a merge card on its underlying task's control lock"
+}
+
+test_build_takes_one_lock_when_a_merge_card_shares_its_task_key() {
+  local home data
+  home=$(make_home merge-lock-dedup)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  stash_store_card "$home" sample-task
+
+  # The payload's merge.sample-task and the store's sample-task normalize to
+  # the same control lock; acquiring it twice would wait on the build's own
+  # live owner forever.
+  run_board_timed 20 "$home" build "$data" >/dev/null \
+    || fail "a merge card plus its task's card deadlocked or failed the build"
+  pass "build takes one lock when a merge card shares its task's key"
+}
+
 # The bearings skill forbids two cards for one task id, so the store writer is
 # the last line of defense: a file that carries two JSON documents makes a
 # later reader refuse the whole record. Exactly one card per key is written.
@@ -1554,6 +1614,8 @@ test_dropping_below_answers_retires_the_answer_source
 test_build_merges_the_durable_card_store_first
 test_build_ignores_a_malformed_store_card_without_failing
 test_build_serializes_store_merge_and_persistence_with_card_writers
+test_build_serializes_a_merge_card_on_the_underlying_task_lock
+test_build_takes_one_lock_when_a_merge_card_shares_its_task_key
 test_refresh_composes_from_the_snapshot_and_merges_the_store_card
 test_refresh_uses_the_configured_state_store
 test_build_skips_an_out_of_contract_store_filename_before_locking

@@ -780,14 +780,23 @@ decision_card_key_valid() {  # <key>
 }
 
 acquire_decision_card_locks() {  # <payload.json>
-  local data=$1 file key lock
+  local data=$1 file key lock lockname seen=''
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     if ! decision_card_key_valid "$key"; then
       printf 'ignored-store-card: %s (file name is not a valid card key)\n' "$key" >&2
       continue
     fi
-    lock="$STATE/.control-$key.lock"
+    # A merge.<task> card shares its underlying task's control lock: every
+    # hold-side writer (answer, card, card merge.<task>) serializes on the
+    # task id, so taking a merge-prefixed lock would let this read/write
+    # cycle race a refresh of the very card it persists.
+    lockname=${key#merge.}
+    case " $seen " in
+      *" $lockname "*) continue ;;
+    esac
+    seen=$seen$lockname' '
+    lock="$STATE/.control-$lockname.lock"
     fm_lock_acquire_wait "$lock" || return 1
     DECISION_CARD_LOCKS[DECISION_CARD_LOCK_COUNT]=$lock
     DECISION_CARD_LOCK_COUNT=$((DECISION_CARD_LOCK_COUNT + 1))
