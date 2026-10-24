@@ -10,9 +10,9 @@
 # A published job directory is mode 0700 and contains root, home, argv
 # (NUL-delimited), stdin, seq, stdout, stderr, queue_deadline, timeout, and
 # state; deadline and exit are added as execution advances, cancel is an
-# optional caller-cancellation marker, and .claim may hold owner, owner_start,
-# supervisor, supervisor_start, group, group_start, and armed records while
-# work executes.
+# optional caller-cancellation marker, and .claim may hold a .owner claim
+# token plus owner, owner_start, supervisor, supervisor_start, group,
+# group_start, and armed records while work executes.
 # Stage writes state=queued last. seq is a queue-wide monotonic staging
 # sequence reserved atomically by its persistent .seq-claims directory; the
 # counter is only a forward-moving allocation hint. If the bounded hint walk
@@ -485,7 +485,7 @@ fm_remote_job_regular_bounded() { # <file> <max-bytes>
 fm_remote_job_remove_claim_records() { # <claim-dir>
   local claim=$1 file
   [ -d "$claim" ] && [ ! -L "$claim" ] || return 1
-  for file in "$claim"/owner "$claim"/owner_start "$claim"/supervisor \
+  for file in "$claim"/.owner "$claim"/owner "$claim"/owner_start "$claim"/supervisor \
     "$claim"/supervisor_start "$claim"/group "$claim"/group_start "$claim"/armed \
     "$claim"/.owner.* "$claim"/.owner_start.* "$claim"/.supervisor.* \
     "$claim"/.supervisor_start.* "$claim"/.group.* "$claim"/.group_start.* \
@@ -617,7 +617,12 @@ fm_remote_job_next_seq() { # [stage-dir destination]
     attempt=$((attempt + 1))
     value=$((value + 1))
     claim="$FM_REMOTE_JOB_SEQ_CLAIMS/$value"
-    if (umask 077; mkdir "$claim") 2>/dev/null; then
+    # mkdir's exit status is not the arbiter: uutils coreutils before 0.11.0
+    # can report success for a directory a concurrent claimer created. The
+    # noclobber create inside the directory is; only one racer can win it, so
+    # a lost race is treated as a taken value and the walk moves on.
+    if (umask 077; mkdir "$claim") 2>/dev/null \
+      && (set -C; : > "$claim/.owner") 2>/dev/null; then
       chmod 700 "$claim" || return 1
       fm_remote_job_advance_seq_hint "$value" || true
       if [ -n "$stage" ]; then
@@ -876,6 +881,10 @@ fm_remote_job_reap_stale() { # <account-home>
         # One directory walk: ! -newer matches whole-second mtime <= cutoff
         # (the former >= age check). Batched rmdir tolerates concurrent mkdir/rmdir races
         # and non-empty dirs the same way the old per-claim rmdir || true did.
+        # An expired claim's .owner token goes first so the claim dir is empty
+        # for rmdir; a fresh token survives with its fresh claim.
+        find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 2 -maxdepth 2 -type f \
+          -name .owner ! -newer "$ref" -delete 2>/dev/null || true
         find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type d \
           -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 \
           ! -newer "$ref" -exec rmdir {} + 2>/dev/null || true

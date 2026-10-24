@@ -183,12 +183,12 @@ test_canonical_partitions_preserve_full_lint() {
   fakebin="$tmp/bin"
   mkdir -p "$fakebin"
   all=$(CI=true "$LINT" --list-files | LC_ALL=C sort)
-  : > "$tmp/union"
-  for part in 1of2 2of2; do
+  : > "$tmp/union2"; : > "$tmp/union3"
+  for part in 1of2 2of2 1of3 2of3 3of3; do
     selected=$(CI=false GITHUB_ACTIONS=false "$LINT" --partition "$part" --list-files) \
       || fail "partition $part must select full canonical roots even on a local branch"
     [ -n "$selected" ] || fail "empty lint partition $part"
-    printf '%s\n' "$selected" >> "$tmp/union"
+    printf '%s\n' "$selected" >> "$tmp/union${part##*of}"
     [ "$selected" = "$("$LINT" --partition "$part" --list-files)" ] \
       || fail "partition $part is nondeterministic"
     log="$tmp/$part.roots"
@@ -212,8 +212,9 @@ test_canonical_partitions_preserve_full_lint() {
     [ "$(grep -c '^fm-lint: end ' "$tmp/$part.out" || true)" -eq "$root_count" ] \
       || fail "partition $part did not stream an end record per root"
   done
-  [ "$(LC_ALL=C sort "$tmp/union")" = "$all" ] || fail "lint partitions lose or duplicate canonical roots"
-  for option in 0of2 3of2 1of3; do
+  [ "$(LC_ALL=C sort "$tmp/union2")" = "$all" ] || fail "1of2/2of2 lint partitions lose or duplicate canonical roots"
+  [ "$(LC_ALL=C sort "$tmp/union3")" = "$all" ] || fail "Nof3 lint partitions lose or duplicate canonical roots"
+  for option in 0of2 3of2 1of0 2of1 xof2 1of2of3; do
     rc=0
     "$LINT" --partition "$option" --list-files > "$tmp/refused" 2>&1 || rc=$?
     [ "$rc" = 2 ] || fail "invalid partition $option was not refused"
@@ -224,7 +225,7 @@ test_canonical_partitions_preserve_full_lint() {
   rc=0
   "$LINT" --partition 1of2 bin/fm-lint.sh > "$tmp/refused" 2>&1 || rc=$?
   [ "$rc" = 2 ] || fail "partition accepted an explicit subset"
-  pass "two canonical lint partitions preserve complete source-aware coverage and reject weakened modes"
+  pass "canonical lint partitions preserve complete source-aware coverage and reject weakened modes"
 }
 
 # fm_lint_stub_git <fakebin-dir>: install a git stub for the changed-file mode

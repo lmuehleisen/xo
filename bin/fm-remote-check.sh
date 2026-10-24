@@ -11,14 +11,15 @@
 #   fm-remote-check.sh lint
 #   fm-remote-check.sh lint --then test --changed
 #   fm-remote-check.sh test --proven-isolated --jobs 8
-#   fm-remote-check.sh lint --partition 1of2 &
-#   fm-remote-check.sh lint --partition 2of2
+#   fm-remote-check.sh lint --partition 1of3 &
+#   fm-remote-check.sh lint --partition 2of3 &
+#   fm-remote-check.sh lint --partition 3of3
 #
 # Each step runs the checked tree's own bin/fm-lint.sh or bin/fm-test-run.sh
 # with the given arguments, in order; every step runs even after one fails.
 # A bare `lint` is fm-lint.sh's changed-file mode, the fast default: only the
 # files changed against origin/main, which takes seconds. The full canonical
-# lint is CI's two --partition runs; on a fast host, running them as two
+# lint is CI's three --partition runs; on a fast host, running them as
 # concurrent invocations can finish well before CI does.
 # A test step's plain script list or --changed already gets fm-test-run.sh's
 # automatic concurrency; pass --jobs (up to its cap of 8) only for selections

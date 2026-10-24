@@ -151,6 +151,31 @@ assert_absent "$STATE_ROOT/.seq-claims/999997" "an expired sequence claim surviv
 rmdir "$STATE_ROOT/.seq-claims/999999"
 pass "atomic sequence claims remain unique and reap only after expiry"
 
+# The uutils coreutils mkdir race (pre-0.11.0, seen in CI as duplicated
+# sequence values) reports success for a directory a concurrent claimer
+# created. This shim makes that lying exit status deterministic on every
+# host: it always delegates to mkdir -p, so every mkdir exits 0 whether or
+# not the caller created the directory, and the noclobber .owner token
+# inside each claim directory becomes the sole arbiter.
+SHIM_BIN="$TMP_ROOT/shim-mkdir"
+mkdir -p "$SHIM_BIN"
+printf '%s\n' '#!/bin/sh' 'exec /bin/mkdir -p "$@"' > "$SHIM_BIN/mkdir"
+chmod +x "$SHIM_BIN/mkdir"
+rm -f -- "$STATE_ROOT/seq" "$TMP_ROOT"/seq-*
+find "$STATE_ROOT/.seq-claims" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+SEQ_PIDS=()
+for i in $(seq 1 20); do
+  ( PATH="$SHIM_BIN:$PATH"; export PATH; fm_remote_job_next_seq ) > "$TMP_ROOT/seq-$i" &
+  SEQ_PIDS+=("$!")
+done
+for pid in "${SEQ_PIDS[@]}"; do
+  wait "$pid" || fail "a sequence allocator under the lying mkdir shim failed"
+done
+SEQ_RESULTS=$(cat "$TMP_ROOT"/seq-* | sort -n)
+[ "$SEQ_RESULTS" = "$SEQ_EXPECTED" ] \
+  || fail "sequence claims under a lying mkdir were not unique and monotonic: $SEQ_RESULTS"
+pass "sequence claims stay unique when mkdir lies about losing the race"
+
 fm_on() {
   FM_HOME="$LOCAL_HOME" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" \

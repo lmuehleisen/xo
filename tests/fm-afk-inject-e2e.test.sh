@@ -269,7 +269,7 @@ wait_for_daemon_log() {  # <literal-message> <scenario>
   printf '%s\n' "$scenario: submitted content:" >&2
   cat "$LOG_FILE" >&2
   printf '%s\n' "$scenario: daemon diagnostics:" >&2
-  tail -30 "$STATE_DIR/.supervise-daemon.log" "$STATE_DIR/daemon.err" >&2
+  tail -n 30 "$STATE_DIR/.supervise-daemon.log" "$STATE_DIR/daemon.err" >&2
   fail "$scenario: did not observe '$message' within 30s"
 }
 
