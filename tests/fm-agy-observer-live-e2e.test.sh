@@ -13,9 +13,11 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/agy-live-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/agy-live-helpers.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGY_BIN=$(command -v agy 2>/dev/null || true)
+agy_live_context
 AGY_VERSION=
 LAB=
 
@@ -28,6 +30,8 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+trap 'exit 143' TERM HUP
+trap 'exit 130' INT
 
 fail() {
   printf 'not ok - %s (agy %s)\n' "$1" "${AGY_VERSION:-unknown}" >&2
@@ -66,7 +70,7 @@ LOG="$STATE/agy-permission-log.jsonl"
 CANARY="$WORKSPACE/observer-canary"
 out=$(cd "$WORKSPACE" && "$AGY_BIN" -p \
   "Run this exact shell command with run_command, then reply DONE: /usr/bin/touch $CANARY" \
-  --model gemini-3.8-flash-low --dangerously-skip-permissions \
+  "${MODEL_FLAGS[@]}" --dangerously-skip-permissions \
   --add-dir "$WORKSPACE" --add-dir "$STATE/$ID.agy-hooks" \
   --print-timeout 120s 2>&1) \
   || fail "agy headless run failed: $out"
@@ -75,12 +79,16 @@ out=$(cd "$WORKSPACE" && "$AGY_BIN" -p \
 [ -s "$LOG" ] || fail "the observer wrote no log: $out"
 jq -c . "$LOG" >/dev/null || fail 'an observer line is not valid JSON'
 jq -es --arg id "$ID" '
+  . as $records |
   (map(select(.event == "pre-tool-use")) | length >= 1)
   and (map(select(.event == "post-tool-use")) | length >= 1)
   and all(.[]; .task == $id)
   and all(.[]; .session_id | type == "string" and length > 0)
-  and (map(select(.event == "post-tool-use"))[0].error == "")' "$LOG" >/dev/null \
+  and any($records[]; . as $pre | .event == "pre-tool-use" and
+    any($records[]; .event == "post-tool-use" and .session_id == $pre.session_id
+      and .step_idx == $pre.step_idx and .tool == $pre.tool and .error == ""))' "$LOG" >/dev/null \
   || fail "no matching pre/post pair landed in the log: $(cat "$LOG")"
 pass "agy $AGY_VERSION: installed worker hooks emit a PreToolUse and PostToolUse line while the tool runs unchanged"
 
 printf '# agy observer live checks passed (agy %s)\n' "$AGY_VERSION"
+agy_live_complete observer "$LOG" || fail 'could not record complete observer coverage'

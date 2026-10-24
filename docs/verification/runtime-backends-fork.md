@@ -406,7 +406,7 @@ The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the fi
 Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
 The same six checks passed on 1.2.7 on 2026-09-20 and on 1.2.6 on 2026-09-18, and the earlier hook-contract facts were verified on 1.2.4 and 1.2.5; the 1.3.1, 1.3.5, 1.3.6, and 1.4.0 refreshes below extend the layer's live-verified set to `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0`.
 A version without that evidence, including 1.2.8 through 1.2.10, 1.3.0, and 1.3.2 through 1.3.4, stays outside the set; later releases require their own live verification.
-The set stays an explicit allowlist rather than a minimum version, because each entry is individually proven against the version-sensitive hook contract.
+That set is now the historical manual baseline: policy-layer launches require the executable-bound admission recorded below, which a version string alone never satisfies.
 
 ```sh
 FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
@@ -444,7 +444,7 @@ The launch therefore stays on `--dangerously-skip-permissions` alone, with the p
 #### 1.3.1 refresh (2026-10-07)
 
 Refreshed on 2026-10-07 with agy 1.3.1 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-Agy policy-layer launches refuse versions outside the allowlist, so 1.3.1 required this refresh before it could launch on that path.
+Agy policy-layer launches then refused versions outside the allowlist, so 1.3.1 required this refresh before it could launch on that path.
 Nothing in the version-sensitive hook contract changed: the same six live checks and the observer live check passed unchanged, and the `agy models` catalog still lists `gemini-3.6-flash-low`, so no part of the layer needed adapting beyond adding 1.3.1 to the allowlist.
 1.3.0 has no live evidence and stays outside the set.
 
@@ -524,7 +524,7 @@ ok - agy 1.3.5: installed worker hooks emit a PreToolUse and PostToolUse line wh
 #### 1.3.6 refresh (2026-10-15)
 
 Refreshed on 2026-10-15 with agy 1.3.6 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.8-flash-low` headless runs.
-Agy policy-layer launches refuse versions outside the allowlist, so 1.3.6 required this refresh before it could launch on that path.
+Agy policy-layer launches then refused versions outside the allowlist, so 1.3.6 required this refresh before it could launch on that path.
 The same six bypass checks and the observer live check passed unchanged from the 1.3.5 refresh, on the same catalog model.
 The version-sensitive contract used by the layer is unchanged: a named `hooks.json` registry carrying `PreInvocation`, `Stop`, `PreToolUse`, and `PostToolUse` command groups still loads, and deny, abstain, timeout, and `force_ask` behavior match the prior refresh.
 A scratch capture of the raw hook stdin on `write_to_file` and `run_command` calls confirmed the same top-level fields (`conversationId`, `stepIdx`, `toolCall`, `workspacePaths`, `modelName`, `transcriptPath`, `artifactDirectoryPath`, plus `error` on the post call alone), matching pre/post pairs on `conversationId`, `stepIdx`, and `toolCall`, and a post-tool `error` of `""`.
@@ -558,7 +558,7 @@ ok - agy 1.3.6: installed worker hooks emit a PreToolUse and PostToolUse line wh
 #### 1.4.0 refresh (2026-10-16)
 
 Refreshed on 2026-10-16 with agy 1.4.0 on macOS on Apple silicon, in scratch workspaces under the task temp root, on `gemini-3.8-flash-low` headless runs.
-Agy policy-layer launches refuse versions outside the allowlist, so 1.4.0 required this refresh before it could launch on that path.
+Agy policy-layer launches then refused versions outside the allowlist, so 1.4.0 required this refresh before it could launch on that path.
 The bypass and observer live checks passed on the same catalog model.
 The version-sensitive contract used by the layer is unchanged: a named `hooks.json` registry carrying `PreInvocation`, `Stop`, `PreToolUse`, and `PostToolUse` command groups still loads, and deny, abstain, timeout, and `force_ask` behavior match the prior refresh.
 A scratch capture of the raw hook stdin on `write_to_file` and `run_command` calls confirmed the same top-level fields (`conversationId`, `stepIdx`, `toolCall`, `workspacePaths`, `modelName`, `transcriptPath`, `artifactDirectoryPath`, plus `error` on the post call alone), matching pre/post pairs on `conversationId`, `stepIdx`, and `toolCall`, and a post-tool `error` of `""`.
@@ -641,6 +641,40 @@ The lab helper verified unchanged default-session state after teardown.
 The focused portable harness, permission-policy, composer, send-confirmation, and submit-busy suites and canonical lint passed for the implementation.
 The explicit verified-version set admits 1.4.4 only after the real checks above.
 Headless primary supervision, compaction refresh, semantic cancellation acknowledgement, and remote secondmate launch remain outside this evidence.
+
+#### Executable-bound patch admission (2026-10-23)
+
+Verified with agy 1.4.6 on macOS Apple silicon (executable SHA-256 `cab004f3c5c6cb7dc8b8712d3bc30431bd4480b17ff38a07eb1865abeffd2f27`) in an isolated Firstmate home, with `gemini-3.8-flash-low` as both worker and judge model.
+[`bin/fm-agy-admission.sh`](../../bin/fm-agy-admission.sh) treated 1.4.6 as an eligible patch candidate, ran the complete bypass, observer, and signals guards before any real brief, and published a private receipt bound to that executable, platform, integration and guard bytes, worker model and effort, and judge.
+Each guard records completion only after all of its cases pass with real tool attempts observed.
+The outside-root shell probe targets a separate reserved `/tmp/fm-*` fixture, because `/tmp` and `$TMPDIR` scratch files are permitted write roots.
+
+```sh
+bin/fm-agy-admission.sh ensure <absolute-agy> gemini-3.8-flash-low '' agy gemini-3.8-flash-low <absolute-agy>
+```
+
+```text
+agy compatibility: task is waiting for synthetic verification of 1.4.6 (gemini-3.8-flash-low); no real brief is sent yet
+ok - agy 1.4.6: shell and native credential reads are denied before disclosure
+ok - agy 1.4.6: a policy deny blocks a bypassed call and the reason reaches the model
+ok - agy 1.4.6: an abstained task-local file op runs unchanged and the armed heartbeat logged
+ok - agy 1.4.6: native file writes outside task roots are denied before execution
+ok - agy 1.4.6: selected custom judge approves a harmless residue call
+ok - agy 1.4.6: a timed-out judge denies, holds the call for firstmate, and never abstains
+ok - agy 1.4.6: install-worker refuses a malformed merged hooks.json before any launch
+ok - agy 1.4.6: a force_ask decision under bypass did not block the call - no prompt exists to force
+ok - agy 1.4.6: a bypass session whose hook never logs leaves no armed line for the canary to trust
+# agy bypass permission layer live checks passed (agy 1.4.6)
+# agy observer live checks passed (agy 1.4.6)
+# all fm-agy-signals live checks passed (agy 1.4.6)
+agy compatibility: all focused checks completed; private executable-bound receipt published
+```
+
+An unchanged repeat admission printed `agy compatibility: reusing matching executable/model receipt` without rerunning any guard.
+A synthetic local-only agy ship through the production `fm-spawn.sh` path reused that receipt behind the pane-side identity assertion and exercised native `read_file`, `write_file`, and `edit_file`, a judge-approved `run_command`, durable steering, interrupt, and exit.
+Only worktree acquisition came from a fixture, and interrupt cancellation remained unconfirmed.
+`tests/fm-agy-admission.test.sh` pins the portable receipt and admission behavior.
+A receipt covers finite fixtures only; it does not prove arbitrary commands, untested tool shapes, or unchanged server-side model behavior.
 
 ### Primary and secondmate supervision
 

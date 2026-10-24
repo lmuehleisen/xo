@@ -17,6 +17,8 @@ set -u
 
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh" || exit 1
+# shellcheck source=tests/agy-admission-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/agy-admission-helpers.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 REAL_TMUX=$(command -v tmux || true)
@@ -85,6 +87,13 @@ run_spawn() {  # <home> <proj> <wt> <fakebin> <id> [args...]
     "$SPAWN" "$id" "$proj" "$@" 2>&1
 }
 
+# A launch-blocker case must reach the staged launch, so it needs the
+# completed compatibility proof the policy layer checks for its exact context.
+admit_fake_agy() {  # <home> <fakebin>
+  fm_agy_fixture_receipt "$1" "$2/agy" gemini-3.8-flash-low '' agy gemini-3.8-flash-low "$2/agy" ||
+    fail "could not seed the fake agy compatibility fixture"
+}
+
 window_present() {  # <window-name>
   ptmux list-windows -t "=$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF -- "$1"
 }
@@ -142,7 +151,8 @@ EOF
   token=$(printf '%s' "$(cd "$home" && pwd -P)" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}')
   LAUNCH_BLOCKER="/tmp/fm-$id+$token"
   ln -s /nonexistent "$LAUNCH_BLOCKER"
-  out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout)
+  admit_fake_agy "$home" "$fakebin"
+  out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout --model gemini-3.8-flash-low)
   status=$?
   rm -f "$LAUNCH_BLOCKER"
   [ "$status" -ne 0 ] || fail "stage: a non-private launch directory must refuse the spawn: $out"
@@ -167,7 +177,8 @@ EOF
   token=$(printf '%s' "$(cd "$home" && pwd -P)" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}')
   LAUNCH_BLOCKER="/tmp/fm-$id+$token"
   ln -s /nonexistent "$LAUNCH_BLOCKER"
-  out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout)
+  admit_fake_agy "$home" "$fakebin"
+  out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout --model gemini-3.8-flash-low)
   status=$?
   rm -f "$LAUNCH_BLOCKER"
   [ "$status" -ne 0 ] || fail "foreign: the spawn must refuse: $out"

@@ -300,7 +300,7 @@ family_for_basename() {
     fm-captain-hold-completed-ship.test.sh|fm-captain-hold-rehold.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
     fm-devin-permission-policy.test.sh|fm-devin-rate-limit-retry.test.sh|fm-devin-fork-harness.test.sh|\
-    fm-agy-permission-policy.test.sh|\
+    fm-agy-permission-policy.test.sh|fm-agy-admission.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
     fm-kimi-harness.test.sh|fm-devin-harness.test.sh|fm-commandcode-harness.test.sh|fm-muse-harness.test.sh|fm-rovo-harness.test.sh|fm-agy-harness.test.sh|fm-kiro-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
@@ -1723,7 +1723,16 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-devin-fork-harness.test.sh
       printf '%s\n' __script__:fm-devin-rate-limit-retry-live-e2e.test.sh
       ;;
+    bin/fm-agy-admission.sh|bin/fm-agy-admission.py|tests/agy-live-helpers.sh|tests/agy-admission-helpers.sh)
+      printf '%s\n' __script__:fm-agy-admission.test.sh
+      printf '%s\n' __script__:fm-agy-harness.test.sh
+      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
+      printf '%s\n' __script__:fm-agy-observer-live-e2e.test.sh
+      printf '%s\n' __script__:fm-agy-signals-live-e2e.test.sh
+      printf '%s\n' __script__:fm-spawn-prelaunch-rollback.test.sh
+      ;;
     bin/fm-agy-lib.sh)
+      printf '%s\n' __script__:fm-agy-admission.test.sh
       printf '%s\n' __script__:fm-agy-harness.test.sh
       printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       printf '%s\n' backend-dispatch
