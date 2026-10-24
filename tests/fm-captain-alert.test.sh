@@ -73,7 +73,7 @@ run() {  # <args...>: runs the notifier in $H at $NOW; output in $OUT, status in
   RC=0
   OUT=$(env -u FM_STATE_OVERRIDE -u FM_ROOT_OVERRIDE FM_HOME="$H" STUB_DIR="$H/stub" \
     FM_CAPTAIN_ALERT_EXEC="$STUB" FM_CAPTAIN_ALERT_SENTINEL="$SENTINEL" \
-    FM_CAPTAIN_ALERT_NOW="$NOW" ${EXTRA_ENV:-} "$ALERT" "$@" 2>&1) || RC=$?
+    FM_CAPTAIN_ALERT_NOW="$NOW" FM_CAPTAIN_ALERT_COOLDOWN_SECS="${COOLDOWN:-}" "$ALERT" "$@" 2>&1) || RC=$?
   printf '%s\n' "$OUT" >> "$H/all-output"
 }
 
@@ -187,7 +187,7 @@ test_burst_coalesces_cooldown_folds_and_cap_holds() {
   use_home "$(make_home cap configured)"
   run arm
   go_away
-  EXTRA_ENV="FM_CAPTAIN_ALERT_COOLDOWN_SECS=0"
+  COOLDOWN=0
   for i in $(seq 1 9); do
     NOW=$((NOW0 + i * 300)); append "task$i" captain "decision $i"
     sweep
@@ -197,7 +197,7 @@ test_burst_coalesces_cooldown_folds_and_cap_holds() {
   NOW=$((NOW0 + 300 + 3600 + 1)); sweep
   assert_equals 8 "$(calls)" "the waiting rows go out once the hour rolls"
   assert_contains "$(payload 8)" "XO needs you (3):" "the held rows are summarized, not lost"
-  EXTRA_ENV=
+  COOLDOWN=
   pass "fm-captain-alert: bursts coalesce, cooldown folds, and the hourly cap holds"
 }
 

@@ -241,7 +241,9 @@ log_event() {  # <kind> <detail>
   printf '%s\t%s\t%s\n' "$(now_epoch)" "$1" "$2" >> "$LOG" 2>/dev/null || return 0
   if [ "$(wc -l < "$LOG" | tr -d ' ')" -gt "$LOG_KEEP" ]; then
     tmp=$(mktemp "$LOG.XXXXXX" 2>/dev/null) || return 0
-    tail -n "$LOG_KEEP" "$LOG" > "$tmp" && mv -f -- "$tmp" "$LOG" || rm -f -- "$tmp"
+    if ! tail -n "$LOG_KEEP" "$LOG" > "$tmp" || ! mv -f -- "$tmp" "$LOG"; then
+      rm -f -- "$tmp"
+    fi
   fi
 }
 
