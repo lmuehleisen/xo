@@ -587,7 +587,7 @@ RECOVERED_LINE="Discord delivery is working again"
 DELIVERED=0
 
 action_check() {
-  local now mode tail entered line= alarm=
+  local now mode tail entered line='' alarm=''
   armed || return 0
   lock_or_skip || return 0
   now=$(now_epoch)
