@@ -235,6 +235,7 @@ compose_payload() {  # <dest.json>
           $s.decisions_open[]?
           | {key: (.key // .id), type: "decision", repo: null,
              title: (.summary // .id), options: [], allow_freeform: true}
+            + (if (.owner // "") == "" then {} else {owner: .owner} end)
         ],
         underway: [
           $s.in_flight[]?
@@ -599,7 +600,7 @@ merge_store_cards() {  # <data.json> <dest.json>
   # used only where the store holds nothing. Order is preserved, and a record
   # that fails the stored form of the shared contract is named on stderr and
   # skipped rather than failing the build.
-  local data=$1 dest=$2 key file staged
+  local data=$1 dest=$2 key file staged owner
   cp -- "$data" "$dest" || return 1
   [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ] || return 0
   while IFS= read -r key; do
@@ -614,6 +615,13 @@ merge_store_cards() {  # <data.json> <dest.json>
     # task would otherwise be merged into this key's slot.
     if [ "$(jq -r '.card.key? // empty' "$file" 2>/dev/null)" != "$key" ]; then
       printf 'ignored-store-card: %s (record key does not match its file name)\n' "$key" >&2
+      continue
+    fi
+    # A card another home owns is display-only here: the local store must
+    # never replace its content, or a later local card with the same key
+    # would inherit the remote question.
+    owner=$(jq -r --arg key "$key" 'first(.captains_call[] | select(.key == $key) | .owner // "")' "$dest" 2>/dev/null)
+    if [ -n "$owner" ] && [ "$owner" != '(main)' ]; then
       continue
     fi
     staged=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-card.XXXXXX") || return 1
@@ -772,7 +780,7 @@ acquire_decision_card_locks() {  # <payload.json>
 }
 
 persist_decision_cards() {  # <effective-payload.json>
-  local data=$1 key card tmp existing task live_task rc keep=''
+  local data=$1 key card tmp existing task live_task rc owner keep=''
   if [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ]; then
     :
   elif ! (umask 077; mkdir -p "$DECISION_CARDS_DIR"); then
@@ -782,6 +790,12 @@ persist_decision_cards() {  # <effective-payload.json>
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     keep=$keep$key$'\n'
+    # Another home's decision card is display-only here and stays out of
+    # this home's durable store, so it can never be merged back as local.
+    owner=$(jq -r --arg key "$key" 'first(.captains_call[] | select(.key == $key) | .owner // "")' "$data" 2>/dev/null)
+    if [ -n "$owner" ] && [ "$owner" != '(main)' ]; then
+      continue
+    fi
     card=$(jq -c --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --arg key "$key" \
       'first(.captains_call[] | select(.key == $key)

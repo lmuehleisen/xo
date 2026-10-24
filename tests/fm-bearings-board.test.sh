@@ -782,6 +782,8 @@ test_answers_mode_keeps_other_homes_calls_display_only() {
         "title":"Secondmate decision","options":[{"value":"yes","label":"Yes"}]
       }]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
   out=$(run_board "$home" build "$data") || fail "the answers build failed: $out"
+  assert_absent "$home/state/decision-cards/remote-mate-call.json" \
+    "another home's decision card was persisted into the local store"
   extract_payload "$board" | jq -e '
     [.captains_call[] | select(.key == "remote-mate-call")]
     | length == 1 and (.[0] | has("answerable") | not)' >/dev/null \
@@ -1044,6 +1046,7 @@ test_build_merges_the_durable_card_store_first() {
     (.captains_call[] | select(.key == $key) | .title) == "Raise-time card"
     and ((.captains_call[] | select(.key == $key)
       | [.options[] | select(.value == "reconcile")] | length) == 1)
+    and ((.captains_call[] | select(.key == $key) | .owner) == "(main)")
     and ((.captains_call[] | select(.key == $key) | .close) == "release")' "$home/served.json" >/dev/null \
     || fail "the board did not serve the stored copy with one injected reconcile choice"
   jq -e --arg key "$key" '.card.title == "Raise-time card"' "$store/$key.json" >/dev/null \
@@ -1134,6 +1137,7 @@ test_refresh_composes_from_the_snapshot_and_merges_the_store_card() {
     (.captains_call[] | select(.key == $key) | .title) == "Raise-time storage choice"
     and ((.captains_call[] | select(.key == $key)
       | [.options[] | select(.value == "reconcile")] | length) == 1)
+    and ((.captains_call[] | select(.key == $key) | .owner) == "(main)")
     and ([.underway[].id] == ["sample-live-task"])
     and ([.landed[].id] == ["sample-landed-task"])
     and ([.charted[].id] == ["sample-gate", "sample-inventory"])
