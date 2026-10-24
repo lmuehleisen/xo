@@ -19,7 +19,7 @@ Current live evidence and its refresh command are in [runtime verification](../.
 | Trust and permissions | No folder-trust dialog observed in the scratch live guard. `--auto` approves permissions that are not explicitly denied. |
 | Marker | None; OpenCode publishes no identity marker, so `../../../bin/fm-harness.sh` identifies it from process ancestry. |
 
-`../../../bin/fm-spawn.sh` owns the bare-launch readiness gate and guarded brief submission.
+`../../../bin/fm-spawn.sh` owns bare-launch readiness, native launch-model verification, and guarded brief submission.
 V2 `--prompt` was observed leaving a startup draft pending, so worker launch submits only after the shared composer classifier proves readiness.
 When a release adds screen furniture the classifier does not recognize, the spawn still submits once the agent is alive, its screen is settled, and that screen positively shows an idle composer with no permission prompt or dialog; it never types into a draft, and prints a `notice:` line - file a todo to teach `../../../bin/fm-composer-lib.sh` the screen captured in the startup diagnostics it names.
 The worker plugin is a package in the task temp directory, named by launch config; no global config or project file is written for model selection or hook installation.

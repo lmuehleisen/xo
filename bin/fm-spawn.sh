@@ -168,6 +168,13 @@
 #   OpenCode requires V2 >= 2.0.18 and starts bare with --standalone --auto,
 #   then waits FM_OPENCODE_READY_POLLS (default 60) at FM_OPENCODE_POLL_INTERVAL
 #   (default 0.5 seconds) for an empty composer before guarded brief submission.
+#   The per-generation plugin must also acknowledge installation before the
+#   brief is submitted, then report the native session.context model before
+#   spawn succeeds (the same poll bound applies independently to each gate).
+#   Missing/mismatched identity refuses with expected/observed diagnostics;
+#   a successful native catalog read also refuses an absent requested model.
+#   Unavailable discovery is reported as uncertainty, never unsupported proof.
+#   This checks OpenCode's resolved model ID, not a provider's internal routing.
 #   If the screen is still unrecognized (never pending) while the agent is
 #   alive, the screen is settled, and it positively shows an idle composer with
 #   no permission prompt or dialog, it prints a notice, captures the screen to
@@ -5880,6 +5887,30 @@ opencode_unrecognized_screen_idle() {
   [ "$before" = "$after" ] && fm_composer_leftbar_idle_evidence "$after"
 }
 
+# The receipt lives in the new busy generation's private plugin directory, so
+# an earlier incarnation cannot satisfy either gate. Never infer actual model
+# identity from the launch config, catalog, or rendered display name.
+opencode_wait_model() { # <ready|verified>
+  local wanted=$1 poll=0 phase
+  while [ "$poll" -lt "${FM_OPENCODE_READY_POLLS:-60}" ]; do
+    phase=$(jq -r '.phase // empty' "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null) || phase=
+    if [ "$phase" = refused ]; then break; fi
+    if [ "$phase" = "$wanted" ]; then
+      if [ "$wanted" = verified ] && [ "$(jq -r '.discovery' "$OPENCODE_MODEL_EVIDENCE")" = unavailable ]; then
+        echo "notice: OpenCode native model discovery unavailable; requiring native session identity for expected=${MODEL:-default}" >&2
+      fi
+      return 0
+    fi
+    poll=$((poll + 1))
+    sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
+  done
+  OPENCODE_MODEL_FAILURE=$(jq -r '"expected=\(.expected) observed=\(.observed); \(.detail) (discovery=\(.discovery))"' \
+    "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null) || \
+    OPENCODE_MODEL_FAILURE="expected=${MODEL:-default} observed=unavailable; native model receipt missing ($wanted); inspect plugin loading and native session errors"
+  echo "error: OpenCode launch model verification failed: $OPENCODE_MODEL_FAILURE; evidence=$OPENCODE_MODEL_EVIDENCE" >&2
+  return 1
+}
+
 opencode_spawn_fail() { # <detail>
   local failure_state=${2:-idle} failure_event
   failure_event=$(status_stamp_line "failed: $1")
@@ -6677,6 +6708,9 @@ EOF
 EOF
     ;;
   opencode*)
+    OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
+      "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || exit 1
+    OPENCODE_MODEL_EVIDENCE="$TASK_TMP/opencode-plugin-$BUSY_GEN/model.json"
     mkdir -p "$TASK_TMP/opencode-plugin-$BUSY_GEN"
     printf '%s\n' '{"type":"module","main":"./index.mjs"}' > "$TASK_TMP/opencode-plugin-$BUSY_GEN/package.json"
     cat >"$TASK_TMP/opencode-plugin-$BUSY_GEN/index.mjs" <<EOF
@@ -6691,6 +6725,7 @@ EOF
 // watcher's wake NOTIFICATION, never current-state truth.
 import { execFile } from "node:child_process";
 import { v2Plugin } from "$FM_ROOT/.opencode/plugins/lib/fm-v2-plugin.js";
+import { installLaunchModelCheck } from "$FM_ROOT/.opencode/plugins/lib/fm-launch-model.js";
 const notifyTurnEnd = $busy_notify_turnend;
 const busyEvent = (state, event) =>
   new Promise((resolve) => {
@@ -6732,7 +6767,17 @@ export const FmBusyState = async () => {
     },
   };
 };
-export default v2Plugin("firstmate.worker-busy", FmBusyState);
+const busyPlugin = v2Plugin("firstmate.worker-busy", FmBusyState);
+export default {
+  ...busyPlugin,
+  async setup(ctx) {
+    const cleanup = await busyPlugin.setup(ctx);
+    await installLaunchModelCheck(ctx, $(jq -cn --arg expected "${MODEL:-default}" \
+      --arg evidence "$OPENCODE_MODEL_EVIDENCE" --arg launchText "$OPENCODE_POINTER" \
+      '{expected:$expected,evidence:$evidence,launchText:$launchText}'));
+    return cleanup;
+  },
+};
 EOF
     ;;
   pi | pi-signed)
@@ -7939,18 +7984,26 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     opencode_spawn_fail "OpenCode V2 composer did not become ready in window $T"
     exit $?
   fi
-  OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
-    "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || {
-    opencode_spawn_fail "OpenCode V2 brief encoding failed in window $T"
+  if ! opencode_wait_model ready; then
+    opencode_spawn_fail "OpenCode V2 model verification failed: $OPENCODE_MODEL_FAILURE"
     exit $?
-  }
+  fi
   # Submission may start work even when its verdict is lost or unconfirmed.
   # Keep task ownership from this point, including if submission is interrupted.
   SPAWN_FRESH_COMMIT_PENDING=0
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" != empty ]; then
+    if [ "$(jq -r '.phase' "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null)" = refused ]; then
+      opencode_wait_model verified || true
+      opencode_spawn_fail "OpenCode V2 model verification failed: $OPENCODE_MODEL_FAILURE" unknown
+      exit $?
+    fi
     opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T" unknown
+    exit $?
+  fi
+  if ! opencode_wait_model verified; then
+    opencode_spawn_fail "OpenCode V2 model verification failed: $OPENCODE_MODEL_FAILURE" unknown
     exit $?
   fi
 fi

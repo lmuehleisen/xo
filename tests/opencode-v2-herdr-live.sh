@@ -8,11 +8,14 @@ set -eu
 fm_live_gate opt-in FM_OPENCODE_LIVE_E2E opencode herdr git jq node
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ORIGINAL_PATH=$PATH
+REAL_OPENCODE=$(command -v opencode)
 HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
 LAB_HOME_HELPER=${LAB_HOME_HELPER:-$ROOT/bin/fm-lab-home.sh}
-HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name opencode-v2-live)
+HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name "${FM_OPENCODE_LAB_LABEL:-opencode-v2-live}")
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-opencode-herdr.XXXXXX")
 export FM_HOME="$LAB/home" FM_ROOT_OVERRIDE="$ROOT"
+export XDG_CONFIG_HOME="$LAB/config" XDG_DATA_HOME="$LAB/data"
+export XDG_STATE_HOME="$LAB/runtime" XDG_CACHE_HOME="$LAB/cache"
 LAB_TMUX_DIR=
 IDS=()
 cleanup() {
@@ -29,7 +32,7 @@ cleanup() {
   PATH="$ORIGINAL_PATH" "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || rc=1
   if [ -n "${FM_OPENCODE_LIVE_EVIDENCE:-}" ]; then
     mkdir -p "$FM_OPENCODE_LIVE_EVIDENCE"
-    cp "$LAB"/*.txt "$FM_OPENCODE_LIVE_EVIDENCE/" 2>/dev/null || true
+    cp "$LAB"/*.txt "$LAB"/model-*.json "$FM_OPENCODE_LIVE_EVIDENCE/" 2>/dev/null || true
   fi
   for id in ${IDS[@]+"${IDS[@]}"}; do fm_test_rm_tmproot "/tmp/fm-$id"; done
   chmod -R u+w "$LAB"
@@ -76,6 +79,11 @@ unset HERDR_ENV HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH 
 VERSION=$(opencode --version)
 MODEL=${FM_OPENCODE_LIVE_MODEL:-opencode/muse-spark-1.3-contributor-free}
 case "$MODEL" in opencode/*free*|opencode/*contributor*) ;; *) fail 'Herdr live guard requires a free/contributor model' ;; esac
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  # shellcheck source=tests/opencode-model-live.sh
+  . "$ROOT/tests/opencode-model-live.sh"
+  oc_model_live_prepare
+fi
 STATUS=$(PATH="$ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" status --json)
 printf '%s\n' "$STATUS" > "$LAB/version.txt"
 HERDR_SOCKET_PATH=$(printf '%s' "$STATUS" | jq -r '.server.socket')
@@ -131,6 +139,10 @@ prepare "$ID"
 for i in $(seq 1 30); do printf 'Probe note %s: no additional action.\n' "$i" >> "$FM_HOME/data/$ID/brief.md"; done
 spawn "$ID"
 TARGET=$(target "$ID")
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  oc_model_live_checks "$FM_OC_FIXTURE"
+  exit 0
+fi
 wait_text "$FM_HOME/state/$ID.status" 'brief processed' "$TARGET"
 wait_idle "$ID" "$TARGET"
 [ -f "$FM_HOME/state/$ID.turn-ended" ] || fail 'native turn-end absent'
