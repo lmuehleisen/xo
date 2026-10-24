@@ -114,6 +114,17 @@ The active captain-answer channel in this fork is chat.
 `bin/fm-send.sh --resolve-key` is the chat channel: its status-log close for a key the status log still owns is owned by that script's header, and a key the status log no longer owns is resolved to a still-open captain-held task - the key as a task id, then the legacy derived identity - and fed as one keyed line.
 An Ops board below the `answers` Lavish mode does not feed this intake, and any answer it prompts returns through chat; an `answers` board feeds it as the bound captured source described below.
 
+### Waking the home that owns the call
+
+A recorded answer is only useful once firstmate acts on it, and a parent-channel line wakes only the parent, so every answer path - `answer`, `answer --release`, and each key `answers` resolves - wakes the owning home's session once the backlog record is durable.
+A main home is woken through its captain inbox (`bin/fm-inbox.sh note --request-id captain-answer-<digest>`), whose note queues one `check` wake.
+A secondmate is woken through its own steering lane, the inbox its parent steers it through, with one fire-and-forget record and one doorbell.
+A `reconcile-requests` request wakes the owning home the same way under a `captain-reconcile-<digest>` id.
+Each wake is keyed to the answer or request, so a replay wakes nobody again, also after the woken session acknowledged its wake.
+The session holding the home's lock is not woken when it records the answer itself, and neither is a session the delivering channel already wakes: the process-event runner declares `FM_CAPTAIN_ANSWER_ANNOUNCED=1` when the capture reaches the home as its own `check` wake, so a board answer notifies once.
+A wake that cannot be delivered is reported as `actionable:` on stderr rather than undoing the recorded answer.
+`wake_answer_owner` in `bin/fm-captain-hold.sh` owns the mechanics.
+
 ## Evidence-backed reconciliation is not a board control
 
 A captain call can stop being a question without the captain ever answering it because the subject lands, the premise turns out to be false, or the choice becomes a matter of fact rather than the captain's to make.
@@ -243,7 +254,7 @@ An ordinary release still survives zero-retention cleanup and archives when conf
 The reconstructed silent-divergence case is signalled under both collapsed and legacy identities while the backlog task, its hold, and the status log survive unchanged, and the false-signal fixtures stay silent.
 A released call whose decision text is `local main`, closed with no artifact, is not published as a local-only landing; report-only unresolved calls refuse `--none` completion before teardown can erase the source; and non-forced scout teardown always requires durable inventory verification.
 The recorded-answer guard rejects a bare `tasks-axi done` close until `answer` records the captain's words and prevents an ordinary finished task from masquerading as an answered call.
-The same suite pins answer-time resolution with task-id keys, `release` mode, replay idempotence, refusal of drifted or ineligible keys, the chat channel reaching the shared intake, hold-set stamping before visible hold state, timestamp preservation across interruption, due-date deferral, and every legacy identity path.
+The same suite pins answer-time resolution with task-id keys, `release` mode, replay idempotence, refusal of drifted or ineligible keys, the chat channel reaching the shared intake, the owning-home wake for main, local secondmate, and remote secondmate homes with replay, announced-channel, owning-session, and reconcile-request cases, hold-set stamping before visible hold state, timestamp preservation across interruption, due-date deferral, and every legacy identity path.
 It also pins the superseded-reason seam: a changed re-hold preserves the exact previous bytes with their provenance and archives the pristine body before writing the new reason, a first hold archives nothing, an identical re-hold writes neither record nor archive entry, and a refused archive leaves the original reason in place.
 The same family pins three edge cases of that seam: a call whose deferral date has lapsed is preserved like any live one, a previous reason beginning with a dash is matched as text instead of parsed as an option, and a failed replacement withdraws its supersession record so the retry records that reason once rather than twice.
 The suite does not test the accepted merge-to-cleanup re-hold window or asynchronous queued-forge landing because those events occur after the locally serialized merge command has returned.

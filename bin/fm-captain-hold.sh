@@ -82,6 +82,9 @@
 # ordering. An exact retry also completes unfinished ordering normalization and
 # is idempotent only when its requested close mode
 # matches the newest record; a changed decision or a mode mismatch is rejected.
+# Every answer path then wakes the home that owns the call once the backlog
+# record is durable, and a replay never wakes it twice (wake_answer_owner beside
+# the reconcile section owns the details).
 # A re-held task may record a new answer on top. On a task already closed outside this script,
 # `answer` records the missing resolution block (the old `repair` path) only
 # when the task still carries the captain-hold provenance tasks-axi preserves
@@ -118,7 +121,8 @@
 # visibly refuses it, and never passes it to `answer`, so no channel and no
 # card-declared mode can turn it into a close, release, or request. A separate
 # `reconcile-requests` intake verifies a captured source's binding before it
-# records a durable request under `state/reconcile-requests/`.
+# records a durable request under `state/reconcile-requests/`, then wakes the
+# home that owns the call the same way an answer does.
 #
 # `reconcile` is the verify-then-decide half. Both outcomes require the pending
 # request created through a bound captured source. `close` is the moot outcome:
@@ -257,6 +261,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-session-lock-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 PARENT_HOLD_PUBLISHED=0
 publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
@@ -1769,6 +1776,14 @@ command_answers() {
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \
           && [ "$hold_kind" != captain ] && [ "$recorded_mode" = released ]; }; then
         occurrence=$(resolution_record_count "$body")
+        # The replay settles the record it matched, so the wake carries that
+        # record's own text and digest, exactly as its first delivery did.
+        if [ "$recorded_digest" = "$digest" ]; then
+          DECISION_TEXT=$(cat "$tmp")
+        else
+          DECISION_TEXT=$(legacy_keyed_decision_text "$source" "$legacy_key" "$answer" "$label")
+        fi
+        DECISION_DIGEST=$recorded_digest
         case "$recorded_mode" in
           repaired) publish_parent_resolution_then_retire "$id" "$occurrence" "answered (repaired)" ;;
           released) publish_parent_resolution_then_retire "$id" "$occurrence" released ;;
@@ -1866,7 +1881,89 @@ publish_parent_resolution_then_retire() {  # <task-id> <occurrence> <note>
   if [ -e "$request" ] && [ "$PARENT_HOLD_PUBLISHED" != 1 ]; then
     fail "could not publish the answered captain-held task $id to its parent"
   fi
+  wake_answer_owner "$id" "$occurrence" "$note"
   reconcile_request_retire "$id"
+}
+
+answer_wake_text() {  # <task-id> <note>
+  local id=$1 outcome=answered effect='The call is closed, so carry out the decision.'
+  if [ "$2" = released ]; then
+    outcome=released
+    effect='The hold is released, so resume the work it gated.'
+  fi
+  printf 'Captain answer recorded for held call %s (%s): act on it now. %s The answer is already recorded on that task in this home'"'"'s backlog, so do not record it again.\n\nRecorded decision:\n%s\n' \
+    "$id" "$outcome" "$effect" "$DECISION_TEXT"
+}
+
+# Wake the session of the home that owns the call. Inside a secondmate home
+# that session is woken through its own steering lane, exactly as its parent
+# steers it (bin/fm-parent-channel-lib.sh resolves the lane, bin/fm-send.sh
+# delivers); a main home's session through its captain inbox
+# (bin/fm-inbox.sh note), whose check wake it drains. Both are durable, and
+# both are keyed by a delivery id derived from the task, the occurrence, and
+# the decision digest: a lane record already carrying that id - pending or
+# handled - means this answer has woken its owner, and the inbox request id
+# replays without a second wake. The session holding this home's lock needs no
+# wake when it is the caller, because it is already acting on the answer, and
+# neither does a session the delivering channel already wakes with this answer:
+# a caller declaring FM_CAPTAIN_ANSWER_ANNOUNCED=1 (the process-event runner,
+# whose captured board result reaches that session as its own check wake) gets
+# no second wake, so one answer notifies once.
+wake_answer_owner() {  # <task-id> <occurrence> <note>
+  local id=$1 occurrence=$2 note=$3 delivery
+  [ -n "$DECISION_DIGEST" ] || return 0
+  delivery=$(sha256_text "$(printf 'captain-answer\t%s\t%s\t%s' "$id" "$occurrence" "$DECISION_DIGEST")")
+  wake_owner "$id" captain-answer "${delivery:0:16}" "$(answer_wake_text "$id" "$note")"
+}
+
+# A reconcile request asks firstmate to re-check a call, so it wakes the owner
+# exactly as an answer does. The request file is written once, so its recorded
+# stamp keys the delivery and a replayed request wakes nobody again.
+wake_reconcile_owner() {  # <task-id>
+  local id=$1 delivery
+  RECONCILE_REQUESTED=''
+  RECONCILE_SOURCE=''
+  reconcile_request_read "$id" || return 0
+  delivery=$(sha256_text "$(printf 'captain-reconcile\t%s\t%s' "$id" "$RECONCILE_REQUESTED")")
+  wake_owner "$id" captain-reconcile "${delivery:0:16}" \
+    "$(printf 'Captain asked to reconcile held call %s: re-check whether it is still a live question, then close it with evidence or note it as still active (fm-captain-hold.sh reconcile). Request source: %s\n' "$id" "$RECONCILE_SOURCE")"
+}
+
+wake_owner() {  # <task-id> <request-prefix> <16-hex-delivery> <text>
+  local id=$1 prefix=$2 delivery=$3 text=$4 err rc=0 lane_rc=0 inbox reason
+  [ "${FM_CAPTAIN_ANSWER_ANNOUNCED:-}" != 1 ] || return 0
+  if [ -f "$STATE/.lock" ] && fm_session_lock_owned_by_self "$STATE"; then
+    return 0
+  fi
+  err=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-wake.XXXXXX") || {
+    printf 'actionable: task %s is answered but its owning home could not be woken (no diagnostics file)\n' "$id" >&2
+    return 0
+  }
+  fm_parent_channel_lane "$FM_HOME" "$STATE" || lane_rc=$?
+  case "$lane_rc" in
+    0)
+      inbox="$FM_PARENT_CHANNEL_LANE_STATE/$FM_PARENT_CHANNEL_ID.inbox"
+      if ! grep -qsF -- "delivery=$delivery " "$inbox"/*.msg "$inbox"/handled/*.msg </dev/null; then
+        FM_HOME="$FM_PARENT_CHANNEL_LANE_HOME" FM_STATE_OVERRIDE="$FM_PARENT_CHANNEL_LANE_STATE" \
+          FM_CONFIG_OVERRIDE="$FM_PARENT_CHANNEL_LANE_HOME/config" \
+          "$SCRIPT_DIR/fm-send.sh" "$FM_PARENT_CHANNEL_ID" --fire-and-forget "$delivery" "$text" \
+          </dev/null >/dev/null 2>"$err" || rc=$?
+      fi
+      ;;
+    1)
+      FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+        "$SCRIPT_DIR/fm-inbox.sh" note --request-id "$prefix-$delivery" -- "$text" \
+        </dev/null >/dev/null 2>"$err" || rc=$?
+      ;;
+    *) rc=$lane_rc; printf 'its steering lane cannot be resolved (rc=%s)\n' "$lane_rc" > "$err" ;;
+  esac
+  if [ "$rc" -ne 0 ]; then
+    # The delivering command's own verdict is its last line; anything before
+    # it is advisory supervision output that would bury the reason.
+    reason=$(sed '/^[[:space:]]*$/d' "$err" | tail -n 1)
+    printf 'actionable: task %s is recorded but its owning home was not woken: %s\n' "$id" "${reason:-rc=$rc}" >&2
+  fi
+  rm -f -- "$err"
 }
 
 command_reconcile_requests() {
@@ -1915,6 +2012,7 @@ command_reconcile_requests() {
       provenance=$source
       [ -z "$note" ] || provenance="$source; captain note: $(sanitize_field "$note")"
       if reconcile_request_record "$id" "$provenance"; then
+        wake_reconcile_owner "$id"
         printf 'reconcile: %s\n' "$id"
         created=$((created + 1))
       else

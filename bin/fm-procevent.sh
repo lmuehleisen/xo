@@ -206,6 +206,9 @@
 # and never suppresses a wake. Recording the captain's answer is transcription,
 # while ACTING on it is firstmate's judgement, so the capture stays unacknowledged
 # and its `check` wake reaches the handler exactly as it would have anyway.
+# That wake is then the answer's one notification: the feed tells the intake, so
+# the answer or reconcile request queues no second wake of its own
+# (feed_announced).
 #
 # A runner is bound to the HOME that owns it, not to the one session that armed
 # it: a persistent source is meant to outlive that session, so reconcile stops a
@@ -456,28 +459,45 @@ adapter_autohandle() {  # <adapter> <source-id> <result-file>
 # source, an adapter with no `answers` command, and a failure on either side all
 # leave the capture untouched and still announced, because this never
 # acknowledges anything (see the keyed-answer note in the header).
+# A capture announced as this home's own `check` wake already tells the session
+# that owns the answered calls, so FM_CAPTAIN_ANSWER_ANNOUNCED=1 keeps the
+# intake from waking it a second time for the same answer. A task-owned round, a
+# self-announcing adapter, and a silent result reach no such wake and keep the
+# intake's own.
+feed_announced() {  # <adapter> <result-file>
+  if ! fm_procevent_result_owner_task "$2" >/dev/null 2>&1 \
+    && ! adapter_self_announcing "$1" \
+    && ! adapter_result_is_silent "$1" "$2"; then
+    printf '1'
+  else
+    printf '0'
+  fi
+}
+
 feed_keyed_answers() {  # <adapter> <source-id> <result-file>
-  local adapter=$1 id=$2 result=$3 script origin seq
+  local adapter=$1 id=$2 result=$3 script origin seq announced
   script=$(adapter_script "$adapter")
   [ -f "$script" ] && [ ! -L "$script" ] || return 1
   origin=$("$SCRIPT_DIR/fm-captain-hold.sh" binding "$id" 2>/dev/null) || return 1
   [ -n "$origin" ] || return 1
   seq=$(fm_procevent_result_sequence "$result") || return 1
+  announced=$(feed_announced "$adapter" "$result")
   "$script" answers "$result" 2>/dev/null \
-    | "$SCRIPT_DIR/fm-captain-hold.sh" answers "$origin" \
+    | FM_CAPTAIN_ANSWER_ANNOUNCED=$announced "$SCRIPT_DIR/fm-captain-hold.sh" answers "$origin" \
         --source "the captured result $id sequence $seq" >/dev/null 2>&1
 }
 
 feed_reconcile_requests() {  # <adapter> <source-id> <result-file>
-  local adapter=$1 id=$2 result=$3 script origin seq rows
+  local adapter=$1 id=$2 result=$3 script origin seq rows announced
   script=$(adapter_script "$adapter")
   [ -f "$script" ] && [ ! -L "$script" ] || return 1
   origin=$("$SCRIPT_DIR/fm-captain-hold.sh" binding "$id" 2>/dev/null) || return 1
   [ -n "$origin" ] || return 1
   seq=$(fm_procevent_result_sequence "$result") || return 1
   rows=$("$script" reconciles "$result" 2>/dev/null) || return 1
+  announced=$(feed_announced "$adapter" "$result")
   printf '%s\n' "$rows" \
-    | "$SCRIPT_DIR/fm-captain-hold.sh" reconcile-requests \
+    | FM_CAPTAIN_ANSWER_ANNOUNCED=$announced "$SCRIPT_DIR/fm-captain-hold.sh" reconcile-requests \
         --source-id "$id" --source "the captured result $id sequence $seq" >/dev/null 2>&1
 }
 
