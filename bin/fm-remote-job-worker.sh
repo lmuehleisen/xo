@@ -221,13 +221,22 @@ worker_acquire_lock() { # <account-home> <identity>
   local account_home=$1 identity=$2 attempt=0
   while [ "$attempt" -lt 150 ]; do
     if (umask 077; mkdir "$WORKER_LOCK") 2>/dev/null; then
-      WORKER_LOCK_HELD=1
-      # Discard the predecessor's heartbeat before publishing our identity:
-      # readiness must come from this owner after lock publication succeeds.
-      rm -f -- "$(fm_remote_job_worker_ready_path)" || return 1
-      worker_publish_lock_owner || return 1
-      worker_publish_identity "$identity" || return 4
-      return 0
+      # mkdir's exit status is not the arbiter: uutils coreutils before 0.11.0
+      # can report success for a directory a concurrent acquirer created. The
+      # noclobber create inside the directory is; a lost race leaves the
+      # winner's lock intact (rmdir on a non-empty directory fails), while a
+      # spurious loss on our own empty directory cleans up and retries.
+      if (set -C; : > "$WORKER_LOCK/.owner") 2>/dev/null; then
+        WORKER_LOCK_HELD=1
+        # Discard the predecessor's heartbeat before publishing our identity:
+        # readiness must come from this owner after lock publication succeeds.
+        rm -f -- "$(fm_remote_job_worker_ready_path)" || return 1
+        worker_publish_lock_owner || return 1
+        worker_publish_identity "$identity" || return 4
+        return 0
+      fi
+      rmdir "$WORKER_LOCK" 2>/dev/null || true
+      [ -d "$WORKER_LOCK" ] || { attempt=$((attempt + 1)); continue; }
     fi
     [ -d "$WORKER_LOCK" ] && [ ! -L "$WORKER_LOCK" ] || return 1
     if [ -e "$WORKER_LOCK/quarantine" ] || [ -L "$WORKER_LOCK/quarantine" ]; then
@@ -241,7 +250,7 @@ worker_acquire_lock() { # <account-home> <identity>
       continue
     fi
     [ ! -L "$WORKER_LOCK/pid" ] && [ ! -L "$WORKER_LOCK/start" ] && [ ! -L "$WORKER_LOCK/command" ] || return 1
-    rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" || return 1
+    rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" "$WORKER_LOCK/.owner" || return 1
     rmdir "$WORKER_LOCK" || return 1
   done
   return 1
@@ -341,6 +350,7 @@ worker_cleanup() {
   if [ -z "$owner_pid" ]; then
     [ ! -L "$WORKER_LOCK/start" ] && [ ! -L "$WORKER_LOCK/command" ] &&
       rm -f -- "$WORKER_LOCK/start" "$WORKER_LOCK/command" 2>/dev/null || true
+    rm -f -- "$WORKER_LOCK/.owner" 2>/dev/null || true
     rmdir "$WORKER_LOCK" 2>/dev/null || true
     WORKER_LOCK_HELD=0
     return 0
@@ -352,7 +362,7 @@ worker_cleanup() {
   [ ! -L "$pid_file" ] && rm -f -- "$pid_file" 2>/dev/null || true
   [ ! -L "$ready" ] && rm -f -- "$ready" 2>/dev/null || true
   [ ! -L "$identity" ] && rm -f -- "$identity" 2>/dev/null || true
-  rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" 2>/dev/null || true
+  rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" "$WORKER_LOCK/.owner" 2>/dev/null || true
   rmdir "$WORKER_LOCK" 2>/dev/null || true
   WORKER_LOCK_HELD=0
 }
@@ -626,18 +636,22 @@ worker_claim() { # <job-dir>
   worker_lane_owner_matches || return 1
   [ ! -e "$claim" ] && [ ! -L "$claim" ] || return 1
   (umask 077; mkdir "$claim") || return 1
+  # As in worker_acquire_lock, mkdir's exit status is not the arbiter on
+  # coreutils builds with the uutils mkdir race; the noclobber create inside
+  # the directory is. A lost race leaves the winner's claim intact.
+  (set -C; : > "$claim/.owner") 2>/dev/null || { rmdir "$claim" 2>/dev/null || true; return 1; }
   pid=${BASHPID:-$$}
-  start=$(fm_remote_job_process_start "$pid") || { rmdir "$claim" 2>/dev/null || true; return 1; }
-  pid_tmp=$(umask 077; mktemp "$claim/.owner.XXXXXX") || { rmdir "$claim" 2>/dev/null || true; return 1; }
+  start=$(fm_remote_job_process_start "$pid") || { rm -f -- "$claim/.owner"; rmdir "$claim" 2>/dev/null || true; return 1; }
+  pid_tmp=$(umask 077; mktemp "$claim/.owner.XXXXXX") || { rm -f -- "$claim/.owner"; rmdir "$claim" 2>/dev/null || true; return 1; }
   start_tmp=$(umask 077; mktemp "$claim/.owner_start.XXXXXX") || {
-    rm -f -- "$pid_tmp"
+    rm -f -- "$pid_tmp" "$claim/.owner"
     rmdir "$claim" 2>/dev/null || true
     return 1
   }
   if ! printf '%s\n' "$pid" > "$pid_tmp" || ! printf '%s\n' "$start" > "$start_tmp" \
     || ! chmod 600 "$pid_tmp" "$start_tmp" || ! mv -f -- "$start_tmp" "$claim/owner_start" \
     || ! mv -f -- "$pid_tmp" "$claim/owner"; then
-    rm -f -- "$pid_tmp" "$start_tmp" "$claim/owner" "$claim/owner_start"
+    rm -f -- "$pid_tmp" "$start_tmp" "$claim/owner" "$claim/owner_start" "$claim/.owner"
     rmdir "$claim" 2>/dev/null || true
     return 1
   fi
@@ -1326,7 +1340,7 @@ worker_supervisor_cleanup_dead_child() { # <account-home> <pid>
   [ ! -L "$ready" ] && rm -f -- "$ready" || return 1
   [ ! -L "$identity" ] && rm -f -- "$identity" || return 1
   [ ! -L "$lock/start" ] && [ ! -L "$lock/command" ] || return 1
-  rm -f -- "$lock/pid" "$lock/start" "$lock/command" || return 1
+  rm -f -- "$lock/pid" "$lock/start" "$lock/command" "$lock/.owner" || return 1
   rmdir "$lock"
 }
 

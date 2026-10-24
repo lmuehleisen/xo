@@ -185,19 +185,28 @@ fm_afk_launch_lock_acquire() {
   while [ "$attempt" -lt 200 ]; do
     attempt=$((attempt + 1))
     if mkdir "$FM_AFK_LAUNCH_LOCK" 2>/dev/null; then
-      if ! printf '%s' "$$" > "$FM_AFK_LAUNCH_LOCK/pid"; then
-        rm -rf "$FM_AFK_LAUNCH_LOCK"
-        return 1
+      # mkdir's exit status is not the arbiter: uutils coreutils before 0.11.0
+      # can report success for a directory a concurrent acquirer created. The
+      # noclobber create inside the directory is; a lost race leaves the
+      # winner's lock intact (rmdir on a non-empty directory fails) and drops
+      # into the contention handling below, while a spurious loss on our own
+      # empty directory cleans up and retries.
+      if (set -C; : > "$FM_AFK_LAUNCH_LOCK/.owner") 2>/dev/null; then
+        if ! printf '%s' "$$" > "$FM_AFK_LAUNCH_LOCK/pid"; then
+          rm -rf "$FM_AFK_LAUNCH_LOCK"
+          return 1
+        fi
+        identity=$(fm_pid_identity "$$" 2>/dev/null) || {
+          rm -rf "$FM_AFK_LAUNCH_LOCK"
+          return 1
+        }
+        if [ -z "$identity" ] || ! printf '%s' "$identity" > "$FM_AFK_LAUNCH_LOCK/pid-identity"; then
+          rm -rf "$FM_AFK_LAUNCH_LOCK"
+          return 1
+        fi
+        return 0
       fi
-      identity=$(fm_pid_identity "$$" 2>/dev/null) || {
-        rm -rf "$FM_AFK_LAUNCH_LOCK"
-        return 1
-      }
-      if [ -z "$identity" ] || ! printf '%s' "$identity" > "$FM_AFK_LAUNCH_LOCK/pid-identity"; then
-        rm -rf "$FM_AFK_LAUNCH_LOCK"
-        return 1
-      fi
-      return 0
+      rmdir "$FM_AFK_LAUNCH_LOCK" 2>/dev/null || true
     fi
     if [ ! -s "$FM_AFK_LAUNCH_LOCK/pid" ] || [ ! -s "$FM_AFK_LAUNCH_LOCK/pid-identity" ]; then
       incomplete=$((incomplete + 1))
