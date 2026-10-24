@@ -1161,6 +1161,43 @@ test_build_scopes_a_stored_card_to_its_owning_home_per_entry() {
   pass "build scopes a stored card to its owning home on each replaced entry"
 }
 
+# The same shared-key shape bites persistence: selecting the first entry's
+# owner and card skips the whole key when a secondmate's card leads, so an
+# empty store stays empty and the local call loses its authored card to the
+# next refresh's synthesized fallback. The persisted record must be the
+# locally owned entry, whichever order the payload lists.
+test_build_persists_the_local_card_when_a_remote_card_leads_a_shared_key() {
+  local home data store key
+  home=$(make_home mixed-owner-persist)
+  data="$home/payload.json"
+  store="$home/state/decision-cards"
+  key=sample-instruction-layer-refinement-review-decision-perishable-first-admission-choice
+  write_valid_payload "$data"
+
+  jq --arg key "$key" '
+    .captains_call = ([.captains_call[] | select(.key == $key)
+      | .owner = "mate-one" | .title = "Secondmate question"])
+      + .captains_call' \
+    "$data" > "$data.next" || fail "could not stage the remote-first payload"
+  mv "$data.next" "$data" || fail "could not stage the remote-first payload"
+  [ "$(jq -c --arg key "$key" '[.captains_call[] | select(.key == $key)] | length' "$data")" = 2 ] \
+    || fail "the fixture payload does not carry the shared key twice"
+
+  run_board "$home" build "$data" >/dev/null \
+    || fail "the remote-first mixed-owner payload did not build"
+  assert_present "$store/$key.json" \
+    "the shared key persisted no card - the remote entry suppressed the local call"
+  jq -e '.card.title == "Perishable-first admission"' "$store/$key.json" >/dev/null \
+    || fail "the store card is not the locally owned entry"
+  extract_payload "$home/.lavish/bearings-board.html" > "$home/served.json"
+  jq -e --arg key "$key" '
+    ([.captains_call[] | select(.key == $key)] | length == 2)
+    and ((.captains_call[] | select(.key == $key and .owner == "mate-one") | .title)
+      == "Secondmate question")' "$home/served.json" >/dev/null \
+    || fail "the board lost or rewrote the secondmate card"
+  pass "build persists the locally owned card when a remote card leads a shared key"
+}
+
 test_build_serializes_store_merge_and_persistence_with_card_writers() {
   local home data key lock acquired release locker_pid build_pid published=0
   home=$(make_home store-writer-race)
@@ -1660,6 +1697,7 @@ test_answers_mode_reopens_a_session_the_captain_ended
 test_dropping_below_answers_retires_the_answer_source
 test_build_merges_the_durable_card_store_first
 test_build_scopes_a_stored_card_to_its_owning_home_per_entry
+test_build_persists_the_local_card_when_a_remote_card_leads_a_shared_key
 test_build_ignores_a_malformed_store_card_without_failing
 test_build_serializes_store_merge_and_persistence_with_card_writers
 test_build_serializes_a_merge_card_on_the_underlying_task_lock

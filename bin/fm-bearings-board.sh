@@ -822,7 +822,7 @@ acquire_decision_card_locks() {  # <payload.json>
 }
 
 persist_decision_cards() {  # <effective-payload.json>
-  local data=$1 key card tmp existing task live_task rc owner keep=''
+  local data=$1 key card tmp existing task live_task rc entry keep=''
   if [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ]; then
     :
   elif ! (umask 077; mkdir -p "$DECISION_CARDS_DIR"); then
@@ -834,19 +834,20 @@ persist_decision_cards() {  # <effective-payload.json>
     keep=$keep$key$'\n'
     # Another home's decision card is display-only here and stays out of
     # this home's durable store, so it can never be merged back as local.
-    owner=$(jq -r --arg key "$key" 'first(.captains_call[] | select(.key == $key) | .owner // "")' "$data" 2>/dev/null)
-    if [ -n "$owner" ] && [ "$owner" != '(main)' ]; then
-      continue
-    fi
+    # A key can appear once per home, so read the locally owned entry - a
+    # remote entry sharing the key must neither suppress the local card's
+    # persistence nor pose as its content.
+    entry=$(jq -c --arg key "$key" '
+      first(.captains_call[] | select(.key == $key)
+        | select((.owner // "(main)") == "(main)"))' "$data") || return 1
+    [ -n "$entry" ] && [ "$entry" != 'null' ] || continue
     # A synthesized fallback tracks the snapshot, not the store: persisting
     # it would give a stale copy store-first precedence over the next one.
-    if [ "$(jq -r --arg key "$key" 'first(.captains_call[] | select(.key == $key) | .synthesized // false)' "$data" 2>/dev/null)" = 'true' ]; then
+    if [ "$(jq -r '.synthesized // false' <<< "$entry")" = 'true' ]; then
       continue
     fi
     card=$(jq -c --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      --arg key "$key" \
-      'first(.captains_call[] | select(.key == $key)
-       | {schema:"fm-decision-card.v1",generated:$generated,card:(. | del(.answerable))})' "$data") || return 1
+      '{schema:"fm-decision-card.v1",generated:$generated,card:(. | del(.answerable))}' <<< "$entry") || return 1
     [ -n "$card" ] || return 1
     tmp=$(umask 077; mktemp "$DECISION_CARDS_DIR/.card.XXXXXX") || return 1
     if printf '%s\n' "$card" > "$tmp" \
