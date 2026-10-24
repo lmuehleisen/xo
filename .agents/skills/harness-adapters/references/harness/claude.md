@@ -85,7 +85,7 @@ A `--secondmate` launch omits the statement because a secondmate operates under 
 ## Approved-publish allowance
 
 A crewmate's or scout's `.claude/settings.local.json` allows exactly `Bash(<home>/bin/fm-approved-publish.sh run <task-id> *)` and denies the relative `bin/` spellings, so auto mode runs the task's own captain-approved publication without its classifier refusing the public writes, and a worker on firstmate's own repository cannot reach its worktree copy that way.
-A primary or secondmate session has no tracked allowance, so auto mode's classifier still reviews its runner invocation, and the captain running the command by hand stays the fallback.
+The tracked `.claude/settings.json` allows the relative `Bash(bin/fm-approved-publish.sh run *)` spelling, so a primary or secondmate session's auto mode runs the runner without a prompt; a worktree copy's `settings.local.json` deny keeps that same spelling refused for a worker, and the captain running the command by hand stays the fallback.
 [`fm-approved-publish.sh`](../../../../../bin/fm-approved-publish.sh) checks the recorded captain approval itself, and the Devin and agy layers approve the same own-task invocation through [`fm-command-policy-lib.sh`](../../../../../bin/fm-command-policy-lib.sh); Codex has no Firstmate-configured command allowlist, so a Codex worker reaches the runner through its reviewed escalation.
 
 ## Skill listing budget
