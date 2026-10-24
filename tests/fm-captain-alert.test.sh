@@ -73,7 +73,7 @@ run() {  # <args...>: runs the notifier in $H at $NOW; output in $OUT, status in
   RC=0
   OUT=$(env -u FM_STATE_OVERRIDE -u FM_ROOT_OVERRIDE FM_HOME="$H" STUB_DIR="$H/stub" \
     FM_CAPTAIN_ALERT_EXEC="$STUB" FM_CAPTAIN_ALERT_SENTINEL="$SENTINEL" \
-    FM_CAPTAIN_ALERT_NOW="$NOW" FM_CAPTAIN_ALERT_COOLDOWN_SECS="${COOLDOWN:-}" "${ALERT_BIN:-$ALERT}" "$@" 2>&1) || RC=$?
+    FM_CAPTAIN_ALERT_NOW="$NOW" FM_CAPTAIN_ALERT_COOLDOWN_SECS="${COOLDOWN:-}" FM_CAPTAIN_ALERT_SCAN="${SCAN:-}" "${ALERT_BIN:-$ALERT}" "$@" 2>&1) || RC=$?
   printf '%s\n' "$OUT" >> "$H/all-output"
 }
 
@@ -354,6 +354,28 @@ test_a_row_appended_between_reads_is_posted_once() {
   pass "fm-captain-alert: a row appended between reads is posted once"
 }
 
+test_more_rows_than_one_scan_are_all_posted_in_order() {
+  use_home "$(make_home scan configured)"
+  run arm
+  go_away
+  local i all=
+  for i in 1 2 3 4 5 6 7 8; do append "task$i" captain "decision $i"; done
+  COOLDOWN=0
+  SCAN=3
+  for i in 1 2 3 4; do
+    NOW=$((NOW0 + i * 300)); sweep
+  done
+  COOLDOWN=
+  SCAN=
+  assert_equals 3 "$(calls)" "eight rows at three per sweep take three posts"
+  assert_contains "$(payload 1)" "(outcomes 1-3)" "the first sweep takes the oldest rows"
+  for i in $(seq 1 "$(calls)"); do all="$all$(payload "$i")"; done
+  for i in 1 2 3 4 5 6 7 8; do
+    assert_contains "$all" "- task$i: decision $i" "row $i is posted even when more rows arrived than one sweep reads"
+  done
+  pass "fm-captain-alert: more rows than one scan are all posted, oldest first"
+}
+
 test_long_multibyte_content_is_cut_on_a_character() {
   use_home "$(make_home multibyte configured)"
   local text
@@ -432,4 +454,5 @@ test_unconfigured_and_url_secrecy
 test_mention_and_brief_detail
 test_a_row_appended_between_reads_is_posted_once
 test_long_multibyte_content_is_cut_on_a_character
+test_more_rows_than_one_scan_are_all_posted_in_order
 test_contract_reach_and_brief_line

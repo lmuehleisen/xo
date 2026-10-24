@@ -43,7 +43,8 @@
 #   - at most FM_CAPTAIN_ALERT_HOURLY_CAP (default 6) posts per rolling hour;
 #     past the cap one volume notice is sent and the rest wait for the window;
 #   - the pending queue keeps at most 200 rows; older ones are counted, not listed;
-#   - one sweep reads at most the newest 1000 store rows.
+#   - one sweep takes at most 1000 rows past its cursor, oldest first
+#     (FM_CAPTAIN_ALERT_SCAN lowers it for tests); the rest wait their turn.
 #
 # FAILURES. The transport classifies each attempt: success (2xx and an id),
 # transient (network error, timeout, 5xx, 2xx without an id, or 429 whose
@@ -95,7 +96,6 @@ UNREGISTER_BIN="$SCRIPT_DIR/fm-check-unregister.sh"
 RECORD_SCHEMA=fm-captain-alert-v1
 MAX_LINE=240
 MAX_PENDING=200
-MAX_SCAN=1000
 MAX_CONTENT=1900
 LOG_KEEP=500
 
@@ -130,6 +130,8 @@ whole_or_default() {  # <value> <default> <min> <max>
 COOLDOWN=$(whole_or_default "${FM_CAPTAIN_ALERT_COOLDOWN_SECS:-}" 3600 0 86400)
 HOURLY_CAP=$(whole_or_default "${FM_CAPTAIN_ALERT_HOURLY_CAP:-}" 6 1 60)
 BUDGET=$(whole_or_default "${FM_CAPTAIN_ALERT_BUDGET:-}" 12 3 20)
+MAX_SCAN=$(whole_or_default "${FM_CAPTAIN_ALERT_SCAN:-}" 1000 1 1000)
+SCAN_SLACK=200
 
 now_epoch() {
   case "${FM_CAPTAIN_ALERT_NOW:-}" in
@@ -352,14 +354,13 @@ send_content() {  # <content>; sets T_KIND, T_REASON, T_ID
 # --- composing ------------------------------------------------------------------
 
 # Compose one message from the pending queue. Prints the content, or nothing
-# when every waiting task is still inside its cooldown. Also prints, on fd 3,
-# the space-separated headlined tasks.
+# when every waiting task is still inside its cooldown. Its last line is
+# TASKS<tab> followed by the space-separated headlined tasks.
 compose() {  # <now>
-  local now=$1 cool_json entry
-  cool_json='{}'
-  for entry in ${R_COOL[@]+"${R_COOL[@]}"}; do
-    cool_json=$(jq -c --arg t "${entry% *}" --argjson e "${entry##* }" '. + {($t): $e}' <<<"$cool_json")
-  done
+  local now=$1 cool_json
+  # One jq turns the `task epoch` cooldown entries into a {task: epoch} map.
+  cool_json=$(printf '%s\n' ${R_COOL[@]+"${R_COOL[@]}"} | jq -cnR '
+    [inputs | capture("^(?<t>.+) (?<e>[0-9]+)$")? | {(.t): (.e | tonumber)}] | add // {}')
   jq -rs --argjson cool "$cool_json" --argjson now "$now" --argjson cd "$COOLDOWN" \
     --arg detail "$DETAIL" --argjson dropped "$R_DROPPED" --argjson max "$MAX_CONTENT" '
     def cut($n): if length > $n then .[0:$n - 3] + "..." else . end;
@@ -439,16 +440,32 @@ pending_count() {
 
 # --- check --------------------------------------------------------------------------
 
-# Move new eligible rows up to <tail> into the pending queue, then advance the
-# cursor to <tail>. Rows appended after the tail was read are left for the next
-# sweep, so the cursor never moves past a row that was not ingested.
+# Move new eligible rows into the pending queue in sequence order, at most
+# MAX_SCAN rows past the cursor and never past <tail>, then advance the cursor
+# to the last sequence taken. Rows past that point wait for the next sweep, so
+# the cursor never moves past a row that was not ingested. The read asks for
+# SCAN_SLACK extra rows so rows appended after the tail read cannot push the
+# cursor's successor out of the window; if they did, the sweep takes nothing.
 ingest() {  # <tail> <entered-epoch>
-  local tail=$1 entered=$2 rows tmp
-  rows=$("$OUTCOME_BIN" list --recent "$MAX_SCAN" 2>/dev/null) || return 1
+  local tail=$1 entered=$2 rows tmp limit lowest
+  limit=$((R_CURSOR + MAX_SCAN))
+  [ "$limit" -le "$tail" ] || limit=$tail
+  rows=
+  if [ "$limit" -gt "$R_CURSOR" ]; then
+    rows=$("$OUTCOME_BIN" list --recent "$((tail - R_CURSOR + SCAN_SLACK))" 2>/dev/null) || return 1
+    lowest=$(printf '%s\n' "$rows" | head -n 1 | jq -r '.seq // empty' 2>/dev/null)
+    case "$lowest" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "$lowest" -gt $((R_CURSOR + 1)) ]; then
+      rows=
+      limit=$R_CURSOR
+    fi
+  else
+    limit=$R_CURSOR
+  fi
   tmp=$(mktemp "$PENDING.XXXXXX") || return 1
   {
     [ ! -s "$PENDING" ] || cat "$PENDING"
-    printf '%s\n' "$rows" | jq -c --argjson c "$R_CURSOR" --argjson t "$tail" --argjson e "$entered" '
+    printf '%s\n' "$rows" | jq -c --argjson c "$R_CURSOR" --argjson t "$limit" --argjson e "$entered" '
       select(type == "object" and .seq > $c and .seq <= $t and .verdict == "captain"
              and (.silent // false) != true and (.epoch // 0) >= $e)
       | {seq, epoch, task: (.task // "fleet"), summary: (.summary // "")}' 2>/dev/null
@@ -459,7 +476,7 @@ ingest() {  # <tail> <entered-epoch>
     tail -n "$MAX_PENDING" "$tmp" > "$tmp.cut" && mv -f -- "$tmp.cut" "$tmp"
   fi
   mv -f -- "$tmp" "$PENDING" || { rm -f -- "$tmp"; return 1; }
-  R_CURSOR=$tail
+  R_CURSOR=$limit
 }
 
 drop_pending() {
