@@ -79,7 +79,6 @@ fi
 if [ -e "$d/orphan-$1" ]; then
   ( sleep 30; : > "$d/late-write" ) &
   printf '%s\n' "$!" > "$d/orphan-pid"
-  printf '%s\n' "$$" > "$d/orphan-parent"
 fi
 if [ -e "$d/detach-$1" ]; then
   sleep 30 </dev/null >/dev/null 2>&1 &
@@ -268,61 +267,28 @@ test_interrupt_stops_the_running_step() {
   pass "an interrupt stops the running step and every process it started before restore runs"
 }
 
-test_interrupt_stops_a_child_left_holding_output() {
-  local home rc runner pid parent i=0 log
-  home=$(make_home orphan)
-  write_procedure "$home" t1
-  approve "$home" t1 t1
-  : > "$home/data/t1/orphan-publish"
-  (
-    PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
-      FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-      FM_CONFIG_OVERRIDE="$home/config" exec "$ROOT/bin/fm-approved-publish.sh" run t1
-  ) >/dev/null 2>&1 &
-  runner=$!
-  while [ ! -s "$home/data/t1/orphan-parent" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
-  [ -s "$home/data/t1/orphan-parent" ] || { kill -KILL "$runner" 2>/dev/null; fail "the publish step never started its child"; }
-  pid=$(cat "$home/data/t1/orphan-pid")
-  parent=$(cat "$home/data/t1/orphan-parent")
-  # Interrupt only once the step itself has exited and its child alone holds
-  # the output open.
-  i=0
-  while kill -0 "$parent" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-  kill -0 "$parent" 2>/dev/null && { kill -KILL "$runner" "$pid" 2>/dev/null; fail "the publish step never exited"; }
-  kill -TERM "$runner"
-  rc=0
-  wait "$runner" || rc=$?
-  expect_code 130 "$rc" "a run interrupted while a step's child still holds its output"
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -KILL -- "-$parent" "$pid" 2>/dev/null
-    fail "the publish step's child was still running after the runner restored and exited"
-  fi
-  assert_absent "$home/data/t1/late-write" "the publish step's child made its later write"
-  assert_equals "preflight lift publish restore " "$(trace_of "$home" t1)" "an interrupt while output drains stops the child, restores, and skips verify"
-  log=$(ls "$home"/data/t1/publish-logs/*.log) || fail "no run log for the interrupted run"
-  assert_grep "stopping the interrupted publish step" "$log" "the log must record that the step's child was stopped"
-  assert_grep "blocks:     restored" "$log" "the interrupted run's summary must report the restore"
-  pass "an interrupt stops a child the step left holding its output before restore runs"
-}
-
 test_step_children_never_outlive_the_step() {
-  local home rc out pid
-  # A failing publish step that leaves a publisher running must not let it
-  # run on into restore or past the runner's exit.
+  local home rc out pid held
+  # A failing publish step that leaves publishers running, one still holding
+  # its output and one detached from it, must not let either run on into
+  # restore or past the runner's exit.
   home=$(make_home detach-fail)
   write_procedure "$home" t1
   approve "$home" t1 t1
+  : > "$home/data/t1/orphan-publish"
   : > "$home/data/t1/detach-publish"
   : > "$home/data/t1/fail-publish"
   rc=0
   out=$(run_publish "$home" run t1 2>&1) || rc=$?
-  pid=$(cat "$home/data/t1/detach-pid" 2>/dev/null) || fail "the failing publish step never started its child"
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -KILL "$pid" 2>/dev/null
+  held=$(cat "$home/data/t1/orphan-pid" 2>/dev/null) || fail "the failing publish step never started its output-holding child"
+  pid=$(cat "$home/data/t1/detach-pid" 2>/dev/null) || fail "the failing publish step never started its detached child"
+  if kill -0 "$held" 2>/dev/null || kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$held" "$pid" 2>/dev/null
     fail "a failed publish step's child was still running after the runner exited"
   fi
-  expect_code 6 "$rc" "a publish step that fails after starting a detached child"
-  assert_equals "preflight lift publish restore " "$(trace_of "$home" t1)" "restore must start only after the failed step's child is stopped"
+  assert_absent "$home/data/t1/late-write" "a failed publish step's child made its later write"
+  expect_code 6 "$rc" "a publish step that fails after starting background children"
+  assert_equals "preflight lift publish restore " "$(trace_of "$home" t1)" "restore must start only after the failed step's children are stopped"
   assert_contains "$out" "the publish step left processes running after it exited" "the run must report the stopped child"
   assert_contains "$out" "blocks:     restored" "the failed run must still restore"
   # The same holds for a step that succeeds.
@@ -399,7 +365,6 @@ test_refuses_when_the_approval_names_another_procedure
 test_approved_run_publishes_and_restores
 test_restore_always_runs
 test_interrupt_stops_the_running_step
-test_interrupt_stops_a_child_left_holding_output
 test_step_children_never_outlive_the_step
 test_live_edits_never_reach_the_run
 test_refuses_auto_approval_flags

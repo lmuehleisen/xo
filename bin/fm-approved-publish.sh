@@ -52,12 +52,13 @@
 # step ends the run: nothing is answered, approved, retried, or overridden.
 # Restore runs exactly once on every exit after preflight starts, including
 # INT, TERM, and HUP, which it ignores while restoring. Nothing a step starts
-# outlives it: when the step exits and its output closes, whether it succeeded
-# or failed, the runner stops anything still running in the step's process
-# group (TERM, then KILL after ten seconds) before going on, and a signal
-# during a step first stops that group and every process the step started.
-# So nothing a step began keeps publishing while or after restore runs. The
-# full output goes to the terminal and to
+# outlives it: a step ends when its process exits, and then, whether it
+# succeeded or failed, the runner stops anything still running in the step's
+# process group (TERM, then KILL after ten seconds) and waits at most ten more
+# seconds for the step's output to close before going on. A signal during a
+# step first stops that group and every process the step started. So nothing
+# a step began keeps publishing while or after restore runs. The full output
+# goes to the terminal and to
 # data/<task-id>/publish-logs/<UTC stamp>-<pid>.log, ending in a summary.
 #
 # Exit codes: 0 published, verified, and blocks restored; 2 usage; 3 refused
@@ -268,13 +269,15 @@ stop_step() {  # <why>
   STEP_PID='' STEP_PGID=''
 }
 
-# Let an interrupted step's output copy finish, killing it only when a process
-# the step left behind still holds the output open ten seconds later.
+# Let an ended step's output copy finish, cutting it off only when a process
+# that left the step's process group still holds the output ten seconds later.
 drain_output() {
   local i=0
   [ -n "$TEE_PID" ] || return 0
   while [ "$i" -lt 50 ] && kill -0 "$TEE_PID" 2>/dev/null; do sleep 0.2; i=$((i + 1)); done
-  kill -KILL "$TEE_PID" 2>/dev/null
+  if kill -KILL "$TEE_PID" 2>/dev/null; then
+    note "a process outside the $STAGE step's process group still held its output ten seconds after the step ended; the output copy stops there"
+  fi
   wait "$TEE_PID" 2>/dev/null
   TEE_PID=''
 }
@@ -293,9 +296,9 @@ run_step() {  # <step>
   fi
   # The step runs in the background while the runner waits for it, so a
   # signal reaches on_signal at once rather than when the step ends. Job
-  # control gives the step its own process group, which stays tracked until
-  # its output closes and anything still running in it is stopped, on every
-  # exit path. tee copies its output.
+  # control gives the step its own process group, so whatever the step leaves
+  # running when it exits, holding its output or not, is stopped on every exit
+  # path before the output is drained. tee copies its output.
   (trap '' INT TERM HUP; exec tee -a "$LOG" "$out") <"$out.fifo" &
   TEE_PID=$!
   set -m 2>/dev/null || true
@@ -306,9 +309,8 @@ run_step() {  # <step>
   wait "$STEP_PID"
   rc=$?
   STEP_PID=''
-  wait "$TEE_PID"
-  TEE_PID=''
   stop_step "the $step step left processes running after it exited; stopping them before going on"
+  drain_output
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     RESULTS="$RESULTS
