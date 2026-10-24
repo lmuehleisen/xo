@@ -56,7 +56,7 @@ if [ "${FM_OPENCODE_LIVE_E2E:-0}" != 1 ]; then
     out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" fm_test_run_spawn "$case_dir/home" "$case_dir/wt" \
       "$fakebin" "$id" "$case_dir/project" --scout --harness opencode --model fixture/native) \
       || fail "scratch OpenCode worker spawn failed: $out"
-    PATH="$(dirname "$bin"):$PATH" python3 -I "$fixture" --launch-log "$case_dir/launch.log" --root "$ROOT" \
+    python3 -I "$fixture" --opencode "$bin" --launch-log "$case_dir/launch.log" --root "$ROOT" \
       --state "$case_dir/home/state" --task "$id" --worktree "$case_dir/wt" \
       || fail "OpenCode $("$bin" --version) native worker fixture failed"
     checked=$((checked + 1))

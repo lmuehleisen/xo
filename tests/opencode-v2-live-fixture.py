@@ -3,9 +3,10 @@
 
 tests/fm-opencode-primary-live-e2e.test.sh runs bin/fm-spawn.sh against a fake
 pane, then hands this fixture the staged launch command it logged. The fixture
-starts a private `opencode serve` with that launch's OPENCODE_CONFIG_CONTENT,
-answers every model request from a loopback provider, and drives sessions
-through the public HTTP API. No provider outside this process is contacted.
+starts the given executable as a private `opencode serve` with that launch's
+OPENCODE_CONFIG_CONTENT, answers every model request from a loopback provider,
+and drives sessions through the public HTTP API. No provider outside this
+process is contacted.
 """
 
 import argparse
@@ -100,7 +101,7 @@ def run(lab, args):
         port = sock.getsockname()[1]
     logpath = lab / "server.log"
     log = logpath.open("w")
-    process = subprocess.Popen(["opencode", "serve", "--hostname", "127.0.0.1", "--port", str(port)], cwd=worktree, env=env, stdout=log, stderr=log)
+    process = subprocess.Popen([os.path.abspath(args.opencode), "serve", "--hostname", "127.0.0.1", "--port", str(port)], cwd=worktree, env=env, stdout=log, stderr=log)
     headers = {}
     events = []
 
@@ -251,7 +252,7 @@ def run(lab, args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    for name in ("launch-log", "root", "state", "task", "worktree"):
+    for name in ("opencode", "launch-log", "root", "state", "task", "worktree"):
         parser.add_argument("--" + name, required=True)
     with tempfile.TemporaryDirectory(prefix="fm-opencode-v2-live-") as directory:
         run(Path(directory).resolve(), parser.parse_args())
