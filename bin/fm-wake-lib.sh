@@ -718,12 +718,14 @@ _fm_recovery_marker_write_locked() {
 }
 
 # Apply the downtime republication states owned by docs/watcher-continuity.md
-# while preserving an outstanding generation-bound acknowledgement.
+# while preserving an outstanding generation-bound acknowledgement. A handback
+# source republishes the current episode as already announced: the close it
+# hands to main is that episode's delivery.
 _fm_recovery_marker_publish() {
   local marker=$1 kind=${2:-downtime} bound=${3:-} source=${4:-watcher}
   local lock saved_token generation='' status=pending previous_append_token=''
   case "$kind" in handling|downtime) ;; *) return 1 ;; esac
-  case "$source" in watcher|append) ;; *) return 1 ;; esac
+  case "$source" in watcher|append|handback) ;; *) return 1 ;; esac
   if [ "$source" = append ]; then
     FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=
     FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=
@@ -757,7 +759,7 @@ _fm_recovery_marker_publish() {
           status=pending
           ;;
         announced:downtime:*)
-          if [ "$source" = watcher ]; then
+          if [ "$source" != append ]; then
             generation=${FM_RECOVERY_MARKER_TOKEN##*:}
             status=announced
           fi
@@ -765,6 +767,7 @@ _fm_recovery_marker_publish() {
       esac
     fi
     FM_RECOVERY_MARKER_TOKEN=$saved_token
+    [ "$source" != handback ] || status=announced
   fi
   if ! _fm_recovery_marker_write_locked "$marker" "$kind" "$generation" "$status"; then
     fm_lock_release "$lock"
@@ -859,6 +862,36 @@ fm_recovery_marker_snapshot() {
   fm_lock_acquire_wait "$lock" || return 1
   fm_recovery_marker_read "$marker" || true
   fm_lock_release "$lock"
+}
+
+_fm_recovery_marker_handling_settled() {
+  local marker=$1 lock line
+  lock="${marker}.lock"
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
+  if ! fm_lock_acquire_wait "$lock"; then
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    return 1
+  fi
+  if [ -s "$FM_WAKE_QUEUE" ]; then
+    if ! fm_recovery_marker_read "$marker"; then
+      fm_lock_release "$lock"
+      fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+      return 1
+    fi
+    line=$FM_RECOVERY_MARKER_TOKEN
+    case "$line" in
+      pending:handling:*|announced:handling:*)
+        if ! _fm_recovery_marker_write_locked "$marker" downtime "${line##*:}"; then
+          fm_lock_release "$lock"
+          fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+          return 1
+        fi
+        ;;
+      pending:downtime:*|announced:downtime:*|acked:*) ;;
+    esac
+  fi
+  fm_lock_release "$lock"
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
 
 _fm_recovery_marker_ack() {
@@ -1062,6 +1095,12 @@ fm_recovery_transition() {
     reopen-announced)
       _fm_recovery_marker_reopen_announced "$marker"
       ;;
+    handling-settled)
+      _fm_recovery_marker_handling_settled "$marker"
+      ;;
+    handback)
+      _fm_recovery_marker_publish "$marker" downtime "" handback
+      ;;
     release-lock)
       [ -n "$target" ] || return 1
       _fm_recovery_marker_publish "$marker" "${value:-downtime}" "$bound" || return 1
@@ -1095,8 +1134,16 @@ fm_recovery_marker_publish() {
   fm_recovery_transition "$1" publish "${2:-downtime}"
 }
 
+fm_recovery_marker_handback() {
+  fm_recovery_transition "$1" handback
+}
+
 fm_recovery_marker_ack() {
   fm_recovery_transition "$1" acknowledge "$2"
+}
+
+fm_recovery_marker_handling_settled() {
+  fm_recovery_transition "$1" handling-settled
 }
 
 fm_recovery_marker_begin_handling() {
@@ -1271,9 +1318,31 @@ fm_lock_try_acquire() {
   return "$rc"
 }
 
+# A lock is created inside its parent directory, so once that directory is gone
+# (a removed home, state directory, or temporary test root) no retry can ever
+# succeed. Succeeds only when the parent is still missing after a 0.1s recheck,
+# so a directory being renamed into place is not mistaken for a removal.
+fm_lock_parent_gone() {  # <lockdir>
+  local parent
+  case "$1" in
+    */*) parent=${1%/*} ;;
+    *) parent=. ;;
+  esac
+  [ -n "$parent" ] || parent=/
+  [ -d "$parent" ] && return 1
+  sleep 0.1
+  [ ! -d "$parent" ]
+}
+
+# Wait for a lock. The 0.1s retry serves live contention on short critical
+# sections, where a wider interval would delay every handoff between the
+# watcher and its writers. The wait is unbounded only while the lock can still
+# be taken: it returns 1 within 0.2s of its parent directory's removal
+# (fm_lock_parent_gone) instead of polling for a lock that can never exist.
 fm_lock_acquire_wait() {
   local lockdir=$1
   while ! fm_lock_try_acquire "$lockdir"; do
+    ! fm_lock_parent_gone "$lockdir" || return 1
     sleep 0.1
   done
 }
@@ -2204,7 +2273,19 @@ fm_wake_append_locked() {
     case "$seq" in
       ''|*[!0-9]*) seq=0 ;;
     esac
-    seq=$((seq + 1))
+    # A lost or unreadable counter must not reuse a queued row's sequence: an
+    # outstanding sequence-bound acknowledgement would consume the new row.
+    # Compare and print the decimal text, never an awk number: awk floats lose
+    # exactness and may format large values in scientific notation.
+    seq=$(awk -F '\t' -v n="$seq" '
+      function digits(v) { sub(/^0+/, "", v); return v }
+      NF >= 5 && $2 ~ /^[0-9]+$/ {
+        a = digits($2); b = digits(n)
+        if (length(a) > length(b) || (length(a) == length(b) && ("" a) > ("" b))) n = $2
+      }
+      END { print n }
+    ' "$FM_WAKE_QUEUE" 2>/dev/null || printf '%s\n' "$seq")
+    seq=$((10#$seq + 1))
     printf '%s\n' "$seq" > "$seq_file" || status=$?
   fi
   if [ "$status" -eq 0 ]; then
@@ -2240,6 +2321,21 @@ fm_wake_queued_keys_locked() {
   local kind=$1
   awk -F '\t' -v kind="$kind" 'NF >= 5 && $3 == kind && !seen[$4]++ { print $4 }' \
     "$FM_WAKE_QUEUE" 2>/dev/null || true
+}
+
+# fm_wake_queued_carries_locked: 0 iff an unacknowledged queued row of <kind>
+# for exactly <key> carries <needle> in its payload. The payload-shaped twin of
+# fm_wake_queued_keys_locked, for a publisher that must write one wake of a
+# given shape at most once: the durable queue stays the authority, so a row
+# matches only while the supervisor has not consumed it, and no separate
+# duplicate ledger can drift from what was actually published.
+# <kind> <key> <needle>
+fm_wake_queued_carries_locked() {
+  local kind=$1 key=$2 needle=$3
+  [ -n "$needle" ] || return 1
+  awk -F '\t' -v kind="$kind" -v key="$key" -v needle="$needle" \
+    'NF >= 5 && $3 == kind && $4 == key && index($5, needle) { found = 1; exit }
+     END { exit !found }' "$FM_WAKE_QUEUE" 2>/dev/null
 }
 
 fm_wake_secondmate_progress_marker_write() { # <task> <observed-at> <oldest-row-key>

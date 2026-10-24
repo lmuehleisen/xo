@@ -38,6 +38,15 @@ export FM_BACKEND_CMUX_BUNDLE_BIN="$TMP_ROOT/no-bundled-cmux"
 unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH PASEO_AGENT_ID __CFBundleIdentifier \
   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH CMUX_TAB_ID CMUX_PANEL_ID 2>/dev/null || true
 
+# A case that simulates a tool as absent removes it from the fake bin directory,
+# which is not enough on its own: bootstrap keeps searching the fallback
+# BASE_PATH, so on a host where that tool is really installed in one of those
+# directories the case would find the host binary instead of the absence it means
+# to pin, and the expected MISSING line would depend on the machine. Every such
+# case curates its base path with tests/lib.sh's fm_test_base_path_sans, which
+# resolves every other tool as before while hiding the named one. Every other
+# case keeps bare BASE_PATH.
+
 # A fake toolchain where every required tool is present and gh is authenticated.
 # treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1.
 make_fake_toolchain() {
@@ -64,6 +73,10 @@ SH
   chmod +x "$fakebin/gh"
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "${FM_FAKE_TREEHOUSE_VERSION:-treehouse version v0.4.2 (fake)}"
+  exit 0
+fi
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
   if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ]; then
     printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
@@ -251,7 +264,7 @@ assert_timeout_report() {
 #   mode=exact -> output must equal <expect>
 #   mode=grep  -> output must contain <expect> (fixed string); <notcontains> must not appear
 test_bootstrap_reporting() {
-  local label lease tasks quota backend mode expect notcontains case_dir fakebin out n archive_body multi_id
+  local label lease tasks quota backend mode expect notcontains case_dir fakebin base out n archive_body multi_id quota_version
   n=0
   while IFS='^' read -r label lease tasks quota backend mode expect notcontains; do
     [ -n "$label" ] || continue
@@ -263,18 +276,32 @@ test_bootstrap_reporting() {
       printf '%s\n' "$backend" > "$case_dir/home/config/backlog-backend"
     fi
     fakebin=$(make_fake_toolchain "$case_dir")
+    base=$BASE_PATH
+    if [ "$lease" = absent ]; then
+      rm -f "$fakebin/treehouse"
+      base=$(fm_test_base_path_sans "$base" treehouse)
+    fi
     if [ "$tasks" = "-" ]; then
       rm -f "$fakebin/tasks-axi"
+      base=$(fm_test_base_path_sans "$base" tasks-axi)
     else
       archive_body=yes
       multi_id=yes
       case "$tasks" in
+        *:noarchive:nomulti)
+          archive_body=no
+          multi_id=no
+          tasks=${tasks%:noarchive:nomulti}
+          ;;
+        *:nomulti:noarchive)
+          archive_body=no
+          multi_id=no
+          tasks=${tasks%:nomulti:noarchive}
+          ;;
         *:noarchive)
           archive_body=no
           tasks=${tasks%:noarchive}
           ;;
-      esac
-      case "$tasks" in
         *:nomulti)
           multi_id=no
           tasks=${tasks%:nomulti}
@@ -282,14 +309,18 @@ test_bootstrap_reporting() {
       esac
       add_tasks_axi "$fakebin" "$tasks" "$archive_body" "$multi_id"
     fi
+    quota_version=0.1.51
     if [ "$quota" = "0" ]; then
       rm -f "$fakebin/quota-axi"
+      base=$(fm_test_base_path_sans "$base" quota-axi)
+    elif [ "$quota" != "1" ]; then
+      quota_version=$quota
     fi
     # FM_ROOT_OVERRIDE points the worktree-tangle check at the non-git home dir so
     # it stays inert: this suite pins tool detection, not the tangle guard, and the
     # ambient checkout (CI runs on a feature branch) must not leak a TANGLE line in.
-    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP="$lease" "$ROOT/bin/fm-bootstrap.sh")
+    out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP="$lease" FM_FAKE_QUOTA_AXI_VERSION="$quota_version" "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
       empty)
         [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
@@ -304,13 +335,15 @@ test_bootstrap_reporting() {
     esac
   done <<'ROWS'
 treehouse --lease support is accepted silently^1^0.2.6^1^manual^empty^^
-treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
+absent treehouse reports a missing tool^absent^0.2.6^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
+treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires --lease support; upgrade: treehouse update)^NEEDS_GH_AUTH
 compatible tasks-axi is silent by default^1^0.2.6^1^-^empty^^
 missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-incompatible tasks-axi is required by default^1^0.1.0^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-tasks-axi without archive-body is required by default^1^0.2.6:noarchive^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-tasks-axi without multi-id mv is required by default^1^0.2.6:nomulti^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
+incompatible tasks-axi reports an upgrade by default^1^0.1.0^1^-^exact^OUTDATED: tasks-axi (installed: 0.1.0; requires 0.2.6; upgrade: npm install -g tasks-axi)^
+tasks-axi without archive-body reports an upgrade by default^1^0.2.6:noarchive^1^-^exact^OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with update --archive-body; upgrade: npm install -g tasks-axi)^
+tasks-axi without multi-id mv reports an upgrade by default^1^0.2.6:nomulti^1^-^exact^OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with mv multi-ID; upgrade: npm install -g tasks-axi)^
 missing quota-axi is required by default^1^0.2.6^0^manual^exact^MISSING: quota-axi (install: npm install -g quota-axi)^
+outdated quota-axi reports an upgrade by default^1^0.2.6^0.1.50^manual^exact^OUTDATED: quota-axi (installed: 0.1.50; requires 0.1.51; upgrade: quota-axi update)^
 manual backlog backend still requires missing tasks-axi^1^-^1^manual^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
 manual backlog backend suppresses tasks-axi availability^1^0.2.6^1^manual^empty^^
 ROWS
@@ -398,84 +431,115 @@ ROWS
 }
 
 test_tasks_axi_min_version() {
-  local label version mode case_dir fakebin out missing n archive_body multi_id
+  local label version mode requirement case_dir fakebin base out missing n archive_body multi_id installed requires expect
   missing='MISSING: tasks-axi (install: npm install -g tasks-axi)'
   n=0
-  while IFS='^' read -r label version mode; do
+  while IFS='^' read -r label version mode requirement; do
     [ -n "$label" ] || continue
     n=$((n + 1))
     case_dir="$TMP_ROOT/tasks-axi-$n"
     mkdir -p "$case_dir/home/config"
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
     fakebin=$(make_fake_toolchain "$case_dir")
-    archive_body=yes
-    multi_id=yes
-    case "$version" in
-      *:noarchive)
-        archive_body=no
-        version=${version%:noarchive}
-        ;;
-    esac
-    case "$version" in
-      *:nomulti)
-        multi_id=no
-        version=${version%:nomulti}
-        ;;
-    esac
-    add_tasks_axi "$fakebin" "$version" "$archive_body" "$multi_id"
-    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    base=$BASE_PATH
+    if [ "$version" = absent ]; then
+      rm -f "$fakebin/tasks-axi"
+      base=$(fm_test_base_path_sans "$base" tasks-axi)
+    else
+      archive_body=yes
+      multi_id=yes
+      case "$version" in
+        *:noarchive:nomulti)
+          archive_body=no
+          multi_id=no
+          version=${version%:noarchive:nomulti}
+          ;;
+        *:nomulti:noarchive)
+          archive_body=no
+          multi_id=no
+          version=${version%:nomulti:noarchive}
+          ;;
+        *:noarchive)
+          archive_body=no
+          version=${version%:noarchive}
+          ;;
+        *:nomulti)
+          multi_id=no
+          version=${version%:nomulti}
+          ;;
+      esac
+      add_tasks_axi "$fakebin" "$version" "$archive_body" "$multi_id"
+    fi
+    out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
       empty)
         [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
       missing)
         [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
+      outdated)
+        installed=${requirement%%|*}
+        requires=${requirement#*|}
+        expect="OUTDATED: tasks-axi (installed: $installed; requires $requires; upgrade: npm install -g tasks-axi)"
+        [ "$out" = "$expect" ] || fail "$label: expected '$expect', got: $out" ;;
     esac
   done <<'ROWS'
-minimum tasks-axi version is accepted^0.2.6^empty
-newer tasks-axi patch is accepted^0.2.7^empty
-newer tasks-axi minor is accepted^0.3.0^empty
-newer tasks-axi major is accepted^1.0.0^empty
-older tasks-axi with features reports an upgrade^0.1.1^missing
-the patch just below the floor reports an upgrade^0.2.5^missing
-unparseable tasks-axi version reports an upgrade^tasks-axi development build^missing
-tasks-axi at floor without archive-body reports an upgrade^0.2.6:noarchive^missing
-tasks-axi at floor without multi-id reports an upgrade^0.2.6:nomulti^missing
+minimum tasks-axi version is accepted^0.2.6^empty^
+newer tasks-axi patch is accepted^0.2.7^empty^
+newer tasks-axi minor is accepted^0.3.0^empty^
+newer tasks-axi major is accepted^1.0.0^empty^
+absent tasks-axi reports a missing tool^absent^missing^
+older tasks-axi with features reports an upgrade^0.1.1^outdated^0.1.1|0.2.6
+the patch just below the floor reports an upgrade^0.2.5^outdated^0.2.5|0.2.6
+unparseable tasks-axi version reports an upgrade^tasks-axi development build^outdated^unparseable|0.2.6
+tasks-axi at floor without archive-body reports an upgrade^0.2.6:noarchive^outdated^0.2.6|0.2.6 with update --archive-body
+tasks-axi at floor without multi-id reports an upgrade^0.2.6:nomulti^outdated^0.2.6|0.2.6 with mv multi-ID
+tasks-axi at floor without archive-body or multi-id names both capabilities^0.2.6:noarchive:nomulti^outdated^0.2.6|0.2.6 with update --archive-body and mv multi-ID
 ROWS
-  pass "bootstrap enforces tasks-axi minimum version"
+  pass "bootstrap separates an absent tasks-axi from one below its floor or feature probe"
 }
 
 # These rows exercise the real bootstrap check with a fake quota-axi answering
-# --version: below the floor produces MISSING, while at or above is silent.
+# --version: absent produces MISSING, below the floor produces OUTDATED, while at
+# or above is silent.
 test_quota_axi_min_version() {
-  local label version mode case_dir fakebin out missing n
+  local label version mode installed expect case_dir fakebin base out missing n
   missing='MISSING: quota-axi (install: npm install -g quota-axi)'
   n=0
-  while IFS='^' read -r label version mode; do
+  while IFS='^' read -r label version mode installed; do
     [ -n "$label" ] || continue
     n=$((n + 1))
     case_dir="$TMP_ROOT/quota-axi-$n"
     mkdir -p "$case_dir/home/config"
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
     fakebin=$(make_fake_toolchain "$case_dir")
-    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    base=$BASE_PATH
+    if [ "$version" = absent ]; then
+      rm -f "$fakebin/quota-axi"
+      base=$(fm_test_base_path_sans "$base" quota-axi)
+    fi
+    out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_QUOTA_AXI_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
       empty)
         [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
       missing)
         [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
+      outdated)
+        expect="OUTDATED: quota-axi (installed: $installed; requires 0.1.51; upgrade: quota-axi update)"
+        [ "$out" = "$expect" ] || fail "$label: expected '$expect', got: $out" ;;
     esac
   done <<'ROWS'
-minimum quota-axi version is accepted^0.1.51^empty
-newer quota-axi patch is accepted^0.1.52^empty
-newer quota-axi minor is accepted^0.2.0^empty
-newer quota-axi major is accepted^1.0.0^empty
-the patch just below the floor reports an upgrade^0.1.50^missing
-much older quota-axi minor reports an upgrade^0.0.9^missing
-unparseable quota-axi version reports an upgrade^quota-axi development build^missing
+minimum quota-axi version is accepted^0.1.51^empty^
+newer quota-axi patch is accepted^0.1.52^empty^
+newer quota-axi minor is accepted^0.2.0^empty^
+newer quota-axi major is accepted^1.0.0^empty^
+absent quota-axi reports a missing tool^absent^missing^
+the patch just below the floor reports an upgrade^0.1.50^outdated^0.1.50
+much older quota-axi minor reports an upgrade^0.0.9^outdated^0.0.9
+unparseable quota-axi version reports an upgrade^quota-axi development build^outdated^unparseable
 ROWS
-  pass "bootstrap enforces quota-axi minimum version"
+  pass "bootstrap separates an absent quota-axi from one below its version floor"
 }
 
 test_git_is_required_with_supported_install_instruction() {
@@ -554,12 +618,14 @@ test_session_provider_backends_do_not_require_tmux() {
     printf '%s\n' "$backend" > "$case_dir/home/config/backend"
     fakebin=$(make_fake_toolchain_no_tmux "$case_dir" "$cli")
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      REX_BIN_DIR="$case_dir/no-rex-bin-dir" FM_BACKEND_REX_BUNDLE_BIN="$case_dir/no-rex" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     [ -z "$out" ] || fail "backend=$backend with tmux absent but its own deps present should be silent, got: $out"
   done <<'ROWS'
 herdr^herdr
 zellij^zellij
 cmux^cmux
+rex^rex
 ROWS
   pass "bootstrap: session-provider backends require their own CLI + jq + treehouse, never tmux"
 }
@@ -577,15 +643,17 @@ test_session_provider_backends_gate_own_cli_not_tmux() {
     # Toolchain has jq + treehouse but NOT the session CLI and NOT tmux.
     fakebin=$(make_fake_toolchain_no_tmux "$case_dir")
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_BACKEND_PASEO_BUNDLE_BIN="$case_dir/no-paseo" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+      FM_BACKEND_PASEO_BUNDLE_BIN="$case_dir/no-paseo" REX_BIN_DIR="$case_dir/no-rex-bin-dir" \
+      FM_BACKEND_REX_BUNDLE_BIN="$case_dir/no-rex" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$backend" in
       herdr) missing="MISSING_MANUAL: herdr (instructions: https://herdr.dev)" ;;
       paseo) missing="MISSING_MANUAL: paseo (instructions: https://paseo.sh)" ;;
+      rex) missing="MISSING_MANUAL: rex (instructions: https://www.superlogical.com/rex)" ;;
       *) missing="MISSING: $cli" ;;
     esac
     assert_contains "$out" "$missing" "backend=$backend must fail closed on its own missing session CLI"
     case "$backend" in
-      herdr|paseo)
+      herdr|paseo|rex)
         assert_not_contains "$out" "MISSING: $backend (install:" \
           "backend=$backend must not advertise manual guidance as an executable install command"
         ;;
@@ -596,6 +664,7 @@ herdr^herdr
 zellij^zellij
 cmux^cmux
 paseo^paseo
+rex^rex
 ROWS
   pass "bootstrap: a session-provider backend gates its own CLI, never a false tmux requirement"
 }
@@ -634,7 +703,7 @@ test_unknown_backend_reports_invalid_configuration() {
   fakebin=$(make_fake_toolchain "$case_dir")
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr zellij orca cmux paseo)" \
+  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr zellij orca cmux paseo rex)" \
     "bootstrap should report an unknown resolved backend"
   assert_not_contains "$out" "MISSING: tmux" "an unknown backend should not silently fall back to tmux dependencies"
   pass "bootstrap: unknown resolved backends fail closed with an actionable diagnostic"
@@ -684,7 +753,7 @@ test_treehouse_lease_check_follows_resolved_backend() {
   local case_dir fakebin out
   # A treehouse that lacks durable --lease support is only a problem for a backend
   # that actually uses treehouse. Orca owns its own worktrees, so an old treehouse
-  # must NOT trip MISSING: treehouse under backend=orca...
+  # must NOT trip the treehouse report under backend=orca...
   case_dir="$TMP_ROOT/orca-old-treehouse"
   mkdir -p "$case_dir/home/config"
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
@@ -706,7 +775,7 @@ test_treehouse_lease_check_follows_resolved_backend() {
   fakebin=$(make_fake_toolchain_no_tmux "$case_dir" herdr)
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "MISSING: treehouse" "backend=herdr must still require treehouse with durable lease support"
+  assert_contains "$out" "OUTDATED: treehouse" "backend=herdr must still require treehouse with durable lease support"
   assert_not_contains "$out" "MISSING: tmux" "backend=herdr must not demand tmux even when treehouse is too old"
   pass "bootstrap: the treehouse lease check follows the resolved backend's worktree provider"
 }
@@ -1056,42 +1125,113 @@ test_tasks_axi_verdict_handoff_is_consumed_once() {
   mkdir -p "$case_dir/home/config"
   fakebin=$(make_fake_toolchain "$case_dir")
   log="$case_dir/tasks-axi.log"
+  # Every invocation is logged, so each case can assert exactly how many probes a
+  # run paid for. The default build is below the floor and advertises multi-ID mv,
+  # so the capability cases switch only the archive-body probe off.
   cat > "$fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FM_FAKE_TASKS_AXI_LOG:?}"
-printf '0.0.1\n'
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "${FM_FAKE_TASKS_AXI_VERSION:-0.0.1}"
+  exit 0
+fi
+if [ "${1:-}" = update ] && [ "${2:-}" = --help ]; then
+  [ "${FM_FAKE_TASKS_AXI_ARCHIVE_BODY:-0}" = 1 ] && printf '%s\n' 'usage: tasks-axi update --archive-body'
+  exit 0
+fi
+if [ "${1:-}" = mv ] && [ "${2:-}" = --help ]; then
+  printf '%s\n' "${FM_FAKE_TASKS_AXI_MV_USAGE:-usage: tasks-axi mv <id> [<id>...] --to <dir>}"
+  exit 0
+fi
 exit 0
 SH
   chmod +x "$fakebin/tasks-axi"
 
-  # Without the handoff, the incompatible stub is probed and reported.
+  # Without the handoff, the incompatible stub is probed and reported. A build
+  # below the floor is answered by the version, so the run must not also pay for
+  # the capability probes it could never use.
   : > "$log"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "MISSING: tasks-axi (install:" "the unaided run did not probe tasks-axi"
+  assert_contains "$out" "OUTDATED: tasks-axi (installed:" "the unaided run did not probe tasks-axi"
   assert_grep '--version' "$log" "the unaided run never ran the probe"
+  [ "$(grep -c -F -- '--help' "$log")" = 0 ] \
+    || fail "a below-floor build ran capability probes its verdict never used: $(cat "$log")"
 
-  # With it, the probe is skipped entirely and the handed-in verdict is used.
+  # A build at the floor runs each capability probe once, and the requirement text
+  # reuses those results instead of running them again.
+  : > "$log"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    FM_FAKE_TASKS_AXI_VERSION=0.2.6 "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" \
+    'OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with update --archive-body; upgrade: npm install -g tasks-axi)' \
+    "the at-floor build did not name the capability it lacks"
+  [ "$(grep -c -F -- '--help' "$log")" = 2 ] \
+    || fail "the requirement text repeated a capability probe: $(cat "$log")"
+
+  # With the verdict alone, the probe is skipped entirely and the handed-in
+  # verdict is used.
   : > "$log"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
     FM_TASKS_AXI_COMPATIBLE=1 "$ROOT/bin/fm-bootstrap.sh")
-  assert_not_contains "$out" "MISSING: tasks-axi" "the handed-in verdict was ignored"
+  assert_not_contains "$out" "OUTDATED: tasks-axi" "the handed-in verdict was ignored"
   [ ! -s "$log" ] || fail "the handed-in verdict did not save the probe: $(cat "$log")"
+
+  # An incompatible verdict carries its reason, so the child's OUTDATED line is as
+  # specific as the parent's probe and still costs no probe of its own beyond the
+  # version it prints as "installed:".
+  : > "$log"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    FM_FAKE_TASKS_AXI_VERSION=0.2.6 \
+    FM_TASKS_AXI_COMPATIBLE=0 FM_TASKS_AXI_CHECK_REASON=update-archive-body "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" \
+    'OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with update --archive-body; upgrade: npm install -g tasks-axi)' \
+    "the handed-in reason did not reach the requirement text"
+  [ "$(grep -c -F -- '--help' "$log")" = 0 ] \
+    || fail "the handed-in reason did not save the capability probes: $(cat "$log")"
+
+  # Both capabilities are named, in the vocabulary's fixed order.
+  : > "$log"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    FM_FAKE_TASKS_AXI_VERSION=0.2.6 \
+    FM_TASKS_AXI_COMPATIBLE=0 FM_TASKS_AXI_CHECK_REASON=update-archive-body,mv-multi-id "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" \
+    'OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with update --archive-body and mv multi-ID; upgrade: npm install -g tasks-axi)' \
+    "the handed-in reason did not name both capabilities"
+  [ "$(grep -c -F -- '--help' "$log")" = 0 ] \
+    || fail "the handed-in reason did not save the capability probes: $(cat "$log")"
 
   # A malformed value is not a verdict.
   : > "$log"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
     FM_TASKS_AXI_COMPATIBLE=yes "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "MISSING: tasks-axi (install:" "a malformed handoff value was trusted"
+  assert_contains "$out" "OUTDATED: tasks-axi (installed:" "a malformed handoff value was trusted"
+
+  # A malformed reason is not a reason either: the child falls back to its own
+  # probes rather than trusting text outside the vocabulary.
+  : > "$log"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    FM_FAKE_TASKS_AXI_VERSION=0.2.6 \
+    FM_TASKS_AXI_COMPATIBLE=0 FM_TASKS_AXI_CHECK_REASON=bogus "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" \
+    'OUTDATED: tasks-axi (installed: 0.2.6; requires 0.2.6 with update --archive-body; upgrade: npm install -g tasks-axi)' \
+    "a malformed handoff reason suppressed the probes"
+  assert_grep 'update --help' "$log" "a malformed handoff reason was trusted instead of probing"
 
   # And the handoff never reaches a grandchild: bootstrap spawns agents, and a
-  # verdict cached into an agent's environment would outlive the tool it describes.
-  out=$(FM_TASKS_AXI_COMPATIBLE=1 bash -c '. "$1"; printf "%s\n" "${FM_TASKS_AXI_COMPATIBLE-unset}"' \
+  # verdict or reason cached into an agent's environment would outlive the tool
+  # they describe.
+  out=$(FM_TASKS_AXI_COMPATIBLE=1 FM_TASKS_AXI_CHECK_REASON=compatible bash -c \
+    '. "$1"; printf "%s %s\n" "${FM_TASKS_AXI_COMPATIBLE-unset}" "${FM_TASKS_AXI_CHECK_REASON-unset}"' \
     _ "$ROOT/bin/fm-tasks-axi-lib.sh")
-  [ "$out" = unset ] || fail "sourcing the library left the handoff in the environment: $out"
-  pass "bootstrap: the tasks-axi compatibility verdict travels exactly one process hop"
+  [ "$out" = 'unset unset' ] || fail "sourcing the library left the handoff in the environment: $out"
+  pass "bootstrap: the tasks-axi compatibility verdict and reason travel exactly one process hop"
 }
 
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
@@ -1135,6 +1275,30 @@ test_crew_dispatch_lanes_template_is_valid() {
     CODEX_HOME="$case_dir/codex-home" TYPESAFE_API_KEY=test-key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
   [ -z "$out" ] || fail "the shipped lanes template must validate cleanly, got: $out"
   pass "bootstrap accepts the shipped crew dispatch lanes template"
+}
+
+# config/pr-health-monitor is the only thing that arms the PR health monitor.
+test_pr_health_monitor_arms_only_with_its_flag() {
+  local case_dir fakebin out flag
+  for flag in on off; do
+    case_dir="$TMP_ROOT/pr-health-$flag"
+    mkdir -p "$case_dir/home/config" "$case_dir/home/data" "$case_dir/home/state"
+    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    [ "$flag" = off ] || : > "$case_dir/home/config/pr-health-monitor"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    add_real_jq "$fakebin"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    [ -z "$out" ] || fail "bootstrap with the PR health flag $flag printed: $out"
+    if [ "$flag" = on ]; then
+      [ -f "$case_dir/home/state/pr-health.check.sh" ] && [ -f "$case_dir/home/state/pr-health.check-trust" ] \
+        || fail "bootstrap did not register the PR health monitor: $(ls -A "$case_dir/home/state")"
+    else
+      [ -z "$(ls -A "$case_dir/home/state")" ] \
+        || fail "bootstrap without the PR health flag left state: $(ls -A "$case_dir/home/state")"
+    fi
+  done
+  pass "bootstrap arms the PR health monitor only when config/pr-health-monitor exists"
 }
 
 test_crew_dispatch_validation() {
@@ -1432,6 +1596,7 @@ test_network_sweeps_recheck_lock_ownership
 test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
+test_pr_health_monitor_arms_only_with_its_flag
 test_crew_dispatch_validation
 test_crew_dispatch_lanes_template_is_valid
 test_crew_dispatch_codex_max_follows_catalog

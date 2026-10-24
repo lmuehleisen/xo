@@ -4,17 +4,26 @@
 # This is a one-shot, read-only command. It reads the current pull request,
 # reported checks, submitted reviews, and review decision from GitHub at
 # invocation time. It never posts, requests, approves, or merges.
-# It reports on checks that have reported. A required context that has never
-# reported on this head is absent from what this command reads and cannot be
-# enumerated here. Empty output therefore means that no reported required check
-# is failing or pending; it does not mean the pull request is ready to merge.
-# When nothing has reported, or nothing required has, that is printed rather
-# than read as ready. When nothing required has reported, every reported check
-# that is failing or pending is printed as well, labelled REPORTED rather than
-# REQUIRED: the base branch of a stacked pull request can be an unprotected
-# branch, so the required view alone would hide a failure there.
-# Where a required check has reported, advisory checks do not block and are
-# omitted.
+# It reports on checks that have reported, and on the required set the base
+# branch's policy configures. bin/fm-pr-lib.sh's github_read_required_contexts
+# reads classic branch protection and active ruleset rules - the same
+# canonical policy read the guarded merge applies, including its
+# plan-unavailable exception, so a repository whose plan cannot expose branch
+# rules verifies as requiring nothing rather than erroring. A configured
+# required context absent from the head's check rollup is named
+# REQUIRED CHECK: <context> (not reported), with the merge's producer app
+# binding preserved. A required set that cannot be read - an API error, an
+# unreadable rollup, or unreadable check producers - is printed as
+# unconfirmed rather than assumed empty.
+# Empty output therefore means that no reported required check is failing
+# or pending and no configured required check is missing;
+# it does not mean the pull request is ready to merge.
+# When nothing has reported, that is printed rather than read as ready. When
+# the required view reports nothing, every reported check that is failing or
+# pending is printed as well, labelled REPORTED rather than REQUIRED: the
+# base branch of a stacked pull request can be an unprotected branch, so the
+# required view alone would hide a failure there. Where a required check has
+# reported, advisory checks do not block and are omitted.
 # A pull request that only awaits an approval (reviewDecision REVIEW_REQUIRED)
 # is not reported as blocked. GitHub's reviewDecision owns whether reviews
 # block; review history is printed only to explain CHANGES_REQUESTED, naming
@@ -32,7 +41,7 @@
 # Usage: fm-pr-state.sh <pr-url>
 #   Prints one line per blocker it can see and nothing when it sees none.
 #   Blockers do not change the successful exit status; lookup or usage refusal
-#   exits non-zero.
+#   exits non-zero. Reading this state needs gh and jq.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,6 +64,7 @@ if [ "${1:-}" = --help ] || [ "${1:-}" = -h ]; then
 fi
 [ "$#" -eq 1 ] || die "usage: fm-pr-state.sh <pr-url>"
 command -v gh >/dev/null 2>&1 || die "gh is required"
+command -v jq >/dev/null 2>&1 || die "jq is required"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 SETTLE=${FM_PR_REVIEW_SETTLE_SECS:-600}
@@ -69,8 +79,13 @@ PATH_PART=$FM_PR_PATH
 NUMBER=$FM_PR_NUMBER
 ENDPOINT="/repos/$PATH_PART/pulls/$NUMBER"
 
-CORE=$(gh pr view "$URL" \
-  --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt --jq '
+# The pull request view is read once as JSON so the scalar fields and the
+# check rollup come from the same response: the required-set missing check
+# below judges the rollup at exactly the head this read reports.
+CORE_JSON=$(gh pr view "$URL" \
+  --json state,mergedAt,isDraft,headRefOid,author,mergeable,reviewDecision,updatedAt,baseRefName,statusCheckRollup) \
+  || die "could not read $URL"
+CORE=$(printf '%s' "$CORE_JSON" | jq -r '
   "state=\(.state | ascii_downcase)",
   "merged_at=\(.mergedAt // "")",
   "draft=\(.isDraft)",
@@ -78,7 +93,8 @@ CORE=$(gh pr view "$URL" \
   "author=\(.author.login)",
   "mergeability=\(if .mergeable == null or .mergeable == "UNKNOWN" then "unknown" else (.mergeable | ascii_downcase) end)",
   "review_decision=\(.reviewDecision // "")",
-  "updated_at=\(.updatedAt)"') || die "could not read $URL"
+  "updated_at=\(.updatedAt)",
+  "base=\(.baseRefName // "")"') || die "could not read $URL"
 
 STATE=
 MERGED_AT=
@@ -88,6 +104,7 @@ HEAD=
 AUTHOR=
 REVIEW_DECISION=
 UPDATED_AT=
+BASE=
 while IFS= read -r row; do
   case "$row" in
     state=*) STATE=${row#state=} ;;
@@ -98,12 +115,13 @@ while IFS= read -r row; do
     mergeability=*) MERGEABILITY=${row#mergeability=} ;;
     review_decision=*) REVIEW_DECISION=${row#review_decision=} ;;
     updated_at=*) UPDATED_AT=${row#updated_at=} ;;
+    base=*) BASE=${row#base=} ;;
   esac
 done <<EOF_CORE
 $CORE
 EOF_CORE
 [ -n "$STATE" ] && [ -n "$DRAFT" ] && [ -n "$HEAD" ] && [ -n "$AUTHOR" ] \
-  && [ -n "$MERGEABILITY" ] \
+  && [ -n "$MERGEABILITY" ] && [ -n "$BASE" ] \
   || die "GitHub returned incomplete pull-request state for $URL"
 
 if [ -n "$MERGED_AT" ]; then
@@ -134,28 +152,92 @@ unsettled_checks() {
     | "'"$label"': \(.name) (\(.state))"' 2>"$GH_STDERR"
 }
 
+# The base's required set is read through the canonical policy read the
+# guarded merge applies. Its plan-unavailable exception resolves a repository
+# whose plan cannot expose branch rules to a positively empty required set
+# rather than an error, so REQUIRED_ERROR names only a genuinely unreadable
+# policy.
+REQUIRED_ERROR=
+github_read_required_contexts "$BASE" || REQUIRED_ERROR=$FM_PR_GITHUB_REQUIRED_ERROR
+
+# Which configured required contexts have not reported at this head, with the
+# guarded merge's producer app binding: an app-bound requirement is satisfied
+# only by a same-named check run from that app at this head, so check-run
+# producers are read only when an app-bound requirement exists. An unreadable
+# producer read or an unreadable rollup leaves the whole question unconfirmed
+# rather than naming a partial set.
+REQUIRED_MISSING=
+REQUIRED_MISSING_ERROR=
+if [ -z "$REQUIRED_ERROR" ] && [ "$FM_PR_GITHUB_REQUIRED" != '[]' ]; then
+  producers='[]'
+  if printf '%s' "$FM_PR_GITHUB_REQUIRED" | jq -e 'any(.[]; .app_id != null)' >/dev/null; then
+    if ! runs=$(gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/commits/$HEAD/check-runs" 2>"$GH_STDERR") \
+      || [ -z "$runs" ] \
+      || ! producers=$(printf '%s' "$runs" | jq -sc --arg head "$HEAD" '
+        [ .[] | if (.check_runs | type) == "array" then .check_runs[] else error("invalid check runs") end
+          | if (.name | type) == "string" and (.app.id | type) == "number" and .head_sha == $head
+            then . else error("invalid check producer") end ]' 2>/dev/null); then
+      REQUIRED_MISSING_ERROR="required check producers at head $HEAD could not be read"
+    fi
+  fi
+  if [ -z "$REQUIRED_MISSING_ERROR" ] \
+    && ! REQUIRED_MISSING=$(github_required_checks_missing "$CORE_JSON" "$FM_PR_GITHUB_REQUIRED" "$producers"); then
+    REQUIRED_MISSING_ERROR="the pull request check rollup could not be read"
+  fi
+fi
+
+CHECKS=
+REPORTED=
+REPORTED_NONE=false
 if ! CHECKS=$(unsettled_checks 'REQUIRED CHECK' --required); then
+  CHECKS=
   # These two sentences are gh's own human-readable error text, verified against
   # gh 2.100.0 on 2026-09-12. gh reports "nothing reported" as an error rather
   # than as structured data, so matching its text is the only way to tell that
   # apart from a real lookup failure. An unrecognised message falls through to
   # the refusal below, so a reword degrades loudly rather than silently.
   if grep -q "^no checks reported on the '" "$GH_STDERR"; then
-    CHECKS="CHECKS: none reported yet"
+    REPORTED_NONE=true
   elif grep -q "^no required checks reported on the '" "$GH_STDERR"; then
-    CHECKS="CHECKS: no required check has reported; readiness unconfirmed"
-    # The required view can hide failures on an unprotected stacked base.
-    REPORTED=$(unsettled_checks 'REPORTED CHECK') || {
-      cat "$GH_STDERR" >&2
-      die "could not read reported checks for $URL"
-    }
-    [ -z "$REPORTED" ] || CHECKS="$CHECKS"$'\n'"$REPORTED"
+    # The reported view is read whether the required set is verified empty or
+    # not: on a verified-empty base it is the whole check signal, and
+    # elsewhere it keeps a stacked base's failures visible.
+    if ! REPORTED=$(unsettled_checks 'REPORTED CHECK'); then
+      if grep -q "^no checks reported on the '" "$GH_STDERR"; then
+        REPORTED_NONE=true
+      else
+        cat "$GH_STDERR" >&2
+        die "could not read reported checks for $URL"
+      fi
+    fi
   else
     cat "$GH_STDERR" >&2
     die "could not read required checks for $URL"
   fi
 fi
+
 [ -z "$CHECKS" ] || printf '%s\n' "$CHECKS"
+if [ -n "$REQUIRED_MISSING" ]; then
+  while IFS= read -r name; do
+    [ -z "$name" ] || printf 'REQUIRED CHECK: %s (not reported)\n' "$name"
+  done <<EOF_MISSING
+$REQUIRED_MISSING
+EOF_MISSING
+fi
+if [ -n "$REQUIRED_ERROR" ]; then
+  while IFS= read -r line; do
+    [ -z "$line" ] || printf 'CHECKS: %s; readiness unconfirmed\n' "$line"
+  done <<EOF_REQUIRED
+$REQUIRED_ERROR
+EOF_REQUIRED
+fi
+[ -z "$REQUIRED_MISSING_ERROR" ] \
+  || printf 'CHECKS: %s; readiness unconfirmed\n' "$REQUIRED_MISSING_ERROR"
+if [ "$REPORTED_NONE" = true ]; then
+  printf 'CHECKS: none reported yet\n'
+elif [ -n "$REPORTED" ]; then
+  printf '%s\n' "$REPORTED"
+fi
 
 if [ "$REVIEW_DECISION" = CHANGES_REQUESTED ]; then
   printf 'REVIEW DECISION: CHANGES_REQUESTED\n'
