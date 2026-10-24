@@ -512,6 +512,23 @@ test_claude_hooks_semantic_lifecycle() {
   pass "claude hooks open on UserPromptSubmit and close on Stop, StopFailure, and SessionEnd"
 }
 
+# The worker's one publish allowance names this home's runner and this task
+# only, and the relative spellings a project rule could allow are denied.
+test_claude_worker_approved_publish_allowance() {
+  local rec id=busy-cl-pub out settings
+  rec=$(make_spawn_case claude-publish claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "claude spawn should succeed: $out"
+  settings="$WT_DIR/.claude/settings.local.json"
+  jq -e --arg allow "Bash($ROOT/bin/fm-approved-publish.sh run $id *)" \
+    '.permissions.allow == [$allow]
+      and .permissions.deny == ["Bash(bin/fm-approved-publish.sh run *)", "Bash(./bin/fm-approved-publish.sh run *)"]' \
+    "$settings" >/dev/null \
+    || fail "claude worker settings must allow only this task's approved-publish run: $(jq -c .permissions "$settings")"
+  pass "a claude worker may run only its own task's approved publication through this home's runner"
+}
+
 test_claude_hooks_stale_incarnation_harmless() {
   local rec id=busy-cl-2 out state settings
   rec=$(make_spawn_case claude-stale claude "$id")
@@ -1172,6 +1189,7 @@ test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_launch_model_session_scope
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
+test_claude_worker_approved_publish_allowance
 test_claude_hooks_stale_incarnation_harmless
 test_gemini_hooks_semantic_lifecycle
 test_gemini_hooks_stale_incarnation_harmless

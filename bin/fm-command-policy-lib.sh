@@ -179,6 +179,9 @@
 #     <this-task-status>` while the home config beside the status file's
 #     state directory has no fleet-ledger flag (the brief scaffold's status
 #     command; that invocation writes nothing)
+#   - this home's fm-approved-publish.sh, only as `run <this-task>` with at
+#     most `--approval <captain-task-id>`; the runner itself refuses unless
+#     the captain's recorded decision names that task's procedure
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -2725,6 +2728,26 @@ approve_captain_hold() {
   done
 }
 
+# fm-approved-publish.sh runs the worker's OWN task's prepared publication, as
+# `run <this task>` with at most `--approval <captain-task-id>`. The runner
+# itself refuses unless the captain's recorded decision names the procedure,
+# so approving the invocation grants nothing that decision did not.
+approve_approved_publish() {
+  [ -n "$TASK" ] || { no_approve "fm-approved-publish.sh without a known task id"; return 0; }
+  [ "${E[1]-}" = run ] || { no_approve "fm-approved-publish.sh ${E[1]:-without a subcommand}"; return 0; }
+  [ "${#E[@]}" -ge 3 ] && [ "${EV[2]}" = 0 ] && [ "${E[2]}" = "$TASK" ] \
+    || { no_approve "fm-approved-publish.sh run names another task (${E[2]-none})"; return 0; }
+  case "${#E[@]}" in
+    3) return 0 ;;
+    5)
+      if [ "${E[3]}" = --approval ] && [ "${EV[4]}" = 0 ]; then
+        case "${E[4]}" in ''|*[!A-Za-z0-9._-]*) ;; *) return 0 ;; esac
+      fi
+      ;;
+  esac
+  no_approve "fm-approved-publish.sh form"
+}
+
 runner_script_name() {  # <npm script name>
   case "$1" in
     test|lint|build|typecheck|type-check|check|test:*|lint:*|build:*|check:*|typecheck:*|test-*|lint-*) return 0 ;;
@@ -2744,6 +2767,7 @@ approve_plain() {  # <base>
   if home_helper "${E[0]}" "${EV[0]}" fm-ensure-agents-md.sh; then approve_ensure_agents_md; return 0; fi
   if home_helper "${E[0]}" "${EV[0]}" fm-captain-hold.sh; then approve_captain_hold; return 0; fi
   if home_helper "${E[0]}" "${EV[0]}" fm-fleet-ledger.sh; then approve_fleet_ledger; return 0; fi
+  if home_helper "${E[0]}" "${EV[0]}" fm-approved-publish.sh; then approve_approved_publish; return 0; fi
   for w in fm-lint.sh fm-test-run.sh fm-doc-audience-check.sh fm-install-shellcheck.sh fm-install-actionlint.sh; do
     home_helper "${E[0]}" "${EV[0]}" "$w" && return 0
   done

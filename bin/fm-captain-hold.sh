@@ -31,6 +31,7 @@
 #   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
+#   fm-captain-hold.sh decision <task-id>
 #   fm-captain-hold.sh diverged
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
@@ -211,6 +212,16 @@
 # crew task reaches a due stale alarm - its open backlog hold need not appear in
 # the task's last status line - and on a 0 bounds repeated alarms from new pane
 # hashes for the decision.
+#
+# `decision` is the read-only lookup for a consumer that acts on what the
+# captain answered, such as bin/fm-approved-publish.sh. It prints the decision
+# text of the task's newest resolution record, byte for byte, only after that
+# text hashes to the record's own decision digest. Exit 0 prints it; 1 means
+# there is no current captain answer to act on - no such task, no record, a
+# newest record that is reconciliation evidence rather than the captain's
+# words, or a call held for the captain again after it was answered; 2 means
+# the record could not be read or did not verify. It never interprets the
+# text.
 #
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
@@ -2491,6 +2502,83 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
   exit 2
 }
 
+# The newest recorded captain decision on one task, verified against its own
+# digest; the header's `decision` paragraph owns the exit contract.
+command_decision() {  # <task-id>
+  local id=${1-} rc=0 body record digest mode='' rest text
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  case "$id" in
+    ''|*[!A-Za-z0-9._-]*)
+      printf 'fm-captain-hold: task id must be a non-empty privacy-safe slug: %s\n' "$id" >&2
+      exit 2
+      ;;
+  esac
+  command_open "$id" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'fm-captain-hold: %s is held for the captain and has no current answer\n' "$id" >&2
+    exit 1
+  fi
+  task_show "$id" || {
+    printf 'fm-captain-hold: no task %s\n' "$id" >&2
+    exit 1
+  }
+  body=$(decode_shown_value "$(show_field "$TASK_SHOW_OUTPUT" body)") || {
+    printf 'fm-captain-hold: cannot decode the record on %s\n' "$id" >&2
+    exit 2
+  }
+  # Records are prepended, so the first leader opens the newest record.
+  record=$(printf '%s\n' "$body" | awk '
+    found { print; next }
+    $0 == "Resolution recorded by fm-captain-hold." || $0 == "Resolution recorded by fm-decision-hold." { found = 1 }
+  ')
+  if [ -z "$record" ]; then
+    printf 'fm-captain-hold: %s records no captain answer\n' "$id" >&2
+    exit 1
+  fi
+  digest=${record%%$'\n'*}
+  rest=${record#*$'\n'}
+  case "$digest" in
+    "Decision digest: "*) digest=${digest#"Decision digest: "} ;;
+    *) printf 'fm-captain-hold: the newest record on %s has no decision digest\n' "$id" >&2; exit 2 ;;
+  esac
+  case "$rest" in
+    "Resolution mode: "*)
+      mode=${rest%%$'\n'*}
+      mode=${mode#"Resolution mode: "}
+      rest=${rest#*$'\n'}
+      ;;
+  esac
+  case "$mode" in
+    answered|released|repaired) ;;
+    *)
+      printf 'fm-captain-hold: the newest record on %s is %s, not the captain'\''s answer\n' \
+        "$id" "${mode:-a legacy record without a mode}" >&2
+      exit 1
+      ;;
+  esac
+  case "$rest" in
+    $'\nCaptain decision:\n'*) rest=${rest#$'\nCaptain decision:\n'} ;;
+    *) printf 'fm-captain-hold: the newest record on %s has no captain decision\n' "$id" >&2; exit 2 ;;
+  esac
+  # The text ends where its line prefix hashes to the recorded digest, which
+  # also proves the stored bytes are the bytes `answer` recorded.
+  text=$(printf '%s' "$rest" | FM_DECISION_DIGEST=$digest perl -MDigest::SHA=sha256_hex -e '
+    local $/;
+    my @lines = split /\n/, <STDIN>, -1;
+    my $text;
+    for my $i (0 .. $#lines) {
+      $text = $i ? "$text\n$lines[$i]" : $lines[$i];
+      last if length($text) > 8192;
+      if (sha256_hex($text) eq $ENV{FM_DECISION_DIGEST}) { print $text; exit 0 }
+    }
+    exit 1
+  ') || {
+    printf 'fm-captain-hold: the newest decision on %s does not match its recorded digest\n' "$id" >&2
+    exit 2
+  }
+  printf '%s\n' "$text"
+}
+
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   answer) shift; command_answer "$@" ;;
@@ -2502,6 +2590,7 @@ case "${1:-}" in
   complete) shift; command_complete "$@" ;;
   verify) shift; command_verify "$@" ;;
   open) shift; command_open "$@" ;;
+  decision) shift; command_decision "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   reconcile) shift; command_reconcile "$@" ;;
   -h|--help) usage ;;
