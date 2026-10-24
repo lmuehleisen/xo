@@ -5316,6 +5316,29 @@ test_card_refreshes_a_merge_card_under_its_merge_key() {
   pass "card refreshes a merge.<task> record against the underlying open call"
 }
 
+# open's own exit 2 (an unreadable backlog, an unresolvable data dir, an
+# incompatible tasks-axi) must reach the operator as a reported refusal,
+# not a silent status-2 death for `card` with zero output.
+test_card_reports_an_unestablishable_open_check() {
+  local home out rc
+  home=$(make_home card-open-fail)
+  tasks_in "$home" add open-fail-task "Decide the open failure" --kind captain >/dev/null \
+    || fail "could not add the call fixture"
+  run_captain "$home" hold open-fail-task --reason "gate" >/dev/null \
+    || fail "hold on the call fixture failed"
+  chmod 000 "$home/data/backlog.md"
+  set +e
+  out=$(run_captain "$home" card open-fail-task --card-title "Decide it" 2>&1)
+  rc=$?
+  set -e
+  chmod 600 "$home/data/backlog.md"
+  [ "$rc" -ne 0 ] || fail "card accepted an unestablishable open check"
+  [ -n "$out" ] || fail "card died silently on an unestablishable open check"
+  assert_contains "$out" "captain call" \
+    "the open-check failure was not reported to the operator: $out"
+  pass "card reports an unestablishable open check instead of dying silently"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
@@ -5388,3 +5411,4 @@ test_card_file_refuses_an_envelope_of_another_schema
 test_card_value_flags_never_swallow_the_next_flag
 test_card_file_refuses_a_non_string_owner
 test_card_refreshes_a_merge_card_under_its_merge_key
+test_card_reports_an_unestablishable_open_check

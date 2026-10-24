@@ -1647,9 +1647,19 @@ command_card() {  # <task-id | merge.<task-id>> <card flags>
   [ "$CARD_USED" -eq 1 ] || fail "card needs --card-file or the card flags"
   stage_authored_card "$id" "" "" "" "$open_id"
   # The open check runs under the same task lock answer takes, so a call closed
-  # while this command waited cannot receive a card afterwards.
+  # while this command waited cannot receive a card afterwards. Command
+  # substitution turns open's own `exit 2` (unreadable backlog, unresolvable
+  # data dir, incompatible tasks-axi) into a status we can report, instead of
+  # killing card with no output.
   acquire_task_control_lock "$open_id"
-  if ! command_open "$open_id" --distinguish-absent >/dev/null 2>&1; then
+  local open_rc=0 open_err
+  open_err=$(command_open "$open_id" --distinguish-absent 2>&1 >/dev/null) || open_rc=$?
+  if [ "$open_rc" -eq 2 ]; then
+    rm -f -- "$DECISION_CARD_TMP"
+    DECISION_CARD_TMP=
+    fail "cannot establish whether task $open_id is an open captain call: ${open_err:-no detail}"
+  fi
+  if [ "$open_rc" -ne 0 ]; then
     rm -f -- "$DECISION_CARD_TMP"
     DECISION_CARD_TMP=
     fail "task $open_id is not an open captain call; a card belongs to a live hold"
