@@ -255,7 +255,11 @@ compose_payload() {  # <dest.json>
              kind: (if (.id | test("^\\(")) then "warning" else "queued" end)}
           + (if (.filed // null) == null then {} else {filed: .filed} end)
         ],
-        charted_more: 0,
+        charted_more: ([$s.omitted[]?
+          | select(.surface | test("^gates showing [0-9]+ of [0-9]+$"))
+          | .surface
+          | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)$")
+          | ((.total | tonumber) - (.shown | tonumber))] | add // 0),
         charted_warning_more: 0
       }' "$snapshot" > "$tmp"; then
     rm -f -- "$snapshot" "$tmp"

@@ -1352,6 +1352,39 @@ SH
   pass "refresh keeps a remote call when a local merge card shares its key"
 }
 
+test_refresh_preserves_the_snapshot_gates_truncation_disclosure() {
+  local home stub
+  home=$(make_home refresh-gates-truncation)
+  stub="$home/fakebin/snapshot-stub"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+cat <<'JSON'
+{
+  "schema": "fm-bearings.v1",
+  "home": "test-home",
+  "generated": "2026-08-19T00:00:00Z",
+  "in_flight": [],
+  "decisions_open": [],
+  "landed": [],
+  "gates": [
+    { "id": "sample-gate", "title": "Dispatched sample gate", "blocked_by": "-",
+      "reason": "Waiting", "owner": "(main)", "filed": "2026-08-18" }
+  ],
+  "omitted": [
+    { "surface": "gates showing 1 of 4", "reveal": "--all-queued" }
+  ]
+}
+JSON
+SH
+  chmod +x "$stub"
+  FM_BEARINGS_BOARD_SNAPSHOT="$stub" run_board "$home" refresh >/dev/null \
+    || fail "refresh failed with a truncated gates snapshot"
+  extract_payload "$home/.lavish/bearings-board.html" > "$home/served.json"
+  jq -e '.charted_more == 3' "$home/served.json" >/dev/null \
+    || fail "refresh dropped the snapshot gates truncation disclosure"
+  pass "refresh preserves the snapshot gates truncation disclosure"
+}
+
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board() {
   local home stub rc out
   home=$(make_home refresh-refusal)
@@ -1407,4 +1440,5 @@ test_build_ignores_a_store_envelope_of_another_schema
 test_refresh_ignores_a_store_envelope_of_another_schema
 test_refresh_keeps_a_deferred_hold_out_of_captains_call
 test_refresh_keeps_a_remote_call_when_a_local_merge_card_shares_its_key
+test_refresh_preserves_the_snapshot_gates_truncation_disclosure
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board
