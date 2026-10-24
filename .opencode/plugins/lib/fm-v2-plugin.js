@@ -1,6 +1,14 @@
 // OpenCode V2 entrypoint adapter for Firstmate's existing hook implementations.
 // V2 public events carry data and execution lifecycle events, rather than the
 // V1 properties/session.idle surface. Keep that translation at this boundary.
+import {
+  eventProperties,
+  eventType,
+  executionEnded,
+  setupEventSubscription,
+  setupToolExecuteBefore,
+} from "./fm-opencode2.js";
+
 export function v2Plugin(id, factory) {
   return {
     id,
@@ -17,36 +25,28 @@ export function v2Plugin(id, factory) {
         },
       });
       if (hooks["tool.execute.before"]) {
-        await ctx.tool.hook("execute.before", async (event) => {
-          return hooks["tool.execute.before"](
-            { tool: event.tool === "shell" ? "bash" : event.tool, sessionID: event.sessionID },
-            { args: event.input },
-          );
-        });
+        await setupToolExecuteBefore(ctx, (event) => hooks["tool.execute.before"](
+          { tool: event.tool === "shell" ? "bash" : event.tool, sessionID: event.sessionID },
+          { args: event.input },
+        ));
       }
-      const controller = new AbortController();
-      const stream = hooks.event ? (async () => {
-        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-          let type = event.type;
-          let properties = event.data;
-          if (type === "session.execution.started") {
-            type = "session.status";
-            properties = { ...event.data, status: { type: "busy" } };
-          } else if (["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].includes(type)) {
-            // Shutdown preserves the execution claim for resume, not an idle turn.
-            if (event.data.reason === "shutdown") continue;
-            type = "session.idle";
-          }
-          if (hooks.event) await hooks.event({ event: { type, properties } });
+      const unsubscribe = hooks.event && setupEventSubscription(ctx, async (event) => {
+        let type = eventType(event);
+        let properties = eventProperties(event);
+        if (type === "session.execution.started") {
+          type = "session.status";
+          properties = { ...properties, status: { type: "busy" } };
+        } else if (executionEnded(event)) {
+          type = "session.idle";
+        } else if (type.startsWith("session.execution.")) {
+          // No other execution event maps to a V1 lifecycle event. A shutdown
+          // terminal event preserves the execution claim for resume, not an idle turn.
+          return;
         }
-      })() : Promise.resolve();
-      // Keep unexpected stream failures visible in OpenCode's plugin logs.
-      stream.catch((error) => {
-        if (!controller.signal.aborted) console.error(`${id}: event subscription failed`, error);
-      });
+        await hooks.event({ event: { type, properties } });
+      }, id);
       return async () => {
-        controller.abort();
-        await stream.catch(() => {});
+        if (unsubscribe) await unsubscribe();
         await hooks.dispose?.();
       };
     },
