@@ -9,8 +9,11 @@
 # path in bin/fm-afk-return.sh calls `archive` through bin/fm-afk-launch.sh stop).
 # Being away changes how the captain is informed and what happens at a
 # captain-owned decision point, never the authority set. Hold-for-return is the
-# only reach profile this release records: there is no phone channel, and the
-# entry announcement says so every time.
+# only reach profile: nobody can answer or approve from outside the session.
+# reach_channels records `none`, or `discord` when an away entry finds the
+# one-way captain alert notifier (bin/fm-captain-alert.sh `reach`) armed,
+# configured, and not stopped by a rejected webhook; the entry announcement
+# names whichever holds every time.
 #
 # AWAY OR QUIET. The same record also backs daemon-backed quiet mode, which a
 # quiet entry marks with `mode: quiet`: the captain is present there, so a quiet
@@ -55,7 +58,8 @@
 #   entered: <UTC ISO 8601>
 #   entered_epoch: <seconds>
 #   expected_return: <UTC ISO 8601> | -
-#   reach_channels: none
+#   reach_channels: none | discord   discord only on an away entry whose
+#                                  notifier reach probe said so; quiet is none
 #   reach_announced: <the one-sentence reach announcement>
 #   spend_max_concurrent_workers: <n>   without --spend, the ordinary worker
 #                                  records this home already holds at entry,
@@ -172,6 +176,8 @@ FM_AFK_CONTRACT_VERSION=2
 # Older record versions this script still reads (never writes).
 FM_AFK_CONTRACT_READABLE_VERSIONS="1 2"
 FM_AFK_CONTRACT_REACH_ANNOUNCED='No phone channel is configured; anything that needs you waits for your return.'
+# %s is the notifier's last confirmed test time, or `never`.
+FM_AFK_CONTRACT_REACH_DISCORD_FORMAT='Notify-only: outcomes that need you are also posted to your XO Discord alerts channel (last confirmed test: %s); replies there do nothing, and anything that needs you still waits for your return.'
 FM_AFK_CONTRACT_SPEND_DEFAULT=20
 FM_AFK_CONTRACT_QUIET_HOLDS_NOTHING='you are present, so nothing waits for your return: every action you ask for, a local landing or a merge included, proceeds now under ordinary attended authority, and quiet mode changes only which updates reach this conversation.'
 # Generous against the longest legitimate holder, a merge waiting on the forge,
@@ -307,6 +313,25 @@ fm_afk_contract_validate_iso() {  # <ts>
   fm_utc_iso_to_epoch "$1" >/dev/null 2>&1
 }
 
+# The reach an entry records: sets FM_AFK_CONTRACT_REACH and
+# FM_AFK_CONTRACT_REACH_TEXT. Only an away entry asks the notifier, and any
+# answer other than `discord <when>` records none.
+fm_afk_contract_entry_reach() {
+  local probe=
+  FM_AFK_CONTRACT_REACH=none
+  FM_AFK_CONTRACT_REACH_TEXT=$FM_AFK_CONTRACT_REACH_ANNOUNCED
+  [ "${FM_AFK_CONTRACT_ENTRY_MODE:-away}" != quiet ] || return 0
+  [ -x "$FM_AFK_CONTRACT_DIR/fm-captain-alert.sh" ] || return 0
+  probe=$(FM_STATE_OVERRIDE="$FM_AFK_CONTRACT_STATE" "$FM_AFK_CONTRACT_DIR/fm-captain-alert.sh" reach 2>/dev/null) || return 0
+  case "$probe" in
+    'discord '?*)
+      FM_AFK_CONTRACT_REACH=discord
+      # shellcheck disable=SC2059 # The format is this script's own constant.
+      FM_AFK_CONTRACT_REACH_TEXT=$(printf "$FM_AFK_CONTRACT_REACH_DISCORD_FORMAT" "${probe#discord }")
+      ;;
+  esac
+}
+
 # Render a whole record on stdout.
 # Inputs: WORDS (verbatim), EXPECTED_RETURN, SPEND, MERGE_GRANTS.
 fm_afk_contract_render_record() {  # <entered-iso> <entered-epoch> <confirmed-iso> <confirmed-epoch>
@@ -315,8 +340,9 @@ fm_afk_contract_render_record() {  # <entered-iso> <entered-epoch> <confirmed-is
   printf 'entered: %s\n' "$entered"
   printf 'entered_epoch: %s\n' "$entered_epoch"
   printf 'expected_return: %s\n' "${EXPECTED_RETURN:--}"
-  printf 'reach_channels: none\n'
-  printf 'reach_announced: %s\n' "$FM_AFK_CONTRACT_REACH_ANNOUNCED"
+  fm_afk_contract_entry_reach
+  printf 'reach_channels: %s\n' "$FM_AFK_CONTRACT_REACH"
+  printf 'reach_announced: %s\n' "$FM_AFK_CONTRACT_REACH_TEXT"
   printf 'spend_max_concurrent_workers: %s\n' "${SPEND:-$FM_AFK_CONTRACT_SPEND_DEFAULT}"
   printf 'confirmed: %s\n' "$confirmed"
   printf 'confirmed_epoch: %s\n' "$confirmed_epoch"
@@ -472,7 +498,7 @@ fm_afk_contract_validate() {  # <path>
   expected=$(fm_afk_contract_read_field "$path" expected_return)
   [ "$expected" = - ] || fm_afk_contract_validate_iso "$expected" || { fm_afk_contract_log "record $path has no valid expected_return"; return 1; }
   reach=$(fm_afk_contract_read_field "$path" reach_channels)
-  [ "$reach" = none ] || { fm_afk_contract_log "record $path has no valid reach_channels"; return 1; }
+  case "$reach" in none|discord) ;; *) fm_afk_contract_log "record $path has no valid reach_channels"; return 1 ;; esac
   announced=$(fm_afk_contract_read_field "$path" reach_announced)
   [ -n "$announced" ] || { fm_afk_contract_log "record $path has no reach announcement"; return 1; }
   spend=$(fm_afk_contract_read_field "$path" spend_max_concurrent_workers)

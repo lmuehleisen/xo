@@ -10,7 +10,8 @@
 # the captain who typed it may not look at the screen again: `enter` records the
 # away words verbatim straight into state/.afk-contract in the same turn, with no
 # separate confirmation step, then prints the entry announcement (hold-for-return
-# only: no phone channel exists; a quiet entry's says nothing is held) and the
+# only, naming the record's reach: no phone channel or notify-only Discord
+# alerts; a quiet entry's says nothing is held) and the
 # read-back, which is informational and never waits for a go
 # (bin/fm-afk-contract.sh owns the record schema; the words are the whole
 # mandate and no script parses them). The record is the posture in every
