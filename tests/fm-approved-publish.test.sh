@@ -50,7 +50,8 @@ run_publish() {  # <home> <command args...>
 # A procedure that records every step it runs in data/<task>/trace and prints
 # its covered `message` file. Marker files in data/<task>, outside the digest
 # the way a real publisher's state is, make a step print text, rewrite the
-# live message, signal the runner, hang, or fail.
+# live message, signal the runner, hang, leave a child holding its output, or
+# fail.
 write_procedure() {  # <home> <task>
   local dir="$1/data/$2/publish"
   mkdir -p "$dir"
@@ -70,6 +71,11 @@ if [ -e "$d/hang-$1" ]; then
   printf '%s\n' "$$" > "$d/hang-pid"
   sleep 30
   : > "$d/late-write"
+fi
+if [ -e "$d/orphan-$1" ]; then
+  ( sleep 30; : > "$d/late-write" ) &
+  printf '%s\n' "$!" > "$d/orphan-pid"
+  printf '%s\n' "$$" > "$d/orphan-parent"
 fi
 [ ! -e "$d/fail-$1" ] || exit 1
 exit 0
@@ -254,6 +260,43 @@ test_interrupt_stops_the_running_step() {
   pass "an interrupt stops the running step and every process it started before restore runs"
 }
 
+test_interrupt_stops_a_child_left_holding_output() {
+  local home rc runner pid parent i=0 log
+  home=$(make_home orphan)
+  write_procedure "$home" t1
+  approve "$home" t1 t1
+  : > "$home/data/t1/orphan-publish"
+  (
+    PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+      FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_CONFIG_OVERRIDE="$home/config" exec "$ROOT/bin/fm-approved-publish.sh" run t1
+  ) >/dev/null 2>&1 &
+  runner=$!
+  while [ ! -s "$home/data/t1/orphan-parent" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+  [ -s "$home/data/t1/orphan-parent" ] || { kill -KILL "$runner" 2>/dev/null; fail "the publish step never started its child"; }
+  pid=$(cat "$home/data/t1/orphan-pid")
+  parent=$(cat "$home/data/t1/orphan-parent")
+  # Interrupt only once the step itself has exited and its child alone holds
+  # the output open.
+  i=0
+  while kill -0 "$parent" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -0 "$parent" 2>/dev/null && { kill -KILL "$runner" "$pid" 2>/dev/null; fail "the publish step never exited"; }
+  kill -TERM "$runner"
+  rc=0
+  wait "$runner" || rc=$?
+  expect_code 130 "$rc" "a run interrupted while a step's child still holds its output"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL -- "-$parent" "$pid" 2>/dev/null
+    fail "the publish step's child was still running after the runner restored and exited"
+  fi
+  assert_absent "$home/data/t1/late-write" "the publish step's child made its later write"
+  assert_equals "preflight lift publish restore " "$(trace_of "$home" t1)" "an interrupt while output drains stops the child, restores, and skips verify"
+  log=$(ls "$home"/data/t1/publish-logs/*.log) || fail "no run log for the interrupted run"
+  assert_grep "stopping the interrupted publish step" "$log" "the log must record that the step's child was stopped"
+  assert_grep "blocks:     restored" "$log" "the interrupted run's summary must report the restore"
+  pass "an interrupt stops a child the step left holding its output before restore runs"
+}
+
 test_live_edits_never_reach_the_run() {
   local home out rc
   home=$(make_home snapshot)
@@ -310,6 +353,7 @@ test_refuses_when_the_approval_names_another_procedure
 test_approved_run_publishes_and_restores
 test_restore_always_runs
 test_interrupt_stops_the_running_step
+test_interrupt_stops_a_child_left_holding_output
 test_live_edits_never_reach_the_run
 test_refuses_auto_approval_flags
 test_reheld_approval_no_longer_counts
