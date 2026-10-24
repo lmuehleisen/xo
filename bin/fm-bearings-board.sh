@@ -779,23 +779,31 @@ decision_card_key_valid() {  # <key>
   jq -ne --arg key "$1" "$FM_DECISION_CARD_JQ_DEFS"'$key | slug(128)' >/dev/null 2>&1
 }
 
-acquire_decision_card_locks() {  # <payload.json>
-  local data=$1 file key lock lockname seen=''
+# Raw card keys on stdin become the deduplicated control-lock names on
+# stdout: an out-of-contract name is named and skipped, and a merge.<task>
+# card maps to its underlying task's lock, because every hold-side writer
+# (answer, card, card merge.<task>) serializes on the task id - a
+# merge-prefixed lock would let this read/write cycle race a refresh of the
+# very card it persists. Normalizing before the caller's sort means two
+# builds holding different key sets still take shared locks in the same
+# order. Kept outside the process substitution: a parenthesis inside the
+# message text defeats bash's runtime re-scan of the <( ) body.
+emit_decision_card_lock_names() {
+  local key
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     if ! decision_card_key_valid "$key"; then
       printf 'ignored-store-card: %s (file name is not a valid card key)\n' "$key" >&2
       continue
     fi
-    # A merge.<task> card shares its underlying task's control lock: every
-    # hold-side writer (answer, card, card merge.<task>) serializes on the
-    # task id, so taking a merge-prefixed lock would let this read/write
-    # cycle race a refresh of the very card it persists.
-    lockname=${key#merge.}
-    case " $seen " in
-      *" $lockname "*) continue ;;
-    esac
-    seen=$seen$lockname' '
+    printf '%s\n' "${key#merge.}"
+  done
+}
+
+acquire_decision_card_locks() {  # <payload.json>
+  local data=$1 file key lock lockname
+  while IFS= read -r lockname; do
+    [ -n "$lockname" ] || continue
     lock="$STATE/.control-$lockname.lock"
     fm_lock_acquire_wait "$lock" || return 1
     DECISION_CARD_LOCKS[DECISION_CARD_LOCK_COUNT]=$lock
@@ -810,7 +818,7 @@ acquire_decision_card_locks() {  # <payload.json>
           printf '%s\n' "$key"
         done
       fi
-    } | LC_ALL=C sort -u
+    } | emit_decision_card_lock_names | LC_ALL=C sort -u
   )
 }
 
