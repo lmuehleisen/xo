@@ -28,6 +28,7 @@ if [ "${FM_OPENCODE_LIVE_E2E:-0}" != 1 ]; then
   fixture="$ROOT/tests/opencode-v2-live-fixture.py"
   TMP_ROOT=$(fm_test_tmproot fm-opencode-v2-offline)
   OFFLINE_IDS=()
+  # shellcheck disable=SC2329 # the EXIT trap below invokes this.
   offline_cleanup() {
     local id meta dir
     for id in ${OFFLINE_IDS[@]+"${OFFLINE_IDS[@]}"}; do
