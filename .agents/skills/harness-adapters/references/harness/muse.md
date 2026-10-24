@@ -19,7 +19,7 @@ The router owns Muse's task-kind boundary.
 | Autonomy | `--yolo` disables approval and sandbox and trusts the workspace. |
 | Trust | Dialog `Do you trust this workspace?`, choice `1 Trust and continue` preselected for Enter; `--yolo` suppresses it, which fresh task paths require. |
 | Marker | None; identity comes from anchored `muse-bin-*` ancestry, which `../../../bin/fm-harness.sh` keeps a retained foreign marker from overriding, while `MUSE_CURRENT_SESSION_LOG` is a path rather than identity and its export to tools is unverified. |
-| Composer | Bordered `⟩`, truecolor `38;2;90;160;255`, luminance about 149.9 and narrowly above ghost threshold 128; typed text is `38;2;204;211;219`, about 209.8, with no observed placeholder or ghost. |
+| Composer | Current idle Muse shows `❯` in truecolor `38;2;90;160;255` between a top rule labelled `Voice input (⌥ + v to start)` and a plain closing rule, over a model/effort/cwd footer, with an idle suggestion in `38;2;103;108;116` below ghost threshold 128; `../../../bin/fm-composer-lib.sh` owns that shape. Muse 0.1.0 drew `⟩` in the same truecolor, luminance about 149.9, with typed text in `38;2;204;211;219`, about 209.8. |
 | Effort | Muse Code 1.4.6 accepts `none\|minimal\|low\|medium\|high\|xhigh\|max\|ultra`; Firstmate maps low through max directly, and gates max on Muse 1.4.6 or newer plus the local Meta model catalog advertising max for the selected model (or catalog default). An unsupported, missing, invalid, or ambiguous catalog entry refuses max before endpoint creation. Explicit ultra remains refused, and none or minimal stay unreachable. |
 
 ## Credential preflight

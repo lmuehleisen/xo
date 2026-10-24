@@ -78,6 +78,8 @@
 #                different, self-proving thing: real claude 2.x draws exactly
 #                that (`─` rule, `❯`+NBSP, `─` rule), so the glyph inside the
 #                pair carries the shape and no identity is needed.
+#                Current muse draws the same self-proving pair under its own
+#                labelled top rule (FM_COMPOSER_MUSE_VOICE_LABEL below).
 #   agy        - a `>` row between solid rules, followed immediately by its
 #                shortcuts/cancel footer and model cell. The full structure,
 #                never a bare shell glyph, proves this input region. Agy's
@@ -705,7 +707,8 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # hence the unanchored tail). cursor-agent renders
 # two, both anchored: `Plan, search, build anything` in a fresh session and
 # `Add a follow-up` once a turn has completed (verified live on cursor-agent
-# 2026.08.11-e8db854). Devin renders the anchored `Ask Devin to build features,
+# 2026.08.11-e8db854, and again on 2026.10.19-6bbf2c4 as one fully dim run).
+# Devin renders the anchored `Ask Devin to build features,
 # fix bugs, or work on your code` as dim text after its `❭` glyph (verified
 # live, devin 3000.11.1). Command Code renders the anchored `Ask your question...`
 # after its `❯` glyph (verified live, Command Code 1.74.1); its truecolor is too
@@ -982,6 +985,23 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
     if _fm_composer_is_prompt_glyph "$plain_content" "$FM_COMPOSER_AGENT_PROMPT_GLYPHS"; then
       printf 'empty'; return 0
     fi
+    # Ghost stripping emptied the row, glyph included. cursor-agent 2026.10.19
+    # draws `→` and `Add a follow-up` as one SGR 2 run and parks the terminal
+    # cursor below the footer, so there is no reverse-video remnant for the
+    # rule below to see. The plain row is the same anchored idle placeholder.
+    # Bright typed text is not stripped, so it never arrives here. Unstyled
+    # input has no de-emphasis proof and stays unknown. A shell glyph is not
+    # an agent glyph, so a dead shell still cannot read empty.
+    if [ "$styled" = 1 ]; then
+      local plain_body=$plain_content plain_glyph=''
+      if fm_composer_leading_agent_glyph_var plain_glyph "$plain_body"; then
+        plain_body=${plain_body#*"$plain_glyph"}
+        fm_composer_normalize_trim_var plain_body
+        if fm_composer_idle_matches "$plain_body" "$idle_re" "$idle_case"; then
+          printf 'empty'; return 0
+        fi
+      fi
+    fi
     printf 'unknown'; return 0
   fi
   if _fm_composer_is_prompt_glyph "$content" "$FM_COMPOSER_AGENT_PROMPT_GLYPHS"; then
@@ -1106,6 +1126,23 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <indent>
   return 0
 }
 
+# Muse Code's composer top rule carries this voice-input label at its LEFT end,
+# `── Voice input (⌥ + v to start) ───…`, over a `❯` row and a plain closing
+# rule with the model/effort/cwd footer below. Only this
+# exact label opens a pair: a changed label leaves the closing rule unmatched,
+# and the verdict stays a refusal.
+FM_COMPOSER_MUSE_VOICE_LABEL='Voice input (⌥ + v to start)'
+
+# _fm_composer_muse_voice_rule_row: 0 when the trimmed row is Muse's labelled
+# top rule: a two-dash lead, the exact label, then a solid separator run. Like
+# the titled rule, the scan lets it OPEN a pair but never close one, and proves
+# its width against the closing rule; `⌥` (U+2325) is one terminal column.
+_fm_composer_muse_voice_rule_row() {  # <trimmed-row>
+  local row=$1
+  case "$row" in "── $FM_COMPOSER_MUSE_VOICE_LABEL "*) ;; *) return 1 ;; esac
+  _fm_composer_pi_separator_row "${row#"── $FM_COMPOSER_MUSE_VOICE_LABEL "}"
+}
+
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
@@ -1128,6 +1165,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   FM_COMPOSER_SCAN_LEFTBAR_END=-1
   FM_COMPOSER_SCAN_PI_PAIR_FOUND=0
   FM_COMPOSER_SCAN_PI_PAIR_VALID=0
+  FM_COMPOSER_SCAN_PI_PAIR_TITLED=0
   FM_COMPOSER_SCAN_PI_TITLE_INVALID=0
   FM_COMPOSER_SCAN_PI_OPEN=-1
   FM_COMPOSER_SCAN_PI_CLOSE=-1
@@ -1193,8 +1231,10 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       if [ "$pi_open" -ge 0 ]; then
         FM_COMPOSER_SCAN_PI_PAIR_FOUND=1
+        FM_COMPOSER_SCAN_PI_PAIR_TITLED=0
         FM_COMPOSER_SCAN_PI_TITLE_INVALID=0
         if [ -n "$pi_title_spaces" ]; then
+          FM_COMPOSER_SCAN_PI_PAIR_TITLED=1
           pi_close_spaces="$indent${trimmed//─/ }"
           if [ "$pi_title_spaces" != "$pi_close_spaces" ]; then
             FM_COMPOSER_SCAN_PI_TITLE_INVALID=1
@@ -1215,11 +1255,14 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       pi_lines=0
       pi_glyph_row=-1
       pi_glyph=''
-    elif _fm_composer_titled_rule_row "$trimmed" "$indent"; then
+    elif _fm_composer_titled_rule_row "$trimmed" "$indent" \
+       || _fm_composer_muse_voice_rule_row "$trimmed"; then
       # Prove the named rule's width against its closing rule. The truncation
       # ellipsis is one column; other non-ASCII titles remain unproved rather
       # than guessing their terminal width. Retain the one-column title pad.
+      # Muse's `⌥` is blanked only inside its exact label.
       pi_title_spaces="$indent${trimmed//─/ }"
+      pi_title_spaces=${pi_title_spaces/"$FM_COMPOSER_MUSE_VOICE_LABEL"/${FM_COMPOSER_MUSE_VOICE_LABEL//⌥/ }}
       pi_title_spaces=${pi_title_spaces//…/ }
       pi_title_spaces=$(printf '%s' "$pi_title_spaces" | LC_ALL=C sed 's/[!-~]/ /g')
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
@@ -2792,8 +2835,11 @@ _fm_composer_pi_verdict() {  # <screen> <styled> <has_identity> <identity>
   # polytoken keeps the strict unknown - its composer really is empty
   # mid-turn (Enter queues, verified live), but the unknown keeps the
   # busy-queue conversion honest through the submit cores.
+  # A named Claude rule can bound its glyph composer, but cannot prove Pi's
+  # blank separated input even when its width matches the closing rule.
   if { [ "$agent" != pi ] && [ "$agent" != polytoken ]; } \
-    || [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" != 1 ]; then
+    || [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" != 1 ] \
+    || [ "$FM_COMPOSER_SCAN_PI_PAIR_TITLED" = 1 ]; then
     printf 'unknown'
     return 0
   fi
