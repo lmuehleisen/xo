@@ -1385,6 +1385,35 @@ SH
   pass "refresh preserves the snapshot gates truncation disclosure"
 }
 
+test_refresh_synthesized_fallback_tracks_the_snapshot() {
+  local home stub
+  home=$(make_home refresh-synthesized)
+  stub="$home/fakebin/snapshot-stub"
+  printf '%s\n' 'First question' > "$home/fakebin/summary.txt"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+summary=$(cat "$(dirname "$0")/summary.txt")
+jq -n --arg summary "$summary" '{
+  schema:"fm-bearings.v1", home:"test-home", generated:"2026-08-19T00:00:00Z",
+  in_flight:[], landed:[], gates:[],
+  decisions_open:[{id:"sample-open-call", key:"sample-open-call",
+    verb:"needs-decision", summary:$summary, owner:"(main)"}]}'
+SH
+  chmod +x "$stub"
+  FM_BEARINGS_BOARD_SNAPSHOT="$stub" run_board "$home" refresh >/dev/null \
+    || fail "the first refresh failed"
+  assert_absent "$home/state/decision-cards/sample-open-call.json" \
+    "a synthesized fallback was persisted into the durable store"
+  printf '%s\n' 'Changed question' > "$home/fakebin/summary.txt"
+  FM_BEARINGS_BOARD_SNAPSHOT="$stub" run_board "$home" refresh >/dev/null \
+    || fail "the second refresh failed"
+  extract_payload "$home/.lavish/bearings-board.html" > "$home/served.json"
+  jq -e '(.captains_call[] | select(.key == "sample-open-call") | .title)
+      == "Changed question"' "$home/served.json" >/dev/null \
+    || fail "a stored synthesized fallback kept an obsolete question on the board"
+  pass "refresh synthesized fallbacks track the snapshot and stay out of the store"
+}
+
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board() {
   local home stub rc out
   home=$(make_home refresh-refusal)
@@ -1441,4 +1470,5 @@ test_refresh_ignores_a_store_envelope_of_another_schema
 test_refresh_keeps_a_deferred_hold_out_of_captains_call
 test_refresh_keeps_a_remote_call_when_a_local_merge_card_shares_its_key
 test_refresh_preserves_the_snapshot_gates_truncation_disclosure
+test_refresh_synthesized_fallback_tracks_the_snapshot
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board

@@ -234,7 +234,8 @@ compose_payload() {  # <dest.json>
         captains_call: [
           $s.decisions_open[]?
           | {key: (.key // .id), type: "decision", repo: null,
-             title: (.summary // .id), options: [], allow_freeform: true}
+             title: (.summary // .id), options: [], allow_freeform: true,
+             synthesized: true}
             + (if (.owner // "") == "" then {} else {owner: .owner} end)
         ],
         underway: [
@@ -618,6 +619,9 @@ merge_store_cards() {  # <data.json> <dest.json>
       printf 'ignored-store-card: %s (%s)\n' "$key" "$STORE_CARD_REASONS" >&2
       continue
     fi
+    if [ "$(jq -r '.card.synthesized // false' "$file" 2>/dev/null)" = 'true' ]; then
+      continue
+    fi
     # A record answers for its own key only: a file whose card names another
     # task would otherwise be merged into this key's slot.
     if [ "$(jq -r '.card.key? // empty' "$file" 2>/dev/null)" != "$key" ]; then
@@ -801,6 +805,11 @@ persist_decision_cards() {  # <effective-payload.json>
     # this home's durable store, so it can never be merged back as local.
     owner=$(jq -r --arg key "$key" 'first(.captains_call[] | select(.key == $key) | .owner // "")' "$data" 2>/dev/null)
     if [ -n "$owner" ] && [ "$owner" != '(main)' ]; then
+      continue
+    fi
+    # A synthesized fallback tracks the snapshot, not the store: persisting
+    # it would give a stale copy store-first precedence over the next one.
+    if [ "$(jq -r --arg key "$key" 'first(.captains_call[] | select(.key == $key) | .synthesized // false)' "$data" 2>/dev/null)" = 'true' ]; then
       continue
     fi
     card=$(jq -c --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
