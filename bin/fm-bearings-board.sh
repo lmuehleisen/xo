@@ -277,7 +277,9 @@ compose_payload() {  # <dest.json>
       key=$(basename "$file" .json)
       case "$key" in merge.*) ;; *) continue ;; esac
       jq -e --arg key "$key" '[.captains_call[]?.key] | index($key) != null' "$tmp" >/dev/null 2>&1 && continue
-      jq -e --arg task "${key#merge.}" '[.captains_call[]?.key] | index($task) != null' "$tmp" >/dev/null 2>&1 || continue
+      jq -e --arg task "${key#merge.}" '
+        [.captains_call[]? | select(.key == $task and (.owner // "(main)") == "(main)")]
+        | length > 0' "$tmp" >/dev/null 2>&1 || continue
       if ! read_store_card "$file"; then
         printf 'ignored-store-card: %s (%s)\n' "$key" "$STORE_CARD_REASONS" >&2
         continue
@@ -297,7 +299,8 @@ compose_payload() {  # <dest.json>
       ($extra | map(.key | sub("^merge\\."; ""))) as $replaced
       | .captains_call = ([.captains_call[]
           | . as $card
-          | select(($replaced | index($card.key)) == null)] + $extra)' \
+          | select(($replaced | index($card.key)) == null
+              or ((.owner // "(main)") != "(main)"))] + $extra)' \
         "$tmp" > "$tmp.next"; then
       rm -f -- "$tmp" "$tmp.next"
       fail "cannot add the durable decision cards to the composed payload"

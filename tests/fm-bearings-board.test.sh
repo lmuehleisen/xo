@@ -1314,6 +1314,44 @@ EOF
   pass "refresh keeps a deferred hold's card out of Captain's Call"
 }
 
+test_refresh_keeps_a_remote_call_when_a_local_merge_card_shares_its_key() {
+  local home stub
+  home=$(make_home refresh-remote-merge)
+  stub="$home/fakebin/snapshot-stub"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+cat <<'JSON'
+{
+  "schema": "fm-bearings.v1",
+  "home": "test-home",
+  "generated": "2026-08-19T00:00:00Z",
+  "in_flight": [],
+  "decisions_open": [
+    { "id": "shared", "key": "shared", "verb": "needs-decision",
+      "summary": "Secondmate open call", "owner": "mate-one" }
+  ],
+  "landed": [],
+  "gates": []
+}
+JSON
+SH
+  chmod +x "$stub"
+  mkdir -p "$home/state/decision-cards"
+  jq -n '{
+    schema:"fm-decision-card.v1", generated:"2026-08-18T00:00:00Z",
+    card:{key:"merge.shared", type:"merge", repo:"sample", title:"Merge: shared",
+      risk:"low", options:[{value:"merge", label:"Merge now"}], allow_freeform:true}
+  }' > "$home/state/decision-cards/merge.shared.json"
+  FM_BEARINGS_BOARD_SNAPSHOT="$stub" run_board "$home" refresh >/dev/null \
+    || fail "refresh failed with a remote call sharing a merge card key"
+  extract_payload "$home/.lavish/bearings-board.html" > "$home/served.json"
+  jq -e '
+    ([.captains_call[] | select(.key == "shared" and .owner == "mate-one")] | length == 1)
+    and ([.captains_call[].key] | index("merge.shared") == null)' "$home/served.json" >/dev/null \
+    || fail "refresh replaced a secondmate call with an unrelated local merge card"
+  pass "refresh keeps a remote call when a local merge card shares its key"
+}
+
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board() {
   local home stub rc out
   home=$(make_home refresh-refusal)
@@ -1368,4 +1406,5 @@ test_refresh_ignores_a_malformed_store_card
 test_build_ignores_a_store_envelope_of_another_schema
 test_refresh_ignores_a_store_envelope_of_another_schema
 test_refresh_keeps_a_deferred_hold_out_of_captains_call
+test_refresh_keeps_a_remote_call_when_a_local_merge_card_shares_its_key
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board
