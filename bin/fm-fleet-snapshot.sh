@@ -443,12 +443,24 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
   fi
 
   set -o pipefail
+  # Pass the reconcile and archived sets through files, not argv: a large
+  # Done archive expanded into --argjson exceeds the OS argument limit.
+  local reconcile_file archived_file rc=0
+  reconcile_file=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-snapshot-reconcile.XXXXXX") || return 1
+  archived_file=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-snapshot-archived.XXXXXX") \
+    || { rm -f -- "$reconcile_file"; return 1; }
+  reconcile_requests_json > "$reconcile_file" \
+    || { rm -f -- "$reconcile_file" "$archived_file"; return 1; }
+  archived_ids_json > "$archived_file" \
+    || { rm -f -- "$reconcile_file" "$archived_file"; return 1; }
   # shellcheck disable=SC2094
   jq -Rn --arg path "$backlog" --arg today "$SNAPSHOT_TODAY" --arg now "$SNAPSHOT_NOW" \
     --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" \
-    --argjson reconcile "$(reconcile_requests_json)" \
-    --argjson archived "$(archived_ids_json)" '
-    def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+    --slurpfile reconcile_file "$reconcile_file" \
+    --slurpfile archived_file "$archived_file" '
+    ($reconcile_file[0]) as $reconcile
+    | ($archived_file[0]) as $archived
+    | def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
     def timestamp_epoch($d):
       if ($d | type) != "string" then null
       elif ($d | test("T")) then try ($d | fromdateiso8601) catch null
@@ -630,7 +642,9 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
           | .captain_actionable = (.hold_bucket == "live")
         else . end)
     | del(.section,.order)
-  ' < "$backlog" | fm_hold_reason_decode_stream json
+  ' < "$backlog" | fm_hold_reason_decode_stream json || rc=$?
+  rm -f -- "$reconcile_file" "$archived_file"
+  return "$rc"
 )
 
 SNAPSHOT_TASK_DIR=
