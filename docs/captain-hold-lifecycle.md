@@ -90,7 +90,7 @@ The `--force` path remains the explicit captain-approved discard escape hatch.
 
 A call is answerable the moment it is raised, but the board and the captain's deck can show options, context, and a recommendation only when a card carries them.
 That structure exists in the agent that raises the call and in nothing later, so `bin/fm-captain-hold.sh hold` accepts card flags - or `--card-file` for a bare card or an `fm-decision-card.v1` envelope - and writes the same record `bin/fm-bearings-board.sh build` persists under `state/decision-cards/<task>.json`.
-The `card <task-id>` form rewrites that record for an open call.
+The `card <task-id>` form rewrites that record for an open call, and `card merge.<task-id>` addresses a merge card by its store key while still requiring the underlying task to be an open call.
 Validation runs before the hold's first mutation, so a malformed card leaves the task, the backlog, and the store untouched.
 
 **The store is a source as well as a sink, and it wins.**

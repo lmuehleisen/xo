@@ -114,6 +114,7 @@ FM_DECISION_CARD_JQ_DEFS='
       elif (optional_subject | not) then ["subject must be {artifact: slug, version: 3-part version}"]
       elif (has("subject") and .type != "decision") then ["subject belongs to a decision card only"]
       elif (optional_string("freeform_hint") | not) then ["freeform_hint must be a string"]
+      elif (optional_string("owner") | not) then ["owner must be a string or null"]
       elif (has("close") and .close != "done" and .close != "release") then ["close must be done or release"]
       elif (has("allow_freeform") and (.allow_freeform | type != "boolean")) then ["allow_freeform must be a boolean"]
       elif (has("recommend_value")
@@ -124,4 +125,8 @@ FM_DECISION_CARD_JQ_DEFS='
       elif ([.options[].value] | index("reconcile") != null) then ["reconcile is reserved: the board build injects that choice itself"]
       elif (.type == "merge" and (.risk | nonempty_string | not)) then ["a merge card needs a non-empty risk"]
       else [] end;
+    # The reasons ladder must never excuse a contract failure: when call_item
+    # rejects a card the ladder does not name, the failure still reports one.
+    def failure_reasons:
+      call_reasons | if length == 0 then ["card fails fm-decision-card.v1"] else . end;
 '

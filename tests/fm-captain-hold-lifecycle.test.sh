@@ -5219,6 +5219,103 @@ test_card_file_refuses_an_envelope_of_another_schema() {
   pass "card file refuses an envelope of another schema and accepts a bare card"
 }
 
+# A card value flag whose next token is another flag must refuse rather than
+# store the flag's name as copy and silently skip the real flag.
+test_card_value_flags_never_swallow_the_next_flag() {
+  local home out rc
+  home=$(make_home card-flag-values)
+  run_captain "$home" hold flag-value-call --title "Decide the flag route" \
+    --reason "captain flag choice" >/dev/null || fail "hold failed"
+  set +e
+  out=$(run_captain "$home" card flag-value-call --card-title --no-freeform 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "card consumed --no-freeform as the --card-title value"
+  assert_contains "$out" "--card-title needs a value" \
+    "the refusal does not name the starved flag: $out"
+  set +e
+  out=$(run_captain "$home" hold flag-hold-call --title "Hold flags" \
+    --reason "captain choice" --card-title --reason 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "hold consumed --reason as the --card-title value"
+  assert_contains "$out" "--card-title needs a value" \
+    "the hold refusal does not name the starved flag: $out"
+  assert_absent "$home/state/decision-cards/flag-hold-call.json" \
+    "a refused flag pairing still stored a card"
+  pass "card value flags refuse a following flag instead of consuming it"
+}
+
+# call_item is the contract: a card whose owner is not a string fails it, and
+# the reasons ladder must still name the broken field instead of passing the
+# card through with no explanation.
+test_card_file_refuses_a_non_string_owner() {
+  local home out rc
+  home=$(make_home card-owner)
+  jq -n '{key:"sample-owner-card", type:"decision", repo:"sample",
+    title:"Owned copy", owner:5,
+    options:[{value:"a", label:"Option A"}]}' > "$home/owner-card.json"
+  set +e
+  out=$(run_captain "$home" hold sample-owner-card --title "Decide the owned route" \
+    --reason "captain owner choice" --card-file "$home/owner-card.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "hold accepted a card whose owner is not a string"
+  assert_contains "$out" "owner" \
+    "the refusal does not name the broken field: $out"
+  assert_absent "$home/state/decision-cards/sample-owner-card.json" \
+    "a refused card was still stored"
+  if grep -q "sample-owner-card" "$home/data/backlog.md"; then
+    fail "a refused card still created the task"
+  fi
+  pass "hold refuses a card whose owner is not a string"
+}
+
+# A merge card lives under its merge.<task> key while the open call lives on
+# the task: `card merge.<task>` is the supported refresh path, still gated on
+# the underlying call being open.
+test_card_refreshes_a_merge_card_under_its_merge_key() {
+  local home out rc store
+  home=$(make_home card-merge-key)
+  store="$home/state/decision-cards"
+  tasks_in "$home" add merge-gate-work "Ship the merge gate" --repo sample >/dev/null \
+    || fail "could not add the work row fixture"
+  run_captain "$home" hold merge-gate-work --reason "merge needs the captain" >/dev/null \
+    || fail "hold on the work row failed"
+  jq -n '{key:"merge.merge-gate-work", type:"merge", repo:"sample",
+    title:"Merge the gate", risk:"touches the release path", close:"release",
+    options:[{value:"merge", label:"Merge it"}]}' > "$home/merge-card.json"
+  run_captain "$home" card merge.merge-gate-work --card-file "$home/merge-card.json" \
+    >/dev/null || fail "card refused the merge.<task> key of an open call"
+  jq -e '.schema == "fm-decision-card.v1" and .card.key == "merge.merge-gate-work"
+         and .card.type == "merge" and (.card.risk == "touches the release path")
+         and (.card.close == "release")' "$store/merge.merge-gate-work.json" >/dev/null \
+    || fail "the merge.<task> card was not stored under its merge key"
+  assert_absent "$store/merge-gate-work.json" \
+    "the merge key wrote a record under the bare task id"
+  run_captain "$home" card merge.merge-gate-work --card-title "Revised merge copy" \
+    --type merge --risk "revised risk" --option "merge:Merge it" >/dev/null \
+    || fail "the flag-built path refused a merge.<task> refresh"
+  jq -e '.card.title == "Revised merge copy" and .card.repo == "sample"' \
+    "$store/merge.merge-gate-work.json" >/dev/null \
+    || fail "a flag-built merge.<task> refresh lost the underlying task repository"
+  jq -n '{key:"merge.unheld-work", type:"merge", repo:null,
+    title:"Merge nothing", risk:"none",
+    options:[{value:"merge", label:"Merge it"}]}' > "$home/unheld-card.json"
+  tasks_in "$home" add unheld-work "Unheld work" >/dev/null \
+    || fail "could not add the unheld row fixture"
+  set +e
+  out=$(run_captain "$home" card merge.unheld-work --card-file "$home/unheld-card.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "card accepted a merge.<task> key for a task that is not an open call"
+  assert_contains "$out" "not an open captain call" \
+    "the merge.<task> refusal does not name the open-call gate: $out"
+  assert_absent "$store/merge.unheld-work.json" \
+    "a card was stored for a merge key whose task is not held"
+  pass "card refreshes a merge.<task> record against the underlying open call"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
@@ -5288,3 +5385,6 @@ test_card_rewrites_an_open_call_and_a_rehold_preserves_it
 test_card_refuses_a_closed_call
 test_card_records_the_task_repository
 test_card_file_refuses_an_envelope_of_another_schema
+test_card_value_flags_never_swallow_the_next_flag
+test_card_file_refuses_a_non_string_owner
+test_card_refreshes_a_merge_card_under_its_merge_key
