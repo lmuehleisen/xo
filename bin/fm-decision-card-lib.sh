@@ -114,7 +114,7 @@ FM_DECISION_CARD_JQ_DEFS='
       elif (optional_subject | not) then ["subject must be {artifact: slug, version: 3-part version}"]
       elif (has("subject") and .type != "decision") then ["subject belongs to a decision card only"]
       elif (optional_string("freeform_hint") | not) then ["freeform_hint must be a string"]
-      elif (optional_string("owner") | not) then ["owner must be a string or null"]
+      elif (optional_string("owner") | not) then ["owner must be a string when present"]
       elif (has("close") and .close != "done" and .close != "release") then ["close must be done or release"]
       elif (has("allow_freeform") and (.allow_freeform | type != "boolean")) then ["allow_freeform must be a boolean"]
       elif (has("recommend_value")
