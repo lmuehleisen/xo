@@ -209,7 +209,8 @@ fm_lease_read() {
 # lease of <actor> can appear meanwhile; the supervision host asks about the
 # branch actor only when no engine turn of its own is running.
 fm_lease_actor_holds_any() {
-  local lease task
+  # fm_lease_read writes these; keep the caller's own lease reading intact.
+  local lease task FM_LEASE_ACTOR FM_LEASE_PID FM_LEASE_EPOCH
   for lease in "$STATE"/.lease-*; do
     [ -e "$lease" ] || continue
     case "$lease" in *.lock) continue ;; esac
