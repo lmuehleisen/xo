@@ -137,9 +137,8 @@ bash bin/fm-test-run.sh tests/fm-kiro-harness.test.sh tests/fm-busy-adapter-wiri
 ```
 
 The portable suites cover launch isolation, model refusal and timeout behavior, effort flags, hook generations, native-marker fallback, composer scope, lifecycle keys, teardown, and crewmate/scout publish-policy and resource wiring.
-The original adapter's Linux evidence came from kiro-cli 2.21.4 on Amazon Linux 2 with a toolbox/aim-sandbox wrapper and native auth at `~/.local/share/kiro-cli/data.sqlite3`.
-That build exported no `KIRO_*` identity marker; anchored process ancestry therefore remains the portable detection mechanism.
-The current live refresh above covers macOS, while Linux regression and lint remain CI-enforced.
+On Linux, kiro-cli 2.21.4 on Amazon Linux 2 under a toolbox/aim-sandbox wrapper kept native auth at `~/.local/share/kiro-cli/data.sqlite3` and exported no `KIRO_*` identity marker, so anchored process ancestry remains the portable detection mechanism.
+The live refresh above covers macOS; Linux regression and lint are CI-enforced.
 
 Unverified boundaries: V3/KAS, primary and secondmate operation, and rendered-surface behavior on backends other than tmux.
 No StopFailure or SessionEnd-equivalent V2 hook is credited; an abnormal end without a usable marker binding remains conservative.
