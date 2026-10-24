@@ -1943,7 +1943,7 @@ wake_owner() {  # <task-id> <request-prefix> <16-hex-delivery> <text>
   case "$lane_rc" in
     0)
       inbox="$FM_PARENT_CHANNEL_LANE_STATE/$FM_PARENT_CHANNEL_ID.inbox"
-      if ! grep -qsF -- "delivery=$delivery " "$inbox"/*.msg "$inbox"/handled/*.msg; then
+      if ! grep -qsF -- "delivery=$delivery " "$inbox"/*.msg "$inbox"/handled/*.msg </dev/null; then
         FM_HOME="$FM_PARENT_CHANNEL_LANE_HOME" FM_STATE_OVERRIDE="$FM_PARENT_CHANNEL_LANE_STATE" \
           FM_CONFIG_OVERRIDE="$FM_PARENT_CHANNEL_LANE_HOME/config" \
           "$SCRIPT_DIR/fm-send.sh" "$FM_PARENT_CHANNEL_ID" --fire-and-forget "$delivery" "$text" \
