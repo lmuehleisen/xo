@@ -17,7 +17,9 @@
 #            canonical snapshot (bin/fm-bearings-snapshot.sh --json): the fleet
 #            rows, one card per open captain call, and nothing an agent would
 #            have to judge. A call's card is a fallback carrying its durable
-#            summary as the title, no options, and freeform answers only,
+#            summary as the title, no options, freeform answers only, and the
+#            snapshot's declared hold close mode, so answering a captain-gated
+#            work item releases its hold instead of closing the task,
 #            unless the durable store already holds that call's card: a stored
 #            merge.<task> card replaces the fallback here, and build's
 #            store-first merge supplies the raise-time record's real options
@@ -237,6 +239,7 @@ compose_payload() {  # <dest.json>
              title: (.summary // .id), options: [], allow_freeform: true,
              synthesized: true}
             + (if (.owner // "") == "" then {} else {owner: .owner} end)
+            + (if .close == null then {} else {close: .close} end)
         ],
         underway: [
           $s.in_flight[]?

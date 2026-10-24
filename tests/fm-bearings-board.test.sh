@@ -1414,6 +1414,45 @@ SH
   pass "refresh synthesized fallbacks track the snapshot and stay out of the store"
 }
 
+# A synthesized fallback carries the hold's declared close mode, so a board
+# answer to a captain-gated work item releases the hold instead of closing
+# unfinished work; an entry that declares none stays free of a close guess.
+test_refresh_fallback_carries_the_snapshot_close_mode() {
+  local home stub
+  home=$(make_home refresh-close-mode)
+  stub="$home/fakebin/snapshot-stub"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+cat <<'JSON'
+{
+  "schema": "fm-bearings.v1",
+  "home": "test-home",
+  "generated": "2026-08-19T00:00:00Z",
+  "in_flight": [],
+  "decisions_open": [
+    { "id": "work-gate", "key": "work-gate", "verb": "captain-hold",
+      "summary": "Merge the sample", "owner": "(main)", "close": "release" },
+    { "id": "plain-call", "key": "plain-call", "verb": "captain-hold",
+      "summary": "Pick a route", "owner": "(main)" }
+  ],
+  "landed": [],
+  "gates": []
+}
+JSON
+SH
+  chmod +x "$stub"
+  FM_BEARINGS_BOARD_SNAPSHOT="$stub" run_board "$home" refresh >/dev/null \
+    || fail "refresh failed with a declared hold close mode"
+  extract_payload "$home/.lavish/bearings-board.html" > "$home/served.json"
+  jq -e '
+    ((.captains_call[] | select(.key == "work-gate") | .close) == "release")
+    and ((.captains_call[] | select(.key == "work-gate") | .synthesized) == true)
+    and ((.captains_call[] | select(.key == "plain-call") | has("close")) | not)' \
+    "$home/served.json" >/dev/null \
+    || fail "the refreshed fallback did not carry the declared hold close mode"
+  pass "refresh carries the snapshot's hold close mode onto synthesized fallbacks"
+}
+
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board() {
   local home stub rc out
   home=$(make_home refresh-refusal)
@@ -1471,4 +1510,5 @@ test_refresh_keeps_a_deferred_hold_out_of_captains_call
 test_refresh_keeps_a_remote_call_when_a_local_merge_card_shares_its_key
 test_refresh_preserves_the_snapshot_gates_truncation_disclosure
 test_refresh_synthesized_fallback_tracks_the_snapshot
+test_refresh_fallback_carries_the_snapshot_close_mode
 test_refresh_refuses_a_broken_snapshot_before_touching_the_board
