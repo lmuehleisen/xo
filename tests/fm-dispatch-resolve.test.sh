@@ -2140,6 +2140,162 @@ assert_contains "$err" 'each use profile effort must be supported by its harness
 cp "$BASE_RULES" "$RULES"
 pass "native Kiro provider inference and effort validation agree with bootstrap"
 
+# --- quota planning overrides: expiring rolling horizon -----------------------
+# A planning override recomputes nothing from raw windows: it truncates the
+# one bounding window's published pace horizon at snapshot time plus the
+# configured horizon, capped at the vendor reset, and ranks by the resulting
+# spendPriority. Native evidence stays printed beside it.
+PLANNING="$HOME_DIR/config/quota-planning.json"
+cat > "$RULES" <<'JSON'
+{"classes":{
+  "sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-6.1-sol","provider":"codex"}]},
+  "alt":{"family":"other","routes":[{"harness":"cursor","model":"cursor-grok-4.6-medium","provider":"cursor"}]},
+  "solpi":{"family":"gpt","routes":[{"harness":"pi","model":"codex-native/gpt-6.1-sol","provider":"codex"}]},
+  "workpi":{"family":"gpt","routes":[{"harness":"pi","model":"openai-codex-work/gpt-6.1-sol","provider":"codex"}]},
+  "devinpaid":{"family":"gpt","routes":[{"harness":"devin","model":"gpt-6-1-sol-max","provider":"devin"}]}},
+ "rules":[
+  {"when":"Plan","lane":"plan","order":"pool","classes":["sol","alt"]},
+  {"when":"Plan pi","lane":"planpi","order":"pool","classes":["solpi","alt"]},
+  {"when":"Plan work","lane":"planwork","order":"pool","classes":["workpi","alt"]},
+  {"when":"Plan devin","lane":"plandevin","order":"pool","classes":["devinpaid","alt"]}]}
+JSON
+plan_quota() {  # <generatedAt> <codex-effective-json> <codex-windows-json>
+  cat > "$LANE_QUOTA" <<JSON
+{"generatedAt":"$1","schemaVersion":5,"providers":[
+ {"provider":"codex","accountKeys":["codex-home"],"state":{"status":"fresh"},"windows":$3,
+  "quotaSemantics":{"status":"known","effectiveAvailability":[$2]}},
+ {"provider":"cursor","state":{"status":"fresh"},"quotaSemantics":{"status":"known","effectiveAvailability":[
+  {"scope":"all_models","status":"known","effectivePercentRemaining":91,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":-0.8}}]}},
+ {"provider":"devin","state":{"status":"fresh"},"quotaSemantics":{"status":"known","effectiveAvailability":[
+  {"scope":"included_quota","status":"known","effectivePercentRemaining":87,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":-0.5}}]}}]}
+JSON
+}
+PLAN_CODEX_ROW='{"scope":"all_models","status":"known","effectivePercentRemaining":71,"boundedBy":["weekly"],"limitingWindowIds":["weekly"],"pace":{"status":"ahead","worstReservePercentPoints":-14.7143},"runway":{"status":"projected_exhaustion","usableRunwaySeconds":200000},"selection":{"status":"known","spendPriority":-1.2017}}'
+PLAN_CODEX_WINDOWS='[{"id":"weekly","resetsAt":"2026-10-29T00:00:00Z","percentRemaining":71,"pace":{"status":"ahead","reservePercentPoints":-14.7143,"burnMultiple":2.03}}]'
+rm -f "$PLANNING"
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 0 "$code" "planning baseline without config exits 0: $err"
+assert_contains "$out" "profile: --harness 'cursor'" "without a planning override the native spendPriority ranks cursor first"
+assert_contains "$out" 'spendPriority=-1.2017' "without a planning override the native Codex spendPriority is printed"
+assert_not_contains "$out" 'planning:' "absent planning config prints no planning line"
+
+cat > "$PLANNING" <<'JSON'
+{"overrides":[{"provider":"codex","accountKey":"codex-home","windowId":"weekly","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}
+JSON
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 0 "$code" "active planning override exits 0: $err"
+assert_contains "$out" 'planning: active provider=codex account=codex-home window=weekly horizon_seconds=302400 expires_at=2026-11-01T04:00:00Z' "an active planning override is inspectable"
+assert_contains "$out" 'spendPriority=-0.61' "the planning horizon raises the Codex spendPriority from the native pace"
+assert_contains "$out" 'native_spendPriority=-1.2017' "the native spendPriority stays visible beside the planning value"
+assert_contains "$out" "profile: --harness 'codex'" "the planning value visibly favours the direct Codex route on identical input"
+planning_first=$out
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_equals "$planning_first" "$out" "a repeated intake after restart reproduces the planning result with no state"
+
+plan_quota '2026-11-01T04:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" "profile: --harness 'cursor'" "at the expiry instant the planning override is inactive and native ranking returns"
+assert_contains "$out" 'planning: inactive' "expired planning is named as inactive rather than applied"
+assert_not_contains "$out" 'native_spendPriority=' "expired planning prints no adjusted candidate value"
+plan_quota '2026-11-02T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" "profile: --harness 'cursor'" "after expiry the planning override stays inactive"
+
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane planpi --project xo
+assert_contains "$out" 'spendPriority=-0.61' "a Pi codex-native route on the same subscription account receives the planning value"
+run_lane code out err "$BRIEF" --lane planwork --project xo
+assert_contains "$out" 'spendPriority=-1.2017' "a Pi route on a different account lane keeps the native value"
+assert_not_contains "$out" 'native_spendPriority=' "a different account lane is never planning-adjusted by model name"
+run_lane code out err "$BRIEF" --lane plandevin --project xo
+assert_contains "$out" 'candidate: devin:gpt-6-1-sol-max  class=devinpaid family=gpt  provider=devin  scope=included_quota  remaining=87%  spendPriority=-0.5' "a Devin route keeps its native value under a Codex planning override"
+assert_not_contains "$out" 'native_spendPriority=' "no non-Codex route is planning-adjusted"
+
+plan_quota '2026-10-23T00:00:00Z' '{"scope":"all_models","status":"known","effectivePercentRemaining":0,"boundedBy":["weekly"],"limitingWindowIds":["weekly"],"runway":{"status":"exhausted_now","usableRunwaySeconds":0},"selection":{"status":"known","spendPriority":-5}}' "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'runway exhausted_now at all_models' "planning never revives an exhausted Codex window"
+assert_contains "$out" "profile: --harness 'cursor'" "an exhausted Codex route stays ineligible under planning"
+
+plan_quota '2026-10-23T00:00:00Z' '{"scope":"all_models","status":"known","effectivePercentRemaining":71,"boundedBy":["weekly"],"limitingWindowIds":["weekly"],"runway":{"status":"projected_exhaustion","usableRunwaySeconds":200000},"selection":{"status":"unknown"}}' "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'eligible, unranked: spendPriority missing' "planning never turns unknown spendPriority into a healthy value"
+assert_not_contains "$out" 'native_spendPriority=' "unknown spendPriority is never planning-adjusted"
+
+plan_quota '2026-10-23T00:00:00Z' '{"scope":"all_models","status":"known","effectivePercentRemaining":71,"boundedBy":["weekly","five_hour"],"limitingWindowIds":["weekly","five_hour"],"runway":{"status":"projected_exhaustion","usableRunwaySeconds":200000},"selection":{"status":"known","spendPriority":-1.2017}}' '[{"id":"weekly","resetsAt":"2026-10-29T00:00:00Z","percentRemaining":71,"pace":{"status":"ahead","reservePercentPoints":-14.7143,"burnMultiple":2.03}},{"id":"five_hour","resetsAt":"2026-10-23T05:00:00Z","percentRemaining":50,"pace":{"status":"ahead","reservePercentPoints":-10,"burnMultiple":1.5}}]'
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPriority=-1.2017' "a scope bounded by a short window beside the weekly window keeps the native value"
+assert_not_contains "$out" 'native_spendPriority=' "multi-window scopes are never planning-adjusted from one window"
+
+# The limiting scope is re-evaluated after planning: an unchanged second
+# bound still caps the route even when the weekly bound rises.
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW,{\"scope\":\"model:gpt-6.1-sol\",\"status\":\"known\",\"effectivePercentRemaining\":60,\"boundedBy\":[\"weekly\",\"five_hour\"],\"limitingWindowIds\":[\"weekly\",\"five_hour\"],\"runway\":{\"status\":\"projected_exhaustion\",\"usableRunwaySeconds\":200000},\"selection\":{\"status\":\"known\",\"spendPriority\":-1}}" '[{"id":"weekly","resetsAt":"2026-10-29T00:00:00Z","percentRemaining":71,"pace":{"status":"ahead","reservePercentPoints":-14.7143,"burnMultiple":2.03}},{"id":"five_hour","resetsAt":"2026-10-23T05:00:00Z","percentRemaining":50,"pace":{"status":"ahead","reservePercentPoints":-10,"burnMultiple":1.5}}]'
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'scope=model:gpt-6.1-sol  remaining=60%  spendPriority=-1' "an unchanged bound still limits the route after the weekly bound is planning-adjusted"
+assert_contains "$out" "profile: --harness 'cursor'" "the re-evaluated limiting bound keeps the competitor first"
+assert_not_contains "$out" 'native_spendPriority=' "a route limited by an unchanged bound prints no planning value"
+
+# Window matching happens before an override is selected: a window-specific
+# entry wins over an earlier generic or wrong-window entry.
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+cat > "$PLANNING" <<'JSON'
+{"overrides":[
+ {"provider":"codex","accountKey":"codex-home","windowId":"five_hour","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"},
+ {"provider":"codex","accountKey":"codex-home","windowId":"weekly","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}
+JSON
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPriority=-0.61' "the weekly override applies even when a wrong-window override is listed first"
+cat > "$PLANNING" <<'JSON'
+{"overrides":[
+ {"provider":"codex","accountKey":"codex-home","horizonSeconds":86400,"expiresAt":"2026-11-01T04:00:00Z"},
+ {"provider":"codex","accountKey":"codex-home","windowId":"weekly","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}
+JSON
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPriority=-0.61' "a window-specific override takes precedence over an earlier generic override"
+assert_not_contains "$out" 'spendPriority=2.94' "the generic override horizon never applies beside a window-specific one"
+cat > "$PLANNING" <<'JSON'
+{"overrides":[{"provider":"codex","accountKey":"codex-home","windowId":"weekly","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}
+JSON
+
+# Account membership must be published: an unproven lane keeps native
+# ranking, and a lane-less candidate resolves instead of erroring in jq.
+jq 'del(.providers[0].accountKeys)' "$LANE_QUOTA" > "$TMP_ROOT/plan-no-keys.json" && mv "$TMP_ROOT/plan-no-keys.json" "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 0 "$code" "unknown account membership still resolves: $err"
+assert_contains "$out" 'spendPriority=-1.2017' "a non-default lane without published account membership keeps the native value"
+assert_not_contains "$out" 'native_spendPriority=' "unproven account membership is never planning-adjusted"
+jq '.classes.soloc = {"family":"gpt","routes":[{"harness":"opencode","model":"gpt-6.1-sol","provider":"codex"}]} | .rules += [{"when":"Plan oc","lane":"planoc","order":"pool","classes":["soloc","alt"]}]' "$RULES" > "$TMP_ROOT/plan-oc-rules.json" && mv "$TMP_ROOT/plan-oc-rules.json" "$RULES"
+plan_quota '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane planoc --project xo
+expect_code 0 "$code" "a lane-less Codex candidate resolves under a planning file: $err"
+assert_contains "$out" 'spendPriority=-0.61' "a lane-less candidate on the published default account receives the planning value"
+
+printf '%s\n' '{"overrides":[{"accountKey":"codex-home","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "an override without provider refuses resolution"
+assert_contains "$err" 'malformed planning file' "a missing provider is the documented malformed error"
+printf '%s\n' '{"overrides":[{"provider":123,"accountKey":"codex-home","horizonSeconds":302400,"expiresAt":"2026-11-01T04:00:00Z"}]}' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "an override with a non-string provider refuses resolution"
+: > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "an empty planning file refuses resolution"
+assert_contains "$err" 'malformed planning file' "an empty planning file is the documented malformed error"
+printf '%s\n%s\n' '{"overrides":[]}' '{"overrides":[]}' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "a planning file with multiple JSON values refuses resolution"
+
+printf '%s\n' '{"overrides":[{"provider":"codex","accountKey":"codex-home","horizonSeconds":-5,"expiresAt":"2026-11-01T04:00:00Z"}]}' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "a malformed planning override refuses resolution"
+assert_contains "$err" 'malformed planning file' "malformed planning is an actionable configuration error"
+printf '%s' '{' > "$PLANNING"
+run_lane code out err "$BRIEF" --lane plan --project xo
+expect_code 2 "$code" "unparseable planning config refuses resolution"
+rm -f "$PLANNING"
+cp "$BASE_RULES" "$RULES"
+pass "quota planning overrides favour matched direct Codex routes only while active and never fabricate quota health"
+
 # --- private call history, including early outcomes and write failures -------
 HISTORY="$HOME_DIR/state/dispatch-history.jsonl"
 # Every completed resolution above should have produced one parseable line;

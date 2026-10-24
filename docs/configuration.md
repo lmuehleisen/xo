@@ -1484,6 +1484,46 @@ The helper respects `FM_HOME` and `FM_CONFIG_OVERRIDE`, and compatibility `--ver
 This file is not inherited into secondmate homes: each home selects the providers its own tools and credentials use, which can differ from the primary home.
 The inheritance allowlist remains owned by [`bin/fm-config-inherit-lib.sh`](../bin/fm-config-inherit-lib.sh).
 
+## Quota planning overrides (config/quota-planning.json)
+
+The optional local, gitignored `config/quota-planning.json` declares temporary consumer-side planning assumptions for quota ranking.
+It never changes vendor evidence.
+An absent file preserves native ranking exactly.
+
+```json
+{
+  "overrides": [
+    {
+      "provider": "<quota-axi provider>",
+      "accountKey": "<matched account lane>",
+      "windowId": "<optional bounding window id>",
+      "horizonSeconds": 302400,
+      "expiresAt": "<ISO-8601 instant>"
+    }
+  ]
+}
+```
+
+Each override names one provider and the account lane a candidate must provably bind through the shared quota library, such as the native Codex `codex-home` lane or a Pi `codex-native/` route on that same account.
+The bound row must publish that membership, through its `accountKey` or `accountKeys`; a lane string alone, a default-row fallback, or unknown schema-5 membership never proves it.
+When both a generic override and a `windowId` override for the same provider and account match a row, the window-specific override wins, regardless of file order.
+A different account lane, a reseller or API-key provider, or a route matched only by model name never receives the override.
+`windowId` is optional and, when present, must equal the scope's single bounding window.
+
+The horizon is rolling, not an assumed vendor reset.
+At each intake the typed resolver evaluates the override against the quota snapshot's `generatedAt`.
+When that instant precedes `expiresAt` and the horizon ends before the vendor reset, the resolver ranks the scope by a planning `spendPriority` that truncates the bounding window's published pace horizon at `generatedAt` plus `horizonSeconds`, capped by the vendor `resetsAt`.
+The calculation reuses the producer's published reserve and burn for that one window.
+A scope bounded by more than one window, an unknown or missing pace, a horizon at or beyond the reset, or unprovable account matching keeps the native value.
+Vendor remaining percent, `resetsAt`, runway, short-window exhaustion, zero-remaining, and unknown states are evaluated first and are never altered.
+
+Inspectable output distinguishes the assumption from observed data.
+An active override prints a `planning: active` line with its provider, account, window, horizon, and expiry, and each adjusted candidate prints its planning value as `spendPriority` beside `native_spendPriority`.
+An expired or otherwise inactive file prints `planning: inactive` and ranks exactly as the native snapshot does.
+A malformed file, including an unknown field, a non-positive horizon, an unparseable expiry, or a duplicate provider/account/window entry, refuses typed resolution with a `malformed planning file` diagnostic instead of being selected around.
+The file is evaluated on every intake, including after a restart, with no stored state.
+This file is not inherited into secondmate homes.
+
 ## Project capacity (config/project-capacity)
 
 The optional local, gitignored `config/project-capacity` tells Firstmate how many workers a project can run at once on this machine, for a project whose machine-local resource - a heavy test suite, a local editor stack, a device - only serves a few workers at a time.

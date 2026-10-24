@@ -296,6 +296,84 @@ fm_quota_devin_catalog() {
     | unique'
 }
 
+# Quota planning overrides (docs/configuration.md owns the config schema):
+# a consumer-side, expiring planning assumption, never vendor evidence.
+# quota_plan_adjust returns a planning spendPriority for a scope row, or null
+# when the override does not provably apply. It applies only while the
+# snapshot's generatedAt precedes the override expiry, only for the named
+# provider and account lane, and only when one window bounds the scope, that
+# window is the configured one when named, and its published pace (reserve
+# and burn) plus reset are all known. The planning value truncates that
+# window's time-remaining percent at the rolling horizon - snapshot time
+# plus horizonSeconds, capped by the vendor reset - inside the producer's
+# own gap formula (percentRemaining / timeRemainingPercent - burnMultiple),
+# clamped like the producer. Multi-window scopes, unknown pace, a horizon
+# beyond the reset, and missing account proof all keep the native value.
+# shellcheck disable=SC2016,SC2034 # jq program used by consumers
+FM_QUOTA_PLANNING_JQ='
+  def quota_ts:
+    if type != "string" then null
+    else (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null) end;
+  def quota_plan_account_proven($prov; $lane; $account):
+    if ($account | type) != "string" then false
+    elif (($prov.accountKey // null) == $account) then ($lane == "" or $lane == $account)
+    elif (($prov.accountKeys // null) | type) == "array"
+    then (($lane == "" or $lane == $account) and ((($prov.accountKeys) | index($account)) != null))
+    else false end;
+  def quota_plan_adjust($prov; $row; $overrides; $provider; $lane; $now):
+    if $now == null then null
+    elif (($row.limitingWindowIds // []) | length) != 1 then null
+    elif (($row.boundedBy // $row.limitingWindowIds) != $row.limitingWindowIds) then null
+    else
+      ($row.limitingWindowIds[0]) as $window_id |
+      ([$prov.windows[]? | select(.id == $window_id)] | first) as $window |
+      ([$overrides[]? | . as $candidate_override
+        | select($candidate_override.provider == $provider)
+        | select(quota_plan_account_proven($prov; $lane; $candidate_override.accountKey))
+        | select((($candidate_override.expiresAt | quota_ts) != null) and ($now < ($candidate_override.expiresAt | quota_ts)))
+        | select((($candidate_override | has("windowId")) | not) or $candidate_override.windowId == $window_id)]) as $matched |
+      ([$matched[] | select(has("windowId"))]) as $specific |
+      (if ($specific | length) > 0 then $specific else $matched end) as $candidates |
+      if ($candidates | length) != 1 then null
+      else
+        ($candidates[0]) as $override |
+          if $window == null then null
+          elif (($window.pace.status // "unknown") == "unknown") then null
+          elif (($window.pace.burnMultiple | type) != "number") then null
+          elif (($window.pace.reservePercentPoints | type) != "number") then null
+          elif (($window.percentRemaining | type) != "number") then null
+          elif (($row.effectivePercentRemaining | type) != "number") then null
+          elif (($row.selection.spendPriority | type) != "number") then null
+          else
+            ($window.resetsAt | quota_ts) as $resets |
+            if $resets == null or $resets <= $now then null
+            else
+              (($window.percentRemaining - $window.pace.reservePercentPoints)) as $time_remaining |
+              if $time_remaining < 0.01 then null
+              elif $override.horizonSeconds >= ($resets - $now) then null
+              else
+                (($time_remaining * $override.horizonSeconds / ($resets - $now))) as $plan_time |
+                if $plan_time < 0.01 then null
+                else
+                  ((($row.effectivePercentRemaining / $plan_time) - $window.pace.burnMultiple)) as $raw |
+                  if ($raw | isfinite | not) then null
+                  else
+                    {spendPriority: ((((if $raw > 100 then 100 elif $raw < -100 then -100 else $raw end) * 10000) | round) / 10000),
+                     nativeSpendPriority: $row.selection.spendPriority,
+                     horizonSeconds: $override.horizonSeconds,
+                     expiresAt: $override.expiresAt,
+                     windowId: $window_id,
+                     provider: $provider,
+                     accountKey: $override.accountKey}
+                  end
+                end
+              end
+            end
+          end
+        end
+    end;
+'
+
 # shellcheck disable=SC2016,SC2034 # jq program used by consumers
 FM_QUOTA_DEVIN_JQ='
   def quota_devin_scope($ids; $model):

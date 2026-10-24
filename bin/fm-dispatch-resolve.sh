@@ -117,6 +117,19 @@
 #   3600, a conservative one-hour completion budget). The output discloses it
 #   and each bound's usableRunwaySeconds; unknown runway remains unranked.
 #
+# Quota planning overrides: the optional local config/quota-planning.json
+#   (docs/configuration.md owns the schema) may name a provider, account lane,
+#   optional window, rolling horizonSeconds, and expiresAt. While the quota
+#   snapshot's generatedAt precedes expiresAt, quota_plan_adjust in
+#   bin/fm-quota-axi-lib.sh ranks a provably matched single-window scope by a
+#   planning spendPriority that truncates the window's published pace horizon
+#   at generatedAt plus the horizon, capped by the vendor reset; the native
+#   value, horizon, and expiry print beside it. This is a consumer planning
+#   assumption, never vendor evidence: vendor remaining, resetsAt, runway,
+#   and exhausted or unknown states are unchanged, and absent, expired, or
+#   unprovable overrides leave ranking exactly on the native spendPriority.
+#   A malformed planning file is a usage error, like malformed rules.
+#
 # Installed-tool gate: every candidate's harness must have a launch location on
 #   this host. Each configured harness is probed once per resolve with a cheap
 #   local lookup over every location the single-owner table
@@ -403,6 +416,39 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson codex_ultra_o
 ' "$RULES" 2>/dev/null) || die "malformed rules file: $RULES_PATH (not JSON)"
 [ -z "$rules_err" ] || die "malformed rules file: $RULES_PATH - $rules_err"
 
+# Optional quota planning overrides stay baseline-identical when absent.
+PLANNING_PATH="$CONFIG/quota-planning.json"
+PLANNING_JSON='{"overrides":[]}'
+PLANNING_PRESENT=false
+if [ -e "$PLANNING_PATH" ] || [ -L "$PLANNING_PATH" ]; then
+  [ -f "$PLANNING_PATH" ] && [ -r "$PLANNING_PATH" ] || die "malformed planning file: $PLANNING_PATH - expected a readable regular file"
+  planning_err=$(jq -sr --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" "$FM_QUOTA_PLANNING_JQ"'
+    def nonblank_string: (type == "string") and (length > 0) and (test("\\s") | not);
+    def override_bad:
+      if type != "object" then true
+      elif ((keys - ["provider", "accountKey", "windowId", "horizonSeconds", "expiresAt"]) | length) != 0 then true
+      elif ((.provider | nonblank_string) | not) then true
+      elif (.provider | test($provider_re) | not) then true
+      elif ((.accountKey | nonblank_string) | not) then true
+      elif (has("windowId") and ((.windowId | nonblank_string) | not)) then true
+      elif (.horizonSeconds | type) != "number" then true
+      elif (.horizonSeconds <= 0 or (.horizonSeconds | isinfinite)) then true
+      elif ((.expiresAt | quota_ts) == null) then true
+      else false end;
+    if length != 1 then "expected exactly one JSON object"
+    elif (.[0] | type) != "object" then "top-level value must be an object"
+    elif ((.[0] | has("overrides")) | not) or ((.[0].overrides | type) != "array") then "overrides must be an array"
+    elif any(.[0].overrides[]; override_bad) then "each override needs provider, accountKey, horizonSeconds above 0, an ISO expiresAt, and no other fields except optional windowId"
+    elif ([.[0].overrides[] | [.provider, .accountKey, (.windowId // "")] | @json] | length) !=
+         ([.[0].overrides[] | [.provider, .accountKey, (.windowId // "")] | @json] | unique | length)
+    then "overrides must not duplicate provider, accountKey, and windowId"
+    else empty end
+  ' "$PLANNING_PATH" 2>/dev/null) || die "malformed planning file: $PLANNING_PATH (not JSON)"
+  [ -z "$planning_err" ] || die "malformed planning file: $PLANNING_PATH - $planning_err"
+  PLANNING_JSON=$(jq -sc '.[0]' "$PLANNING_PATH") || die "malformed planning file: $PLANNING_PATH (not JSON)"
+  PLANNING_PRESENT=true
+fi
+
 missing_provider=$(jq -r '
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   ((.rules // [])[] | profiles(.use)[] | select(has("provider") | not) | "use\t\(.harness)"),
@@ -669,8 +715,9 @@ DIRECT=false
 [ -z "$LANE" ] || DIRECT=true
 RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson installed "$INSTALLED" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
-  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
-  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
+  --argjson planning "$PLANNING_JSON" --argjson planning_present "$PLANNING_PRESENT" \
+  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_PLANNING_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
+  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | (($q.generatedAt // "") | quota_ts) as $now | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
@@ -756,9 +803,13 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         ($rows | map(select(quota_selection_known | not)) | first) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "spendPriority missing, non-numeric, or selection not known at \($bad.scope): not rankable"}
       else
-        ($rows | min_by(.selection.spendPriority)) as $limiting |
+        (prov($p; $lane)) as $prov_row |
+        ($rows | map((quota_plan_adjust($prov_row; .; ($planning.overrides // []); $p; $lane; $now)) as $row_plan
+                     | . + {effectiveSpend: ($row_plan.spendPriority // .selection.spendPriority), rowPlan: $row_plan})
+               | min_by(.effectiveSpend)) as $limiting |
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
-         spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
+         spendPriority: $limiting.effectiveSpend, runway: $limiting.runway.status, eligible: true, reason: "ok"}
+        + (if $limiting.rowPlan != null then {planning: $limiting.rowPlan, nativeSpendPriority: $limiting.rowPlan.nativeSpendPriority} else {} end)
       end
     end;
   def evaluate($c): evaluate_route($c; false; 0);
@@ -896,6 +947,10 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def when_of($c): (if rule_at($c) == null then $none_criterion else rule_at($c).when end | .[0:60]);
   {
     completion_horizon_seconds: $horizon, model: $r.model, latency_ms: $lat, tokens: ($r.usage // null),
+    planning: (if $planning_present | not then {present: false}
+               else {present: true, active: [($planning.overrides // [])[]
+                 | select((.expiresAt | quota_ts) != null and $now != null and $now < (.expiresAt | quota_ts))
+                 | {provider, accountKey, windowId: (.windowId // null), horizonSeconds, expiresAt}]} end),
     direct: $direct,
     rule: $picked,
     rule_when: when_of($picked),
@@ -951,6 +1006,13 @@ TEXT=$(jq -r '
   "dispatch-resolve:",
   "  status: \(.status | flat)",
   "  completion_horizon_seconds: \(.completion_horizon_seconds)",
+  (if .planning.present then
+     (if (.planning.active | length) > 0
+      then (.planning.active[] | "  planning: active provider=\(.provider | flat) account=\(.accountKey | flat)"
+             + (if .windowId then " window=\(.windowId | flat)" else "" end)
+             + " horizon_seconds=\(.horizonSeconds) expires_at=\(.expiresAt | flat) (rolling planning horizon, not a vendor reset)")
+      else "  planning: inactive (no override active at the quota snapshot time; native spendPriority used)" end)
+   else empty end),
   (if .direct then empty
    else "  model: \(show(.model))   latency_ms: \(show(.latency_ms))   tokens: \(show(.tokens.input_tokens))/\(show(.tokens.output_tokens))" end),
   (if .direct then "  rule: \(.rule | flat) (\(.rule_when | flat))   selected: by --lane"
@@ -971,6 +1033,7 @@ TEXT=$(jq -r '
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
       + (if .unmetered then "  quota=unmetered (declared)  spendPriority=\(show(.spendPriority))  runway=unmetered"
          elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
+      + (if .planning then "  native_spendPriority=\(show(.nativeSpendPriority))  planning_horizon_seconds=\(.planning.horizonSeconds)  planning_window=\(.planning.windowId | flat)" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
       + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)
