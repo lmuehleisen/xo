@@ -326,6 +326,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: fork-only `tests/fm-captain-hold-rehold.test.sh`.
 - Upstream: encodes hold reasons so punctuation and line breaks survive and validates their origin, but does not archive superseded reasons; the fork keeps archival preservation around those upstream operations.
 
+### decision-cards-6021
+
+- Intent: port of upstream [PR 6021](https://github.com/kunchenguid/firstmate/pull/6021) at head `f0fd29c0edba75d88eac1460b9e9b0c57e2321a2`: author the captain-call decision card where the question is raised, so Captain's Deck reads the structured card from `state/decision-cards/` instead of a bare call re-derived at board composition.
+- Class: carried; drop when upstream ships PR 6021 (or an equivalent) and an integration takes it, at which point this entry and its seams should reconcile as a no-op or small conflict.
+- Seam: `bin/fm-decision-card-lib.sh` (fork-carried until upstream lands), the card flags, `--card-file`, and `card` subcommand in `bin/fm-captain-hold.sh`, the store-first merge, `compose`, and `refresh` in `bin/fm-bearings-board.sh`, the `reconciling` bucket in `bin/fm-fleet-snapshot.sh`, the title/reason pass-through in `bin/fm-bearings-snapshot.sh`, the worker-options line in `bin/fm-brief.sh`, and their `AGENTS.md`, bearings and captain-hold-lifecycle skill, `docs/captain-hold-lifecycle.md`, `docs/scripts.md`, and CI snapshot-count hunks (shared); xo keeps its `optional_string("owner")` card check in the shared lib and its Lavish-mode `answerable` gating beside upstream's reconcile injection.
+- Guard: `tests/fm-captain-hold-lifecycle.test.sh` raise-time card cases; `tests/fm-bearings-board.test.sh` durable-store, store-first merge, and refresh cases; `tests/fm-bearings-snapshot.test.sh` reconciling-bucket cases.
+- Upstream: PR 6021 is open and unmerged; once it lands, prefer upstream's version of every seam above and drop this entry.
+
 ### stow-audit
 
 - Intent: stow-pass before-state snapshot and verification.

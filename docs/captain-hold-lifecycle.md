@@ -3,6 +3,21 @@
 The normative policy is owned by `.agents/skills/captain-hold-lifecycle/SKILL.md` and is not restated here.
 This document records the deterministic mechanism, structured surfaces, compatibility contract, and privacy-safe regression evidence.
 
+## Find a topic
+
+| Question | Section |
+| --- | --- |
+| What is a captain call, and which subcommand does what? | [Mechanism](#mechanism) |
+| How is a call's structured card written or refreshed? | [The raise-time decision card](#the-raise-time-decision-card) |
+| Why does cleanup of finished work leave a captain call open? | [Cleanup never closes a captain call](#cleanup-never-closes-a-captain-call) |
+| How does a keyed answer from chat or a board reach the call? | [Answer-time resolution](#answer-time-resolution-through-chat) |
+| How is a call closed when it stopped being a question? | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
+| Why did a decision card disappear from the board? | [Card hygiene](#card-hygiene-a-landed-subject-is-not-a-live-call) |
+| Where does a hold appear in snapshots and Bearings? | [Structured read surfaces](#structured-read-surfaces) |
+| What does a `RECORD DIVERGENCE` section mean? | [Record divergence](#record-divergence) |
+| How do rows from older installs still work? | [Compatibility with pre-collapse installs](#compatibility-with-pre-collapse-installs) |
+| Which tests prove this, and how is the record refreshed? | [Verification record](#verification-record) |
+
 ## Mechanism
 
 A decision is not a separate thing in this system: it is an ordinary backlog task held for the captain, and the task id is the identity every surface and channel uses.
@@ -13,6 +28,33 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 The `hold` subcommand is the mandatory captain-hold creation path: it uses an existing task or creates one when nothing exists to hold, records its UTC hold-set timestamp as the leading line of the task body, then invokes the underlying tasks-axi hold operation and verifies both records.
 When `--origin` is supplied, its backend identity is recorded on a `Captain hold origin:` body line before the hold, and a refused hold restores the prior association.
 The reason may contain parentheses and line breaks; `bin/fm-hold-reason-lib.sh` owns storage encoding and `bin/fm-tasks-axi.sh` owns decoded public reads.
+### Subcommands at a glance
+
+| Subcommand | What it does | Details |
+| --- | --- | --- |
+| `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
+| `card` | Rewrites the structured card for an open captain call. | [The raise-time decision card](#the-raise-time-decision-card) |
+| `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answer-time-resolution-through-chat) |
+| `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#mechanism) |
+| `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#mechanism) |
+| `open` | Read-only check of whether a row is still an open captain call. | [Cleanup never closes a captain call](#cleanup-never-closes-a-captain-call) |
+| `answers` | Channel-agnostic entry point for keyed answers. | [Answer-time resolution](#answer-time-resolution-through-chat) |
+| `bind`, `unbind`, `binding` | Record that a captured-answer source feeds the keyed-answer intake. | [Source bindings](#source-bindings) |
+| `reconcile-requests` | Internal intake that records a reconcile request from a board selection. | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
+| `reconcile close`, `reconcile note`, `reconcile list` | Retire or list pending reconcile requests. | [Verifying and retiring a request](#verifying-and-retiring-a-request) |
+| `diverged` | Read-only report of a call whose two records disagree. | [Record divergence](#record-divergence) |
+
+### Creating a hold (`hold`)
+
+The `hold` subcommand is the mandatory captain-hold creation path.
+It works in this order:
+
+1. It uses an existing task, or creates one when nothing exists to hold.
+2. It records the task's UTC hold-set timestamp as the leading line of the task body.
+3. When `--origin` is supplied, it records the origin on the task, replacing any previous association.
+4. It invokes the underlying tasks-axi hold operation.
+5. It verifies the hold and timestamp.
+
 Publishing the stamp first ensures a snapshot cannot observe a newly captain-held task without the timestamp that defines its age.
 Retries of an active hold preserve its hold-set timestamp, while re-holding released work starts a new timestamped lifecycle; a closed task is refused rather than reopened, and `--until` stores the captain's own deferral date through tasks-axi's date gate.
 tasks-axi's hold overwrites the reason in place and keeps no record of what it replaced, so a re-hold whose reason actually changes first preserves the outgoing one through the same `--archive-body` mechanism the answer path uses, and refuses the replacement unless that preservation reads back from the backlog.
@@ -43,6 +85,26 @@ With a non-empty inventory it appends a `captain-held [key=<key>]` transfer even
 Scout teardown calls the read-only `verify` subcommand after checking for the report and before removing any source state.
 `verify` requires the recorded attestation, requires every recorded inventory entry to remain durable and pass the same origin checks as `complete`, and fails on any keyed status decision that opened after the last `complete`, which makes re-running `complete` the repair.
 The `--force` path remains the explicit captain-approved discard escape hatch.
+
+## The raise-time decision card
+
+A call is answerable the moment it is raised, but the board and the captain's deck can show options, context, and a recommendation only when a card carries them.
+That structure exists in the agent that raises the call and in nothing later, so `bin/fm-captain-hold.sh hold` accepts card flags - or `--card-file` for a bare card or an `fm-decision-card.v1` envelope - and writes the same record `bin/fm-bearings-board.sh build` persists under `state/decision-cards/<task>.json`.
+The `card <task-id>` form rewrites that record for an open call.
+Validation runs before the hold's first mutation, so a malformed card leaves the task, the backlog, and the store untouched.
+
+**The store is a source as well as a sink, and it wins.**
+For a key the payload also carries, `build` uses the durable record because it was authored where the question was raised and can be newer than the payload's snapshot, while a payload card is used only for a key the store does not hold.
+A record that is not an `fm-decision-card.v1` envelope, fails the stored form of the contract, or whose card names another task is named on stderr as `ignored-store-card:` and skipped rather than failing the build.
+Because the store is authoritative for its keys, refining a card's copy uses `bin/fm-captain-hold.sh card`, not a payload rewrite.
+
+**The deterministic floor.**
+`bin/fm-bearings-board.sh refresh` composes the fleet rows and one card per open call from the canonical snapshot and then builds, so a raised call, a new landed row, or a changed live stage reaches the board without an agent turn.
+A call whose durable store already holds a card keeps that card instead of the composed fallback, so a refresh never publishes a bare duplicate beside the authored options.
+It never invents the richer copy or the dispatch picker a `/bearings lavish` composition owns.
+It composes every Charted Next gate with `dispatchable=false` and classifies warnings only by parenthesized sentinel ids because the snapshot proves neither a cleared blocker-and-time gate nor a richer kind, and prose is never read to guess either.
+
+The authored-card contract is owned once by `bin/fm-decision-card-lib.sh`, so the payload validator, the raise-time writer, and the store reader use the same definition of a valid card.
 
 ## Cleanup never closes a captain call
 
@@ -144,7 +206,87 @@ Both outcomes require a pre-existing durable request and the operator input that
 A successful normal answer also retires any pending request, because an answered call has no remaining re-check obligation.
 Every retirement is checked: if request removal fails after an answer, close, or note is already durable, the durable outcome stands but the command fails and leaves the pending request visible for retry.
 No path here closes a captain call without either the captain's words through `answer` or the evidence through `reconcile close`.
-An Ops board below `answers` creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation; an `answers` board offers the reconcile choice on decision cards, and a selection files the same captured-source request above.
+
+### Source bindings
+
+`bind`, `unbind`, and `binding` record that a captured-answer source feeds this intake, as a private record under `state/decision-bindings/`.
+An unbound source feeds nothing, so the path is opt-in per source.
+`bind` deliberately does not require the source to exist yet.
+
+### Channels that feed the intake
+
+Two channels feed that one intake today, and both are ordinary callers rather than special cases.
+
+`bin/fm-send.sh --resolve-key` is the chat channel:
+
+- For a key the status log still owns, that script's header owns the status-log close.
+- A key the status log no longer owns is resolved to a still-open captain-held task and fed as one keyed line.
+  The script tries the key as a task id first, then the legacy derived identity.
+
+`bin/fm-procevent.sh` is the captured-result channel:
+
+- After capture, the runner passes a bound built-in source's result to `bin/fm-procevent-<adapter>.sh answers <result-file>`.
+- The runner pipes whatever that prints into the intake.
+- Any built-in adapter with an `answers` command therefore works.
+- The runner names no adapter, parses no result, and carries no decision rule.
+
+`bin/fm-procevent-lavish.sh answers` is one such built-in adapter command.
+It reads only rows tagged `choice` and relays a card's declared close mode.
+It can never let freeform captain prose forge a task id or a mode.
+
+Trusted external process-event adapters intentionally expose no answer operation and cannot feed this authority-bearing intake; [`extension-bindings.md`](extension-bindings.md#trust-boundary) owns that boundary.
+
+## Reconcile: re-check reality, never a blind close
+
+A captain call can stop being a question without the captain ever answering it.
+That happens when the subject lands, the premise turns out to be false, or the choice becomes a matter of fact rather than the captain's to make.
+`reconcile` is the standing third option for that case, and its whole point is that it is NOT an answer.
+It means "go verify the latest state".
+Once that verification has actually been done, it resolves in exactly one of two ways:
+
+- Close the call with the evidence that made it moot.
+- Leave it open with a note recording that it is genuinely still active.
+
+### The keyed-answer intake refuses reconcile
+
+The value remains reserved at the shared keyed-answer intake, which visibly refuses it from every channel and never passes it to `answer`.
+A reconcile value delivered through chat or any ordinary keyed-answer caller therefore cannot complete a task, lift a hold, write a resolution record, or create a reconcile request.
+
+### How a board selection creates a request
+
+Board request creation uses a separate captured-source seam.
+The board emits `fm-bearings-answer.v1` context with the slug-shaped selected option and the freeform note in separate fields.
+Annotating Reconcile therefore cannot turn it into an ordinary answer value.
+
+The Lavish adapter splits each capture between two commands:
+
+| Command | What it emits |
+| --- | --- |
+| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile selection, or a bare note when no option was selected. |
+| `reconciles` | Only task ids whose structured selection is Reconcile, carrying their notes as request provenance. |
+
+Current rows require the versioned shape and the `choice` tag.
+A time-limited rollout branch accepts ordinary answers from the old question/answer shape.
+That branch refuses the old shape's bare and separator-annotated reconcile values from both intakes, because those rows do not separate the selected option from its note.
+Every other structurally uncertain capture feeds neither intake, remains announced, and cannot forge a task id from freeform prose.
+
+The adapter-agnostic runner pipes reconcile rows into `reconcile-requests` only for a bound source.
+That intake verifies the named binding again before it creates anything.
+Failures remain best-effort and never acknowledge or suppress the captured result.
+
+### The reconcile request record
+
+This captured-source intake records a durable reconcile request under `state/reconcile-requests/`.
+There is one private record per task, carrying the requesting provenance and a UTC timestamp.
+The record exists so the obligation to re-check cannot be lost between the wake that carried the answer and the turn that acts on it.
+It is idempotent per task: repeating a reconcile keeps one request and its original timestamp.
+The supported creator is the runner carrying the captain's board selection.
+The binding-checked `reconcile-requests` command is that internal intake rather than an operator reconciliation outcome.
+
+### Verifying and retiring a request
+
+A pending request also affects snapshot classification; [Structured read surfaces](#structured-read-surfaces) owns the ordering and presentation contract.
+Verification retires a request through the moot or still-active outcome owned by [Evidence-backed reconciliation is not a board control](#evidence-backed-reconciliation-is-not-a-board-control) above.
 
 ## Card hygiene: a landed subject is not a live call
 
@@ -178,15 +320,41 @@ Hold reason and body prose are never matched, so no wording can hide, reveal, or
 The buckets are total and mutually exclusive: `blocked` when any blocker is unresolved, else `dated` while `hold_until` is in the future, else `aged` when an undated hold's hold-set timestamp is at least `FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS` old (default 14, floored elapsed days), else `live`.
 No captain hold can fall through them and none can match two, which is what keeps a hold from vanishing from every view.
 `captain_actionable` - waiting on the captain now - is exactly `hold_bucket == "live"`.
+Blocker edges are also resolved against archived Done ids, while missing blockers stay unresolved.
+It then assigns every captain hold exactly one `hold_bucket`.
+The bucket is decided only from structured fields: `hold_kind`, `state`, a validated pending reconcile request, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold-set timestamp.
+Hold reason and body prose are never matched, so no wording can hide, reveal, or reclassify a decision.
+
+The buckets are total and mutually exclusive.
+The first matching row in this order decides the bucket:
+
+| Order | `hold_bucket` | Condition |
+| --- | --- | --- |
+| 1 | `reconciling` | A board-created reconcile request with matching schema, file-name task, and record task is pending. |
+| 2 | `blocked` | Any blocker is unresolved. |
+| 3 | `dated` | `hold_until` is in the future. |
+| 4 | `aged` | An undated hold's hold-set timestamp is at least `FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS` old (default 14, floored elapsed days). |
+| 5 | `live` | None of the above. |
+
+No captain hold can fall through them and none can match two, which is what keeps a hold from vanishing from every view.
+`captain_actionable` - waiting on the captain now - is exactly `hold_bucket == "live"`.
+A `reconciling` hold leaves Captain's Call because the captain already sent it back for a check, and it appears under Charted Next as `reconcile requested <timestamp>: <hold reason>` until the request is retired.
+
 Existing undated holds without a hold-set stamp fall back to the task's `since` date.
 That aging is a projection safety net only.
 The durable deferral remains re-holding with `--until`.
 Its secondmate-home summary classifies an actionable captain hold as `captain_decision` and preserves every captain hold in the bounded queued inventory of the owning home.
 
 `bin/fm-bearings-snapshot.sh` places each captain hold by its `hold_bucket` and inspects no prose of its own.
-A `live` hold is a default Captain's Call entry.
-A `blocked`, `dated`, or `aged` hold leaves the default Captain's Call, renders as a Charted Next gate stating why - the blocking work, the `until <date>`, or the floored age - and contributes to the concrete `omitted[]` disclosure.
-`--all-decisions` reveals every captain hold available within the remote-summary bound and drops its gate, so an available hold is never in both Captain's Call and Charted Next.
+
+| `hold_bucket` | Where the hold appears |
+| --- | --- |
+| `live` | A default Captain's Call entry. |
+| `reconciling` | Leaves the default Captain's Call, renders as a Charted Next gate stating `reconcile requested <timestamp>: <hold reason>`, and contributes to the concrete `omitted[]` disclosure. |
+| `blocked`, `dated`, or `aged` | Leaves the default Captain's Call, renders as a Charted Next gate stating why - the blocking work, the `until <date>`, or the floored age - and contributes to the concrete `omitted[]` disclosure. |
+
+`--all-decisions` reveals every captain hold available within the remote-summary bound and drops its gate.
+An available hold is therefore never in both Captain's Call and Charted Next.
 An actively worked held task may also appear in Underway, which reports running work independently of those decision buckets.
 
 Three accepted limits remain deliberate:
@@ -279,3 +447,82 @@ The board's half is pinned in `tests/fm-bearings-board.test.sh`: it validates an
 
 Projection regressions live in `tests/fm-fleet-snapshot-view.test.sh` (the total structured-only bucket classifier, hold-until parsing, kind-independent captain actionability, undated-hold aging, and title stripping) and `tests/fm-bearings-snapshot.test.sh` (default and expanded decision-bucket membership, deferral explanations, blocker-overflow disclosure, working-hold dual surfaces, remote-summary schema invalidation, exact leading-kind inference, artifact-kind mismatch and answered-question exclusion, kind-bearing and kindless local-only landings publishing their recorded note, and scout-report precedence over competing pull-request links).
 The exact commands and their summarized outputs are recorded in the shipping PR's evidence; run `tests/fm-captain-hold-lifecycle.test.sh`, `tests/fm-watch-triage.test.sh`, `tests/fm-fleet-snapshot-view.test.sh`, `tests/fm-bearings-snapshot.test.sh`, `tests/fm-bearings-board.test.sh`, `tests/fm-bearings-board-render.test.sh`, `tests/fm-send-resolve-key.test.sh`, and `bin/fm-lint.sh` to refresh this record.
+One case in that family needs no beads install and always runs.
+It uses a stubbed tasks-axi that fails any markdown file override, and proves the captain-hold hold, answer, and close mutations reach a beads-configured home without one.
+
+### Reconcile coverage
+
+The reconcile path is pinned in the same suite:
+
+- A reconcile answer arriving through the keyed-answer intake is refused, in the default close mode and in the `release` mode a captain-gated work card declares.
+  It leaves both tasks held with no resolution record or request.
+- Only the separately bound captured-source intake records one durable request per task, idempotently across a replay.
+
+It also proves the two verification outcomes:
+
+- An evidence-backed `reconciled` close records the evidence under its own label and never as the captain's words.
+- A note leaves the call queued, held, and dated.
+
+Around those outcomes, it proves:
+
+- Both outcomes refuse without a pending board request.
+- Each durable mutation applies only once across close, probe, and request-retirement failures.
+- A later distinct request with the same note still appends its own dated record.
+- Every failed retirement is surfaced with its pending request retained.
+- Incompatible resolution modes cannot replay as captain answers.
+- Normal close, release, and replay paths retire pending requests.
+
+The captured-source coverage proves:
+
+- Lavish deduplicates each card before separating versioned structured selections from notes.
+- Bare and annotated Reconcile choices never reach keyed answers.
+- Genuine current and legacy choices still close normally.
+- Legacy bare and separator-annotated reconcile values feed neither intake.
+- Mixed repeated selections preserve every other card's final value.
+- The generic runner creates a request only through a verified bound source.
+- Chat reconcile text creates none.
+- The resulting board request authorizes evidence-backed closure.
+
+### Board suite
+
+The board's half is pinned in `tests/fm-bearings-board.test.sh`:
+
+- Every published decision card carries exactly one reconcile option.
+- Authored options reserve that value across every card type.
+- Recommendations name authored options.
+- A build persists one effective card per key and prefers a valid durable record to a payload copy.
+- A malformed durable record is named and skipped without failing the build.
+- A deterministic refresh composes snapshot rows, merges a stored live-call card, keeps deferred cards out of Captain's Call, and refuses a broken snapshot before publishing.
+- A decision card whose structured subject appears in the payload's landed rows is dropped.
+  A genuinely open one is kept even when an unrelated landed id contains its key after a newline.
+- A build requires a fresh authoritative listed-open result before binding or arming.
+- A reopen retires the pre-reopen source generation and waits for a fresh live listener.
+- A rebuild of an already-armed board with no live listener starts one.
+
+That suite drives its Lavish session through a protocol-shaped stub.
+`tests/fm-bearings-board-lavish-live-e2e.test.sh` is the default-on capability guard for the installed provider, and [`verification/process-event-sources.md`](verification/process-event-sources.md) owns the version-scoped evidence.
+[`verification/process-event-sources.md`](verification/process-event-sources.md) owns the process-event ownership and reclamation evidence exercised by `tests/fm-procevent.test.sh`.
+
+### Classifier and projection suites
+
+`tests/fm-classify-decision-key.test.sh` pins `status_key_closing_verb` itself.
+It separates a resolution from the durable-transfer close and from a still-open key.
+It reports the last real transition across re-openings and both key positions, and treats a prose mention as no transition.
+
+Projection regressions live in two suites:
+
+| Suite | What it covers |
+| --- | --- |
+| `tests/fm-fleet-snapshot-view.test.sh` | The total structured-only bucket classifier, hold-until parsing, kind-independent captain actionability, undated-hold aging, and title stripping. |
+| `tests/fm-bearings-snapshot.test.sh` | Default and expanded decision-bucket membership, pending-reconcile classification and record validation, archived-blocker resolution, deferral explanations, blocker-overflow disclosure, working-hold dual surfaces, remote-summary schema invalidation, exact leading-kind inference, artifact-kind mismatch and answered-question exclusion, kind-bearing and kindless local-only landings publishing their recorded note, and scout-report precedence over competing pull-request links. |
+
+### Refreshing this record
+
+The exact commands and their summarized outputs are recorded in the shipping PR's evidence.
+To refresh this record, run:
+
+- The four suites above: `tests/fm-captain-hold-lifecycle.test.sh`, `tests/fm-classify-decision-key.test.sh`, `tests/fm-fleet-snapshot-view.test.sh`, and `tests/fm-bearings-snapshot.test.sh`.
+- `tests/fm-send-resolve-key.test.sh`, `tests/fm-bearings-board.test.sh`, and `tests/fm-procevent.test.sh`.
+- `bin/fm-lint.sh`.
+
+After a lavish-axi upgrade, run `FM_BEARINGS_LAVISH_LIVE=1 tests/fm-bearings-board-lavish-live-e2e.test.sh`.
