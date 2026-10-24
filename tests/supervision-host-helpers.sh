@@ -2721,6 +2721,44 @@ test_restarted_host_stops_what_a_killed_predecessor_left() {
   pass "host: a restarted host stops, by recorded identity, the cycle a killed predecessor left running"
 }
 
+# A main mutation such as a teardown holds the lease-command lock for as long as
+# it runs. With no branch lease to release, activation must start its first
+# cycle without waiting for that lock; a branch lease a killed predecessor left
+# is still released at activation.
+test_activation_skips_the_lease_lock_when_no_branch_lease_is_held() {
+  local home holder released
+  home=$(make_home lease-lock attended)
+  printf 'main\t%s\t%s\n' "$$" "$(date +%s)" > "$home/state/.lease-demo"
+  FM_STATE_OVERRIDE="$home/state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait "$2" || exit 1
+    : > "$3"
+    while [ ! -e "$4" ]; do sleep 0.1; done
+    fm_lock_release "$2"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state/.fm-lease-command.lock" "$home/lease-lock-held" "$home/lease-lock-release" &
+  holder=$!
+  wait_until 100 test -e "$home/lease-lock-held" || fail "fixture: could not hold the lease-command lock"
+  start_host "$home"
+  if ! wait_until 150 watcher_live "$home"; then
+    : > "$home/lease-lock-release"
+    wait "$holder" 2>/dev/null || true
+    fail "a held lease-command lock kept the host from starting its first cycle: $(cat "$home/state/.supervision-host.log" "$home/host.out" 2>/dev/null)"
+  fi
+  assert_re '	start	gen=host-' "$home/state/.supervision-host.log" "the host started a cycle without logging its start"
+  assert_present "$home/state/.lease-demo" "activation removed a lease the branch actor does not hold"
+  : > "$home/lease-lock-release"
+  wait "$holder" 2>/dev/null || true
+  stop_home_processes "$home"
+
+  released=$(make_home lease-release attended)
+  printf 'branch\t999999\t%s\n' "$(date +%s)" > "$released/state/.lease-demo"
+  start_host "$released"
+  wait_until 150 watcher_live "$released" || fail "lease-release: the host never started a watcher cycle"
+  assert_absent "$released/state/.lease-demo" "activation left a branch lease a predecessor held"
+  stop_home_processes "$released"
+  pass "host: activation skips the lease-command lock when no branch lease is held, and still releases one that is"
+}
+
 test_park_exit_probe_uses_half_second_child_sleeps() {
   local home host_pid
   home=$(make_home park-cadence attended)

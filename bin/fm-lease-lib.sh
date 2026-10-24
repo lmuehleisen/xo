@@ -97,8 +97,8 @@
 #
 # Sourced by bin/fm-send.sh, bin/fm-control.sh, bin/fm-teardown.sh,
 # bin/fm-pr-merge.sh, bin/fm-merge-local.sh, bin/fm-spawn.sh, bin/fm-lock.sh,
-# and bin/fm-lease.sh. Callers must have $STATE resolved before calling. No side
-# effects on source. set -u / set -e safe.
+# bin/fm-supervision-host.sh, and bin/fm-lease.sh. Callers must have $STATE
+# resolved before calling. No side effects on source. set -u / set -e safe.
 
 # Distinct from usage errors (2), the gate refusal (3), and fm-send's
 # unconfirmed submit (3): recognizable as "the other supervision actor holds
@@ -200,6 +200,26 @@ fm_lease_read() {
     '' | *[!0-9]*) FM_LEASE_PID= ;;
   esac
   return 0
+}
+
+# fm_lease_actor_holds_any <actor>: 0 iff some lease file names <actor>, judged
+# exactly as `bin/fm-lease.sh release-actor` selects what it removes. A
+# lock-free read: 1 means that release would remove nothing, so a caller may
+# skip it instead of waiting for the lease-command lock. Sound only while no
+# lease of <actor> can appear meanwhile; the supervision host asks about the
+# branch actor only when no engine turn of its own is running.
+fm_lease_actor_holds_any() {
+  local lease task
+  for lease in "$STATE"/.lease-*; do
+    [ -e "$lease" ] || continue
+    case "$lease" in *.lock) continue ;; esac
+    task=${lease##*/.lease-}
+    fm_lease_valid_id "$task" || continue
+    if fm_lease_read "$task" && [ "$FM_LEASE_ACTOR" = "$1" ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # fm_lease_live <task>: 0 iff a well-formed lease exists, its recorded pid is

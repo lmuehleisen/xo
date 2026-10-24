@@ -139,7 +139,11 @@
 # left running (recorded with identities, never by name), including the
 # engine descendants its turn recorded, removes that turn's files, and
 # releases the branch actor's leases; it releases them again after every
-# engine turn. It also reads the record of a successor a pass-through left for
+# engine turn. A release runs only while some lease names the branch actor
+# (fm_lease_actor_holds_any), so when there is nothing to release a main
+# mutation holding the lease-command lock, such as a slow teardown, cannot hold
+# up activation or the next park.
+# It also reads the record of a successor a pass-through left for
 # main: while that arm still runs under its recorded identity, the first cycle
 # without --restart requests a take-over rather than an ordinary attach.
 # Activation removes the
@@ -195,6 +199,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-lease-lib.sh
+. "$SCRIPT_DIR/fm-lease-lib.sh"
 
 FIRST_ARM_RESTART=0
 case "${1:-}" in
@@ -344,6 +350,7 @@ branch_env() {  # <command...>: run with the branch actor identity
 }
 
 release_branch_leases() {
+  fm_lease_actor_holds_any branch || return 0
   branch_env "$SCRIPT_DIR/fm-lease.sh" release-actor --actor branch >/dev/null 2>&1 || true
 }
 

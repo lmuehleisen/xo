@@ -578,6 +578,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-captain-hold-lifecycle.test.sh` owner-wake cases for main, local secondmate, and remote secondmate homes, the announced, owning-session, and reconcile-request cases, and the one-notification assertion in `test_board_answer_reaches_the_keyed_answer_intake`.
 - Upstream: an answer closes or releases the call and publishes a secondmate's parent line, but wakes no owning session; drop once upstream wakes the owner on answer.
 
+### host-lease-release-skip
+
+- Intent: the supervision host skips its branch-lease release when no lease names the branch actor, so a slow main mutation holding the lease-command lock cannot delay a watcher cycle.
+- Class: carried.
+- Seam: `fm_lease_actor_holds_any` in `bin/fm-lease-lib.sh`, and its call in `release_branch_leases` plus the matching OWNERSHIP note in `bin/fm-supervision-host.sh` (shared).
+- Guard: `tests/fm-supervision-host-recovery.test.sh` `test_activation_skips_the_lease_lock_when_no_branch_lease_is_held`.
+- Upstream: always runs `fm-lease.sh release-actor`, which waits for the lease-command lock that a guarded main mutation such as a teardown holds for its whole run; drop once upstream's release no longer waits for that lock when there is nothing to release.
+
 ## Incidental
 
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
