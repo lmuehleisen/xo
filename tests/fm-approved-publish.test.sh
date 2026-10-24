@@ -50,8 +50,9 @@ run_publish() {  # <home> <command args...>
 # A procedure that records every step it runs in data/<task>/trace and prints
 # its covered `message` file. Marker files in data/<task>, outside the digest
 # the way a real publisher's state is, make a step print text, rewrite the
-# live message, signal the runner, hang, leave a child holding its output, or
-# fail.
+# live message, signal the runner, hang, leave a child holding its output,
+# leave a detached child running, or fail. A later step records any detached
+# child still alive when it starts.
 write_procedure() {  # <home> <task>
   local dir="$1/data/$2/publish"
   mkdir -p "$dir"
@@ -60,6 +61,9 @@ write_procedure() {  # <home> <task>
 # Stand-in publisher: never pass --yes to anything here.
 d=$FM_PUBLISH_DATA
 printf '%s\n' "$1" >> "$d/trace"
+if [ -s "$d/detach-pid" ] && kill -0 "$(cat "$d/detach-pid")" 2>/dev/null; then
+  printf 'survivor-during-%s\n' "$1" >> "$d/trace"
+fi
 [ ! -e "$d/say-$1" ] || cat "$d/say-$1"
 [ ! -e "$d/edit-$1" ] || cp "$d/edit-$1" "$d/publish/message"
 printf 'message: %s\n' "$(cat message)"
@@ -76,6 +80,10 @@ if [ -e "$d/orphan-$1" ]; then
   ( sleep 30; : > "$d/late-write" ) &
   printf '%s\n' "$!" > "$d/orphan-pid"
   printf '%s\n' "$$" > "$d/orphan-parent"
+fi
+if [ -e "$d/detach-$1" ]; then
+  sleep 30 </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$d/detach-pid"
 fi
 [ ! -e "$d/fail-$1" ] || exit 1
 exit 0
@@ -297,6 +305,44 @@ test_interrupt_stops_a_child_left_holding_output() {
   pass "an interrupt stops a child the step left holding its output before restore runs"
 }
 
+test_step_children_never_outlive_the_step() {
+  local home rc out pid
+  # A failing publish step that leaves a publisher running must not let it
+  # run on into restore or past the runner's exit.
+  home=$(make_home detach-fail)
+  write_procedure "$home" t1
+  approve "$home" t1 t1
+  : > "$home/data/t1/detach-publish"
+  : > "$home/data/t1/fail-publish"
+  rc=0
+  out=$(run_publish "$home" run t1 2>&1) || rc=$?
+  pid=$(cat "$home/data/t1/detach-pid" 2>/dev/null) || fail "the failing publish step never started its child"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null
+    fail "a failed publish step's child was still running after the runner exited"
+  fi
+  expect_code 6 "$rc" "a publish step that fails after starting a detached child"
+  assert_equals "preflight lift publish restore " "$(trace_of "$home" t1)" "restore must start only after the failed step's child is stopped"
+  assert_contains "$out" "the publish step left processes running after it exited" "the run must report the stopped child"
+  assert_contains "$out" "blocks:     restored" "the failed run must still restore"
+  # The same holds for a step that succeeds.
+  home=$(make_home detach-ok)
+  write_procedure "$home" t1
+  approve "$home" t1 t1
+  : > "$home/data/t1/detach-lift"
+  rc=0
+  out=$(run_publish "$home" run t1 2>&1) || rc=$?
+  pid=$(cat "$home/data/t1/detach-pid" 2>/dev/null) || fail "the lift step never started its child"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null
+    fail "a successful lift step's child was still running after the runner exited"
+  fi
+  expect_code 0 "$rc" "a lift step that succeeds after starting a detached child"
+  assert_equals "preflight lift publish verify restore " "$(trace_of "$home" t1)" "later steps must start only after the lift step's child is stopped"
+  assert_contains "$out" "the lift step left processes running after it exited" "the run must report the stopped child"
+  pass "nothing a step starts outlives it, whether the step succeeds or fails"
+}
+
 test_live_edits_never_reach_the_run() {
   local home out rc
   home=$(make_home snapshot)
@@ -354,6 +400,7 @@ test_approved_run_publishes_and_restores
 test_restore_always_runs
 test_interrupt_stops_the_running_step
 test_interrupt_stops_a_child_left_holding_output
+test_step_children_never_outlive_the_step
 test_live_edits_never_reach_the_run
 test_refuses_auto_approval_flags
 test_reheld_approval_no_longer_counts

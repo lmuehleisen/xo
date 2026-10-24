@@ -51,13 +51,14 @@
 # a time. It then runs preflight, lift, publish, and verify. The first failing
 # step ends the run: nothing is answered, approved, retried, or overridden.
 # Restore runs exactly once on every exit after preflight starts, including
-# INT, TERM, and HUP, which it ignores while restoring. A signal during a step,
-# or while a process the step left behind still holds its output, first stops
-# the step's process group and every process the step started (TERM, then
-# KILL after ten seconds), so nothing the step began keeps publishing while or
-# after restore runs. The full output goes to
-# the terminal and to data/<task-id>/publish-logs/<UTC stamp>-<pid>.log,
-# ending in a summary.
+# INT, TERM, and HUP, which it ignores while restoring. Nothing a step starts
+# outlives it: when the step exits and its output closes, whether it succeeded
+# or failed, the runner stops anything still running in the step's process
+# group (TERM, then KILL after ten seconds) before going on, and a signal
+# during a step first stops that group and every process the step started.
+# So nothing a step began keeps publishing while or after restore runs. The
+# full output goes to the terminal and to
+# data/<task-id>/publish-logs/<UTC stamp>-<pid>.log, ending in a summary.
 #
 # Exit codes: 0 published, verified, and blocks restored; 2 usage; 3 refused
 # before anything ran (no matching approval, an invalid procedure, or a run
@@ -241,17 +242,18 @@ signal_step() {  # <signal> <pid>...
   signal_pids "$sig" "$@"
 }
 
-# End a step that a signal interrupted, and every process it started, before
-# restore runs: TERM (with CONT, for a process stopped at a terminal read),
-# then KILL whatever is still alive ten seconds later.
-stop_step() {
-  local i=0
+# End the current step's process group, and every process the step started
+# while it still runs, before anything else happens: TERM (with CONT, for a
+# process stopped at a terminal read), then KILL whatever is still alive ten
+# seconds later. Notes <why> only when something was still running.
+stop_step() {  # <why>
+  local why=$1 i=0
   [ -n "$STEP_PGID" ] || return 0
   set --
   # shellcheck disable=SC2046 # process_tree prints one pid per word
   [ -z "$STEP_PID" ] || set -- $(process_tree "$STEP_PID")
   if step_alive "$@"; then
-    note "stopping the interrupted $STAGE step and every process it started"
+    note "$why"
     signal_step TERM "$@"
     signal_step CONT "$@"
     while [ "$i" -lt 50 ] && step_alive "$@"; do sleep 0.2; i=$((i + 1)); done
@@ -259,7 +261,7 @@ stop_step() {
       # shellcheck disable=SC2046
       [ -z "$STEP_PID" ] || set -- "$@" $(process_tree "$STEP_PID")
       signal_step KILL "$@"
-      note "the $STAGE step was still running ten seconds after TERM and was killed"
+      note "processes from the $STAGE step were still running ten seconds after TERM and were killed"
     fi
   fi
   [ -z "$STEP_PID" ] || wait "$STEP_PID" 2>/dev/null
@@ -292,8 +294,8 @@ run_step() {  # <step>
   # The step runs in the background while the runner waits for it, so a
   # signal reaches on_signal at once rather than when the step ends. Job
   # control gives the step its own process group, which stays tracked until
-  # its output closes, so stop_step can end the step and anything it left
-  # running before restore. tee copies its output.
+  # its output closes and anything still running in it is stopped, on every
+  # exit path. tee copies its output.
   (trap '' INT TERM HUP; exec tee -a "$LOG" "$out") <"$out.fifo" &
   TEE_PID=$!
   set -m 2>/dev/null || true
@@ -305,7 +307,8 @@ run_step() {  # <step>
   rc=$?
   STEP_PID=''
   wait "$TEE_PID"
-  TEE_PID='' STEP_PGID=''
+  TEE_PID=''
+  stop_step "the $step step left processes running after it exited; stopping them before going on"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     RESULTS="$RESULTS
@@ -348,7 +351,7 @@ finish() {  # <exit-code>
   local rc=$1 meaning stopped_at=$STAGE
   trap '' INT TERM HUP PIPE
   set +m 2>/dev/null || true
-  stop_step
+  stop_step "stopping the interrupted $STAGE step and every process it started"
   drain_output
   if [ "$RESTORE_ARMED" = 1 ]; then
     if run_step restore; then
