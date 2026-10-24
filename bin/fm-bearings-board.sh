@@ -618,7 +618,7 @@ merge_store_cards() {  # <data.json> <dest.json>
   # used only where the store holds nothing. Order is preserved, and a record
   # that fails the stored form of the shared contract is named on stderr and
   # skipped rather than failing the build.
-  local data=$1 dest=$2 key file staged owner
+  local data=$1 dest=$2 key file staged
   cp -- "$data" "$dest" || return 1
   [ -d "$DECISION_CARDS_DIR" ] && [ ! -L "$DECISION_CARDS_DIR" ] || return 0
   while IFS= read -r key; do
@@ -639,16 +639,15 @@ merge_store_cards() {  # <data.json> <dest.json>
       continue
     fi
     # A card another home owns is display-only here: the local store must
-    # never replace its content, or a later local card with the same key
-    # would inherit the remote question.
-    owner=$(jq -r --arg key "$key" 'first(.captains_call[] | select(.key == $key) | .owner // "")' "$dest" 2>/dev/null)
-    if [ -n "$owner" ] && [ "$owner" != '(main)' ]; then
-      continue
-    fi
+    # never replace its content, or a remote call would inherit the local
+    # question. The check is per entry, not per key - a payload can carry the
+    # same key once for the local call and once for a secondmate's, and
+    # checking only the first entry's owner would either paste the local card
+    # onto the remote question or skip the local replacement entirely.
     staged=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-card.XXXXXX") || return 1
     if ! jq --arg key "$key" --slurpfile record "$file" '
           .captains_call = [.captains_call[]
-            | if .key == $key
+            | if (.key == $key) and ((.owner // "(main)") == "(main)")
               then (. as $orig | $record[0].card | del(.answerable)
                     | if $orig | has("owner") then .owner = $orig.owner
                       else del(.owner) end)

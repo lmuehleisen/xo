@@ -1114,6 +1114,53 @@ test_build_merges_the_durable_card_store_first() {
   pass "build merges the durable card store first for its key"
 }
 
+# A payload can carry one call key per home: a local card and a secondmate's
+# card under the same key. Checking only the first entry's owner before the
+# store-first merge either pastes the stored local card onto the remote
+# question (local entry first) or skips the local replacement entirely
+# (remote entry first). The owner check belongs on each replacement target.
+test_build_scopes_a_stored_card_to_its_owning_home_per_entry() {
+  local home data store key order
+  home=$(make_home mixed-owner-store)
+  data="$home/payload.json"
+  store="$home/state/decision-cards"
+  key=sample-instruction-layer-refinement-review-decision-perishable-first-admission-choice
+  write_valid_payload "$data"
+  stash_store_card "$home" "$key"
+
+  for order in local-first remote-first; do
+    if [ "$order" = local-first ]; then
+      jq --arg key "$key" '
+        .captains_call += [.captains_call[] | select(.key == $key)
+          | .owner = "mate-one" | .title = "Secondmate question"]' \
+        "$data" > "$data.next" || fail "could not stage the mixed-owner payload"
+    else
+      jq --arg key "$key" '
+        .captains_call = ([.captains_call[] | select(.key == $key)
+          | .owner = "mate-one" | .title = "Secondmate question"])
+          + .captains_call' \
+        "$data" > "$data.next" || fail "could not stage the mixed-owner payload"
+    fi
+    mv "$data.next" "$data" || fail "could not stage the mixed-owner payload"
+    [ "$(jq -c --arg key "$key" '[.captains_call[] | select(.key == $key)] | length' "$data")" = 2 ] \
+      || fail "the $order fixture payload does not carry the shared key twice"
+
+    run_board "$home" build "$data" >/dev/null \
+      || fail "the $order mixed-owner payload did not build"
+    extract_payload "$home/.lavish/bearings-board.html" > "$home/served.json"
+    jq -e --arg key "$key" '
+      ([.captains_call[] | select(.key == $key)] | length == 2)
+      and ((.captains_call[] | select(.key == $key and .owner == "(main)") | .title)
+        == "Raise-time storage choice")
+      and ((.captains_call[] | select(.key == $key and .owner == "mate-one") | .title)
+        == "Secondmate question")' "$home/served.json" >/dev/null \
+      || fail "$order: the stored card did not stay scoped to the owning home"
+    # Restore the single-owner payload before the other order's build.
+    write_valid_payload "$data"
+  done
+  pass "build scopes a stored card to its owning home on each replaced entry"
+}
+
 test_build_serializes_store_merge_and_persistence_with_card_writers() {
   local home data key lock acquired release locker_pid build_pid published=0
   home=$(make_home store-writer-race)
@@ -1612,6 +1659,7 @@ test_build_refuses_a_symlinked_board_path
 test_answers_mode_reopens_a_session_the_captain_ended
 test_dropping_below_answers_retires_the_answer_source
 test_build_merges_the_durable_card_store_first
+test_build_scopes_a_stored_card_to_its_owning_home_per_entry
 test_build_ignores_a_malformed_store_card_without_failing
 test_build_serializes_store_merge_and_persistence_with_card_writers
 test_build_serializes_a_merge_card_on_the_underlying_task_lock
