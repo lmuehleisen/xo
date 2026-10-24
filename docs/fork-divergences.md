@@ -586,6 +586,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-teardown.test.sh` `test_status_archive_pruning_bounded_across_many_tasks`.
 - Upstream: streams one `find` per task directory through a process substitution, which macOS Bash 3.2 keeps open until teardown's top-level command returns and whose 256th descriptor corrupts the shell's heap, and warns per directory; drop once upstream bounds the walk without a per-directory process substitution.
 
+### host-lease-release-skip
+
+- Intent: the supervision host skips its branch-lease release when no lease names the branch actor, so a slow main mutation holding the lease-command lock cannot delay a watcher cycle.
+- Class: carried.
+- Seam: `fm_lease_actor_holds_any` in `bin/fm-lease-lib.sh`, and its call in `release_branch_leases` plus the matching OWNERSHIP note in `bin/fm-supervision-host.sh` (shared).
+- Guard: `tests/fm-supervision-host-recovery.test.sh` `test_activation_skips_the_lease_lock_when_no_branch_lease_is_held`.
+- Upstream: always runs `fm-lease.sh release-actor`, which waits for the lease-command lock that a guarded main mutation such as a teardown holds for its whole run; drop once upstream's release no longer waits for that lock when there is nothing to release.
+
 ## Incidental
 
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
