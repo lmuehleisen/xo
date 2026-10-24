@@ -30,7 +30,7 @@
 #   candidate binds to one row through quota_row in
 #   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
 #   reads its own account's row and an expanded provider with no row for the
-#   candidate is unmeasured, never blocked), and the spendPriority argmax over
+#   candidate is unmeasured, never blocked), and the selected-score argmax over
 #   the eligible candidates after the completion-horizon gate. The model never
 #   sees quota, catalogs, approvals,
 #   confidence floors, `why`, or `use`. With no rules, it returns a non-clear
@@ -41,11 +41,11 @@
 # Lanes: a rule with `classes` is a lane (bin/fm-dispatch-lanes-lib.sh owns its
 #   structural checks). Each class route is evaluated like a profile, except a
 #   class declared unmetered receives its configured spend_priority (default 0)
-#   as synthetic spendPriority and skips provider quota evidence; its other
+#   as a synthetic selected score and skips provider quota evidence; its other
 #   eligibility gates still apply.
 #   Code picks: a sampled experiment class with a rankable route first; in
 #   an `ordered` lane the first class with any eligible route, ranked inside
-#   that class; in a `pool` lane the spendPriority argmax over every class.
+#   that class; in a `pool` lane the selected-score argmax over every class.
 #   A class at its optional max_live cap or live_cap_group cap is not eligible.
 #   Live counts read ordinary task records (kind not secondmate) from
 #   $FM_HOME/state/*.meta
@@ -56,11 +56,11 @@
 #   A group counts each record once across all routes of all configured member
 #   classes, including classes outside the selected lane and excluded classes.
 #   These checks are advisory; fm-spawn.sh does not enforce live caps.
-#   Exact spendPriority ties across classes prefer fewer live workers;
+#   Exact selected-score ties across classes prefer fewer live workers;
 #   ties that remain escalate, including ties between routes of one class.
 #   Distinct unmetered spend_priority values avoid ties between those classes.
 #   A class gated `others-ahead-of-pace` stays eligible only while every
-#   rankable route of the lane's ungated classes is metered with spendPriority
+#   rankable route of the lane's ungated classes is metered with a selected score
 #   below 0 and its own best route is not ahead of pace. Unmetered routes
 #   always count as pace-neutral, regardless of their configured score, so
 #   changing spend_priority cannot change a pace gate. An experiment class is
@@ -74,6 +74,11 @@
 #   --lane <name> resolves that lane rule directly: no Choice request, so no
 #   API key, curl, or never-send check is needed; it still reads the
 #   one quota snapshot.
+#   Prefer additive spendPressure once per snapshot when any scope publishes it;
+#   otherwise use legacy spendPriority. Missing selected scores stay unranked.
+#   Candidate output labels name the selected metric; unmetered policy scores
+#   retain their configured values. Legacy planning overrides apply only to
+#   spendPriority; pressure snapshots disclose them as inactive.
 #
 # Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
 #   exists, every string value of the built request is checked against it
@@ -88,17 +93,18 @@
 # Output (stdout, TOON-style block):
 #   dispatch-resolve:
 #     status: clear | ambiguous | escalate | error
+#     spend_metric: spendPressure   (omitted for legacy spendPriority)
 #     model/latency_ms/tokens, rule (when excerpt) and confidence, probabilities
 #     fallback: <runner-up rule taken when the picked rule missed its own floor>
 #     reason: <why the status is not clear>
 #     lane: <name> order=<ordered|pool>   (lane rules; exclude_family and data_tags when given)
 #     experiment: <class> share=.. bucket=.. -> sampled | not sampled | excluded
-#     candidate: <harness>:<model> [class=.. family=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
-#     Unmetered class routes print quota=unmetered (declared), spendPriority=0, runway=unmetered; these are declared facts, not measured quota.
+#     candidate: <harness>:<model> [class=.. family=..] provider=.. scope=.. remaining=..% <spend_metric>=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
+#     Unmetered class routes print quota=unmetered (declared), <spend_metric>=<configured score>, runway=unmetered; these are declared facts, not measured quota.
 #     class: <name> family=<family> [experiment]   (lane rules, status clear only)
 #     Lane candidate lines end with live=<count> [max_live=<cap>] and, for a
 #     grouped class, live_cap_group=<name> group_live=<count> group_max_live=<cap>.
-#     tie_break: <class> has fewest live workers (<count>) among spendPriority ties
+#     tie_break: <class> has fewest live workers (<count>) among <spend_metric> ties
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
@@ -717,7 +723,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
   --argjson planning "$PLANNING_JSON" --argjson planning_present "$PLANNING_PRESENT" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_PLANNING_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
-  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | (($q.generatedAt // "") | quota_ts) as $now | ($r.answers.rule) as $a |
+  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | (quota_selection_metric($q)) as $metric | (($q.generatedAt // "") | quota_ts) as $now | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
@@ -739,14 +745,14 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         end
     end;
   def evidence($rows):
-    $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), usableRunwaySeconds: (.runway.usableRunwaySeconds // null), spendPriority: (.selection.spendPriority // null)});
+    $rows | map({scope, status, pct: (.effectivePercentRemaining // null), runway: (.runway.status // null), usableRunwaySeconds: (.runway.usableRunwaySeconds // null), spendScore: (.selection[$metric] // null)});
   def evaluate_route($c; $unmetered; $spend_priority):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if ($installed[$c.harness] // false) | not then
       {profile: $c, eligible: false, reason: "\($c.harness) tool not installed on this host"}
     elif $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
     elif $unmetered then
-      {profile: $c, provider: $p, unmetered: true, spendPriority: $spend_priority, eligible: true, reason: "unmetered (declared)"}
+      {profile: $c, provider: $p, unmetered: true, spendScore: $spend_priority, eligible: true, reason: "unmetered (declared)"}
     elif prov($p; $lane) == null then
       {profile: $c, provider: $p, eligible: true, unranked: true,
        reason: (if any($q.providers[]; .provider == $p)
@@ -799,16 +805,16 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
           (.runway.status != "projected_exhaustion" or (.runway.usableRunwaySeconds | type) != "number")) then
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true,
          reason: "runway feasibility unknown for completion horizon \($horizon)s"}
-      elif any($rows[]; (quota_selection_known | not)) then
-        ($rows | map(select(quota_selection_known | not)) | first) as $bad |
-        {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "spendPriority missing, non-numeric, or selection not known at \($bad.scope): not rankable"}
+      elif any($rows[]; (quota_selection_known($metric) | not)) then
+        ($rows | map(select(quota_selection_known($metric) | not)) | first) as $bad |
+        {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "\($metric) missing, non-numeric, or selection not known at \($bad.scope): not rankable"}
       else
         (prov($p; $lane)) as $prov_row |
-        ($rows | map((quota_plan_adjust($prov_row; .; ($planning.overrides // []); $p; $lane; $now)) as $row_plan
-                     | . + {effectiveSpend: ($row_plan.spendPriority // .selection.spendPriority), rowPlan: $row_plan})
+        ($rows | map((if $metric == "spendPriority" then quota_plan_adjust($prov_row; .; ($planning.overrides // []); $p; $lane; $now) else null end) as $row_plan
+                     | . + {effectiveSpend: ($row_plan.spendPriority // .selection[$metric]), rowPlan: $row_plan})
                | min_by(.effectiveSpend)) as $limiting |
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
-         spendPriority: $limiting.effectiveSpend, runway: $limiting.runway.status, eligible: true, reason: "ok"}
+         spendScore: $limiting.effectiveSpend, runway: $limiting.runway.status, eligible: true, reason: "ok"}
         + (if $limiting.rowPlan != null then {planning: $limiting.rowPlan, nativeSpendPriority: $limiting.rowPlan.nativeSpendPriority} else {} end)
       end
     end;
@@ -822,7 +828,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def confidence_floor($c): if declared_confidence($c) then rule_at($c).min_confidence else ($floor | tonumber) end;
   def rankable: .eligible and ((.unranked // false) | not);
   # Synthetic unmetered scores rank routes but never measure quota pace.
-  def ahead_of_pace: .unmetered != true and .spendPriority < 0;
+  def ahead_of_pace: .unmetered != true and .spendScore < 0;
   def blocked($reason): . + {eligible: false, unranked: false, unknown: false, reason: $reason};
   # A data policy admits its class only for an allowed project or data tag, and
   # never with a denied tag.
@@ -867,11 +873,11 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ([$classes0[] | select(.gate == null) | .candidates[] | select(rankable)]) as $others |
     [$classes0[] |
       if .gate == "others-ahead-of-pace" and .excluded == null then
-        ([.candidates[] | select(rankable)] | max_by(.spendPriority)) as $own |
-        (if ($others | length) == 0 then "pace gate closed: no ungated class in the lane has a rankable spendPriority"
+        ([.candidates[] | select(rankable)] | max_by(.spendScore)) as $own |
+        (if ($others | length) == 0 then "pace gate closed: no ungated class in the lane has a rankable \($metric)"
          elif any($others[]; ahead_of_pace | not) then
            "pace gate closed: \([$others[] | select(ahead_of_pace | not) | .class] | unique | join(", ")) not spending ahead of pace"
-         elif $own == null then "pace gate closed: this class has no rankable spendPriority"
+         elif $own == null then "pace gate closed: this class has no rankable \($metric)"
          elif ($own | ahead_of_pace) then "pace gate closed: this class is itself spending ahead of pace"
          else null end) as $closed |
         if $closed == null then . + {gate_open: true}
@@ -885,16 +891,16 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def argmax_pick($cands; $where):
     ([$cands[] | select(rankable)]) as $ranked |
     if ($ranked | length) == 0 then {status: "escalate", reason: "no rankable eligible candidate\($where)"}
-    else ($ranked | max_by(.spendPriority)) as $best |
-      ([$ranked[] | select(.spendPriority == $best.spendPriority)]) as $ties |
+    else ($ranked | max_by(.spendScore)) as $best |
+      ([$ranked[] | select(.spendScore == $best.spendScore)]) as $ties |
       (if ([$ties[].class] | unique | length) > 1 then
          ($ties | map(.live) | min) as $fewest | [$ties[] | select(.live == $fewest)]
        else $ties end) as $final |
       if ($final | length) > 1
-      then {status: "escalate", reason: "genuine spendPriority tie\($where)"}
+      then {status: "escalate", reason: "genuine \($metric) tie\($where)"}
       else {status: "clear", chosen: $final[0]}
         + (if ($ties | length) > 1 then
-             {tie_break: "\($final[0].class) has fewest live workers (\($final[0].live)) among spendPriority ties"}
+             {tie_break: "\($final[0].class) has fewest live workers (\($final[0].live)) among \($metric) ties"}
            else {} end)
       end
     end;
@@ -951,7 +957,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
                else {present: true, active: [($planning.overrides // [])[]
                  | select((.expiresAt | quota_ts) != null and $now != null and $now < (.expiresAt | quota_ts))
                  | {provider, accountKey, windowId: (.windowId // null), horizonSeconds, expiresAt}]} end),
-    direct: $direct,
+    direct: $direct, spendMetric: $metric,
     rule: $picked,
     rule_when: when_of($picked),
     confidence: $a.confidence, probabilities: $a.probabilities
@@ -988,9 +994,9 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ([$cands[] | select(.unranked)]) as $unranked |
     if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", note: $sel.note, candidates: $cands}
     else
-      ($elig | max_by(.spendPriority)) as $best |
-      ([$elig[] | select(.spendPriority == $best.spendPriority)] | length) as $ties |
-      if $ties > 1 then $ev + {status: "escalate", reason: "genuine spendPriority tie", note: $sel.note, candidates: $cands}
+      ($elig | max_by(.spendScore)) as $best |
+      ([$elig[] | select(.spendScore == $best.spendScore)] | length) as $ties |
+      if $ties > 1 then $ev + {status: "escalate", reason: "genuine \($metric) tie", note: $sel.note, candidates: $cands}
       else $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $best}
         + (if ($unranked | length) > 0 then
              {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
@@ -1003,16 +1009,19 @@ TEXT=$(jq -r '
   def flat: tostring | gsub("[\t\r\n]"; " ");
   def show($value): ($value // "-") | flat;
   def shell_arg: flat | @sh;
+  (.spendMetric // "spendPriority") as $metric |
   "dispatch-resolve:",
   "  status: \(.status | flat)",
   "  completion_horizon_seconds: \(.completion_horizon_seconds)",
   (if .planning.present then
-     (if (.planning.active | length) > 0
+     (if $metric != "spendPriority" then "  planning: inactive (selected \($metric); overrides adjust spendPriority only)"
+      elif (.planning.active | length) > 0
       then (.planning.active[] | "  planning: active provider=\(.provider | flat) account=\(.accountKey | flat)"
              + (if .windowId then " window=\(.windowId | flat)" else "" end)
              + " horizon_seconds=\(.horizonSeconds) expires_at=\(.expiresAt | flat) (rolling planning horizon, not a vendor reset)")
       else "  planning: inactive (no override active at the quota snapshot time; native spendPriority used)" end)
    else empty end),
+  (if $metric == "spendPressure" then "  spend_metric: \($metric)" else empty end),
   (if .direct then empty
    else "  model: \(show(.model))   latency_ms: \(show(.latency_ms))   tokens: \(show(.tokens.input_tokens))/\(show(.tokens.output_tokens))" end),
   (if .direct then "  rule: \(.rule | flat) (\(.rule_when | flat))   selected: by --lane"
@@ -1031,8 +1040,8 @@ TEXT=$(jq -r '
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
       + (if .class then "  class=\(.class | flat) family=\(.family | flat)" + (if .experiment then " experiment" else "" end) else "" end)
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
-      + (if .unmetered then "  quota=unmetered (declared)  spendPriority=\(show(.spendPriority))  runway=unmetered"
-         elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
+      + (if .unmetered then "  quota=unmetered (declared)  \($metric)=\(show(.spendScore))  runway=unmetered"
+         elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  \($metric)=\(show(.spendScore))  runway=\(show(.runway))" else "" end)
       + (if .planning then "  native_spendPriority=\(show(.nativeSpendPriority))  planning_horizon_seconds=\(.planning.horizonSeconds)  planning_window=\(.planning.windowId | flat)" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)

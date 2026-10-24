@@ -1512,7 +1512,7 @@ A different account lane, a reseller or API-key provider, or a route matched onl
 
 The horizon is rolling, not an assumed vendor reset.
 At each intake the typed resolver evaluates the override against the quota snapshot's `generatedAt`.
-When that instant precedes `expiresAt` and the horizon ends before the vendor reset, the resolver ranks the scope by a planning `spendPriority` that truncates the bounding window's published pace horizon at `generatedAt` plus `horizonSeconds`, capped by the vendor `resetsAt`.
+When the snapshot selects legacy `spendPriority`, that instant precedes `expiresAt`, and the horizon ends before the vendor reset, the resolver ranks the scope by a planning `spendPriority` that truncates the bounding window's published pace horizon at `generatedAt` plus `horizonSeconds`, capped by the vendor `resetsAt`.
 The calculation reuses the producer's published reserve and burn for that one window.
 A scope bounded by more than one window, an unknown or missing pace, a horizon at or beyond the reset, or unprovable account matching keeps the native value.
 Vendor remaining percent, `resetsAt`, runway, short-window exhaustion, zero-remaining, and unknown states are evaluated first and are never altered.
@@ -1520,6 +1520,7 @@ Vendor remaining percent, `resetsAt`, runway, short-window exhaustion, zero-rema
 Inspectable output distinguishes the assumption from observed data.
 An active override prints a `planning: active` line with its provider, account, window, horizon, and expiry, and each adjusted candidate prints its planning value as `spendPriority` beside `native_spendPriority`.
 An expired or otherwise inactive file prints `planning: inactive` and ranks exactly as the native snapshot does.
+Snapshots selecting `spendPressure` also leave these legacy overrides inactive and disclose that the selected metric is unchanged.
 A malformed file, including an unknown field, a non-positive horizon, an unparseable expiry, or a duplicate provider/account/window entry, refuses typed resolution with a `malformed planning file` diagnostic instead of being selected around.
 The file is evaluated on every intake, including after a restart, with no stored state.
 This file is not inherited into secondmate homes.
@@ -1722,7 +1723,7 @@ A lane rule's `when`, `approval`, `min_confidence`, and `floor` keep their meani
 
 Every class route is evaluated like a profile, with a class's `unmetered` flag replacing only provider quota evidence.
 
-- A class with `unmetered: true` replaces provider quota evidence with the explicit label `unmetered (declared)` and its `spend_priority` as synthetic `spendPriority`; it does not claim a measured remaining percentage or runway.
+- A class with `unmetered: true` replaces provider quota evidence with the explicit label `unmetered (declared)` and its `spend_priority` as a synthetic value of the selected spend metric; it does not claim a measured remaining percentage or runway.
 - Absent `spend_priority` keeps the score at `0`, so positive measured scores rank ahead and negative scores rank behind; setting it to `5`, for example, prefers the class over eligible routes with lower scores.
 - An unmetered route always counts as not spending ahead of pace, regardless of its synthetic score, so changing `spend_priority` cannot open or close an `others-ahead-of-pace` gate.
 - Unmetered affects quota evidence only; class live caps, data policies, experiment sampling, approval, lane ordering, and other eligibility gates still apply.
@@ -1730,9 +1731,9 @@ Every class route is evaluated like a profile, with a class's `unmetered` flag r
 - An `ordered` lane takes the first class with any eligible route and ranks only inside that class; an eligible but unranked route keeps its class first rather than falling through to the next class.
 - A `pool` lane ranks every eligible route of every class together.
 - A class at its `max_live` cap or its `live_cap_group` cap is not eligible, so an ordered lane falls through and a pool lane ranks the remaining routes; [`fm-dispatch-resolve.sh`](../bin/fm-dispatch-resolve.sh)'s header owns the metadata counting and advisory-check contract.
-- An exact `spendPriority` tie across classes prefers the class with the fewest live workers and discloses the tie-break; any surviving tie escalates, including tied routes within one class.
+- An exact selected-score tie across classes prefers the class with the fewest live workers and discloses the tie-break; any surviving tie escalates, including tied routes within one class.
   Distinct `spend_priority` values avoid ties between unmetered classes.
-- A class gated `others-ahead-of-pace` stays eligible only while every rankable route of the lane's ungated classes is metered with a negative `spendPriority` (spending ahead of pace) and the gated class's own best route is not ahead of pace; with no rankable ungated route the gate stays closed.
+- A class gated `others-ahead-of-pace` stays eligible only while every rankable route of the lane's ungated classes is metered with a negative selected score (spending ahead of pace) and the gated class's own best route is not ahead of pace; with no rankable ungated route the gate stays closed.
 - An experiment class is sampled from the task text's checksum, so the same brief always samples the same way; a sampled experiment with a rankable route takes the task, and an unsampled one is not eligible.
 - A class with a `data_policy` is eligible only when the task's project is in `allow_projects` or one of its data tags is in `allow_tags`, and never when one of its data tags is in `deny_tags`.
 - A second opinion resolves the originating task's lane again with that task's model family excluded; every experiment class is excluded from a second opinion too.
@@ -1808,7 +1809,8 @@ After the answer, code applies all remaining checks and ranking:
 - Each candidate's `provider` and `floor`.
 - Every applicable account-wide, model/product, or explicitly mapped provider bucket from one `quota-axi --json` snapshot.
 - The inspectable completion horizon and runway feasibility floor before ranking; the script header owns the input and conservative default.
-- The numeric `spendPriority` argmax over candidates, using each candidate's limiting row.
+- The numeric argmax of the snapshot-wide spend metric over candidates, using each candidate's limiting row.
+  The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#read-the-default-toon) owns selection of additive `spendPressure` or legacy `spendPriority`, including unknowns and the prohibition on mixing formulas.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
 
@@ -1832,7 +1834,7 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 - A candidate whose harness has no executable launch location on this host is not eligible, printing `not eligible: <harness> tool not installed on this host`. Launch locations come from the single-owner table `fm_control_harness_launch_candidates` in [`bin/fm-control-lib.sh`](../bin/fm-control-lib.sh) - a bare name on PATH, or an absolute resolver fallback path such as Kimi's `~/.kimi-code/bin` - and each must resolve to an executable file, as [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s resolvers require; they are probed once per resolve with cheap local lookups, so a harness installed only at a fallback stays eligible while an exported function or alias of the same name never counts.
 - Dispatch configuration is identical across homes while installed tools are not, so a host without the tool never lands on a route that would fail at launch. The gate declines that route only: it never substitutes another route by itself, every candidate is still printed with its evidence, and an all-ineligible outcome keeps the ordinary escalate result.
 - Any applicable hard-bound `exhausted_now` row, known zero bound, or finite projected runway below the completion horizon makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
-- Unknown runway, missing or nonnumeric `spendPriority`, or selection status other than known is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
+- Unknown runway, missing or nonnumeric selected scores, or selection status other than known is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
 
 - On the opted-in path, duplicate concrete profiles with the same harness, model, and effort inside one rule or the default array are configuration errors rather than ties.
 

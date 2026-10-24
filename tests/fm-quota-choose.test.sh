@@ -906,4 +906,36 @@ if call_choose --snapshot "$LAB/alias.toon" --candidate codex:default >/dev/null
 fi
 ok "schema-six TOON lane uncertainty requires the agent-owned JSON fallback"
 
+# The producer appends pressure without moving any existing quota column.
+cat > "$LAB/pressure.toon" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt,spendPressure}:
+  claude,all_models,80,1.2,through_reset,established,weekly,"2030-01-03T00:00:00Z",0.6
+exhaustion[0]:
+attention[0]:
+TOON
+out=$(call_choose --snapshot "$LAB/pressure.toon" --candidate claude:default)
+[ "$out" = "claude default" ] || fail "additive pressure TOON was refused: $out"
+sed 's/,0.6$/,unknown/' "$LAB/pressure.toon" > "$LAB/pressure-unknown.toon"
+out=$(call_choose --snapshot "$LAB/pressure-unknown.toon" --candidate claude:default)
+[ "$out" = "claude default" ] || fail "eligibility helper incorrectly used pressure as a gate: $out"
+sed 's/provider,scope/provider,accountKey,scope/; s/claude,all_models/codex,codex-home,all_models/' "$LAB/pressure.toon" > "$LAB/pressure-account.toon"
+out=$(call_choose --snapshot "$LAB/pressure-account.toon" --candidate codex:default)
+[ "$out" = "codex default" ] || fail "account-key offset lost the appended pressure column: $out"
+# The appended column must not relax row width or shift the runway veto.
+sed 's/,0.6$//' "$LAB/pressure.toon" > "$LAB/pressure-truncated.toon"
+if call_choose --snapshot "$LAB/pressure-truncated.toon" --candidate claude:default > /dev/null 2>&1; then
+  fail "pressure header accepted a truncated row"
+fi
+sed 's/,0.6$/,0.6,extra/' "$LAB/pressure.toon" > "$LAB/pressure-extra.toon"
+if call_choose --snapshot "$LAB/pressure-extra.toon" --candidate claude:default > /dev/null 2>&1; then
+  fail "pressure header accepted an extra column"
+fi
+sed 's/through_reset/exhausted_now/' "$LAB/pressure-account.toon" > "$LAB/pressure-exhausted.toon"
+if call_choose --snapshot "$LAB/pressure-exhausted.toon" --candidate codex:default > /dev/null 2>&1; then
+  fail "appended pressure hid account-scoped exhaustion"
+fi
+ok "additive pressure column leaves the eligibility-only helper unchanged"
+
 printf '# all fm-quota-choose tests passed\n'

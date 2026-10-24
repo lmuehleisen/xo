@@ -461,6 +461,67 @@ expect_code 2 "$code" "unknown provider is a configuration error"
 assert_contains "$err" 'unknown FM_DISPATCH_PROVIDER' "unknown provider is actionable"
 pass "OpenRouter ambiguous, malformed, HTTP, and missing-model paths are handled"
 
+# --- additive steady-rate score: one metric for the complete snapshot --------
+write_quota "$QUOTA" 0.7597
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0.1 |
+    (.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models") | .selection.spendPressure) = 0.8 |
+    (.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0.3' "$QUOTA" > "$TMP_ROOT/pressure.json"
+cp "$TMP_ROOT/pressure.json" "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "additive pressure is rankable"
+assert_contains "$out" '  spend_metric: spendPressure' "the snapshot metric is disclosed"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "steady pressure reverses the legacy Cursor winner"
+assert_contains "$out" 'remaining=79%  spendPressure=0.8' "candidate evidence labels the selected metric"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '
+  .spendMetric == "spendPressure" and
+  any(.candidates[]; .route == "claude:sonnet" and .spendPressure == 0.8 and
+    .unmetered == false and (has("spendPriority") | not))
+' >/dev/null || fail "history mislabeled pressure as legacy priority"
+
+# Selection applies even when only an unrelated scope advertises the field.
+jq 'del(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) |
+    (.providers[] | select(.provider == "google") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = null' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  spend_metric: spendPressure' "a null property outside the candidate set selects pressure globally"
+assert_contains "$out" '  status: escalate' "candidates cannot rank on legacy scores in a mixed snapshot"
+
+# Provider-wide and exact-model bounds use the same metric and its minimum.
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability) +=
+    [{scope:"model:sonnet",status:"known",effectivePercentRemaining:99,
+      runway:{status:"through_reset"},selection:{status:"known",spendPriority:99,spendPressure:0.2}}]' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'cursor'" "the tightest pressure bound controls ranking"
+assert_contains "$out" 'scope=model:sonnet  remaining=99%  spendPressure=0.2' "exact-model pressure is retained as limiting evidence"
+
+jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[].selection) |= (del(.spendPressure) | .spendPriority = 100)' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "a missing pressure never falls back to a provider legacy score"
+assert_contains "$out" 'spendPressure missing, non-numeric, or selection not known at all_models' "mixed-snapshot missing scores stay unranked"
+
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = "unknown"' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: escalate' "unknown pressure never falls back to legacy scores"
+assert_contains "$out" '  reason: no rankable eligible candidate' "unknown pressure is not zero"
+
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0.1' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: escalate' "equal pressure never falls back to different legacy scores"
+assert_contains "$out" '  reason: genuine spendPressure tie' "a pressure tie names the selected metric"
+
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.usableRunwaySeconds) = 30' "$TMP_ROOT/pressure.json" > "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "pressure cannot override a short completion runway"
+assert_contains "$out" 'runway 30s below completion horizon 3600s' "the unchanged runway veto is disclosed"
+pass "additive pressure: consistent snapshot metric, unknown handling, and runway veto"
+write_quota "$QUOTA" 0.7597
+
 # --- never-send list: a match or a bad list withholds the request -------------
 NEVER_SEND="$HOME_DIR/config/dispatch-never-send"
 PRIVATE_BRIEF="$TMP_ROOT/private-brief.md"
@@ -1014,6 +1075,14 @@ assert_contains "$out" 'candidate: pi:openai-codex/gpt-5.6-sol  provider=codex  
 assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  -> eligible, unranked: provider codex has no quota row for account codex-home: disclosed uncertainty' "native Codex never infers an account from a Pi lane"
 assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex-work/gpt-5.6-terra'" "the lane with headroom is chosen"
 assert_equals '--json' "$(cat "$LOG/quota-axi.calls")" "schema 6 needs one quota-axi --json read"
+
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = 100 |
+    (.providers[] | select(.accountKey == "openai-codex-work") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0' "$SCHEMA6" > "$TMP_ROOT/schema6-pressure.json"
+reset_log
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/schema6-pressure.json" run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex-work/gpt-5.6-terra'" "pressure preserves account binding and exhaustion vetoes"
+assert_contains "$out" 'remaining=11%  spendPressure=0  runway=projected_exhaustion  -> eligible' "zero pressure is known, not missing"
+assert_contains "$out" 'no quota row for account codex-home' "pressure cannot substitute a sibling account"
 
 SCHEMA6_NATIVE="$TMP_ROOT/schema6-native.json"
 jq '
@@ -1756,6 +1825,29 @@ run_lane code out err "$BRIEF" --lane scoped --project xo
 assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "an ungated lane ranks the same class without the pace condition"
 pass "the Gemini pace gate applies only where the lane declares it"
 
+# Pace gates must use pressure even when legacy signs would close the gate.
+jq '.rules = [{lane:"pressure",when:"ordinary work",classes:["sol-high",{class:"gemini-flash-high",gate:"others-ahead-of-pace"}]}]' "$TEMPLATE" > "$RULES"
+lane_quota codex=0.2 agy=-0.4
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection) |= (.spendPressure = (-.spendPriority))' "$LANE_QUOTA" > "$LANE_QUOTA.pressure"
+mv "$LANE_QUOTA.pressure" "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane pressure --project xo
+assert_contains "$out" "profile: --harness 'agy' --model 'gemini-3.8-flash-high'" "pressure signs open the pace gate despite opposite legacy signs"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = 0' "$LANE_QUOTA" > "$LANE_QUOTA.pressure"
+mv "$LANE_QUOTA.pressure" "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane pressure --project xo
+assert_contains "$out" 'pace gate closed: sol-high not spending ahead of pace' "zero pressure closes the gate without consulting legacy priority"
+
+jq '.classes["muse-spark"].spend_priority = 5 |
+    .rules = [{lane:"pressure",when:"ordinary work",classes:["sol-high","muse-spark"]}]' "$TEMPLATE" > "$RULES"
+run_lane code out err "$BRIEF" --lane pressure --project xo
+assert_contains "$out" 'quota=unmetered (declared)  spendPressure=5  runway=unmetered' "configured unmetered scores keep their value under pressure"
+assert_contains "$out" 'class: muse-spark' "the configured synthetic score still ranks alongside pressure"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '
+  .spendMetric == "spendPressure" and
+  any(.candidates[]; .class == "muse-spark" and .unmetered == true and .spendPressure == 5)
+' >/dev/null || fail "history lost the synthetic pressure distinction"
+pass "pressure controls lane pace gates and preserves synthetic scores"
+
 # Changing a synthetic score never changes pace, on either side of the gate.
 for priority in 0 5 -5; do
   jq --argjson priority "$priority" '.classes["muse-spark"].spend_priority = $priority |
@@ -2193,6 +2285,25 @@ planning_first=$out
 run_lane code out err "$BRIEF" --lane plan --project xo
 assert_equals "$planning_first" "$out" "a repeated intake after restart reproduces the planning result with no state"
 
+# Legacy planning cannot substitute its burn-based score into pressure ranking.
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.8 |
+    (.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.9' "$LANE_QUOTA" > "$TMP_ROOT/planning-pressure.json"
+cp "$TMP_ROOT/planning-pressure.json" "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" "profile: --harness 'cursor'" "the legacy planning value cannot displace the pressure winner"
+assert_contains "$out" 'spendPressure=-0.9' "the published pressure remains unchanged by the active legacy override"
+assert_contains "$out" 'planning: inactive (selected spendPressure; overrides adjust spendPriority only)' "the inactive legacy override is disclosed"
+assert_not_contains "$out" 'native_spendPriority=' "pressure candidates never carry legacy planning evidence"
+
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection) |= del(.spendPressure)' "$TMP_ROOT/planning-pressure.json" > "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'eligible, unranked: spendPressure missing' "planning cannot fill in a missing pressure score"
+assert_contains "$out" "profile: --harness 'cursor'" "a missing pressure score never falls back to adjusted priority"
+
+jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.8' "$TMP_ROOT/planning-pressure.json" > "$LANE_QUOTA"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'genuine spendPressure tie' "legacy planning cannot break a pressure tie"
+
 plan_quota '2026-11-01T04:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
 run_lane code out err "$BRIEF" --lane plan --project xo
 assert_contains "$out" "profile: --harness 'cursor'" "at the expiry instant the planning override is inactive and native ranking returns"
@@ -2321,7 +2432,7 @@ tail -n 1 "$HISTORY" | jq -e --arg brief "$HISTORY_BRIEF" '
   .model == "jev-1.13.0" and (.latency_ms | type) == "number" and
   .tokens == {input_tokens: 812, output_tokens: 60} and
   .rule == "rule_4" and .confidence == 0.9 and .probabilities.rule_4 == 0.96 and
-  .suggested_profile.harness == "cursor" and
+  .suggested_profile.harness == "cursor" and .spendMetric == "spendPriority" and
   any(.candidates[]; .route == "cursor:cursor-grok-4.6-medium" and
     .eligibility == "eligible" and .spendPriority == 0.7597)
 ' >/dev/null || fail "clear history lost score, input pointer or candidates"

@@ -11,6 +11,9 @@
 # of taking default-account evidence that a JSON membership read could replace.
 # The agent-side quota skill owns that permitted fallback; this helper never
 # takes a second snapshot.
+# Both the legacy quota[] columns and the additive trailing spendPressure
+# column are accepted. This helper checks eligibility only; it never ranks by
+# either score.
 # For each --candidate in order, it maps <harness> to its primary provider
 # family, then applies the matched row's provider-wide scopes and exact model
 # or product scopes for <model>. A candidate is eligible only when no
@@ -271,10 +274,11 @@ else
       else error("invalid zero-row quota header")
       end
     else
-      ($lines | map(test("^quota\\[[1-9][0-9]*\\]\\{provider,(accountKey,)?scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt\\}:$")) | index(true)) as $quota_index |
+      ($lines | map(test("^quota\\[[1-9][0-9]*\\]\\{provider,(accountKey,)?scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt(,spendPressure)?\\}:$")) | index(true)) as $quota_index |
       if $quota_index == null then error("missing quota section")
       else
         (if ($lines[$quota_index] | contains("{provider,accountKey,")) then 1 else 0 end) as $k |
+        (if ($lines[$quota_index] | endswith(",spendPressure}:")) then 1 else 0 end) as $pressure_col |
         ($lines[:$quota_index]) as $head |
         ($lines[$quota_index] | capture("^quota\\[(?<count>[1-9][0-9]*)\\]").count | tonumber) as $quota_count |
         ($lines[($quota_index + 1):($quota_index + 1 + $quota_count)]) as $quota_lines |
@@ -287,7 +291,7 @@ else
         ($lines[($attention_index + 1 + $attention_count):]) as $tail |
         if (($head | valid_preamble) | not) or
            ($quota_lines | length) != $quota_count or
-           (($quota_lines | valid_rows(8 + $k)) | not) or
+           (($quota_lines | valid_rows(8 + $k + $pressure_col)) | not) or
            ($exhaustion_rows | length) != $exhaustion_count or
            (($exhaustion_rows | valid_rows(5 + $k)) | not) or
            ($attention_rows | length) != $attention_count or
@@ -298,7 +302,7 @@ else
           ($quota_lines | map(decoded_row)) as $rows |
           ($attention_rows | attention_entries($k)) as $attention_entries |
           if (($attention_entries | valid_attention_entries) | not) then error("invalid attention identities")
-          elif any($rows[]; length != 8 + $k) then error("invalid quota rows")
+          elif any($rows[]; length != 8 + $k + $pressure_col) then error("invalid quota rows")
           else
             {
               schemaVersion: schema_of($k),

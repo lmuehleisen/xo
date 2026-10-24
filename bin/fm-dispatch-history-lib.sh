@@ -11,6 +11,9 @@
 # brief_path points to the input without storing its text. Unavailable evidence
 # is null or empty. Router fields whitelist scores, token counts, the suggested
 # profile and compact candidates, never request bodies, response bodies or keys.
+# spendMetric names the snapshot-wide formula (null before quota evaluation);
+# each candidate score uses that metric as its key, with unmetered marking
+# synthetic policy scores. Legacy snapshots retain their spendPriority key.
 # Spawn entries record the final profile and resolver_exists, which means an
 # earlier router entry for that task exists in this home's history (any status).
 # Only successful ship/scout launches call the spawn helper, including relaunch.
@@ -32,7 +35,7 @@ fm_dispatch_history_router() (
       latency_ms: $latency} + $evidence + $result) as $r |
     {kind: "router", time: $time, task_id: $id, brief_path: $brief,
      status: $r.status, model: ($r.model | select(. != "") // null),
-     latency_ms: $r.latency_ms,
+     latency_ms: $r.latency_ms, spendMetric: ($r.spendMetric // null),
      tokens: (if $r.tokens then $r.tokens | {input_tokens, output_tokens} else null end),
      rule: ($r.rule // null), confidence: ($r.confidence // null),
      probabilities: ($r.probabilities // {}), lane: ($r.lane | select(. != "") // null),
@@ -44,7 +47,8 @@ fm_dispatch_history_router() (
         provider: (.provider // null), class: (.class // null),
         eligibility: (if .unranked then "eligible, unranked"
           elif .eligible then "eligible" else "not eligible" end),
-        spendPriority: (.spendPriority // null)}]}
+        unmetered: (.unmetered // false),
+        ($r.spendMetric // "spendPriority"): (.spendScore // null)}]}
   ') || return 0
   umask 077
   mkdir -p "$home/state" || return 0
