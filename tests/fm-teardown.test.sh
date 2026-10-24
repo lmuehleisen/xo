@@ -5836,12 +5836,75 @@ SH
     rc=0
     FM_ARCHIVE_TEST_COMMAND="$(command -v "$operation")" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
     expect_code 0 "$rc" "unrelated archive $operation failure aborted teardown"
-    grep -E 'warning:.*unrelated-old' "$case_dir/stderr" >/dev/null || fail "pruning failure did not name its path"
+    if [ "$operation" = rm ]; then
+      grep -E 'warning:.*unrelated-old' "$case_dir/stderr" >/dev/null || fail "pruning failure did not name its path"
+    else
+      assert_grep "warning: could not scan status archives under $case_dir/data" "$case_dir/stderr" "scan failure did not name the data root"
+    fi
     assert_grep 'current history' "$case_dir/data/task-x1/status.log" "pruning failure lost current archive"
     assert_absent "$case_dir/state/task-x1.meta" "pruning failure retained current metadata"
     assert_present "$case_dir/data/unrelated-old/status.log" "failure fixture did not preserve expired archive"
   done
   pass "retention failures warn without aborting unrelated teardown"
+}
+
+# Hundreds of task directories once left Bash 3.2 teardown spinning at full
+# CPU with its locks held; a crashing scan must also warn once, not per task
+# (docs/fork-divergences.md teardown-archive-prune-bound).
+test_status_archive_pruning_bounded_across_many_tasks() {
+  local case_dir rc mode dir dirs i calls
+  . "$ROOT/bin/fm-timeout-lib.sh"
+  for mode in scan crash; do
+    case_dir=$(make_case "status-archive-many-$mode")
+    write_meta "$case_dir" local-only ship
+    touch "$case_dir/config/status-archive"
+    printf 'done: current history\n' > "$case_dir/state/task-x1.status"
+    dirs=()
+    i=0
+    while [ "$i" -lt 300 ]; do
+      dirs+=("$case_dir/data/old-$i")
+      i=$((i + 1))
+    done
+    mkdir -p "${dirs[@]}"
+    for dir in "${dirs[@]}"; do
+      printf 'recent\n' > "$dir/status.log"
+    done
+    printf 'expired\n' > "$case_dir/data/old-7/status.1.log"
+    touch -t 200001010000 "$case_dir/data/old-7/status.1.log"
+    cat > "$case_dir/fakebin/find" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    status.log|*/status.log)
+      printf 'scan\n' >> "$FM_ARCHIVE_TEST_CASE/find-calls"
+      [ "$FM_ARCHIVE_TEST_MODE" != crash ] || kill -BUS "$$"
+      break
+      ;;
+  esac
+done
+exec "${FM_ARCHIVE_TEST_COMMAND:?}" "$@"
+SH
+    chmod +x "$case_dir/fakebin/find"
+    rc=0
+    FM_ARCHIVE_TEST_CASE="$case_dir" FM_ARCHIVE_TEST_MODE="$mode" FM_ARCHIVE_TEST_COMMAND="$(command -v find)" \
+      FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data" \
+      FM_CONFIG_OVERRIDE="$case_dir/config" PATH="$case_dir/fakebin:$PATH" \
+      fm_run_timed 120 "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    expect_code 0 "$rc" "many-task retention ($mode)"
+    calls=$(grep -c '' "$case_dir/find-calls" 2>/dev/null || true)
+    [ "${calls:-0}" -lt 10 ] || fail "retention ran $calls scans for 300 task directories"
+    assert_grep 'current history' "$case_dir/data/task-x1/status.log" "many-task retention lost current archive"
+    assert_absent "$case_dir/state/task-x1.meta" "many-task retention retained current metadata"
+    assert_present "$case_dir/data/old-299/status.log" "retention removed a recent archive"
+    if [ "$mode" = crash ]; then
+      [ "$(grep -c 'could not scan status archives' "$case_dir/stderr")" = 1 ] \
+        || fail "crashing scan did not warn exactly once"
+      assert_present "$case_dir/data/old-7/status.1.log" "crashing scan still pruned"
+    else
+      assert_absent "$case_dir/data/old-7/status.1.log" "expired archive survived many-task pruning"
+    fi
+  done
+  pass "retention over hundreds of task directories stays bounded and a crashing scan warns once"
 }
 
 test_status_archive_missing_status_noop() {
@@ -5916,6 +5979,7 @@ test_status_archive_failed_publish_preserves_presentation
 test_status_archive_cursor_failure_retries_without_duplicate
 test_status_archive_publish_and_cold_log_stay_inert
 test_status_archive_pruning_failure_warns_and_completes
+test_status_archive_pruning_bounded_across_many_tasks
 test_missing_startup_source_refuses_before_cleanup
 test_unreadable_startup_source_refuses_before_cleanup
 test_missing_adapter_sibling_refuses_before_cleanup
