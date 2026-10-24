@@ -168,6 +168,13 @@
 #   OpenCode requires V2 >= 2.0.18 and starts bare with --standalone --auto,
 #   then waits FM_OPENCODE_READY_POLLS (default 60) at FM_OPENCODE_POLL_INTERVAL
 #   (default 0.5 seconds) for an empty composer before guarded brief submission.
+#   The per-generation plugin must also acknowledge installation before the
+#   brief is submitted, then report the native session.context model before
+#   spawn succeeds (the same poll bound applies independently to each gate).
+#   Missing/mismatched identity refuses with expected/observed diagnostics;
+#   a successful native catalog read also refuses an absent requested model.
+#   Unavailable discovery is reported as uncertainty, never unsupported proof.
+#   This checks OpenCode's resolved model ID, not a provider's internal routing.
 #   If the screen is still unrecognized (never pending) while the agent is
 #   alive, the screen is settled, and it positively shows an idle composer with
 #   no permission prompt or dialog, it prints a notice, captures the screen to
@@ -526,8 +533,8 @@
 #   Claude, Codex, and agy launches read config/crew-permissions: absent or auto
 #   uses Claude's --permission-mode auto / Codex's --approve-for-me
 #   (workspace-write with automatic review); manual uses Claude manual / Codex
-#   on-request with human review. agy has no reviewed-auto mode of its own, so
-#   auto selects its policy-layered --dangerously-skip-permissions posture for
+#   on-request with human review. agy's native Auto is account-dependent and
+#   not this route; auto selects its policy-layered bypass posture for
 #   crewmates and scouts; --no-agy-bypass selects --mode accept-edits, which
 #   auto-approves file edits inside the granted directories but STILL prompts
 #   for every shell command, and manual leaves agy's default review mode where
@@ -2787,7 +2794,7 @@ agy_model_validate() {  # <agy-bin> <model> <effort>
   local bin=$1 model=$2 effort=$3 listing ids level levels rc=0 bound=${FM_AGY_MODELS_TIMEOUT:-15}
   case "$bound" in ''|*[!0-9]*|0*) bound=15 ;; esac
   [ -n "$model" ] && [ "$model" != default ] || return 0
-  listing=$(fm_run_timed "$bound" "$bin" models 2>/dev/null < /dev/null) || rc=$?
+  listing=$(fm_run_timed "$bound" env AGY_CLI_DISABLE_AUTO_UPDATE=1 "$bin" models 2>/dev/null < /dev/null) || rc=$?
   if [ "$rc" -ne 0 ] || [ -z "$listing" ]; then
     if [ "$rc" -eq 124 ]; then
       echo "notice: 'agy models' did not answer within ${bound}s; launching with --model '$model' unvalidated" >&2
@@ -3137,7 +3144,7 @@ launch_command_template() { # <harness> <kind> <permission-flags>
   # inherited CLAUDECODE from a claude primary would otherwise outrank them in
   # a process that only reads the environment.
   agy)
-    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS __AGYBIN__ '
+    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS AGY_CLI_DISABLE_AUTO_UPDATE=1 __AGYBIN__ '
     printf '%s' "$permission_flags"
     printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     ;;
@@ -5880,6 +5887,30 @@ opencode_unrecognized_screen_idle() {
   [ "$before" = "$after" ] && fm_composer_leftbar_idle_evidence "$after"
 }
 
+# The receipt lives in the new busy generation's private plugin directory, so
+# an earlier incarnation cannot satisfy either gate. Never infer actual model
+# identity from the launch config, catalog, or rendered display name.
+opencode_wait_model() { # <ready|verified>
+  local wanted=$1 poll=0 phase
+  while [ "$poll" -lt "${FM_OPENCODE_READY_POLLS:-60}" ]; do
+    phase=$(jq -r '.phase // empty' "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null) || phase=
+    if [ "$phase" = refused ]; then break; fi
+    if [ "$phase" = "$wanted" ]; then
+      if [ "$wanted" = verified ] && [ "$(jq -r '.discovery' "$OPENCODE_MODEL_EVIDENCE")" = unavailable ]; then
+        echo "notice: OpenCode native model discovery unavailable; requiring native session identity for expected=${MODEL:-default}" >&2
+      fi
+      return 0
+    fi
+    poll=$((poll + 1))
+    sleep "${FM_OPENCODE_POLL_INTERVAL:-0.5}"
+  done
+  OPENCODE_MODEL_FAILURE=$(jq -r '"expected=\(.expected) observed=\(.observed); \(.detail) (discovery=\(.discovery))"' \
+    "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null) || \
+    OPENCODE_MODEL_FAILURE="expected=${MODEL:-default} observed=unavailable; native model receipt missing ($wanted); inspect plugin loading and native session errors"
+  echo "error: OpenCode launch model verification failed: $OPENCODE_MODEL_FAILURE; evidence=$OPENCODE_MODEL_EVIDENCE" >&2
+  return 1
+}
+
 opencode_spawn_fail() { # <detail>
   local failure_state=${2:-idle} failure_event
   failure_event=$(status_stamp_line "failed: $1")
@@ -6685,6 +6716,9 @@ EOF
 EOF
     ;;
   opencode*)
+    OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
+      "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || exit 1
+    OPENCODE_MODEL_EVIDENCE="$TASK_TMP/opencode-plugin-$BUSY_GEN/model.json"
     mkdir -p "$TASK_TMP/opencode-plugin-$BUSY_GEN"
     printf '%s\n' '{"type":"module","main":"./index.mjs"}' > "$TASK_TMP/opencode-plugin-$BUSY_GEN/package.json"
     cat >"$TASK_TMP/opencode-plugin-$BUSY_GEN/index.mjs" <<EOF
@@ -6699,6 +6733,7 @@ EOF
 // watcher's wake NOTIFICATION, never current-state truth.
 import { execFile } from "node:child_process";
 import { v2Plugin } from "$FM_ROOT/.opencode/plugins/lib/fm-v2-plugin.js";
+import { installLaunchModelCheck } from "$FM_ROOT/.opencode/plugins/lib/fm-launch-model.js";
 const notifyTurnEnd = $busy_notify_turnend;
 const busyEvent = (state, event) =>
   new Promise((resolve) => {
@@ -6740,7 +6775,17 @@ export const FmBusyState = async () => {
     },
   };
 };
-export default v2Plugin("firstmate.worker-busy", FmBusyState);
+const busyPlugin = v2Plugin("firstmate.worker-busy", FmBusyState);
+export default {
+  ...busyPlugin,
+  async setup(ctx) {
+    const cleanup = await busyPlugin.setup(ctx);
+    await installLaunchModelCheck(ctx, $(jq -cn --arg expected "${MODEL:-default}" \
+      --arg evidence "$OPENCODE_MODEL_EVIDENCE" --arg launchText "$OPENCODE_POINTER" \
+      '{expected:$expected,evidence:$evidence,launchText:$launchText}'));
+    return cleanup;
+  },
+};
 EOF
     ;;
   pi | pi-signed)
@@ -7462,7 +7507,10 @@ pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
 omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
-agy) LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "${AGY_BIN:-}")"} ;;
+agy)
+  LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "${AGY_BIN:-}")"}
+  LAUNCH="$(fm_agy_launch_guard)$LAUNCH"
+  ;;
 devin)
   LAUNCH=${LAUNCH//__DEVINBIN__/"$(shell_quote "${DEVIN_BIN:-}")"}
   LAUNCH=${LAUNCH//__DEVINCONFIG__/"$(shell_quote "$STATE_REAL/$ID.devin-config.json")"}
@@ -7944,18 +7992,26 @@ if [ "$HARNESS" = opencode ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     opencode_spawn_fail "OpenCode V2 composer did not become ready in window $T"
     exit $?
   fi
-  OPENCODE_POINTER=$(printf 'Read the brief at %s and follow it exactly.' "$BRIEF_REAL" |
-    "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief) || {
-    opencode_spawn_fail "OpenCode V2 brief encoding failed in window $T"
+  if ! opencode_wait_model ready; then
+    opencode_spawn_fail "OpenCode V2 model verification failed: $OPENCODE_MODEL_FAILURE"
     exit $?
-  }
+  fi
   # Submission may start work even when its verdict is lost or unconfirmed.
   # Keep task ownership from this point, including if submission is interrupted.
   SPAWN_FRESH_COMMIT_PENDING=0
   OPENCODE_VERDICT=$(fm_backend_send_text_submit "$BACKEND" "$T" "$OPENCODE_POINTER" \
     3 "${FM_OPENCODE_POLL_INTERVAL:-0.5}" 0 "$W") || OPENCODE_VERDICT=send-failed
   if [ "$OPENCODE_VERDICT" != empty ]; then
+    if [ "$(jq -r '.phase' "$OPENCODE_MODEL_EVIDENCE" 2>/dev/null)" = refused ]; then
+      opencode_wait_model verified || true
+      opencode_spawn_fail "OpenCode V2 model verification failed: $OPENCODE_MODEL_FAILURE" unknown
+      exit $?
+    fi
     opencode_spawn_fail "OpenCode V2 brief submission unconfirmed ($OPENCODE_VERDICT) in window $T" unknown
+    exit $?
+  fi
+  if ! opencode_wait_model verified; then
+    opencode_spawn_fail "OpenCode V2 model verification failed: $OPENCODE_MODEL_FAILURE" unknown
     exit $?
   fi
 fi

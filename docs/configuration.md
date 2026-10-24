@@ -1005,7 +1005,7 @@ agy's own reviewed `--mode auto` exists since 1.3.5 ([release notes](https://git
 Firstmate does not route workers through it, so an agy crewmate or scout in Auto uses `--dangerously-skip-permissions` with Firstmate's permission policy and judge by default.
 The per-spawn `--no-agy-bypass` option selects `--mode accept-edits`, which approves file edits inside granted directories while still prompting for shell commands.
 Manual leaves agy's default review mode in place, where edits and shell commands prompt; agy secondmates also stay outside the worker policy layer.
-The policy layer's version, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.
+The policy layer's executable-compatibility, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.
 For a policy-layer launch, availability depends on the installed CLI, account, and managed policy; a denied or unsupported launch must be reported rather than retried without the policy layer.
 Manual approval prompts can leave an unattended task waiting for intervention; with agy, Manual keeps its full review prompts and `--no-agy-bypass` selects `accept-edits`, which still prompts for shell commands.
 Both modes preserve the separate project delivery and merge-approval rules.
@@ -1483,6 +1483,46 @@ Caller-supplied `--provider` options are refused when a scope file exists, preve
 The helper respects `FM_HOME` and `FM_CONFIG_OVERRIDE`, and compatibility `--version` checks remain unscoped.
 This file is not inherited into secondmate homes: each home selects the providers its own tools and credentials use, which can differ from the primary home.
 The inheritance allowlist remains owned by [`bin/fm-config-inherit-lib.sh`](../bin/fm-config-inherit-lib.sh).
+
+## Quota planning overrides (config/quota-planning.json)
+
+The optional local, gitignored `config/quota-planning.json` declares temporary consumer-side planning assumptions for quota ranking.
+It never changes vendor evidence.
+An absent file preserves native ranking exactly.
+
+```json
+{
+  "overrides": [
+    {
+      "provider": "<quota-axi provider>",
+      "accountKey": "<matched account lane>",
+      "windowId": "<optional bounding window id>",
+      "horizonSeconds": 302400,
+      "expiresAt": "<ISO-8601 instant>"
+    }
+  ]
+}
+```
+
+Each override names one provider and the account lane a candidate must provably bind through the shared quota library, such as the native Codex `codex-home` lane or a Pi `codex-native/` route on that same account.
+The bound row must publish that membership, through its `accountKey` or `accountKeys`; a lane string alone, a default-row fallback, or unknown schema-5 membership never proves it.
+When both a generic override and a `windowId` override for the same provider and account match a row, the window-specific override wins, regardless of file order.
+A different account lane, a reseller or API-key provider, or a route matched only by model name never receives the override.
+`windowId` is optional and, when present, must equal the scope's single bounding window.
+
+The horizon is rolling, not an assumed vendor reset.
+At each intake the typed resolver evaluates the override against the quota snapshot's `generatedAt`.
+When that instant precedes `expiresAt` and the horizon ends before the vendor reset, the resolver ranks the scope by a planning `spendPriority` that truncates the bounding window's published pace horizon at `generatedAt` plus `horizonSeconds`, capped by the vendor `resetsAt`.
+The calculation reuses the producer's published reserve and burn for that one window.
+A scope bounded by more than one window, an unknown or missing pace, a horizon at or beyond the reset, or unprovable account matching keeps the native value.
+Vendor remaining percent, `resetsAt`, runway, short-window exhaustion, zero-remaining, and unknown states are evaluated first and are never altered.
+
+Inspectable output distinguishes the assumption from observed data.
+An active override prints a `planning: active` line with its provider, account, window, horizon, and expiry, and each adjusted candidate prints its planning value as `spendPriority` beside `native_spendPriority`.
+An expired or otherwise inactive file prints `planning: inactive` and ranks exactly as the native snapshot does.
+A malformed file, including an unknown field, a non-positive horizon, an unparseable expiry, or a duplicate provider/account/window entry, refuses typed resolution with a `malformed planning file` diagnostic instead of being selected around.
+The file is evaluated on every intake, including after a restart, with no stored state.
+This file is not inherited into secondmate homes.
 
 ## Project capacity (config/project-capacity)
 
@@ -2141,6 +2181,41 @@ A fail-closed poll that already queued a wake, and a timeout, always print so th
 `FM_MAIL_CHECK_BUDGET` (default 15, valid 5..25) bounds one standing poll and is cut down to fit `FM_CHECK_TIMEOUT`.
 `bin/fm-mail-check.sh disarm` removes the standing check.
 
+## Captain alerts to Discord (.env)
+
+While the away posture stands, `bin/fm-captain-alert.sh` posts outcomes that need the captain to a Discord channel through a webhook.
+It is one-way: replies in Discord do nothing, nothing can be approved there, and anything that needs the captain still waits for the return.
+Quiet mode and attended sessions post nothing.
+The script header owns the row selection, coalescing and rate limits, failure handling, and secrecy rules; this section owns the configuration.
+
+It is off unless the home's gitignored `.env` provides a webhook URL:
+
+```sh
+FM_DISCORD_ALERT_WEBHOOK=          # required: the webhook URL; a bearer credential, never printed
+FM_DISCORD_ALERT_DETAIL=full       # optional: full (outcome summaries) or brief (counts only)
+FM_DISCORD_ALERT_MENTION_USER_ID=  # optional: numeric Discord user id mentioned in each post
+```
+
+Use a webhook created for these alerts alone, so rotating or deleting it touches nothing else that posts to Discord.
+Choose `brief` when anyone besides the captain can read the channel.
+The mention is only needed when the channel's notification level is Mentions.
+
+**Arm and test**
+
+`bin/fm-captain-alert.sh arm` registers the watcher check (`state/captain-alert.check.sh`) and starts its cursor at the current end of the outcome store, so nothing earlier is ever posted.
+`bin/fm-captain-alert.sh test` posts one labelled test message and prints the id Discord returned; it is a captain-authorized action.
+Discord accepting a post proves only that the message exists in the channel: whether the phone rings depends on the channel and server notification settings, desktop activity, and the phone's own settings, so confirm the test reached the phone.
+`bin/fm-captain-alert.sh status` prints the configuration and delivery state without the URL, and `disarm` removes the check and its records.
+
+**What the captain sees**
+
+The `/afk` entry announcement names the notify-only Discord reach and the last confirmed test only when the check is armed, configured, and not stopped by a rejected webhook; otherwise it says no phone channel is configured.
+A delivery failure becomes one notification when it starts, a one-time alarm through the away watchdog's channels ([wedge-alarm.md](wedge-alarm.md)), and a gap line in the return brief.
+A rejected webhook stops posting until `test` succeeds or the webhook value changes.
+
+Captain outcomes come from the supervision branch's outcome store, which the Pi branch and the supervision host both write.
+A home whose away supervision is the away daemon records no captain outcomes, so the check reports that once and posts nothing there.
+
 ## Relay (.env)
 
 Relay lets a firstmate instance answer public mentions and act on normal reversible mention requests through firstmate's normal lifecycle.
@@ -2720,6 +2795,7 @@ Some built-in sources carry the captain's answer to a captain-held task, and wha
 
 - An explicitly captured review artifact may use the parallel optional `reconciles` adapter command and binding-verified `reconcile-requests` intake rather than entering keyed answers; the static Ops board never emits that selection or binds an answer source, and [`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#evidence-backed-reconciliation-is-not-a-board-control) owns the lifecycle semantics.
 - Feeding is independent of handling: it never acknowledges a result and never suppresses a wake, because recording the answer or request is transcription while acting on it is firstmate's judgement.
+- A capture announced as the home's own `check` wake is the fed answer's or request's one notification, so the feed tells the intake to queue no second wake for it ([`captain-hold-lifecycle.md`](captain-hold-lifecycle.md#waking-the-home-that-owns-the-call)).
 - An unbound built-in source, a built-in adapter without the corresponding command, and a failure on either side all leave the capture untouched and still announced.
 - External binding responses never enter either authority-bearing intake.
 
@@ -3025,6 +3101,12 @@ FM_IMAP_HOST=      # mail-plane IMAP server hostname
 FM_IMAP_PORT=993   # mail-plane IMAP server port
 FM_SMTP_HOST=      # mail-plane SMTP server hostname
 FM_SMTP_PORT=465   # mail-plane SMTP server port
+FM_DISCORD_ALERT_WEBHOOK=   # captain alerts webhook URL, from .env only (docs/configuration.md "Captain alerts to Discord")
+FM_DISCORD_ALERT_DETAIL=full   # captain alerts detail: full or brief
+FM_DISCORD_ALERT_MENTION_USER_ID=   # captain alerts: optional numeric user id to mention
+FM_CAPTAIN_ALERT_COOLDOWN_SECS=3600   # seconds before one task is headlined again in a captain alert
+FM_CAPTAIN_ALERT_HOURLY_CAP=6   # captain alert posts per rolling hour before one volume notice
+FM_CAPTAIN_ALERT_BUDGET=12   # seconds allowed for one captain alert post; 3..20
 FMX_PAIRING_TOKEN=      # Relay pairing token; .env opt-in authorizes replies and eligible lifecycle actions
 FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainly for local relay development
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env

@@ -136,7 +136,18 @@ fi
 # pair; a holder that died mid-write is broken after FM_BUSY_LOCK_STALE_SECS.
 lock_acquire() {
   local tries=0 now mtime age
-  while ! mkdir "$LOCK" 2>/dev/null; do
+  # mkdir's exit status is not the arbiter: uutils coreutils before 0.11.0 can
+  # report success for a directory a concurrent acquirer created. The noclobber
+  # create inside the directory is; a lost race leaves the winner's lock
+  # intact (rmdir on a non-empty directory fails), while a spurious loss on
+  # our own empty directory cleans up and retries.
+  while :; do
+    if mkdir "$LOCK" 2>/dev/null; then
+      if (set -C; : > "$LOCK/.owner") 2>/dev/null; then
+        return 0
+      fi
+      rmdir "$LOCK" 2>/dev/null || true
+    fi
     tries=$((tries + 1))
     if [ "$tries" -ge 40 ]; then
       now=$(date +%s)
@@ -148,16 +159,19 @@ lock_acquire() {
       age=$((now - mtime))
       if [ "$age" -ge "${FM_BUSY_LOCK_STALE_SECS:-5}" ]; then
         rmdir "$LOCK" 2>/dev/null || rm -rf "$LOCK" 2>/dev/null || true
-        mkdir "$LOCK" 2>/dev/null && break
+        if mkdir "$LOCK" 2>/dev/null \
+          && (set -C; : > "$LOCK/.owner") 2>/dev/null; then
+          return 0
+        fi
+        rmdir "$LOCK" 2>/dev/null || true
       fi
       echo "error: busy-state lock timeout for $ID" >&2
       return 1
     fi
     sleep 0.05
   done
-  return 0
 }
-lock_release() { rmdir "$LOCK" 2>/dev/null || true; }
+lock_release() { rm -f -- "$LOCK/.owner" 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null || true; }
 
 write_record() {  # <gen> <seq>
   local tmp

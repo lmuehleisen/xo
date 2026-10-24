@@ -10,7 +10,8 @@
 # the captain who typed it may not look at the screen again: `enter` records the
 # away words verbatim straight into state/.afk-contract in the same turn, with no
 # separate confirmation step, then prints the entry announcement (hold-for-return
-# only: no phone channel exists; a quiet entry's says nothing is held) and the
+# only, naming the record's reach: no phone channel or notify-only Discord
+# alerts; a quiet entry's says nothing is held) and the
 # read-back, which is informational and never waits for a go
 # (bin/fm-afk-contract.sh owns the record schema; the words are the whole
 # mandate and no script parses them). The record is the posture in every
@@ -185,19 +186,28 @@ fm_afk_launch_lock_acquire() {
   while [ "$attempt" -lt 200 ]; do
     attempt=$((attempt + 1))
     if mkdir "$FM_AFK_LAUNCH_LOCK" 2>/dev/null; then
-      if ! printf '%s' "$$" > "$FM_AFK_LAUNCH_LOCK/pid"; then
-        rm -rf "$FM_AFK_LAUNCH_LOCK"
-        return 1
+      # mkdir's exit status is not the arbiter: uutils coreutils before 0.11.0
+      # can report success for a directory a concurrent acquirer created. The
+      # noclobber create inside the directory is; a lost race leaves the
+      # winner's lock intact (rmdir on a non-empty directory fails) and drops
+      # into the contention handling below, while a spurious loss on our own
+      # empty directory cleans up and retries.
+      if (set -C; : > "$FM_AFK_LAUNCH_LOCK/.owner") 2>/dev/null; then
+        if ! printf '%s' "$$" > "$FM_AFK_LAUNCH_LOCK/pid"; then
+          rm -rf "$FM_AFK_LAUNCH_LOCK"
+          return 1
+        fi
+        identity=$(fm_pid_identity "$$" 2>/dev/null) || {
+          rm -rf "$FM_AFK_LAUNCH_LOCK"
+          return 1
+        }
+        if [ -z "$identity" ] || ! printf '%s' "$identity" > "$FM_AFK_LAUNCH_LOCK/pid-identity"; then
+          rm -rf "$FM_AFK_LAUNCH_LOCK"
+          return 1
+        fi
+        return 0
       fi
-      identity=$(fm_pid_identity "$$" 2>/dev/null) || {
-        rm -rf "$FM_AFK_LAUNCH_LOCK"
-        return 1
-      }
-      if [ -z "$identity" ] || ! printf '%s' "$identity" > "$FM_AFK_LAUNCH_LOCK/pid-identity"; then
-        rm -rf "$FM_AFK_LAUNCH_LOCK"
-        return 1
-      fi
-      return 0
+      rmdir "$FM_AFK_LAUNCH_LOCK" 2>/dev/null || true
     fi
     if [ ! -s "$FM_AFK_LAUNCH_LOCK/pid" ] || [ ! -s "$FM_AFK_LAUNCH_LOCK/pid-identity" ]; then
       incomplete=$((incomplete + 1))

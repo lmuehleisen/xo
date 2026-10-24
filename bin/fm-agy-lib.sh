@@ -34,8 +34,8 @@
 #   and a hard-deny/judge decision on PreToolUse after the log-only observer
 #   - so the bypass is policed rather than bare. The
 #   launch refuses rather than falls back when any gate fails: jq missing, a
-#   policy-layer launch whose agy version is outside the adapter's live-verified
-#   set, a project-supplied
+#   policy-layer launch without matching executable/context evidence from
+#   fm-agy-admission.sh, a project-supplied
 #   .agents/hooks.json in the task worktree or its ancestors up to the git
 #   root, an unwritable policy file, or a failed hook install. After the
 #   session starts, a canary (FM_AGY_ARMED_POLLS, default 40) refuses and
@@ -93,7 +93,8 @@
 # them as arguments: AGY_BYPASS, AGY_BYPASS_POSTURE_SET, AGY_BYPASS_OPT_OUT,
 # AGY_JUDGE_ARG,
 # AGY_JUDGE_SET, AGY_JUDGE_TIER, AGY_JUDGE_MODEL, AGY_JUDGE_BIN, AGY_BIN,
-# ARG3, RELAUNCH_META, HARNESS, KIND, RAW_LAUNCH, RELAUNCH,
+# ARG3, RELAUNCH_META, RELAUNCH_PRIOR_HARNESS, MODEL, MODEL_SET, EFFORT,
+# EFFORT_SET, HARNESS, KIND, RAW_LAUNCH, RELAUNCH,
 # CREW_PERMISSION_MODE, WT, STATE, STATE_REAL, ID, BUSY_GEN, TASK_TMP, BRIEF,
 # FM_ROOT, SCRIPT_DIR, BACKEND, T, W, ZELLIJ_TAB_ID, and
 # SPAWN_FRESH_COMMIT_PENDING, plus shell_quote, status_stamp_line,
@@ -117,7 +118,8 @@ agy_effort_level() {  # <effort> <model>
   esac
 }
 
-# agy has no reviewed-auto mode. Its only blanket option is
+# Native reviewed Auto is account-dependent and is not this worker route.
+# The blanket option is
 # --dangerously-skip-permissions. For agy crewmate and scout launches, auto
 # selects the policy layer below by default; --no-agy-bypass selects
 # --mode accept-edits, verified on agy 1.2.0 to auto-approve file edits inside
@@ -161,6 +163,13 @@ fm_agy_default_posture() {  # <harness> <kind>
 # field, which resolves to this adapter's own tier in fm_agy_bypass_validate.
 fm_agy_relaunch_inherit() {
   [ "$ARG3" = agy ] && [ "$KIND" != secondmate ] || return 0
+  # Retain the exact tested context on a same-adapter restart. A switch from
+  # another harness must select its agy model rather than borrowing that id.
+  if [ "${RELAUNCH_PRIOR_HARNESS:-}" = agy ]; then
+    [ "$MODEL_SET" -eq 1 ] || MODEL=$(fm_meta_get "$RELAUNCH_META" model)
+    [ "$EFFORT_SET" -eq 1 ] || EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
+    [ "$MODEL" != default ] || MODEL=
+  fi
   case "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" in
     on)
       AGY_BYPASS=1
@@ -278,7 +287,7 @@ fm_agy_permission_dirs() {
 }
 
 fm_agy_spawn_wire() {
-  local agy_policy agy_version agy_verified agy_wt_real agy_check_dir \
+  local agy_policy agy_version agy_wt_real agy_check_dir \
     agy_git_root agy_task_data agy_grants_sha
   [ "$RAW_LAUNCH" -eq 0 ] || return 0
   agy_policy=
@@ -286,8 +295,7 @@ fm_agy_spawn_wire() {
     # The bypass posture's gates, each refusing rather than falling
     # back to an unguarded launch:
     # - jq, without which the adapter cannot read a payload;
-    # - an agy version inside the live-verified set the adapter prints
-    #   (docs/verification/runtime-backends.md owns the evidence);
+    # - executable/context proof from the bounded admission owner;
     # - no project-supplied .agents/hooks.json in the task worktree or
     #   its ancestors up to the git root, so the adapter's own hooks are
     #   the only hook definitions in force;
@@ -300,17 +308,8 @@ fm_agy_spawn_wire() {
       echo "error: cannot spawn agy policy-layer worker: jq is required by the permission policy hook; install jq or select --no-agy-bypass" >&2
       exit 1
     }
-    agy_version=$("$AGY_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    agy_verified=$("$SCRIPT_DIR/fm-agy-permission-policy.sh" verified-versions 2>/dev/null || true)
-    case " $agy_verified " in
-      *" ${agy_version:-none} "*) ;;
-      *)
-        echo "error: cannot spawn agy policy-layer worker: agy ${agy_version:-unreadable} is outside the live-verified set ($agy_verified); the hook contract this layer depends on is unproven there; manual review is a separate explicit choice: config/crew-permissions=manual or --no-agy-bypass (not judge coverage)" >&2
-        exit 1
-        ;;
-    esac
     if [ "$AGY_JUDGE_TIER" = agy ]; then
-      # The judge tier and the worker share one binary, already gated above.
+      # The judge tier and worker share the selected executable identity.
       AGY_JUDGE_BIN=$AGY_BIN
     else
       AGY_JUDGE_BIN=$(command -v "$(fm_judge_tier_command "$AGY_JUDGE_TIER")" 2>/dev/null || true)
@@ -333,6 +332,15 @@ fm_agy_spawn_wire() {
       [ "$agy_check_dir" != "$agy_git_root" ] || break
       agy_check_dir=$(dirname "$agy_check_dir")
     done
+    AGY_ADMISSION_RECEIPT=$(
+      "$SCRIPT_DIR/fm-agy-admission.sh" ensure "$AGY_BIN" "${MODEL:-}" \
+        "$(agy_effort_level "${EFFORT:-}" "${MODEL:-}")" \
+        "$AGY_JUDGE_TIER" "$AGY_JUDGE_MODEL" "$AGY_JUDGE_BIN"
+    ) || {
+      echo "error: cannot spawn agy policy-layer worker: compatibility proof unavailable; no real task was sent; manual review remains an explicit separate choice, not judge coverage" >&2
+      exit 1
+    }
+    agy_version=$(jq -r .binding.version "$AGY_ADMISSION_RECEIPT") || exit 1
     agy_policy="$STATE_REAL/$ID.agy-permission.json"
     agy_task_data=$(cd "$(dirname "$BRIEF")" && pwd -P) || exit 1
     # The digest pins the grants block firstmate wrote, so a block the
@@ -371,6 +379,21 @@ fm_agy_spawn_wire() {
       exit 1
     }
   fi
+}
+
+# This short-circuits in the pane immediately before the native invocation,
+# including before shell expansion of the real brief. A replacement after
+# spawn's admission cannot inherit that earlier executable's receipt.
+fm_agy_launch_guard() {
+  local value
+  [ "$AGY_BYPASS" -eq 1 ] || return 0
+  printf 'python3 %s assert ' "$(shell_quote "$SCRIPT_DIR/fm-agy-admission.py")"
+  for value in "$AGY_ADMISSION_RECEIPT" "$AGY_BIN" "${MODEL:-}" \
+    "$(agy_effort_level "${EFFORT:-}" "${MODEL:-}")" \
+    "$AGY_JUDGE_TIER" "$AGY_JUDGE_MODEL" "$AGY_JUDGE_BIN"; do
+    printf '%s ' "$(shell_quote "$value")"
+  done
+  printf '&& '
 }
 
 # agy starts its brief itself (-i), so there is no pointer to deliver; what

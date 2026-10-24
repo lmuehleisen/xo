@@ -17,6 +17,7 @@ It lists channel directives, one per non-empty, non-comment line, and every list
 - `osascript` posts a macOS Notification Center banner outside the terminal pane.
 - `herdr` calls `herdr notification show` outside the supervised pane.
 - `command:<cmd>` runs `<cmd>` through `sh -c` with the alarm summary as `$1` and on stdin, allowing delivery to a phone or pager service.
+  `command:/path/to/xo/bin/fm-captain-alert.sh post "$1"` sends the alarm to the Discord captain alerts webhook ([configuration.md](configuration.md#captain-alerts-to-discord-env)).
 
 An absent `config/wedge-alarm` behaves as `auto`, which is default-on on macOS.
 This is deliberate because the alarm fires only after a genuine max-defer wedge and is rate-limited to at most once per max-defer window.

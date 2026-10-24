@@ -929,7 +929,7 @@ test_verified_versions_and_grants_digest_verbs() {
   versions=$("$POLICY_SH" verified-versions 2>/dev/null)
   case "$versions" in
     '1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4') ;;
-    *) fail "verified-versions must list the live-verified agy set, got: $versions" ;;
+    *) fail "verified-versions must retain the historical manual baseline, got: $versions" ;;
   esac
   dir="$TMP_ROOT/verbs"
   mkdir -p "$dir"

@@ -1123,6 +1123,46 @@ test_opencode_rejects_v1_before_launch() {
   pass "OpenCode V1 and a prerelease of the floor are refused before launch"
 }
 
+test_opencode_native_launch_model_gate() {
+  local scenario id rec out rc evidence expected=opencode/fixture-requested actual
+  for scenario in matching mismatch missing missing-plugin unsupported unavailable; do
+    id="oc-model-$scenario"
+    FM_TEST_CLEANUP_DIRS+=("/tmp/fm-$id")
+    rec=$(make_spawn_case "$id" opencode "$id")
+    read_case_record "$rec"
+    actual=$expected
+    case "$scenario" in mismatch) actual=opencode/fixture-served ;; missing) actual=missing ;; esac
+    out=$(FM_FAKE_OPENCODE_ACTUAL_MODEL="$actual" \
+      FM_FAKE_OPENCODE_PLUGIN_MISSING="$([ "$scenario" != missing-plugin ] || printf 1)" \
+      FM_FAKE_OPENCODE_DISCOVERY="$scenario" \
+      FM_OPENCODE_READY_POLLS=2 FM_OPENCODE_POLL_INTERVAL=0.01 \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model "$expected")
+    rc=$?
+    evidence=$(find "/tmp/fm-$id" -name model.json -type f | head -1)
+    case "$scenario" in
+      matching|unavailable)
+        expect_code 0 "$rc" "$scenario native model must launch: $out"
+        jq -e --arg model "$expected" '.phase == "verified" and .observed == $model and .source == "session.context"' \
+          "$evidence" >/dev/null || fail "spawn accepted without native identity"
+        if [ "$scenario" = unavailable ]; then
+          assert_contains "$out" 'discovery unavailable' "unavailable catalog was hidden"
+          assert_not_contains "$out" 'absent from the native model catalog' "failed discovery was called unsupported"
+        fi ;;
+      *)
+        expect_code 1 "$rc" "$scenario native model must refuse: $out"
+        assert_contains "$out" "expected=$expected" "model refusal lacks expected identity"
+        case "$scenario" in
+          mismatch) assert_contains "$out" 'observed=opencode/fixture-served' "model refusal lacks actual identity" ;;
+          *) assert_contains "$out" 'observed=unavailable' "missing model was not explicit" ;;
+        esac
+        if [ "$scenario" = missing-plugin ]; then
+          assert_not_contains "$(cat "$LAUNCH_LOG")" 'Read the brief at' "brief submitted before native gate installation/support"
+        fi ;;
+    esac
+  done
+  pass "OpenCode checks native identity, refuses mismatch/missing/plugin absence/unknown model and discloses unavailable discovery"
+}
+
 test_opencode_newer_than_verified_launches_with_notice() {
   local rec id version out status
   for version in 2.0.27 2.0.27+build.5 2.0.27-rc.1 2.0.99; do
@@ -3739,6 +3779,7 @@ test_cursor_threads_model_workspace_and_omits_effort_axis
 test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_rejects_v1_before_launch
+test_opencode_native_launch_model_gate
 test_opencode_newer_than_verified_launches_with_notice
 test_opencode_rejects_v2_secondmate_before_launch
 test_opencode_refuses_pending_startup_composer

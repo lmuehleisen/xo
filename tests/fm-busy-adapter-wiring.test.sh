@@ -259,7 +259,8 @@ let finished;
 const done = new Promise((resolve) => { finished = resolve; });
 const cleanup = await mod.default.setup({
   location: { directory: "/tmp" },
-  session: { prompt: async () => {} },
+  model: { list: async () => { throw new Error("catalog unavailable"); } },
+  session: { prompt: async () => {}, hook: async () => {} },
   event: { subscribe: async function* () {
     try { for (const arg of process.argv.slice(2)) yield JSON.parse(arg); }
     finally { finished(); }
@@ -268,6 +269,52 @@ const cleanup = await mod.default.setup({
 await done;
 await cleanup();
 EOF
+}
+
+test_opencode_launch_model_session_scope() {
+  if ! CHECK_MODULE="$ROOT/.opencode/plugins/lib/fm-launch-model.js" CHECK_TMP="$TMP_ROOT" node --input-type=module <<'JS'
+import { readFileSync } from "node:fs";
+import { strict as assert } from "node:assert";
+import { pathToFileURL } from "node:url";
+const { installLaunchModelCheck } = await import(pathToFileURL(process.env.CHECK_MODULE));
+for (const scenario of ["matching", "mismatch", "missing", "default", "unavailable", "malformed"]) {
+  const hooks = {};
+  const evidence = `${process.env.CHECK_TMP}/model-${scenario}.json`;
+  const ctx = {
+    model: { list: async () => {
+      if (scenario === "unavailable") throw new Error("offline");
+      return { data: scenario === "malformed" ? [{}] : [{ providerID: "example", id: "requested" }] };
+    } },
+    session: { hook: async (name, callback) => { hooks[name] = callback; } },
+  };
+  await installLaunchModelCheck(ctx, { expected: scenario === "default" ? "default" : "example/requested", evidence, launchText: "launch brief" });
+  const read = () => JSON.parse(readFileSync(evidence, "utf8"));
+  const event = { sessionID: "worker", model: { providerID: "example", id: "served" } };
+  hooks.context(event);
+  assert.equal(read().phase, "ready", "unbound roots must not prove identity");
+  await hooks.prompt({ sessionID: "other-root", prompt: { text: "unrelated prompt" } });
+  hooks.context(event);
+  assert.equal(read().phase, "ready", "unrelated admission must not bind the worker");
+  await hooks.prompt({ sessionID: "worker", prompt: { text: "launch brief" } });
+  hooks.context({ ...event, sessionID: "child" });
+  assert.equal(read().phase, "pending", "child model must not prove or refuse the parent");
+  if (scenario === "missing") event.model = {};
+  else if (scenario !== "mismatch") event.model = { providerID: "example", id: "requested" };
+  if (["missing", "mismatch"].includes(scenario)) {
+    assert.throws(() => hooks.context(event), /expected=example\/requested observed=/);
+    assert.equal(read().phase, "refused");
+  } else {
+    hooks.context(event);
+    assert.equal(read().phase, "verified");
+    assert.equal(read().source, "session.context");
+  }
+  if (["unavailable", "malformed"].includes(scenario)) assert.equal(read().discovery, "unavailable");
+}
+JS
+  then
+    fail "native model session-scope checks failed"
+  fi
+  pass "OpenCode model evidence requires the exact launch session; configuration, unrelated roots and children cannot prove it"
 }
 
 test_opencode_plugin_semantic_lifecycle() {
@@ -329,6 +376,95 @@ test_opencode_plugin_semantic_lifecycle() {
   [ "$out" = "idle opencode-plugin" ] || fail "V2 user interrupt must settle main busy, got $out"
   [ -f "$state/$id.turn-ended" ] || fail "V2 settlement must touch the turn-end signal"
   pass "OpenCode V2 execution lifecycle settles only the latched worker session"
+}
+
+# OpenCode directs a plugin to abort its event stream during cleanup. The
+# generated plugin's cleanup must end a still-open stream without reporting it,
+# while a stream that fails on its own must stay visible in the plugin log.
+test_opencode_v2_cleanup_aborts_the_stream_and_reports_failures() {
+  local rec id=busy-oc-2 out plugin
+  rec=$(make_spawn_case oc-v2-cleanup opencode "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "opencode spawn should succeed: $out"
+  plugin="/tmp/fm-$id/opencode-plugin-$(cat "$HOME_DIR/state/$id.busy-gen")/index.mjs"
+  out=$(PLUGIN_PATH="$plugin" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.PLUGIN_PATH).href);
+const ctx = (subscribe) => ({
+  location: { directory: "/tmp" },
+  model: { list: async () => { throw new Error("catalog unavailable"); } },
+  session: { prompt: async () => {}, hook: async () => {} },
+  event: { subscribe },
+});
+let opened = false;
+let closed = false;
+const cleanup = await mod.default.setup(ctx(async function* ({ signal }) {
+  opened = true;
+  try {
+    await new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    yield { type: "session.execution.started", data: { sessionID: "ses_main" } };
+  } finally {
+    closed = true;
+  }
+}));
+for (let i = 0; i < 100 && !opened; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+if (!opened || closed) throw new Error(`stream not held open before cleanup: opened=${opened} closed=${closed}`);
+const hung = setTimeout(() => { console.log("CLEANUP_HUNG"); process.exit(1); }, 5000);
+await cleanup();
+clearTimeout(hung);
+console.log(closed ? "CLEANUP_CLOSED" : "CLEANUP_LEFT_OPEN");
+const failing = await mod.default.setup(ctx(async function* () { throw new Error("FIXTURE_STREAM_BROKE"); }));
+// Let the failure surface before cleanup aborts the stream.
+await new Promise((resolve) => setTimeout(resolve, 100));
+await failing();
+EOF
+  ) || fail "V2 cleanup drive failed: $out"
+  assert_contains "$out" CLEANUP_CLOSED "cleanup must end the still-open event stream"
+  assert_contains "$out" 'firstmate.worker-busy: event subscription failed' "a failed stream must name the plugin in its log"
+  assert_contains "$out" FIXTURE_STREAM_BROKE "a failed stream must report its error"
+  [ "$(printf '%s\n' "$out" | grep -c 'event subscription failed')" = 1 ] \
+    || fail "cleanup's abort must not be reported as a stream failure: $out"
+  pass "OpenCode V2 cleanup aborts an open event stream silently and reports a failed one"
+}
+
+test_opencode_v2_boundary_registers_tool_hook_before_setup_resolves() {
+  local out
+  out=$(BOUNDARY="$ROOT/.opencode/plugins/lib/fm-v2-plugin.js" node --input-type=module 2>&1 <<'EOF'
+import { strict as assert } from "node:assert";
+import { pathToFileURL } from "node:url";
+const { v2Plugin } = await import(pathToFileURL(process.env.BOUNDARY).href);
+const calls = [];
+const plugin = v2Plugin("fixture.tool-hook", async () => ({
+  "tool.execute.before": async (input, output) => {
+    calls.push({ input, output });
+    if (output.args.command === "DENY_ME") throw new Error("fixture denied");
+  },
+}));
+let hook;
+const cleanup = await plugin.setup({
+  location: { directory: "/tmp" },
+  session: { prompt: async () => {} },
+  event: { subscribe: () => { throw new Error("a plugin without an event hook must not subscribe"); } },
+  tool: {
+    hook: async (name, callback) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (name === "execute.before") hook = callback;
+    },
+  },
+});
+assert.equal(typeof hook, "function", "setup resolved before the execute.before hook was registered");
+await hook({ tool: "shell", sessionID: "ses_main", input: { command: "echo allowed" } });
+await hook({ tool: "read", sessionID: "ses_main", input: { filePath: "README.md" } });
+await assert.rejects(hook({ tool: "shell", sessionID: "ses_main", input: { command: "DENY_ME" } }), /fixture denied/);
+assert.deepEqual(calls.map(({ input }) => input.tool), ["bash", "read", "bash"]);
+assert.deepEqual(calls[0], { input: { tool: "bash", sessionID: "ses_main" }, output: { args: { command: "echo allowed" } } });
+await cleanup();
+console.log("TOOL_HOOK_OK");
+EOF
+  ) || fail "V2 tool-hook drive failed: $out"
+  assert_contains "$out" TOOL_HOOK_OK "the V2 boundary tool hook drive did not complete: $out"
+  pass "OpenCode V2 boundary registers its tool hook before setup resolves and propagates a block"
 }
 
 run_claude_hook() {  # <settings.json> <hook-event>
@@ -1050,6 +1186,7 @@ test_pi_extension_stale_incarnation_rejected
 test_pi_extension_enforces_the_publish_policy
 test_pi_extension_denies_when_the_publish_check_cannot_run
 test_kimi_and_grok_install_no_unverified_wiring
+test_opencode_launch_model_session_scope
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
 test_claude_worker_approved_publish_allowance
@@ -1061,6 +1198,8 @@ test_gemini_is_refused_as_a_secondmate
 test_kiro_hooks_semantic_lifecycle
 test_kiro_hooks_stale_incarnation_harmless
 test_raw_kiro_launch_has_no_semantic_wiring
+test_opencode_v2_cleanup_aborts_the_stream_and_reports_failures
+test_opencode_v2_boundary_registers_tool_hook_before_setup_resolves
 test_codex_unverified_until_a_semantic_source_exists
 
 echo "all fm-busy-adapter-wiring tests passed"

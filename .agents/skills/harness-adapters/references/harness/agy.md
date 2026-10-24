@@ -1,6 +1,6 @@
 # agy (Antigravity CLI)
 
-Google's Antigravity CLI, with worker and primary compatibility refreshed on 2026-10-21 with agy 1.4.4.
+Google's Antigravity CLI, with worker and primary compatibility refreshed on 2026-10-23 with agy 1.4.6.
 Verified for interactive primary, secondmate, crewmate, and scout work.
 `../../../../../bin/fm-spawn.sh` owns the concrete launch and grant mechanics, through the fork-only `../../../../../bin/fm-agy-lib.sh` it sources.
 agy updates itself often and without asking, so treat every version-scoped fact here as refreshable rather than settled, and re-run the live guard after an upgrade.
@@ -65,7 +65,7 @@ The options this adapter uses are the default review mode, `--mode accept-edits`
 | `manual` | no `--mode` flag | agy's default review mode; edits prompt too. |
 | anything else | refused | The launch stops; there is no fallback onto the bypass. |
 
-The default bypass is never bare: the launch refuses unless the policy hooks, verified agy version, judge, and startup canary pass their gates.
+The default bypass is never bare: the launch refuses unless the policy hooks, executable/context compatibility evidence, judge, and startup canary pass their gates.
 `--no-agy-bypass` selects `--mode accept-edits` for a single agy crewmate or scout launch; agy secondmates remain outside the worker policy layer.
 
 **`accept-edits` covers file edits, not shell commands.**
@@ -122,13 +122,16 @@ An approval lands in the per-task verdict cache for ordinary calls; for a never-
 Markers deliberately survive `Stop` - nothing in a bypassed session is still waiting, so the marker means "firstmate still owes this call a decision" and closes only on approve, decline, a retried call's PostToolUse, or `retire`.
 
 File-tool writes are checked against the resolved physical path, and a target under `.agents/`, `.git/`, or firstmate's own worker wiring is refused outright.
-agy 1.4.4 emits `read_file`, `write_file`, and `edit_file` with an absolute `Path`; the adapter checks that operand through the same credential and write-root policy as the legacy file tools.
+agy 1.4.4 and 1.4.6 emit `read_file`, `write_file`, and `edit_file` with an absolute `Path`; the adapter checks that operand through the same credential and write-root policy as the legacy file tools.
 The observer records the path without file or replacement contents.
 Under bypass a statically visible exec write or removal outside the task write roots is refused rather than judged - there is no native prompt behind the judge to correct a bad verdict - while credential reads hold for firstmate.
 Static analysis cannot classify every command a worker can compose, so a command it cannot see into goes to the judge; this layer reduces risk and is not a security boundary.
 Under a brief's read exclusions, a file-tool read of the worker's own brain directory (`~/.gemini/antigravity-cli/brain/<conversationId>`, where agy stores fetched pages) or of a firstmate skill file the brief says to read and follow still runs without a judge call, and the judge is told both; the adapter's header owns the rule.
 
-Defences that gate policy-layer launches: `jq` present, the agy version inside the adapter's live-verified set (`verified-versions`, the explicit allowlist [`bin/fm-agy-permission-policy.sh`](../../../../../bin/fm-agy-permission-policy.sh) prints and the dated refreshes in [`docs/verification/runtime-backends-fork.md`](../../../../../docs/verification/runtime-backends-fork.md) prove), no project-supplied `.agents/hooks.json` in the worktree or ancestors up to the git root, so firstmate's worker hooks are the only hook definitions in force, and a startup canary that closes the endpoint when the adapter's armed line for this launch's busy generation never reaches the observer log.
+[`bin/fm-agy-admission.sh`](../../../../../bin/fm-agy-admission.sh) owns bounded synthetic verification, private executable/context receipts, patch-family eligibility, and explicit migration of the historical manually verified baseline.
+Its required explicit worker model prevents a mutable default from inheriting another model's native-tool evidence.
+Finite fixtures and unchanged local receipts do not prove arbitrary commands, untested tool shapes, or unchanged server-side behavior.
+The other launch defences remain `jq`, no project-supplied `.agents/hooks.json` in the worktree or ancestors up to the git root, and the generation-bound startup canary that closes the endpoint when the adapter never arms.
 The judge is selected per task from the tiers `../../../../../bin/fm-judge-tier-lib.sh` owns, and agy judges agy by default: without `--agy-judge` the tier calls `agy -p` under its own sandbox on `gemini-3.8-flash-low`, with a 100-second budget pinned beside the Devin adapter's, and its prompt rides on the process argument list, so a call under review is visible in `ps` while the judge runs.
 `--agy-judge <tier>[:<model>]` selects another tier - a Devin SWE-2 judge for an agy worker, for instance - and refuses the launch when the tier is unknown or its executable is not installed, rather than falling back onto the default.
 The resolved tier is printed before the launch, repeated on the spawned line, recorded as `agy_judge=` in the task's metadata, and named in every judge-decided log record, so which judge adjudicated a call stays readable after teardown removes the per-task policy file.

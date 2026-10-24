@@ -368,6 +368,19 @@ GAP: the away watchdog was not running at return"
 GAP: the away watchdog found $finding"
     done < "$STATE/.afk-sentinel-alarm"
   fi
+  # Discord captain alerts (bin/fm-captain-alert.sh): a failure is a GAP, a
+  # working channel is a note beside the health verdict, and an unarmed home
+  # prints nothing.
+  if [ -x "$SCRIPT_DIR/fm-captain-alert.sh" ]; then
+    finding=$("$SCRIPT_DIR/fm-captain-alert.sh" brief-line --since "$(window_start_epoch)" 2>/dev/null || true)
+    case "$finding" in
+      '') ;;
+      GAP:*) lines="$lines
+$finding" ;;
+      *) note="${note:+$note
+}$finding" ;;
+    esac
+  fi
   if [ -s "$STATE/.subsuper-inject-wedged" ]; then
     lines="$lines
 delivery wedged: $(head -1 "$STATE/.subsuper-inject-wedged" 2>/dev/null || true)"

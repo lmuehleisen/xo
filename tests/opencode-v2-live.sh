@@ -14,6 +14,7 @@ LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-opencode-v2.XXXXXX")
 ID="oc-v2-probe-$$"
 MODEL=${FM_OPENCODE_LIVE_MODEL:-opencode/muse-spark-1.3-contributor-free}
 REAL_TMUX=$(command -v tmux)
+REAL_OPENCODE=$(command -v opencode)
 unset TMUX TMUX_PANE
 CODE_ROOT="$LAB/code"
 mkdir -p "$CODE_ROOT/.agents/skills/fm-local-skill-probe" "$CODE_ROOT/.agents/skills/fm-worktree-skill-probe"
@@ -43,6 +44,10 @@ export XDG_CONFIG_HOME="$LAB/config" XDG_DATA_HOME="$LAB/data"
 export XDG_STATE_HOME="$LAB/runtime" XDG_CACHE_HOME="$LAB/cache"
 export FM_SPAWN_NO_GUARD=1
 cleanup() {
+  if [ -n "${FM_OPENCODE_LIVE_EVIDENCE:-}" ]; then
+    mkdir -p "$FM_OPENCODE_LIVE_EVIDENCE"
+    cp "$LAB"/model-* "$FM_OPENCODE_LIVE_EVIDENCE/" 2>/dev/null || true
+  fi
   "$REAL_TMUX" -S "$SOCKET" kill-server 2>/dev/null || true
   "$LAB_HOME_HELPER" teardown "$FM_HOME"
   if [ -d "$LAB" ]; then chmod -R u+w "$LAB"; fi
@@ -56,6 +61,11 @@ exec '$REAL_TMUX' -S '$SOCKET' "\$@"
 SH
 chmod +x "$LAB/shim/tmux"
 export PATH="$LAB/shim:$PATH"
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  # shellcheck source=tests/opencode-model-live.sh
+  . "$ROOT/tests/opencode-model-live.sh"
+  oc_model_live_prepare
+fi
 printf 'manual\n' > "$FM_HOME/config/backlog-backend"
 printf 'tmux\n' > "$FM_HOME/config/backend"
 # A fresh independent fixture repository, never the fleet's shared worktree pool.
@@ -92,7 +102,19 @@ Your steering inbox is $FM_HOME/state/$ID.inbox.
 Read each *.msg there when instructed and acknowledge it by moving it into handled/.
 If the status file already contains "brief processed", append "working: relaunched" instead.
 BRIEF
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  cat > "$FM_HOME/data/$ID/brief.md" <<BRIEF
+# Task
+Do not edit project files or run fleet supervision.
+Append a newline-terminated line 'working: brief processed' to $FM_HOME/state/$ID.status, then stop.
+If it already contains that line, append 'working: relaunched' instead.
+BRIEF
+fi
 TMUX_TMPDIR="$LAB_TMUX_DIR" "$REAL_TMUX" new-session -d -s probe -n anchor -c "$LAB/project" -x 140 -y 40 "bash --noprofile --norc -i"
+# Keep every window on this private server in the same controlled shell.
+# A login shell can reorder PATH ahead of the test's executable wrapper.
+"$REAL_TMUX" -S "$SOCKET" set-option -g default-shell "$(command -v bash)"
+"$REAL_TMUX" -S "$SOCKET" set-option -g default-command 'bash --noprofile --norc -i'
 # Keep the new endpoint on this private server; production allocation still
 # creates the worker window and enters the independent scratch copy.
 export TMUX="$SOCKET,$$,0"
@@ -174,6 +196,7 @@ probe_fresh_home() {  # <window> <config> <row-regex> <label>
   tmux kill-window -t "probe:$window"
 }
 HOME_CONFIG=$(jq -nc --arg model "$MODEL" '{model:$model,agents:{build:{model:$model}}}')
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" != 1 ]; then
 probe_fresh_home home "$HOME_CONFIG" '^[[:space:]]{8,}[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' 'version label'
 # A configured MCP server leads that row with its count; this one never starts.
 MCP_CONFIG=$(jq -c '.mcp = {"fm-probe": {type: "local", command: ["false"]}}' <<<"$HOME_CONFIG")
@@ -204,7 +227,12 @@ done
 tmux send-keys -t probe:permission Escape
 tmux kill-window -t probe:permission
 pass "$VERSION: manual permission prompt refuses typed delivery; no permission accepted"
+fi
 bash "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB/project" --scout --harness opencode --model "$MODEL"
+if [ "${FM_OPENCODE_MODEL_CHECK_ONLY:-0}" = 1 ]; then
+  oc_model_live_checks "$LAB/wt"
+  exit 0
+fi
 wait_file_text "$FM_HOME/state/$ID.status" 'brief processed'
 wait_idle
 wait_file_text "$FM_HOME/state/$ID.status" 'FM_OPENCODE_LOCAL_SKILL_OK'

@@ -116,7 +116,7 @@ fm_judge_tier_run() {  # <tier> <bin> <model> <seconds> <prompt-file>
   local tier=${1-} bin=${2-} model=${3-} seconds=${4-} prompt=${5-}
   case "$tier" in
     agy)
-      fm_run_timed "$seconds" \
+      fm_run_timed "$seconds" env AGY_CLI_DISABLE_AUTO_UPDATE=1 \
         "$bin" -p "$(cat "$prompt")" --model "$model" \
         --disable-slash-commands --sandbox 2>/dev/null </dev/null
       ;;
