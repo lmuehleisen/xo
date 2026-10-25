@@ -77,8 +77,8 @@
 #   Prefer additive spendPressure once per snapshot when any scope publishes it;
 #   otherwise use legacy spendPriority. Missing selected scores stay unranked.
 #   Candidate output labels name the selected metric; unmetered policy scores
-#   retain their configured values. Legacy planning overrides apply only to
-#   spendPriority; pressure snapshots disclose them as inactive.
+#   retain their configured values. Planning overrides adjust whichever
+#   metric the snapshot selects.
 #
 # Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
 #   exists, every string value of the built request is checked against it
@@ -128,12 +128,13 @@
 #   optional window, rolling horizonSeconds, and expiresAt. While the quota
 #   snapshot's generatedAt precedes expiresAt, quota_plan_adjust in
 #   bin/fm-quota-axi-lib.sh ranks a provably matched single-window scope by a
-#   planning spendPriority that truncates the window's published pace horizon
-#   at generatedAt plus the horizon, capped by the vendor reset; the native
-#   value, horizon, and expiry print beside it. This is a consumer planning
-#   assumption, never vendor evidence: vendor remaining, resetsAt, runway,
-#   and exhausted or unknown states are unchanged, and absent, expired, or
-#   unprovable overrides leave ranking exactly on the native spendPriority.
+#   planning value of the selected metric (spendPriority or spendPressure)
+#   that truncates the window's published pace horizon at generatedAt plus
+#   the horizon, capped by the vendor reset; the native value, horizon, and
+#   expiry print beside it. This is a consumer planning assumption, never
+#   vendor evidence: vendor remaining, resetsAt, runway, and exhausted or
+#   unknown states are unchanged, and absent, expired, or unprovable
+#   overrides leave ranking exactly on the native selected metric.
 #   A malformed planning file is a usage error, like malformed rules.
 #
 # Installed-tool gate: every candidate's harness must have a launch location on
@@ -810,12 +811,12 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "\($metric) missing, non-numeric, or selection not known at \($bad.scope): not rankable"}
       else
         (prov($p; $lane)) as $prov_row |
-        ($rows | map((if $metric == "spendPriority" then quota_plan_adjust($prov_row; .; ($planning.overrides // []); $p; $lane; $now) else null end) as $row_plan
-                     | . + {effectiveSpend: ($row_plan.spendPriority // .selection[$metric]), rowPlan: $row_plan})
+        ($rows | map(quota_plan_adjust($prov_row; .; ($planning.overrides // []); $p; $lane; $now; $metric) as $row_plan
+                     | . + {effectiveSpend: ($row_plan.value // .selection[$metric]), rowPlan: $row_plan})
                | min_by(.effectiveSpend)) as $limiting |
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
          spendScore: $limiting.effectiveSpend, runway: $limiting.runway.status, eligible: true, reason: "ok"}
-        + (if $limiting.rowPlan != null then {planning: $limiting.rowPlan, nativeSpendPriority: $limiting.rowPlan.nativeSpendPriority} else {} end)
+        + (if $limiting.rowPlan != null then {planning: $limiting.rowPlan, nativeSpend: $limiting.rowPlan.native} else {} end)
       end
     end;
   def evaluate($c): evaluate_route($c; false; 0);
@@ -1014,12 +1015,11 @@ TEXT=$(jq -r '
   "  status: \(.status | flat)",
   "  completion_horizon_seconds: \(.completion_horizon_seconds)",
   (if .planning.present then
-     (if $metric != "spendPriority" then "  planning: inactive (selected \($metric); overrides adjust spendPriority only)"
-      elif (.planning.active | length) > 0
+     (if (.planning.active | length) > 0
       then (.planning.active[] | "  planning: active provider=\(.provider | flat) account=\(.accountKey | flat)"
              + (if .windowId then " window=\(.windowId | flat)" else "" end)
              + " horizon_seconds=\(.horizonSeconds) expires_at=\(.expiresAt | flat) (rolling planning horizon, not a vendor reset)")
-      else "  planning: inactive (no override active at the quota snapshot time; native spendPriority used)" end)
+      else "  planning: inactive (no override active at the quota snapshot time; native \($metric) used)" end)
    else empty end),
   (if $metric == "spendPressure" then "  spend_metric: \($metric)" else empty end),
   (if .direct then empty
@@ -1042,7 +1042,7 @@ TEXT=$(jq -r '
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
       + (if .unmetered then "  quota=unmetered (declared)  \($metric)=\(show(.spendScore))  runway=unmetered"
          elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  \($metric)=\(show(.spendScore))  runway=\(show(.runway))" else "" end)
-      + (if .planning then "  native_spendPriority=\(show(.nativeSpendPriority))  planning_horizon_seconds=\(.planning.horizonSeconds)  planning_window=\(.planning.windowId | flat)" else "" end)
+      + (if .planning then "  native_\($metric)=\(show(.nativeSpend))  planning_horizon_seconds=\(.planning.horizonSeconds)  planning_window=\(.planning.windowId | flat)" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
       + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)

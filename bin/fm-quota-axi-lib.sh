@@ -308,17 +308,20 @@ fm_quota_devin_catalog() {
 
 # Quota planning overrides (docs/configuration.md owns the config schema):
 # a consumer-side, expiring planning assumption, never vendor evidence.
-# quota_plan_adjust returns a planning spendPriority for a scope row, or null
+# quota_plan_adjust returns a planning value of the selected metric
+# (spendPriority or spendPressure) for a scope row, or null
 # when the override does not provably apply. It applies only while the
 # snapshot's generatedAt precedes the override expiry, only for the named
 # provider and account lane, and only when one window bounds the scope, that
-# window is the configured one when named, and its published pace (reserve
-# and burn) plus reset are all known. The planning value truncates that
-# window's time-remaining percent at the rolling horizon - snapshot time
-# plus horizonSeconds, capped by the vendor reset - inside the producer's
-# own gap formula (percentRemaining / timeRemainingPercent - burnMultiple),
-# clamped like the producer. Multi-window scopes, unknown pace, a horizon
-# beyond the reset, and missing account proof all keep the native value.
+# window is the configured one when named, and its published pace (reserve,
+# plus burn for spendPriority) and reset are all known. The planning value
+# truncates that window's time-remaining percent at the rolling horizon -
+# snapshot time plus horizonSeconds, capped by the vendor reset - inside the
+# producer's own gap formula (percentRemaining / timeRemainingPercent - burn),
+# where burn is the window's burnMultiple for spendPriority and the steady
+# full-utilization rate 1 for spendPressure, clamped like the producer.
+# Multi-window scopes, unknown pace, a horizon beyond the reset, and missing
+# account proof all keep the native value.
 # shellcheck disable=SC2016,SC2034 # jq program used by consumers
 FM_QUOTA_PLANNING_JQ='
   def quota_ts:
@@ -330,7 +333,7 @@ FM_QUOTA_PLANNING_JQ='
     elif (($prov.accountKeys // null) | type) == "array"
     then (($lane == "" or $lane == $account) and ((($prov.accountKeys) | index($account)) != null))
     else false end;
-  def quota_plan_adjust($prov; $row; $overrides; $provider; $lane; $now):
+  def quota_plan_adjust($prov; $row; $overrides; $provider; $lane; $now; $metric):
     if $now == null then null
     elif (($row.limitingWindowIds // []) | length) != 1 then null
     elif (($row.boundedBy // $row.limitingWindowIds) != $row.limitingWindowIds) then null
@@ -349,11 +352,11 @@ FM_QUOTA_PLANNING_JQ='
         ($candidates[0]) as $override |
           if $window == null then null
           elif (($window.pace.status // "unknown") == "unknown") then null
-          elif (($window.pace.burnMultiple | type) != "number") then null
+          elif $metric == "spendPriority" and (($window.pace.burnMultiple | type) != "number") then null
           elif (($window.pace.reservePercentPoints | type) != "number") then null
           elif (($window.percentRemaining | type) != "number") then null
           elif (($row.effectivePercentRemaining | type) != "number") then null
-          elif (($row.selection.spendPriority | type) != "number") then null
+          elif (($row.selection[$metric] | type) != "number") then null
           else
             ($window.resetsAt | quota_ts) as $resets |
             if $resets == null or $resets <= $now then null
@@ -365,11 +368,12 @@ FM_QUOTA_PLANNING_JQ='
                 (($time_remaining * $override.horizonSeconds / ($resets - $now))) as $plan_time |
                 if $plan_time < 0.01 then null
                 else
-                  ((($row.effectivePercentRemaining / $plan_time) - $window.pace.burnMultiple)) as $raw |
+                  ((($row.effectivePercentRemaining / $plan_time) - (if $metric == "spendPressure" then 1 else $window.pace.burnMultiple end))) as $raw |
                   if ($raw | isfinite | not) then null
                   else
-                    {spendPriority: ((((if $raw > 100 then 100 elif $raw < -100 then -100 else $raw end) * 10000) | round) / 10000),
-                     nativeSpendPriority: $row.selection.spendPriority,
+                    {value: ((((if $raw > 100 then 100 elif $raw < -100 then -100 else $raw end) * 10000) | round) / 10000),
+                     native: $row.selection[$metric],
+                     metric: $metric,
                      horizonSeconds: $override.horizonSeconds,
                      expiresAt: $override.expiresAt,
                      windowId: $window_id,

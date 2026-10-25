@@ -129,7 +129,7 @@ The [shared quota validator](../../../bin/fm-quota-axi-lib.sh) refuses malformed
 After the permitted TOON-to-JSON fallback, escalate instead of routing if no candidate can be ranked or runway uncertainty prevents proving the feasibility floor for any candidate that could be selected.
 Show the chosen metric name and score or literal `unknown` in the rationale.
 
-When the snapshot selects legacy `spendPriority` and the local [quota planning overrides](../../../docs/configuration.md#quota-planning-overrides-configquota-planningjson) file is present, the typed resolver already applies any active override and prints the planning value as `spendPriority` beside `native_spendPriority`, with a `planning: active` or `planning: inactive` line.
+When the local [quota planning overrides](../../../docs/configuration.md#quota-planning-overrides-configquota-planningjson) file is present, the typed resolver already applies any active override to the selected metric and prints the planning value under that metric's name beside its `native_` value, with a `planning: active` or `planning: inactive` line.
 Rank by the resolver's printed value in that case and name the planning horizon and expiry in the rationale.
 Never recompute a planning value by hand from window lists, and never apply one the resolver did not print.
 An absent or inactive override means the native scalar above is the whole ranking evidence.

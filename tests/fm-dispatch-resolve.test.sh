@@ -2236,7 +2236,7 @@ pass "native Kiro provider inference and effort validation agree with bootstrap"
 # A planning override recomputes nothing from raw windows: it truncates the
 # one bounding window's published pace horizon at snapshot time plus the
 # configured horizon, capped at the vendor reset, and ranks by the resulting
-# spendPriority. Native evidence stays printed beside it.
+# selected metric. Native evidence stays printed beside it.
 PLANNING="$HOME_DIR/config/quota-planning.json"
 cat > "$RULES" <<'JSON'
 {"classes":{
@@ -2285,24 +2285,57 @@ planning_first=$out
 run_lane code out err "$BRIEF" --lane plan --project xo
 assert_equals "$planning_first" "$out" "a repeated intake after restart reproduces the planning result with no state"
 
-# Legacy planning cannot substitute its burn-based score into pressure ranking.
-jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.8 |
-    (.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.9' "$LANE_QUOTA" > "$TMP_ROOT/planning-pressure.json"
-cp "$TMP_ROOT/planning-pressure.json" "$LANE_QUOTA"
+# On a pressure snapshot the same horizon adjusts spendPressure, using the
+# producer's steady full-utilization burn of 1 instead of the observed burn.
+plan_pressure() {  # <generatedAt> <codex-effective-json> <codex-windows-json>
+  plan_quota "$@"
+  jq '(.providers[].quotaSemantics.effectiveAvailability[].selection) |= (if .status == "known" then .spendPressure = 0.1 else . end) |
+      (.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection) |= (if .status == "known" then .spendPressure = -0.1717 else . end)' "$LANE_QUOTA" > "$TMP_ROOT/planning-pressure.json"
+  mv "$TMP_ROOT/planning-pressure.json" "$LANE_QUOTA"
+}
+PLAN_CODEX_PRESSURE_WINDOWS_MULTI='[{"id":"weekly","resetsAt":"2026-10-29T00:00:00Z","percentRemaining":71,"pace":{"status":"ahead","reservePercentPoints":-14.7143,"burnMultiple":2.03}},{"id":"five_hour","resetsAt":"2026-10-23T05:00:00Z","percentRemaining":50,"pace":{"status":"ahead","reservePercentPoints":-10,"burnMultiple":1.5}}]'
+plan_pressure '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
 run_lane code out err "$BRIEF" --lane plan --project xo
-assert_contains "$out" "profile: --harness 'cursor'" "the legacy planning value cannot displace the pressure winner"
-assert_contains "$out" 'spendPressure=-0.9' "the published pressure remains unchanged by the active legacy override"
-assert_contains "$out" 'planning: inactive (selected spendPressure; overrides adjust spendPriority only)' "the inactive legacy override is disclosed"
-assert_not_contains "$out" 'native_spendPriority=' "pressure candidates never carry legacy planning evidence"
+expect_code 0 "$code" "active planning override on a pressure snapshot exits 0: $err"
+assert_contains "$out" 'spend_metric: spendPressure' "the pressure snapshot selects spendPressure"
+assert_contains "$out" 'planning: active provider=codex account=codex-home window=weekly horizon_seconds=302400 expires_at=2026-11-01T04:00:00Z' "an active override is disclosed on a pressure snapshot"
+assert_contains "$out" 'spendPressure=0.42' "the planning horizon raises the Codex spendPressure with a steady burn of 1"
+assert_contains "$out" 'native_spendPressure=-0.1717' "the native spendPressure stays visible beside the planning value"
+assert_contains "$out" 'planning_horizon_seconds=302400' "the pressure planning horizon is printed beside the value"
+assert_not_contains "$out" 'native_spendPriority=' "pressure candidates carry pressure planning evidence only"
+assert_contains "$out" "profile: --harness 'codex'" "the planning pressure favours the direct Codex route on identical input"
 
-jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection) |= del(.spendPressure)' "$TMP_ROOT/planning-pressure.json" > "$LANE_QUOTA"
+plan_pressure '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" '[{"id":"weekly","resetsAt":"2026-10-29T00:00:00Z","percentRemaining":71,"pace":{"status":"ahead","reservePercentPoints":-14.7143}}]'
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPressure=0.42' "planning spendPressure needs no observed burn"
+
+plan_pressure '2026-11-01T04:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'planning: inactive (no override active at the quota snapshot time; native spendPressure used)' "an expired override is inactive on a pressure snapshot"
+assert_contains "$out" 'spendPressure=-0.1717' "an expired override leaves the native spendPressure"
+assert_not_contains "$out" 'native_spendPressure=' "an expired override prints no planning pressure"
+assert_contains "$out" "profile: --harness 'cursor'" "native pressure ranking returns after expiry"
+
+plan_pressure '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+run_lane code out err "$BRIEF" --lane planwork --project xo
+assert_contains "$out" 'spendPressure=-0.1717' "a different account lane keeps the native spendPressure"
+assert_not_contains "$out" 'native_spendPressure=' "a different account lane is never pressure-adjusted"
+
+plan_pressure '2026-10-23T00:00:00Z' '{"scope":"all_models","status":"known","effectivePercentRemaining":71,"boundedBy":["weekly","five_hour"],"limitingWindowIds":["weekly","five_hour"],"runway":{"status":"projected_exhaustion","usableRunwaySeconds":200000},"selection":{"status":"known","spendPriority":-1.2017}}' "$PLAN_CODEX_PRESSURE_WINDOWS_MULTI"
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPressure=-0.1717' "a multi-window scope keeps the native spendPressure"
+assert_not_contains "$out" 'native_spendPressure=' "multi-window scopes are never pressure-adjusted from one window"
+
+plan_pressure '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" '[{"id":"weekly","resetsAt":"2026-10-29T00:00:00Z","percentRemaining":71,"pace":{"status":"unknown"}}]'
+run_lane code out err "$BRIEF" --lane plan --project xo
+assert_contains "$out" 'spendPressure=-0.1717' "unknown pace keeps the native spendPressure"
+assert_not_contains "$out" 'native_spendPressure=' "unknown pace is never pressure-adjusted"
+
+plan_pressure '2026-10-23T00:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection) |= del(.spendPressure)' "$LANE_QUOTA" > "$TMP_ROOT/planning-pressure.json" && mv "$TMP_ROOT/planning-pressure.json" "$LANE_QUOTA"
 run_lane code out err "$BRIEF" --lane plan --project xo
 assert_contains "$out" 'eligible, unranked: spendPressure missing' "planning cannot fill in a missing pressure score"
-assert_contains "$out" "profile: --harness 'cursor'" "a missing pressure score never falls back to adjusted priority"
-
-jq '(.providers[].quotaSemantics.effectiveAvailability[].selection.spendPressure) = -0.8' "$TMP_ROOT/planning-pressure.json" > "$LANE_QUOTA"
-run_lane code out err "$BRIEF" --lane plan --project xo
-assert_contains "$out" 'genuine spendPressure tie' "legacy planning cannot break a pressure tie"
+assert_contains "$out" "profile: --harness 'cursor'" "a missing pressure score never falls back to a planning value"
 
 plan_quota '2026-11-01T04:00:00Z' "$PLAN_CODEX_ROW" "$PLAN_CODEX_WINDOWS"
 run_lane code out err "$BRIEF" --lane plan --project xo
