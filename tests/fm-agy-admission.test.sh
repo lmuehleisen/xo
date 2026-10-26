@@ -79,17 +79,23 @@ assert_receipt || fail 'complete cold proof did not certify the exact executable
 [ "$(admit)" = "$RECEIPT" ] && [ "$(attempts)" = 3 ] || fail 'matching receipt reran guards'
 pass 'agy admission: first complete certification and cheap unchanged reuse'
 
+bad_dir="$CASE/malformed-context"
+mkdir -m 700 "$bad_dir"
 for value in null '[]' '"invalid"' missing; do
   if [ "$value" = missing ]; then
-    jq 'del(.binding.context)' "$RECEIPT" > "$CASE/bad-receipt.json"
+    jq 'del(.binding.context)' "$RECEIPT" > "$bad_dir/receipt.json"
   else
-    jq --argjson value "$value" '.binding.context=$value' "$RECEIPT" > "$CASE/bad-receipt.json"
+    jq --argjson value "$value" '.binding.context=$value' "$RECEIPT" > "$bad_dir/receipt.json"
   fi
-  jq '.binding' "$CASE/bad-receipt.json" > "$CASE/bad-binding.json"
-  chmod 600 "$CASE/bad-receipt.json"
-  if python3 "$CODE/bin/fm-agy-admission.py" match "$CASE/bad-receipt.json" "$CASE/bad-binding.json" \
+  jq '.binding' "$bad_dir/receipt.json" > "$bad_dir/binding.json"
+  chmod 600 "$bad_dir/receipt.json"
+  if python3 "$CODE/bin/fm-agy-admission.py" match "$bad_dir/receipt.json" "$bad_dir/binding.json" \
     2> "$CASE/bad-context.stderr"; then fail 'malformed context inherited compatibility coverage'; fi
-  grep -q 'requires an object context' "$CASE/bad-context.stderr" || fail 'malformed context did not fail with its binding diagnostic'
+  if ! grep -q 'requires an object context' "$CASE/bad-context.stderr"; then
+    printf 'Expected object-context diagnostic for %s; actual: ' "$value" >&2
+    cat "$CASE/bad-context.stderr" >&2
+    fail 'malformed context did not fail with its binding diagnostic'
+  fi
   ! grep -q Traceback "$CASE/bad-context.stderr" || fail 'malformed context crashed the receipt matcher'
 done
 pass 'agy admission: malformed and missing context rejects coverage without choosing a legacy fallback'
