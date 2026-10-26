@@ -5222,7 +5222,7 @@ SH
     "$WATCH" > "$dir/watch.out" &
   pid=$!
   for ((i=0; i<450; i++)); do
-    [ ! -e "$state/native.agy-hooks/native-poll-error" ] || break
+    grep -q 'key=agy-native-transport-' "$state/native.status" 2>/dev/null && break
     is_live_non_zombie "$pid" || break
     sleep 0.1
   done
