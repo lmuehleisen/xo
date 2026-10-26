@@ -1758,6 +1758,7 @@ test_spawn_secondmate_runs_thread_in_home_with_env() {
   [ "$(t3_json_field "$settings" 'd.env.LAVISH_AXI_HOST')" = undefined ] || fail "a key an earlier spawn wrote and this one does not must not linger"
   [ "$(t3_json_field "$settings" 'Object.keys(d.env).length')" = 19 ] || fail "the env block should hold the home's entry, the 17 Firstmate keys, and their list, got $(t3_json_field "$settings" 'Object.keys(d.env)')"
   [ "$(t3_json_field "$settings" 'd.env.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "settings env must carry GOTMPDIR"
+  # shellcheck disable=SC2329 # Passed as a callback to assert_t3_secondmate_env.
   read_settings() { t3_json_field "$settings" "d.env[\"$1\"]"; }
   assert_t3_secondmate_env read_settings "claude secondmate settings env" "$home" "$thread" autoarm "$id"
   t3_excluded "$home" .claude/settings.local.json || fail "the settings file must be git-excluded in the home"
@@ -1783,6 +1784,7 @@ test_spawn_codex_secondmate_writes_toml_env() {
   toml="$home/.codex/config.toml"
   assert_present "$toml" "a codex secondmate home gets .codex/config.toml"
   [ "$(t3_toml_env "$toml" GOTMPDIR)" = "/tmp/fm-$id/gotmp" ] || fail "config.toml must set GOTMPDIR, got '$(cat "$toml")'"
+  # shellcheck disable=SC2329 # Passed as a callback to assert_t3_secondmate_env.
   read_toml() { t3_toml_env "$toml" "$1"; }
   assert_t3_secondmate_env read_toml "codex secondmate config.toml" "$home" "$thread" persistent "$id"
   t3_excluded "$home" .codex/config.toml || fail "config.toml must be git-excluded in the home"
