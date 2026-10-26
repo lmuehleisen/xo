@@ -3397,7 +3397,9 @@ test_pane_is_busy_t3code_trusts_native_verdict_without_capture() {
   dir=$(make_supercase primary-t3code-busy)
   (
     fm_backend_source t3code || fail "could not source the t3code adapter"
+    # shellcheck disable=SC2329 # Negative-call sentinel for the sourced pane_is_busy implementation.
     fm_backend_capture() { : > "$dir/capture-called"; }
+    # shellcheck disable=SC2329 # The sourced pane_is_busy calls this scoped backend override.
     fm_backend_t3code_probe() {
       [ "$1" = thread-captain ] || : > "$dir/unexpected-probe"
       printf '%s' "${FM_FAKE_T3_ROW:?}"
