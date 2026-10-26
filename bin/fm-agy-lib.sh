@@ -76,7 +76,7 @@ fm_agy_relaunch_inherit() {
     esac
   fi
   if [ "$(fm_meta_get "$RELAUNCH_META" agy_posture)" = native-auto ]; then
-    AGY_NATIVE_AUTO=1
+    AGY_NATIVE_AUTO=1 AGY_BYPASS=0
     CREW_PERMISSION_MODE=auto
     AGY_BYPASS_POSTURE_SET=1
     return 0
@@ -103,7 +103,9 @@ fm_agy_relaunch_inherit() {
       AGY_BYPASS_OPT_OUT=1
       ;;
   esac
-  if [ "${RELAUNCH_PRIOR_HARNESS:-}" = agy ] && [ "$AGY_BYPASS_POSTURE_SET" = 0 ]; then
+  if [ "${RELAUNCH_PRIOR_HARNESS:-}" = agy ] \
+    && [ -z "$(fm_meta_get "$RELAUNCH_META" agy_posture)" ] \
+    && [ -z "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" ]; then
     # Older prompted workers may predate the explicit bypass field. Keep
     # their existing accept-edits posture rather than silently migrating it.
     AGY_NATIVE_AUTO=0 AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=1 AGY_BYPASS_OPT_OUT=1
@@ -419,8 +421,11 @@ fm_agy_spawn_ready_gate() {
       exit 1
     fi
     local seq prompt
-    seq=$(fm_agy_native_seq "$STATE_REAL" "$ID") || exit 1
-    prompt=$("$SCRIPT_DIR/fm-operational-input.sh" encode launch-brief < "$BRIEF") || exit 1
+    if ! seq=$(fm_agy_native_seq "$STATE_REAL" "$ID") \
+      || ! prompt=$("$SCRIPT_DIR/fm-operational-input.sh" encode launch-brief < "$BRIEF"); then
+      agy_spawn_fail "agy native Auto was verified but the task brief could not be prepared; no task brief was sent"
+      exit 1
+    fi
     if ! fm_agy_native_submit "$BACKEND" "$T" "$ID" "$prompt" || ! agy_wait_for_started "$seq"; then
       agy_spawn_fail "agy native Auto was verified but task brief delivery was not confirmed"
       exit 1

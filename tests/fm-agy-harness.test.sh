@@ -1023,7 +1023,7 @@ test_agy_native_refuses_unproven_context_before_brief() {
 
 test_agy_native_spawn_orders_proof_before_brief() {
   local variant fields case_dir home proj wt fakebin id out state_real tasktmp
-  for variant in success fallback; do
+  for variant in success fallback seq brief; do
     fields=$(make_spawn_case "native-$variant-${TMP_ROOT##*.}")
     IFS='|' read -r case_dir home proj wt fakebin id <<<"$fields"
     mv "$fakebin/agy" "$fakebin/agy-catalog"
@@ -1049,13 +1049,20 @@ SH
         || fail 'native startup sent the task before activation or enabled bypass'
       state_real=$(cd "$home/state" && pwd -P)
       ! grep -Fq -- "--add-dir '$state_real' " "$home/launch.log" || fail 'native launch granted shared state'
-    else
+    elif [ "$variant" = fallback ]; then
       if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_NO_AUTO=1 FM_AGY_NATIVE_POLLS=3 FM_AGY_POLL_INTERVAL=0.1 \
         run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then fail 'native fallback was reported dispatched'; fi
       [ ! -e "$home/launch.log.native-brief" ] && [ ! -e "$home/launch.log.native-canary" ] \
         || fail 'unproven native fallback received a task brief'
       grep -q 'native Auto activation failed' "$home/state/$id.status" || fail "native fallback refusal was not recorded: $out"
       [ -f "$home/launch.log.closed" ] || fail 'unproven native endpoint was not closed'
+    else
+      if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_PREP_FAIL="$variant" FM_AGY_NATIVE_POLLS=8 FM_AGY_POLL_INTERVAL=0.1 \
+        run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then fail 'failed brief preparation was reported dispatched'; fi
+      [ -e "$home/launch.log.native-canary" ] && [ ! -e "$home/launch.log.native-brief" ] \
+        || fail 'preparation failure did not occur between activation and delivery'
+      grep -q 'task brief could not be prepared' "$home/state/$id.status" || fail "preparation failure was not diagnosed: $out"
+      [ -f "$home/launch.log.closed" ] || fail 'activated agent was abandoned after preparation failed'
     fi
     tasktmp="/tmp/fm-$id"
     fm_test_rm_tmproot "$tasktmp"
@@ -1076,7 +1083,8 @@ test_agy_deprecated_worker_flags_refuse() {
 }
 
 test_agy_native_and_legacy_relaunch_postures() (
-  local posture meta="$TMP_ROOT/relaunch-posture.meta"
+  local ordering posture meta="$TMP_ROOT/relaunch-posture.meta"
+  for ordering in inherit-first default-first; do
   for posture in native-auto legacy-bypass legacy-prompt manual legacy-manual old-prompt; do
     printf 'model=fixture-model\neffort=high\n' > "$meta"
     case "$posture" in
@@ -1091,6 +1099,7 @@ test_agy_native_and_legacy_relaunch_postures() (
     MODEL_SET=0 EFFORT_SET=0 MODEL='' EFFORT='' AGY_NATIVE_AUTO=0
     AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=0 AGY_BYPASS_OPT_OUT=0 AGY_JUDGE_ARG=''
     CREW_PERMISSION_MODE=auto
+    if [ "$ordering" = default-first ]; then fm_agy_default_posture agy scout; fi
     fm_agy_relaunch_inherit
     fm_agy_default_posture agy scout
     [ "$MODEL:$EFFORT" = fixture-model:high ] || fail 'relaunch lost its tested model context'
@@ -1111,6 +1120,7 @@ test_agy_native_and_legacy_relaunch_postures() (
     CREW_PERMISSION_MODE=auto
     fm_agy_relaunch_inherit
     [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$CREW_PERMISSION_MODE" = "$before" ] || fail 'recording the posture changed the next restart'
+  done
   done
   pass 'native, manual and recorded legacy relaunches retain their own posture and context'
 )

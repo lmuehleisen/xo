@@ -3450,6 +3450,8 @@ test_herdr_presentation_recovery_preserves_recorded_agy_opt_out() {
   }
   dir=$HERDR_CASE_DIR
   id=herdr-agy-opt-out
+  sed 's/^harness=.*/harness=agy/' "$dir/home/state/$id.meta" > "$dir/home/state/$id.meta.new"
+  mv "$dir/home/state/$id.meta.new" "$dir/home/state/$id.meta"
   printf 'agy_bypass=off\n' >> "$dir/home/state/$id.meta"
   mkdir -p "$dir/home/config"
   printf 'on\n' > "$dir/home/config/herdr-presentation-spaces"

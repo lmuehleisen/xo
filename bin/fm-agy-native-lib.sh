@@ -204,7 +204,9 @@ fm_agy_native_resume() { # <backend> <target> <state> <key>
   case "$slug" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   marker="$PENDING_DIR/$slug.pending" proof="$PENDING_DIR/$slug.native"
   [ -f "$marker" ] && [ "$(cat "$proof.sent" 2>/dev/null)" = decline ] || return 1
+  # shellcheck disable=SC2034 # Read by the policy owner's close_pending/log_record.
   TOOL=run_command TOOL_USE_ID=$slug
+  # shellcheck disable=SC2034 # Read by the policy owner's close_pending/log_record.
   SESSION_ID=$(jq -er .session "$PENDING_DIR/$slug.candidate") || return 1
   if [ ! -e "$proof.resume" ]; then
     for ((i=0; i<${FM_AGY_NATIVE_POLLS:-160}; i++)); do

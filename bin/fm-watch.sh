@@ -247,6 +247,8 @@ WATCH_HOME_EXISTED=0
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # Parent-owned secondmate missed-report guards: durable pending-reply
 # expectations created by fm-send on marked secondmate requests. The tick is
 # cheap when no records exist and never scrapes secondmate conversation.
@@ -3889,7 +3891,7 @@ EOF
     # Native agy review can wait without emitting Stop. Bind an answerable
     # panel before busy suppression so it becomes an ordinary keyed decision.
     if [ -n "$task" ] && [ "$(fm_meta_get "$STATE/$task.meta" agy_posture)" = native-auto ]; then
-      if ! bash "$SCRIPT_DIR/fm-agy-permission-policy.sh" native-poll \
+      if ! fm_run_timed 30 bash "$SCRIPT_DIR/fm-agy-permission-policy.sh" native-poll \
         "$STATE/$task.agy-permission.json" </dev/null >/dev/null 2>&1; then
         native_error="$STATE/$task.agy-hooks/native-poll-error"
         if (set -C; : > "$native_error") 2>/dev/null; then

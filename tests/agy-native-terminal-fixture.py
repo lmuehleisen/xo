@@ -78,6 +78,13 @@ def spawn(args):
         mode_path.write_text("default")
         paint()
     elif args[0] == "capture-pane":
+        marker = Path(str(log) + ".native-marker")
+        if marker.exists() and not Path(marker.read_text()).exists():
+            failure = os.environ.get("FM_FAKE_AGY_PREP_FAIL")
+            if failure == "seq":
+                (hooks.parent / (task + ".busy-state")).unlink(missing_ok=True)
+            elif failure == "brief":
+                Path(policy["brief"]).unlink(missing_ok=True)
         print(screen.read_text(), end="")
     elif args[0] == "display-message":
         if args[-1] == "#{cursor_y}":
@@ -107,6 +114,7 @@ def spawn(args):
                     raise ValueError("invalid synthetic activation command or inactive mode")
                 event("PreToolUse", command)
                 Path(words[3]).write_text(words[1])
+                Path(str(log) + ".native-marker").write_text(words[3])
                 event("PostToolUse", command)
                 Path(str(log) + ".native-canary").touch()
             elif not text.startswith("This is a launch readiness check"):

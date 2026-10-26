@@ -5199,6 +5199,42 @@ test_wedge_escalation_resets_when_pane_becomes_active() {
   pass "a pane becoming active again resets the consecutive wedge-escalation counter"
 }
 
+test_native_approval_poll_timeout_surfaces() {
+  local dir state fakebin gen pid i child
+  dir=$(make_case native-poll-timeout); state="$dir/state"; fakebin="$dir/fakebin"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" native) || fail 'native timeout fixture could not arm'
+  printf 'window=test:fm-native\nkind=scout\nharness=agy\nbackend=tmux\nagy_posture=native-auto\nbusy_gen=%s\n' "$gen" > "$state/native.meta"
+  mkdir "$state/native.agy-hooks"
+  jq -n --arg gen "$gen" '{task:"native",posture:"native-auto",gen:$gen}' > "$state/native.agy-permission.json"
+  mv "$fakebin/tmux" "$fakebin/tmux-base"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'capture-pane '*'-S -0')
+    printf '%s\n' "$$" > "$FM_NATIVE_POLL_PID"
+    exec sleep 120 ;;
+esac
+exec "$(dirname "$0")/tmux-base" "$@"
+SH
+  chmod +x "$fakebin/tmux"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-native FM_NATIVE_POLL_PID="$dir/poll.pid" \
+    FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$WATCH" > "$dir/watch.out" &
+  pid=$!
+  for ((i=0; i<450; i++)); do
+    [ ! -e "$state/native.agy-hooks/native-poll-error" ] || break
+    is_live_non_zombie "$pid" || break
+    sleep 0.1
+  done
+  reap "$pid"
+  [ -f "$dir/poll.pid" ] || fail "native viewport capture was never attempted: $(cat "$dir/watch.out")"
+  grep -q 'key=agy-native-transport-' "$state/native.status" || fail 'hung native polling did not publish its bounded transport failure'
+  child=$(cat "$dir/poll.pid")
+  ! is_live_non_zombie "$child" || fail 'native poll timeout left its blocked child alive'
+  ack_stopped_cycle "$state" || fail 'native poll timeout watcher did not clean up'
+  pass 'native approval polling times out, reaps its blocked child and publishes the transport decision'
+}
+
 # --- a stop request is honored mid-poll --------------------------------------
 # Every stopper (the arm's signal path, the away-mode daemon, reap above) waits
 # for the watcher to exit after one TERM, so TERM must end it through its EXIT
