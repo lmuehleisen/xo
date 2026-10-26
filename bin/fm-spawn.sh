@@ -3678,7 +3678,7 @@ OMP_PROFILE_MATE=
 OMP_PROFILE_RAW=
 [ "$RAW_LAUNCH" = 0 ] || OMP_PROFILE_RAW=$ARG3
 OMP_PROFILE_PIN=$(fm_omp_profile_select "$HARNESS" "$CONFIG" "$OMP_PROFILE_MATE" "$OMP_PROFILE_RAW") || exit 1
-if [ "$HARNESS" = omp ]; then
+if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" "$OMP_PROFILE_PIN" || exit 1
 fi
 if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = kiro ]; then
