@@ -71,8 +71,8 @@ The policy owner's `approve`, `decline` and `resume` verbs own one-shot choices 
 Conversation-wide and persistent approval choices are never selected.
 Unknown, clipped, changed or ambiguous panels remain unapproved and surface for inspection or guarded relaunch.
 
-Live one-shot approval was observed on agy 1.4.7, but harmless escalation canaries did not reliably reproduce live decline.
-Captured real panel fixtures and generation-bound hook transitions cover decline/cancel reconciliation; this is not a live end-to-end decline claim.
+Live one-shot approval and decline/reconciliation were verified on agy 1.4.7 through Herdr.
+Other model/backend combinations retain their separately recorded startup/tool coverage rather than a separate live No claim.
 A decline is not settled from its footer: a new accepted Stop must prove reconciliation or the decision remains open.
 The [verification record](../../../../../docs/verification/runtime-backends-fork.md#native-auto-workers) owns the measured limits and refresh commands.
 
@@ -118,7 +118,7 @@ An unstyled accept-edits hint, a manual-mode row with no identifying footer, and
 Native background-task observation uses the returned log with `view_file`; delegation-shaped native tools retain the shared pre-tool guard.
 
 Unsupported surfaces remain explicit: headless primary supervision, native SessionStart and compaction refresh, and general semantic interrupt completion are not supported by this integration.
-Native Auto decision handling has the explicit live-decline limit described above.
+Native Auto decision handling retains the per-context verification limits above.
 The optional quota helper now uses Agy's own catalog for the reviewed bucket bindings owned by `../../../../../bin/fm-quota-axi-lib.sh`; the agent-side quota procedure remains authoritative.
 Runtime backend lifecycle guarantees remain those of each backend's capability table; native worker activation is verified on tmux and Herdr, with current evidence in the verification owner.
 Remote secondmate launch and relaunch remain unsupported and are refused by `../../../../../bin/fm-remote-secondmate-control.sh`; that Herdr-only path is separate from the verified local secondmate integration.

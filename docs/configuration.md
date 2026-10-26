@@ -1011,7 +1011,7 @@ The [agy adapter reference](../.agents/skills/harness-adapters/references/harnes
 The Firstmate hook retains task-root, protected-wiring, credential-metadata, force/publication and brief-scope constraints; ordinary residue goes to native review without a Firstmate worker judge.
 Native pending command approvals use the existing keyed decision lifecycle through [`bin/fm-agy-permission-policy.sh`](../bin/fm-agy-permission-policy.sh).
 A native outside-sandbox call may execute automatically or request a one-shot decision, so tests must verify actual effects rather than assuming every harmless call prompts.
-Live decline was not reproducible reliably on agy 1.4.7; deterministic fixtures cover cancellation reconciliation and the [verification owner](verification/runtime-backends-fork.md#native-auto-workers) records that limit.
+Live native No and cancellation reconciliation were verified on agy 1.4.7 through Herdr; the [verification owner](verification/runtime-backends-fork.md#native-auto-workers) records the context and limits.
 
 Recorded agy workers keep their existing posture on relaunch, including legacy judge/bypass or prompted accept-edits tasks; their pending decisions are preserved until ordinary retirement.
 The deprecated new-worker `--agy-bypass`, `--no-agy-bypass` and `--agy-judge` flags refuse rather than selecting a different permission route.

@@ -340,10 +340,28 @@ A production-hook native file write into a synthetic foreign-task root was denie
 
 Live one-shot command approval produced the exact status append and closed the same keyed decision through PostToolUse.
 Native Auto also approved harmless outside-sandbox calls itself, including an exact inbox acknowledgment.
-A closed-loopback canary and an owned opaque write canary completed without prompting.
-**Live decline/resume was not reproducible reliably on agy 1.4.7.**
-`tests/fm-agy-native.test.sh` uses the captured real panel and cancellation shapes with production generation/conversation hooks to verify decline, key-only busy preservation, accepted-Stop reconciliation, unconfirmed-action retention and idempotent resume.
-Those fixtures do not establish a live end-to-end decline guarantee.
+Harmless outside-sandbox calls can auto-complete, so ordinary calls need not produce a prompt.
+Live decline/reconciliation passed on agy 1.4.7 with `gemini-3.8-flash-high` through Herdr.
+A recursive permission change on a newly created disposable directory outside all native grants and system temporary storage reached the native approval panel.
+The production decision path selected option 4, No, and the directory and sentinel retained their original modes and contents.
+A new main-conversation invocation produced `CANCEL_ACK` and an accepted Stop, closed the exact keyed decision and returned semantic busy state to idle.
+This is a live No proof for that context, not a claim that every model/backend or risky action was separately declined.
+
+```sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=herdr \
+  FM_AGY_LIVE_MODEL=gemini-3.8-flash-high \
+  FM_AGY_NATIVE_LIVE_DECLINE_PROBE=permissions \
+  bin/fm-test-run.sh tests/fm-agy-native-live-e2e.test.sh
+```
+
+```text
+ok - native Auto: live decline reconciled through a new accepted Stop
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.4.7, herdr)
+```
+
+`tests/fm-agy-native.test.sh` additionally uses captured panel/cancellation shapes and production hooks for delayed, foreign, malformed, non-idle and missing Stop cases, changed contexts, uncertain delivery and idempotent resume.
+Those adversarial fixtures supplement the live normal path.
 Native compatibility receipts record live approval/decline observations separately from their required activation coverage.
 
 ### accept-edits covers file edits, not shell commands
