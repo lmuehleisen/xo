@@ -83,7 +83,8 @@ fm_agy_relaunch_inherit() {
   fi
   if [ "$(fm_meta_get "$RELAUNCH_META" agy_posture)" = manual ] \
     || { [ "$(fm_meta_get "$RELAUNCH_META" agy_permission_mode)" = manual ] \
-      && [ -z "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" ]; }; then
+      && { [ -z "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" ] \
+        || [ "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" = off ]; }; }; then
     AGY_NATIVE_AUTO=0 AGY_BYPASS_POSTURE_SET=1 CREW_PERMISSION_MODE=manual
     return 0
   fi

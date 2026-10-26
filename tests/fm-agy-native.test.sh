@@ -40,6 +40,12 @@ if printf '%s\n' 'Auto mode: edits & safe commands auto-approved' '? for shortcu
   | python3 "$ROOT/bin/fm-agy-native.py" active 2>/dev/null; then fail 'transcript text was credited as active Auto'; fi
 sed 's/esc to cancel/? for shortcuts/' "$SCREEN" > "$TMP_ROOT/stale"
 if python3 "$ROOT/bin/fm-agy-native.py" prompt < "$TMP_ROOT/stale" 2>/dev/null; then fail 'inactive transcript panel was accepted'; fi
+for value in null '[]' '{"tool":"run_command","args":[]}'; do
+  printf '%s\n' "$value" > "$TMP_ROOT/bad-candidate.json"
+  if python3 "$ROOT/bin/fm-agy-native.py" match "$TMP_ROOT/bad-candidate.json" < "$SCREEN" \
+    2> "$TMP_ROOT/bad-candidate.stderr"; then fail 'malformed candidate was matched'; fi
+  ! grep -q Traceback "$TMP_ROOT/bad-candidate.stderr" || fail 'malformed candidate crashed the viewport parser'
+done
 pass 'native viewport: independent Auto signals, fallback refusal, active panel and wrapped choices'
 
 cat > "$TMP_ROOT/fakebin/tmux" <<'SH'
@@ -53,6 +59,21 @@ export PATH="$TMP_ROOT/fakebin:$PATH" FM_HOME="$TMP_ROOT" FM_STATE_OVERRIDE="$ST
 manage() { "$ROOT/bin/fm-agy-permission-policy.sh" "$1" "$POLICY" "${2:-}" </dev/null; }
 payload "$COMMAND"
 [ -z "$(hook pre-tool-use)" ] || fail 'ordinary native call was held for a judge'
+cp "$SCREEN" "$TMP_ROOT/live-panel"
+cp "$TMP_ROOT/stale" "$SCREEN"
+manage native-poll || fail 'idle transcript should not be treated as a transport failure'
+[ ! -e "$STATE/t1.agy-permission-pending/native-unbound.pending" ] || fail 'idle transcript created an unbound native decision'
+[ ! -e "$STATE/t1.status" ] || fail 'idle transcript published a false decision'
+cp "$TMP_ROOT/live-panel" "$SCREEN"
+cp "$POLICY" "$STATE/no-extension"
+for action in native-poll resume; do
+  if "$ROOT/bin/fm-agy-permission-policy.sh" "$action" "$STATE/no-extension" agy-permission-fixture-s1 </dev/null; then
+    fail 'a policy without a pending-store path reached native control'
+  fi
+done
+[ ! -s "$TMP_ROOT/keys" ] || fail 'missing pending store delivered native keys'
+[ -z "$("$ROOT/bin/fm-agy-permission-policy.sh" post-tool-use "$STATE/no-extension" < "$PAYLOAD")" ] \
+  || fail 'non-json policy did not leave the post hook inert'
 manage native-poll || fail 'native panel polling failed'
 pending="$STATE/t1.agy-permission-pending/fixture-s1.pending"
 [ -f "$pending" ] || fail 'native panel did not become a durable keyed decision'
@@ -82,6 +103,16 @@ printf 'different-gen\n' > "$STATE/t1.busy-gen"
 if manage native-poll; then fail 'stale generation was trusted'; fi
 printf '%s\n' "$GEN" > "$STATE/t1.busy-gen"
 pass 'native decisions: concurrent ambiguity and stale generations fail closed'
+manage retire
+payload "$COMMAND" 4
+hook pre-tool-use >/dev/null
+panel
+sed '/4\. No, cancel/d' "$SCREEN" > "$TMP_ROOT/clipped"
+mv "$TMP_ROOT/clipped" "$SCREEN"
+manage native-poll
+[ -e "$STATE/t1.agy-permission-pending/native-unbound.pending" ] || fail 'clipped active dialog was silently ignored'
+manage retire
+pass 'native polling: idle transcript is inert, clipped active dialogs surface, and missing stores refuse control'
 
 # Ordinary residue never invokes a Firstmate judge. Hard refusals and
 # Firstmate-specific holds still apply through the same public hook.

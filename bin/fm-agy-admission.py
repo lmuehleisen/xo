@@ -65,6 +65,8 @@ INTEGRATION = [
 
 
 def guards_for(binding):
+    if not isinstance(binding, dict) or not isinstance(binding.get("context"), dict):
+        raise ValueError("compatibility binding requires an object context")
     first = "native" if binding["context"].get("posture") == "native-auto" else "bypass"
     return {name: GUARDS[name] for name in (first, "observer", "signals")}
 

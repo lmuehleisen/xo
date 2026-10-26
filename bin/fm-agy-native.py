@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read only the live agy viewport; never interpret history as a native prompt.
 
-Usage: fm-agy-native.py active|prompt|match <candidate.json> < viewport
+Usage: fm-agy-native.py active|dialog|prompt|match <candidate.json> < viewport
 `prompt` emits a fingerprint and selected choice for the complete command
 approval panel. `match` additionally requires its displayed command to match
 the exact hook input, allowing only display wrapping. Unknown, clipped, or
@@ -15,12 +15,18 @@ import re
 import sys
 
 
+def live_dialog(screen):
+    rows = screen.splitlines()
+    footer = next((row.strip() for row in reversed(rows) if row.strip()), "")
+    return ("esc to cancel" in footer and any(row.strip() in
+            ("Requesting permission for:", "Run this command?") for row in rows))
+
+
 def panel(screen):
     # Require the entire current panel, including both persistent choices.
     # Its fingerprint excludes selection, which changes while choosing No.
     rows = screen.splitlines()
-    footer = next((row.strip() for row in reversed(rows) if row.strip()), "")
-    if "esc to cancel" not in footer:
+    if not live_dialog(screen):
         raise ValueError("native approval panel is not the active viewport")
     starts = [i for i, row in enumerate(rows) if row.strip() == "Requesting permission for:"]
     if not starts:
@@ -85,9 +91,15 @@ def main():
         if not active:
             raise ValueError("native Auto indicator absent")
         return
+    if verb == "dialog":
+        if not live_dialog(screen):
+            raise ValueError("no live native command dialog")
+        return
     result = panel(screen)
     if verb == "match":
         candidate = json.loads(Path(sys.argv[2]).read_text())
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("args"), dict):
+            raise ValueError("native candidate requires an args object")
         if candidate.get("tool") != "run_command" or not matches(result["command"], candidate):
             raise ValueError("native prompt does not match exact hook input")
         result["candidate_digest"] = hashlib.sha256(

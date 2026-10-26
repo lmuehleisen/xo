@@ -111,6 +111,7 @@ PY
 fm_agy_native_decision() {
   local action=$1 policy=$2 key=${3:-} state meta backend target screen panel
   local candidate found='' count=0 slug marker proof current selected seq i
+  [ "${PENDING_DIR+x}" = x ] && [ -n "$PENDING_DIR" ] || return 1
   state=${policy%/*} meta="$state/$TASK.meta"
   [ -f "$meta" ] && [ "$(fm_meta_get "$meta" harness)" = agy ] \
     && [ "$(fm_meta_get "$meta" busy_gen)" = "$GEN" ] \
@@ -125,7 +126,7 @@ fm_agy_native_decision() {
   screen=$(fm_agy_native_screen "$backend" "$target" "$TASK") || return 1
   panel=$(printf '%s' "$screen" | python3 "$SCRIPT_DIR/fm-agy-native.py" prompt 2>/dev/null) || {
     [ "$action" = poll ] || return 1
-    case "$screen" in *'Requesting permission for:'*|*'Run this command?'*) ;; *) return 0 ;; esac
+    printf '%s' "$screen" | python3 "$SCRIPT_DIR/fm-agy-native.py" dialog >/dev/null 2>&1 || return 0
     panel=''
   }
   for candidate in "$PENDING_DIR"/*.candidate; do
@@ -198,6 +199,7 @@ fm_agy_native_decision() {
 
 fm_agy_native_resume() { # <backend> <target> <state> <key>
   local backend=$1 target=$2 state=$3 key=$4 slug marker proof screen seq invocation i
+  [ "${PENDING_DIR+x}" = x ] && [ -n "$PENDING_DIR" ] || return 1
   slug=${key#agy-permission-}
   case "$slug" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   marker="$PENDING_DIR/$slug.pending" proof="$PENDING_DIR/$slug.native"
