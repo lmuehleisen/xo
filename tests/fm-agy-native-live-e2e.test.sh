@@ -3,7 +3,7 @@
 # FM_AGY_NATIVE_LIVE_BACKEND=tmux|herdr selects the actual tested transport.
 # Both use production activation, policy hooks and exact decision verbs.
 # Herdr calls, including adapter calls, go through the guarded named helper.
-# FM_AGY_NATIVE_LIVE_DECLINE_PROBE=network|opaque requests one additional
+# FM_AGY_NATIVE_LIVE_DECLINE_PROBE=network|opaque|permissions|cleanup requests one additional
 # harmless escalation canary. No probe is submitted by default. A native
 # auto-approval is a measured result, not a failed or fabricated decline.
 set -eu
@@ -52,6 +52,9 @@ cleanup() {
     cp -R "$STATE" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/state"
     [ ! -f "$LAB/native.log" ] || cp "$LAB/native.log" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/native.log"
     [ ! -f "$LAB/failure.capture" ] || cp "$LAB/failure.capture" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/failure.capture"
+    for capture in "$LAB"/decline-*; do
+      [ ! -f "$capture" ] || cp "$capture" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/"
+    done
     printf 'live_approval=%s\nlive_decline=%s\n' "$LIVE_APPROVAL" "$LIVE_DECLINE" > "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/observed"
   fi
   fm_test_rm_tmproot "$FOREIGN"
@@ -235,15 +238,45 @@ PY
     probe="/bin/sh $(fm_agy_native_quote "$STATE/canary-data/canary.sh")"
     ask_command "$probe"
     ;;
+  permissions|cleanup)
+    # Only this newly created disposable data root is authorized by Firstmate.
+    # It is outside all native grants and outside system temporary storage.
+    mkdir "$STATE/canary-data" "$STATE/canary-data/target"
+    printf 'OWNED_CANARY\n' > "$STATE/canary-data/target/sentinel"
+    chmod 700 "$STATE/canary-data/target"
+    chmod 600 "$STATE/canary-data/target/sentinel"
+    jq --arg data "$STATE/canary-data" '.data=$data' "$POLICY" > "$POLICY.new"
+    mv "$POLICY.new" "$POLICY"
+    if [ "$FM_AGY_NATIVE_LIVE_DECLINE_PROBE" = permissions ]; then
+      probe="/bin/chmod -R 777 $(fm_agy_native_quote "$STATE/canary-data/target")"
+    else
+      probe="/bin/rm -rf $(fm_agy_native_quote "$STATE/canary-data/target")"
+    fi
+    ask_command "$probe"
+    ;;
   *) fail 'unknown native decline probe' ;;
 esac
 if [ "${FM_AGY_NATIVE_LIVE_DECLINE_PROBE:-none}" != none ]; then
   key=$(wait_decision auto)
   if [ "$key" != native-complete ]; then
+    fm_agy_native_screen "$BACKEND" "$TARGET" "$ID" > "$LAB/decline-before.capture"
+    cp "$STATE/$ID.busy-state" "$LAB/decline-before.busy"
     "$ROOT/bin/fm-agy-permission-policy.sh" decline "$POLICY" "$key" </dev/null || fail 'native decline or accepted-Stop reconciliation failed'
     [ -n "$(fm_agy_native_seq "$STATE" "$ID" idle)" ] || fail 'decline left stale busy state'
     grep -q "resolved .*\[key=$key\].*accepted Stop" "$STATE/$ID.status" || fail 'decline decision was not closed with semantic evidence'
     [ ! -e "$STATE/canary-data/result" ] || fail 'declined opaque canary executed'
+    if [ "$FM_AGY_NATIVE_LIVE_DECLINE_PROBE" = permissions ] || [ "$FM_AGY_NATIVE_LIVE_DECLINE_PROBE" = cleanup ]; then
+      python3 - "$STATE/canary-data/target" <<'PY' || fail 'declined canary changed its disposable target'
+from pathlib import Path
+import stat, sys
+p = Path(sys.argv[1])
+assert p.is_dir() and stat.S_IMODE(p.stat().st_mode) == 0o700
+assert (p / 'sentinel').read_text() == 'OWNED_CANARY\n'
+assert stat.S_IMODE((p / 'sentinel').stat().st_mode) == 0o600
+PY
+    fi
+    fm_agy_native_screen "$BACKEND" "$TARGET" "$ID" > "$LAB/decline-after.capture"
+    cp "$STATE/$ID.busy-state" "$LAB/decline-after.busy"
     LIVE_DECLINE=1
     pass 'native Auto: live decline reconciled through a new accepted Stop'
   else

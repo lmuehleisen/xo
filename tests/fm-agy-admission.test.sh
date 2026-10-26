@@ -86,6 +86,7 @@ for value in null '[]' '"invalid"' missing; do
     jq --argjson value "$value" '.binding.context=$value' "$RECEIPT" > "$CASE/bad-receipt.json"
   fi
   jq '.binding' "$CASE/bad-receipt.json" > "$CASE/bad-binding.json"
+  chmod 600 "$CASE/bad-receipt.json"
   if python3 "$CODE/bin/fm-agy-admission.py" match "$CASE/bad-receipt.json" "$CASE/bad-binding.json" \
     2> "$CASE/bad-context.stderr"; then fail 'malformed context inherited compatibility coverage'; fi
   grep -q 'requires an object context' "$CASE/bad-context.stderr" || fail 'malformed context did not fail with its binding diagnostic'
