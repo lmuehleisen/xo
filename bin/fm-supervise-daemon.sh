@@ -1034,7 +1034,7 @@ escalate_flush() {  # <state>
     : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"
     return 0
   fi
-  if [ "$INJECT_LAST_VERDICT" = unconfirmed ]; then
+  if [ "$INJECT_SUBMIT_ATTEMPTED" = 1 ] && [ "$INJECT_LAST_VERDICT" = unconfirmed ]; then
     escalate_freeze "$buf" "$INJECT_SENT_MSG" "$id"
   fi
   return 1
