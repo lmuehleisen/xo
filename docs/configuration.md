@@ -1092,15 +1092,23 @@ Other harness adapters and explicit raw launch commands retain their existing pe
 For pane-backed workers this is the only permission setting: no value selects Claude's `--dangerously-skip-permissions`, and `config/claude-permission-mode` is not read on that path.
 
 Auto requests Claude's classifier-backed permission mode and Codex's automatic approval reviewer with workspace-write sandboxing.
-agy's own reviewed `--mode auto` exists since 1.3.5 ([release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.3.5)) but is gated per account: a refused request warns and silently falls back to default review, and headless `-p` auto-denies permissioned commands while still exiting 0.
-Firstmate does not route workers through it, so an agy crewmate or scout in Auto uses `--dangerously-skip-permissions` with Firstmate's permission policy and judge by default.
-The per-spawn `--no-agy-bypass` option selects `--mode accept-edits`, which approves file edits inside granted directories while still prompting for shell commands.
-Manual leaves agy's default review mode in place, where edits and shell commands prompt; agy secondmates also stay outside the worker policy layer.
-The policy layer's executable-compatibility, hook, write-guard, and judge gates refuse the launch when they cannot be satisfied, and the [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns its decision surface.
-For a policy-layer launch, availability depends on the installed CLI, account, and managed policy; a denied or unsupported launch must be reported rather than retried without the policy layer.
-Manual approval prompts can leave an unattended task waiting for intervention; with agy, Manual keeps its full review prompts and `--no-agy-bypass` selects `accept-edits`, which still prompts for shell commands.
+New agy crewmates and scouts in Auto use verified native Auto with sandboxing and a deterministic Firstmate hook.
+The task brief is withheld until active mode, a real harmless result and native lifecycle hooks are proven; startup fallback refuses dispatch rather than silently changing permissions.
+The native worker route supports tmux and Herdr; unsupported backends refuse Auto, while Manual remains an explicit native-review choice.
+Manual leaves agy's default review prompts in place; local secondmates retain their separate primary integration.
+The [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns operating facts and the live-decline verification limit.
+[`bin/fm-agy-lib.sh`](../bin/fm-agy-lib.sh) owns launch prerequisites, exact physical grants, bounds and failure cleanup.
+
+The Firstmate hook retains task-root, protected-wiring, credential-metadata, force/publication and brief-scope constraints; ordinary residue goes to native review without a Firstmate worker judge.
+Native pending command approvals use the existing keyed decision lifecycle through [`bin/fm-agy-permission-policy.sh`](../bin/fm-agy-permission-policy.sh).
+A native outside-sandbox call may execute automatically or request a one-shot decision, so tests must verify actual effects rather than assuming every harmless call prompts.
+Live native No and cancellation reconciliation were verified on agy 1.4.7 through Herdr; the [verification owner](verification/runtime-backends-fork.md#native-auto-workers) records the context and limits.
+
+Recorded agy workers keep their existing posture on relaunch, including legacy judge/bypass or prompted accept-edits tasks; their pending decisions are preserved until ordinary retirement.
+The deprecated new-worker `--agy-bypass`, `--no-agy-bypass` and `--agy-judge` flags refuse rather than selecting a different permission route.
 Both modes preserve the separate project delivery and merge-approval rules.
-Pane-backed workers receive additional access to the owning home's shared state directory and their brief/report directory, not the entire home; the shared state layout is not a per-task security boundary.
+Native agy workers grant their physical worktree, task data/scratch and owned hook directory, without granting the shared state directory.
+Other adapter-specific state grants remain governed by their launch owners; the shared state layout is not a per-task security boundary.
 Every pane-backed Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.
 Claude Code path-checks its Read, Glob, and Grep tools against its working directories, and since 2.1.257 the first outside read in auto mode parks the pane on a one-time question, so the grant keeps those channels readable without that question.
 Protected Git writes and operations outside the allowed sandbox still require the harness's normal review.
@@ -3417,7 +3425,7 @@ agy --mode accept-edits --add-dir "$(pwd -P)"
 
 The tracked `.agents/hooks.json` supplies the native primary integration; worker dispatch installs separate Firstmate-owned hooks through `bin/fm-agy-hook.sh`.
 Agy task launches require Python 3 for the cleanup audit; `bin/fm-agy-lib.sh` checks it before acquiring an endpoint, including manual and raw launches.
-The existing crew-permissions setting above owns Agy's approval posture, including its interactive shell review requirement.
+The existing crew-permissions setting above owns Agy's approval posture and recorded-worker compatibility.
 [`supervision-protocols/agy.md`](supervision-protocols/agy.md) owns the native background-command wake procedure.
 [`turnend-guard.md`](turnend-guard.md) and [`sessionstart-nudge.md`](sessionstart-nudge.md) own turn-end and startup compatibility, including interruption and compaction limits.
 Agy runs local secondmates through the same primary integration, while model and effort selection retains the adapter's existing dispatch axes.

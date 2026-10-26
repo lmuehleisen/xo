@@ -81,10 +81,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### agy-permission-posture
 
-- Intent: agy crewmates and scouts in Auto use the policed permission layer and judge by default; `--no-agy-bypass` selects `--mode accept-edits`, and Manual keeps agy's default review mode.
+- Intent: new agy Auto workers use verified native review plus deterministic task constraints; recorded legacy workers retain their existing posture and decisions.
 - Class: intended.
-- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-admission.sh`, `bin/fm-agy-admission.py`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including executable-bound admission, generation-bound approval evidence and cleanup audit, with fixtures in `tests/agy-admission-helpers.sh` and `tests/agy-live-helpers.sh`, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
-- Guard: `tests/fm-agy-permission-policy.test.sh`; `tests/fm-agy-admission.test.sh`; `tests/fm-agy-harness.test.sh`; the opt-in live guard `tests/fm-agy-bypass-live-e2e.test.sh`.
+- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-native-lib.sh`, `bin/fm-agy-native.py`, `bin/fm-agy-admission.sh`, `bin/fm-agy-admission.py`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including executable-bound admission, generation-bound approval evidence and cleanup audit, with fixtures in `tests/agy-admission-helpers.sh` and `tests/agy-live-helpers.sh`, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
+- Guard: `tests/fm-agy-native.test.sh`, `tests/fm-agy-harness.test.sh`, `tests/fm-agy-admission.test.sh`, and the opt-in `tests/fm-agy-native-live-e2e.test.sh`; existing policy/bypass tests retain legacy coverage.
+- Limit: live No/reconciliation proof covers agy 1.4.7 with Flash High on Herdr; the [verification record](verification/runtime-backends-fork.md#native-auto-workers) owns other model/backend limits and adversarial fixture coverage.
 - Upstream: its own agy adapter has no fork permission layer.
 
 ### devin-permission-layer

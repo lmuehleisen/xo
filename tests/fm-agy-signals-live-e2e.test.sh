@@ -44,20 +44,24 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 agy_live_context
 LAB=
 SOCKET=
-TMUX_ROOT=
+LAB_HOME_HELPER=${LAB_HOME_HELPER:-$ROOT/bin/fm-lab-home.sh}
+LAB_HOME=
+LAB_TMUX_DIR=
 SESSION=agy-signals
 TARGET="$SESSION:agy"
 AGY_VERSION=
 
 cleanup() {
   local rc=$?
+  trap - EXIT
   [ -z "$SOCKET" ] || "$REAL_TMUX" -S "$SOCKET" kill-server >/dev/null 2>&1 || true
-  fm_test_rm_tmproot "${TMUX_ROOT:-}"
+  if [ -n "$LAB_TMUX_DIR" ]; then "$LAB_HOME_HELPER" teardown "$LAB_HOME" || rc=1; fi
   if [ "$rc" -ne 0 ] && [ -n "$LAB" ]; then
     printf 'Agy worker failure evidence retained: %s\n' "$LAB" >&2
   else
     fm_test_rm_tmproot "${LAB:-}"
   fi
+  exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 143' TERM HUP
@@ -100,16 +104,21 @@ LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-agy-live.XXXXXX")
 # it treat a write inside the granted directory as non-workspace access.
 LAB=$(cd "$LAB" && pwd -P)
 fm_test_require_tmproot "$LAB"
-TMUX_ROOT=$(TMPDIR=/tmp fm_test_tmproot fm-agy-socket)
-SOCKET="$TMUX_ROOT/agy"
+LAB_HOME="$LAB/home"
+"$LAB_HOME_HELPER" create "$LAB_HOME" >/dev/null || fail 'could not create a marked lab home'
+LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$LAB_HOME") || fail 'could not isolate the tmux socket'
+SOCKET="$LAB_TMUX_DIR/tmux-$(id -u)/default"
 WORKSPACE="$LAB/workspace"
 # Reproduce a Firstmate worker inheriting the tracked primary registration.
 # A real linked worktree must keep accept-edits even when that hook is loaded.
 git init -q "$LAB/project" || fail 'could not initialize linked-worktree fixture'
-git -C "$LAB/project" -c user.name=Test -c user.email=test@example.invalid \
-  commit --allow-empty -qm fixture || fail 'could not commit linked-worktree fixture'
-git -C "$LAB/project" worktree add --detach "$WORKSPACE" >/dev/null 2>&1 \
-  || fail 'could not create linked worker worktree'
+# Build only disposable Git metadata; no worktree-provider lifecycle or commit
+# identity is needed to exercise the primary hook's linked-checkout exclusion.
+mkdir -p "$WORKSPACE" "$LAB/project/.git/worktrees/worker"
+printf 'gitdir: %s\n' "$LAB/project/.git/worktrees/worker" > "$WORKSPACE/.git"
+printf '%s\n' "$WORKSPACE/.git" > "$LAB/project/.git/worktrees/worker/gitdir"
+printf '../..\n' > "$LAB/project/.git/worktrees/worker/commondir"
+printf 'ref: refs/heads/fixture\n' > "$LAB/project/.git/worktrees/worker/HEAD"
 mkdir -p "$WORKSPACE/.agents" "$WORKSPACE/bin" "$WORKSPACE/state"
 printf '# Isolated Firstmate worker\n' > "$WORKSPACE/AGENTS.md"
 cp "$ROOT/.agents/hooks.json" "$WORKSPACE/.agents/hooks.json"
@@ -217,10 +226,9 @@ wait_for_text() {  # <text> [samples]
   return 1
 }
 
-# The production approval posture for config/crew-permissions=auto, which is
-# what makes facts 2 and 3 a test of the shipped decision rather than of an
-# arbitrary flag combination.
-TMUX_TMPDIR="$TMUX_ROOT" "$REAL_TMUX" -S "$SOCKET" new-session -d -s "$SESSION" -n agy -c "$WORKSPACE" -x 200 -y 50 \
+# The retained prompted posture for recorded pre-migration workers. Native
+# Auto startup and its deterministic constraints have their own live guard.
+TMUX_TMPDIR="$LAB_TMUX_DIR" "$REAL_TMUX" new-session -d -s "$SESSION" -n agy -c "$WORKSPACE" -x 200 -y 50 \
   || fail "could not create the private tmux session"
 launch=$(printf '%q ' env -u NO_COLOR AGY_CLI_DISABLE_AUTO_UPDATE=1 "$AGY_BIN" --mode accept-edits \
   "${MODEL_FLAGS[@]}" --add-dir "$WORKSPACE" --add-dir "$STATE/agy-live.agy-hooks" -i 'reply with exactly: LIVE_OK')

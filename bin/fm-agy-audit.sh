@@ -62,12 +62,13 @@ def archive(state, task):
     decisions = [r for r in rows if r.get("event") == "pre-tool-use"
                  and r.get("decision") in {"approve", "refuse", "escalate"}]
     holds = {"agy-permission-" + r["tool_use_id"]: timestamp(r.get("ts"))
-             for r in decisions if r.get("decision") == "escalate" and r.get("tool_use_id")}
+             for r in rows if r.get("decision") == "escalate" and r.get("tool_use_id")
+             and r.get("event") in {"pre-tool-use", "native-poll"}}
     resolutions = []
     for row in rows:
         reason = row.get("reason", "")
         key = reason[len("escalation "):] if reason.startswith("escalation ") else ""
-        if key not in holds or row.get("event") not in {"approve", "decline", "retire", "post-tool-use"}:
+        if key not in holds or row.get("event") not in {"approve", "decline", "resume", "retire", "post-tool-use"}:
             continue
         resolved = timestamp(row.get("ts"))
         held = holds[key]
@@ -97,6 +98,11 @@ def archive(state, task):
         "kind": meta.get("kind"), "mode": meta.get("effective_mode", meta.get("mode")),
         "agy_version": policy.get("agy_version", meta.get("agy_version")),
         "permission_mode": meta.get("agy_permission_mode"),
+        "posture": meta.get("agy_posture", "legacy-bypass" if meta.get("agy_bypass") == "on" else "manual"),
+        "confirmed_native_coverage": meta.get("agy_posture") == "native-auto" and bool(generation)
+            and any(r.get("event") == "native-activated" for r in rows),
+        "native_review_calls": sum(r.get("decision") == "native-review" for r in rows),
+        "native_prompts": sum(r.get("event") == "native-poll" and r.get("decision") == "escalate" for r in rows),
         "bypass": meta.get("agy_bypass") == "on", "result": terminal,
         "judge_tier": policy.get("judge_tier"), "judge_model": policy.get("judge_model"),
         "recorded_judge": meta.get("agy_judge"),

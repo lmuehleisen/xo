@@ -19,6 +19,9 @@
 # PreInvocation conversation id; subagent callbacks cannot settle its parent.
 # A retired generation can write only its own session binding and is refused by
 # fm-busy-event.sh before publishing state or a turn-ended wake.
+# An accepted PreInvocation also records its busy sequence under the owned
+# generation, so native cancellation recovery distinguishes a new invocation
+# from a delayed Stop belonging to the cancelled turn.
 # retire-worker removes only that marked, non-symlink adapter directory.
 #
 # install-worker also registers the log-only tool observer: matcher groups on
@@ -34,7 +37,7 @@
 # hooks.json before installing it, so every hook it writes, including the
 # turn-end pair, is one agy will load.
 #
-# With a <policy-file> argument install-worker also wires the bypass-mode
+# With a <policy-file> argument install-worker also wires the native/legacy
 # permission adapter bin/fm-agy-permission-policy.sh beside the observer: an
 # armed heartbeat on PreInvocation and Stop, and the decision as a second
 # PreToolUse hook (after the observer, with a timeout above the judge
@@ -187,7 +190,7 @@ observe_tool_call() {
   local line
   line=$(printf '%s' "$payload" | jq -c \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg task "$id" --arg event "$event" '
+    --arg task "$id" --arg gen "$gen" --arg event "$event" '
     def s(n): (. // "") | tostring | .[0:n];
     (.toolCall.args // {}) as $a
     | ([$a.CommandLine, $a.Path, $a.TargetFile, $a.AbsolutePath, $a.FilePath, $a.File,
@@ -196,6 +199,7 @@ observe_tool_call() {
     | {
         ts: ($ts | s(32)),
         task: ($task | s(128)),
+        gen: ($gen | s(128)),
         event: (if $event == "PostToolUse" then "post-tool-use" else "pre-tool-use" end),
         tool: (.toolCall.name | s(128)),
         session_id: (.conversationId | s(128)),
@@ -236,8 +240,16 @@ if [ "$MODE" = worker ]; then
   [ "$(cat "$binding" 2>/dev/null)" = "$conversation" ] || inert
   case "$event" in
     PreInvocation)
-      "$SCRIPT_DIR/fm-busy-event.sh" apply "$state" "$id" busy --gen "$gen" \
-        --source agy-hook --event pre-invocation >/dev/null 2>&1 || true
+      if "$SCRIPT_DIR/fm-busy-event.sh" apply "$state" "$id" busy --gen "$gen" \
+        --source agy-hook --event pre-invocation >/dev/null 2>&1; then
+        # shellcheck source=bin/fm-busy-lib.sh
+        . "$SCRIPT_DIR/fm-busy-lib.sh"
+        record=$(fm_busy_record_read "$state" "$id") || inert
+        case "$record" in 'busy agy-hook pre-invocation '*)
+          printf '%s\n' "${record##* }" > "$dir/$gen.invocation.$$" \
+            && mv -f "$dir/$gen.invocation.$$" "$dir/$gen.invocation" ;;
+        esac
+      fi
       ;;
     Stop)
       printf '%s' "$payload" | jq -e '.fullyIdle == true' >/dev/null 2>&1 || inert

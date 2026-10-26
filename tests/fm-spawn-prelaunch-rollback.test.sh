@@ -17,8 +17,6 @@ set -u
 
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh" || exit 1
-# shellcheck source=tests/agy-admission-helpers.sh
-. "$(dirname "${BASH_SOURCE[0]}")/agy-admission-helpers.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 REAL_TMUX=$(command -v tmux || true)
@@ -87,13 +85,6 @@ run_spawn() {  # <home> <proj> <wt> <fakebin> <id> [args...]
     "$SPAWN" "$id" "$proj" "$@" 2>&1
 }
 
-# A launch-blocker case must reach the staged launch, so it needs the
-# completed compatibility proof the policy layer checks for its exact context.
-admit_fake_agy() {  # <home> <fakebin>
-  fm_agy_fixture_receipt "$1" "$2/agy" gemini-3.8-flash-low '' agy gemini-3.8-flash-low "$2/agy" ||
-    fail "could not seed the fake agy compatibility fixture"
-}
-
 window_present() {  # <window-name>
   ptmux list-windows -t "=$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF -- "$1"
 }
@@ -110,9 +101,9 @@ assert_rolled_back() {  # <label> <home> <wt> <fakebin> <id> <spawn-output>
   done
 }
 
-# Case (2): --agy-bypass refuses a worktree carrying a tracked
+# Case (2): native Auto refuses a worktree carrying a tracked
 # .agents/hooks.json. The refusal itself stays; what it acquired first must not.
-test_bypass_hooks_refusal_rolls_back() {
+test_native_hooks_refusal_rolls_back() {
   local id="rb-hooks-$$" fields case_dir home proj wt fakebin out status
   fields=$(make_case hooks "$id")
   IFS='|' read -r case_dir home proj wt fakebin <<EOF
@@ -126,17 +117,17 @@ EOF
   git -C "$proj" push -q origin HEAD:main 2>/dev/null ||
     git -C "$proj" push -q origin HEAD 2>/dev/null ||
     fail "hooks: the fixture's project hook file did not reach origin"
-  out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout --agy-bypass)
+  out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout)
   status=$?
-  [ "$status" -ne 0 ] || fail "hooks: a bypass spawn over a project hooks.json must refuse: $out"
+  [ "$status" -ne 0 ] || fail "hooks: a native Auto spawn over a project hooks.json must refuse: $out"
   case "$out" in
-    *'worker hooks to be the only hooks in force'*) ;;
+    *'native policy requires owned hook wiring'*) ;;
     *) fail "hooks: expected the hooks.json refusal, got: $out" ;;
   esac
   grep -qxF -- "get --lease --lease-holder $home:$id" "$fakebin/treehouse-calls" ||
     fail "hooks: the case must lease a slot before refusing, or it proves nothing: $(cat "$fakebin/treehouse-calls" 2>/dev/null)"
   assert_rolled_back hooks "$home" "$wt" "$fakebin" "$id" "$out"
-  pass "fm-spawn.sh: an agy bypass refusal after leasing returns the slot and closes its window"
+  pass "fm-spawn.sh: an agy native hooks refusal after leasing returns the slot and closes its window"
 }
 
 # A refusal after the provisional record was published but before launch
@@ -151,7 +142,7 @@ EOF
   token=$(printf '%s' "$(cd "$home" && pwd -P)" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}')
   LAUNCH_BLOCKER="/tmp/fm-$id+$token"
   ln -s /nonexistent "$LAUNCH_BLOCKER"
-  admit_fake_agy "$home" "$fakebin"
+  printf 'manual\n' > "$home/config/crew-permissions"
   out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout --model gemini-3.8-flash-low)
   status=$?
   rm -f "$LAUNCH_BLOCKER"
@@ -177,7 +168,7 @@ EOF
   token=$(printf '%s' "$(cd "$home" && pwd -P)" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}')
   LAUNCH_BLOCKER="/tmp/fm-$id+$token"
   ln -s /nonexistent "$LAUNCH_BLOCKER"
-  admit_fake_agy "$home" "$fakebin"
+  printf 'manual\n' > "$home/config/crew-permissions"
   out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout --model gemini-3.8-flash-low)
   status=$?
   rm -f "$LAUNCH_BLOCKER"
@@ -218,7 +209,7 @@ EOF
 
 test_agy_audit_dependency_refuses_before_launch() {
   local mode id fields case_dir home proj wt fakebin out status
-  for mode in auto manual raw bypass; do
+  for mode in auto manual raw; do
     id="rb-python-$mode-$$"
     fields=$(make_case "python-$mode" "$id")
     IFS='|' read -r case_dir home proj wt fakebin <<EOF
@@ -230,7 +221,6 @@ EOF
     [ "$mode" != manual ] || printf 'manual\n' > "$home/config/crew-permissions"
     case "$mode" in
       raw) out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout 'agy --version'); status=$? ;;
-      bypass) out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout --agy-bypass); status=$? ;;
       *) out=$(run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" agy --scout); status=$? ;;
     esac
     [ "$status" -ne 0 ] || fail "$mode: unusable Python must refuse agy launch"
@@ -345,7 +335,7 @@ test_opencode_readiness_failure_returns_clean_slot
 test_opencode_readiness_failure_keeps_startup_content
 test_opencode_failed_record_rollback_keeps_failure_status
 test_agy_audit_dependency_refuses_before_launch
-test_bypass_hooks_refusal_rolls_back
+test_native_hooks_refusal_rolls_back
 test_post_publication_prelaunch_refusal_rolls_back
 test_foreign_slot_content_keeps_the_lease
 test_raw_agy_launch_does_not_abort

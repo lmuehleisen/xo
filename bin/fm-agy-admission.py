@@ -22,8 +22,13 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SCHEMA = "fm-agy-compatibility.v1"
+SCHEMA = "fm-agy-compatibility.v2"
 GUARDS = {
+    "native": [
+        "verified-startup", "warm-auto", "actual-tool-result", "brief-handoff",
+        "native-prompt-or-safe-completion", "deterministic-deny",
+        "status-inbox-roundtrip", "busy-start-stop", "hook-retire",
+    ],
     "bypass": [
         "credential-shell", "credential-native", "shell-refusal",
         "native-create-edit", "native-outside-refusal", "judge-approval",
@@ -40,6 +45,8 @@ INTEGRATION = [
     "bin/fm-agy-admission.py", "bin/fm-agy-admission.sh",
     "bin/fm-agy-lib.sh", "bin/fm-spawn.sh", "bin/fm-agy-hook.sh",
     "bin/fm-agy-permission-policy.sh", "bin/fm-command-policy-lib.sh",
+    "bin/fm-agy-native.py", "bin/fm-agy-native-lib.sh", "bin/fm-watch.sh",
+    "bin/fm-backend.sh", "bin/backends/tmux.sh", "bin/backends/herdr.sh",
     "bin/fm-credential-access.mjs", "bin/fm-credential-access-lib.sh",
     "bin/fm-judge-tier-lib.sh", "bin/fm-timeout-lib.sh", "bin/fm-wake-lib.sh",
     "bin/fm-path-lib.sh", "bin/fm-primary-scope-lib.sh",
@@ -52,7 +59,16 @@ INTEGRATION = [
     "tests/fm-agy-bypass-live-e2e.test.sh",
     "tests/fm-agy-observer-live-e2e.test.sh",
     "tests/fm-agy-signals-live-e2e.test.sh",
+    "tests/fm-agy-native-live-e2e.test.sh",
+    "tests/fm-agy-native.test.sh", "tests/agy-native-terminal-fixture.py",
 ]
+
+
+def guards_for(binding):
+    if not isinstance(binding, dict) or not isinstance(binding.get("context"), dict):
+        raise ValueError("compatibility binding requires an object context")
+    first = "native" if binding["context"].get("posture") == "native-auto" else "bypass"
+    return {name: GUARDS[name] for name in (first, "observer", "signals")}
 
 
 def digest(value):
@@ -135,6 +151,10 @@ def context(args):
     executable, model, effort, tier, judge_model, judge_bin = args
     if model in ("", "default"):
         raise ValueError("compatibility requires an explicit --model; the mutable default is untested")
+    if tier in ("native-tmux", "native-herdr") and not judge_model and not judge_bin:
+        return {"model": model, "effort": effort,
+                "tool_contract": "native-file-and-shell-v2", "posture": "native-auto",
+                "backend": tier[len("native-"):]}
     if tier not in ("agy", "devin") or not judge_model:
         raise ValueError("unknown judge context")
     return {
@@ -168,9 +188,10 @@ def snapshot(args):
 
 
 def coverage(proofs, binding):
-    if set(proofs) != set(GUARDS):
+    guards = guards_for(binding)
+    if set(proofs) != set(guards):
         raise ValueError("incomplete live guard coverage")
-    for guard, required in GUARDS.items():
+    for guard, required in guards.items():
         proof = proofs[guard]
         if (proof.get("guard") != guard or proof.get("coverage") != required
                 or proof.get("context") != binding["context"]
@@ -178,6 +199,9 @@ def coverage(proofs, binding):
                 or proof["seconds"] < 0
                 or not proof.get("tools")):
             raise ValueError("incomplete or mismatched " + guard + " guard")
+        if guard == "native" and any(type(proof.get(key)) is not bool
+                                     for key in ("live_approval", "live_decline")):
+            raise ValueError("native live observations must be explicit booleans")
 
 
 def receipt_matches(path, binding):
@@ -217,6 +241,9 @@ def main():
             "guard": guard, "coverage": GUARDS[guard], "tools": sorted(tools),
             "context": binding["context"], "seconds": float(seconds),
         }
+        if guard == "native":
+            proof["live_approval"] = os.environ.get("FM_AGY_NATIVE_OBSERVED_APPROVAL") == "1"
+            proof["live_decline"] = os.environ.get("FM_AGY_NATIVE_OBSERVED_DECLINE") == "1"
         write_json(Path(directory) / (guard + ".json"), proof)
     elif verb == "publish":
         receipt, selected, proof_dir, origin, *selected_args = args
@@ -225,7 +252,7 @@ def main():
             raise ValueError("executable or integration replaced during proof; evidence invalidated")
         proofs = {
             guard: read_json(Path(proof_dir) / (guard + ".json"), trusted=True)
-            for guard in GUARDS
+            for guard in guards_for(binding)
         }
         coverage(proofs, binding)
         write_json(Path(receipt), {

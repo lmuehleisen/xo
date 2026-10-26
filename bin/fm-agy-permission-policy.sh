@@ -1,128 +1,58 @@
 #!/usr/bin/env bash
-# fm-agy-permission-policy.sh - firstmate's permission decision layer for agy
-# workers launched under --dangerously-skip-permissions. bin/fm-spawn.sh wires
-# it through bin/fm-agy-hook.sh install-worker into the task-owned
-# state/<id>.agy-hooks/.agents/hooks.json: an armed heartbeat on PreInvocation,
-# the decision on PreToolUse after the log-only observer, and pending closure
-# on Stop. It is only ever installed by an explicit opt-in spawn flag, and its
-# per-task policy file lives outside the worktree.
+# fm-agy-permission-policy.sh - deterministic agy worker policy and decisions.
 #
-# Usage: fm-agy-permission-policy.sh <event> <policy-file> [<key>]
-#   events: armed | pre-tool-use | post-tool-use | stop | approve | decline |
-#           retire | repin-grants | judge-probe
-#        fm-agy-permission-policy.sh grants-digest <brief-file>
-#        fm-agy-permission-policy.sh verified-versions
-# The agy hook payload arrives as JSON on stdin; the management verbs
-# (approve, decline, retire, repin-grants, register-credentials) and the two query verbs read none.
+# Usage: fm-agy-permission-policy.sh <event> <policy.json> [<decision-key>]
+# Events: armed | pre-tool-use | post-tool-use | stop | native-poll |
+#         approve | decline | resume | retire | repin-grants |
+#         register-credentials | judge-probe
+# Queries: grants-digest <brief> | verified-versions | --help
 #
-#   armed (PreInvocation)      the adapter's first hook call of a session
-#                              writes one {event:"armed"} line to the observer
-#                              log - the canary's proof the wiring is live.
-#                              pre-tool-use and stop write it too, so a missed
-#                              PreInvocation cannot fake a dead wiring.
-#   pre-tool-use (every tool)  the decision contract below.
-#   post-tool-use (every tool) closes a pending marker for the call that ran.
-#   stop (Stop)                rewrites the armed heartbeat only. A pending
-#                              marker deliberately survives turn end: unlike
-#                              the Devin worker's native prompt, nothing in a
-#                              bypassed agy session is still waiting, so the
-#                              marker means "firstmate still owes this call a
-#                              decision" and must stay resolvable until
-#                              approve, decline, or retire.
-#   approve <key>              firstmate's resolution of a held call: caches
-#                              the verdict so the worker's retry runs. For a
-#                              never-approve, credential, or uncached call approval is a one-shot
-#                              token consumed by one retry; a further retry
-#                              escalates again.
-#   decline <key>              firstmate's refusal of a held call: a retry of
-#                              the same call is denied without re-escalating.
-#   repin-grants               records the digest of a live brief's grants
-#                              block after firstmate edits it.
-#   grants-digest <file>       prints the digest of a brief's grants block.
-#   retire                     closes every pending escalation as not-run and
-#                              removes the pending directory.
-#   verified-versions          prints historical manually verified releases;
-#                              fm-agy-admission.sh owns executable admission.
-#   judge-probe                the measurement seam: runs the same static
-#                              analysis and judge call as pre-tool-use on the
-#                              payload given, prints one line naming the tier,
-#                              model, static class, verdict, and reason, and
-#                              writes NOTHING - no cache entry, no marker, no
-#                              status line, no log record, no armed line. The
-#                              judge disagrees with itself often enough that a
-#                              tier has to be comparable on identical inputs
-#                              before it is chosen; a harness replays captured
-#                              payloads through it once per tier and diffs.
+# A policy with posture=native-auto retains physical write-root, protected
+# wiring/instruction, metadata-only credential, force/publication and brief
+# scope constraints. Refusals emit deny. Firstmate-specific questions deny
+# with a durable held-call decision; only an exact one-shot approval permits
+# their retry. Ordinary residue abstains to native Auto without a Firstmate
+# judge or reusable judge approval. Native execution remains independently
+# reviewed by the vendor. This static layer is not an OS security boundary.
 #
-# Decisions: bin/fm-command-policy-lib.sh owns the command analysis - the
-# refusal list, the read-and-build set, protected briefs and protected
-# wiring, the never-approve outward-action class, fetch classification,
-# recursive-rm roots, grants, the judge skeleton, and the verdict cache. This
-# adapter owns the agy payload schema (.conversationId, .stepIdx,
-# .toolCall.name and .toolCall.args camelCase fields), the agy tool-name
-# mapping, the judge tier this adapter defaults to, and the agy decision
-# surface (bin/fm-judge-tier-lib.sh owns each tier's invocation):
-#   - the refusal list, a statically visible write or removal outside every
-#     write root, and any write or removal of this adapter's own wiring - the
-#     policy file, its pending and cache stores, the worker hook directory,
-#     and the observer log - emit {"decision":"deny","reason":"..."}, which
-#     agy enforces even under --dangerously-skip-permissions;
-#   - the read-and-build set, read-only web lookups, task-local file
-#     operations, a cached verdict, a consumed one-shot approval, and a
-#     judge APPROVE emit NOTHING - the call abstains and runs;
-#   - everything else - the never-approve class, a call touching credential
-#     material, and every judge DECLINE, timeout, crash, or no-verdict -
-#     emits {"decision":"deny","reason":"held for firstmate: ..."}, writes
-#     the pending marker, and appends the needs-decision status line, so
-#     firstmate can cache an approval and steer the worker to retry. A retry
-#     of the same held call is denied against the existing marker BEFORE the
-#     verdict cache or the judge is consulted, and a call firstmate declined
-#     is denied against its declined cache entry - neither re-escalates. The
-#     path never abstains: under a bypass launch, abstain is what runs a
-#     call.
-# Agy has no hook output that silently approves a call - {"decision":"allow"}
-# still lands on a native prompt - so this adapter's approval IS abstention,
-# which only means "run it" because the launch already skipped native review.
-# Because abstain runs the call, every failure mode here fails closed: no jq,
-# an unreadable payload, a call scoped to a foreign or missing workspace, or
-# an unreadable policy file all deny rather than emit - there is no native
-# prompt behind this layer to catch what it lets through.
+# native-poll inspects only the recorded worker's live viewport and binds an
+# answerable command panel to exactly one outstanding native hook input.
+# It writes an agy-permission-<conversationId>-s<stepIdx> keyed needs-decision
+# marker, or an unbound decision when identity/shape cannot be proven.
+# approve selects option 1 once and confirms the same invocation's PostToolUse.
+# decline selects option 4, then submits a tool-free reconciliation turn;
+# only its accepted generation/main-conversation Stop settles cancellation.
+# A sent but unconfirmed action stays open and cannot be sent again. resume
+# finishes that reconciliation without repeating a sent action or message.
+# Never select a conversation-wide or persistent approval. Unbound prompts
+# require inspection or guarded relaunch rather than guessed keys.
+# fm-agy-native-lib.sh owns the backend mechanics and activation contract.
 #
-# Tool mapping: run_command maps onto the shared exec analysis with
-# CommandLine and Cwd; read_file, view_file, grep_search, and list_dir are the read
-# class, and a native file read or list_dir of the worker's own agy brain directory
-# (~/.gemini/antigravity-cli/brain/<conversationId>, its fetched-page store)
-# or a native file read of a file the brief directs it to read stays approved under
-# brief read exclusions, credential checks first; write_file, edit_file,
-# write_to_file and replace_file_content are the write class against
-# the task worktree and scratch roots; search_web and read_url_content are
-# read-only web lookups; manage_task kill requires firstmate approval until
-# native ownership is verified; every other tool name is residue for the judge.
-# The pending key is agy-permission-<conversationId>-s<stepIdx>, the only
-# stable call identity agy provides.
+# Policies without posture=native-auto are legacy bypass tasks. Their prior
+# judge selection, caches, held-call exact retry tokens, declined-retry
+# suppression and management verbs remain supported until they finish.
+# A held marker survives Stop and closes only on approval, decline, an
+# authorized completion, or retire. No version string admits a binary;
+# fm-agy-admission.sh owns executable/context verification.
 #
-# Credential-sensitive approvals also use one-shot exact-input tokens; no
-# template suffix or .env wildcard bypasses that boundary.
+# Hook JSON uses conversationId, stepIdx, workspacePaths and toolCall.name/args.
+# run_command uses CommandLine/Cwd; read_file, write_file and edit_file use
+# absolute Path. Legacy file names remain mapped too. Observer/log input
+# excludes file contents. A conversation's own brain outputs and explicitly
+# directed skill reads retain their existing read-scope exception, after
+# credential checks. fm-command-policy-lib.sh owns command analysis and grant
+# pinning; fm-credential-access.mjs owns credential metadata and use grants.
 #
-# Policy file (written by bin/fm-spawn.sh): JSON object with string fields
-# task, worktree, status, inbox, data, tasktmp, brief, log, agy (absolute
-# judge executable), agy_version (the launch binary version), gen (the launch's busy generation, stamped onto the
-# armed line so the canary can tell this launch's wiring from a stale record
-# left by an earlier launch), judge_model (a model id for the judge tier below,
-# read on every call, empty disables the judge), judge_timeout (seconds, the
-# bound on ONE judge attempt), judge_tier and judge_bin (the judge tier this
-# task runs and its executable - fm-spawn records what --agy-judge selected,
-# an absent tier means this adapter's own agy tier on the `agy` field above,
-# and a tier this build does not know denies rather than falling back), and
-# grants_sha (the digest pin the shared library describes).
-# Pending escalation markers live in <policy minus .json>-pending/ and the
-# per-task verdict cache in <policy minus .json>-cache/; bin/fm-teardown.sh
-# removes both with the policy file. With no readable policy file the
-# refusal list still applies and every other call denies.
-#
-# Exit codes: 0 always for hook events - agy reads the decision from stdout
-# and a non-zero exit blocks the tool without a reason the model can use.
-# Management verbs exit 1 on a failed operation.
+# The firstmate-owned policy declares task, worktree, status, inbox, data,
+# tasktmp, brief, log, gen, config and optional agy_version/credential fields.
+# Legacy policies additionally declare agy, judge_tier/bin/model/timeout.
+# <policy-without-.json>-pending/ holds exact pending calls and native decline
+# records; -cache/ is retained for legacy judge verdicts and exact one-shot
+# Firstmate constraints. Both are protected wiring and retire with the task.
+# Armed records are generation-bound; missing policy, malformed input or
+# foreign workspace denies. Hook events exit 0 with deny JSON or silence;
+# failed management verbs exit nonzero. Management/query verbs read no stdin.
+
 set -u
 export LC_ALL=C
 
@@ -136,10 +66,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 FM_POLICY_EXEC_TOOL=run_command
 FM_POLICY_COMMAND_FIELD=CommandLine
-# This launch runs under agy's full bypass, so the shared analysis refuses
-# statically visible writes and removals outside the task write roots
-# outright rather than sending them to a judge with no native prompt behind
-# it.
+# Use the shared conservative static write refusals in both routes. Native
+# review must not widen Firstmate's authorized task write roots.
 FM_POLICY_BYPASS=1
 # The judge budget is pinned per adapter so an inherited JUDGE_BUDGET cannot
 # stretch a hook invocation past the explicit timeout install-worker gives
@@ -152,13 +80,17 @@ FM_POLICY_ADAPTER=agy
 FM_POLICY_WORKER_LABEL=agy
 FM_JUDGE_TIER_NATIVE=agy
 
+if [ "${1:-}" = --help ]; then
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
+  exit 0
+fi
 EVENT=${1-}
 POLICY=${2-}
 KEY=${3-}
 case "$EVENT" in
-  armed|pre-tool-use|post-tool-use|stop|approve|decline|retire|repin-grants|register-credentials|grants-digest|verified-versions|judge-probe) ;;
+  armed|pre-tool-use|post-tool-use|stop|approve|decline|retire|repin-grants|register-credentials|grants-digest|verified-versions|judge-probe|native-poll|resume) ;;
   *)
-    sed -n '9,11s/^# *//p' "${BASH_SOURCE[0]}" >&2
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}" >&2
     exit 0
     ;;
 esac
@@ -204,6 +136,7 @@ fi
 if [ "$EVENT" = post-tool-use ] || [ "$EVENT" = stop ]; then
   [ -n "$PENDING_DIR" ] || { cat >/dev/null; exit 0; }
   set -- "$PENDING_DIR"/*.pending
+  [ "$EVENT" != post-tool-use ] || set -- "$@" "$PENDING_DIR"/*.candidate
   [ "$EVENT" != post-tool-use ] || set -- "$@" "$CACHE_DIR"/*.once-spent
   for m in "$@"; do [ ! -f "$m" ] || break; done
   [ -f "$m" ] || { cat >/dev/null; exit 0; }
@@ -213,7 +146,7 @@ if [ "$EVENT" = retire ]; then
 fi
 
 PAYLOAD=
-case "$EVENT" in retire|repin-grants|register-credentials|approve|decline) ;; *) PAYLOAD=$(cat) ;; esac
+case "$EVENT" in retire|repin-grants|register-credentials|approve|decline|native-poll|resume) ;; *) PAYLOAD=$(cat) ;; esac
 
 TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' AGY='' JUDGE_BIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' CONFIG_DIR='' GEN='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
@@ -242,7 +175,40 @@ fi
 # binary above. The tier fm-spawn recorded is the one that runs; an unknown
 # one, or one whose executable is not there, denies and holds the call for
 # firstmate rather than quietly running some other judge.
-fm_judge_tier_bind "$FM_JUDGE_TIER_NATIVE" "$AGY"
+NATIVE_AUTO=0
+if jq -e '.posture == "native-auto"' "$POLICY" >/dev/null 2>&1; then
+  NATIVE_AUTO=1
+  JUDGE_TIER=native JUDGE_MODEL=''
+  if [ "$EVENT" = judge-probe ]; then
+    echo 'fm-agy-permission-policy: native Auto policies have no Firstmate model judge' >&2
+    exit 1
+  fi
+else
+  fm_judge_tier_bind "$FM_JUDGE_TIER_NATIVE" "$AGY"
+fi
+
+TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT=''
+case "$EVENT" in
+  native-poll|resume|approve|decline)
+    # Native command panels are answered through the existing policy verbs.
+    # Hook-held deterministic decisions keep their original exact-token path.
+    native_action=$EVENT
+    [ "$native_action" != native-poll ] || native_action=poll
+    native_marker="$PENDING_DIR/${KEY#agy-permission-}.pending"
+    if [ "$NATIVE_AUTO" = 1 ] && { [ "$EVENT" = native-poll ] || [ "$EVENT" = resume ] \
+      || [ "$(sed -n '4p' "$native_marker" 2>/dev/null)" = native ]; }; then
+      # shellcheck source=bin/fm-backend.sh
+      . "$SCRIPT_DIR/fm-backend.sh"
+      # shellcheck source=bin/fm-busy-lib.sh
+      . "$SCRIPT_DIR/fm-busy-lib.sh"
+      # shellcheck source=bin/fm-agy-native-lib.sh
+      . "$SCRIPT_DIR/fm-agy-native-lib.sh"
+      fm_agy_native_decision "$native_action" "$POLICY" "$KEY"
+      exit $?
+    fi
+    [ "$EVENT" != native-poll ] && [ "$EVENT" != resume ] || exit 1
+    ;;
+esac
 
 # The adapter's own firstmate-owned wiring, declared to the shared policy so
 # any statically visible write or removal of it is refused: the policy file
@@ -258,9 +224,13 @@ if [ -n "$POLICY" ]; then
   [ -n "$TASK" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"${POLICY%/*}/$TASK.agy-hooks"
   [ -n "$LOG" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$LOG"
 fi
+if [ "$NATIVE_AUTO" = 1 ] && [ -n "$WORKTREE" ]; then
+  # Shell writers must preserve the same agent/Git wiring boundary as native
+  # file tools, including a hooks file that does not exist at launch yet.
+  POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$WORKTREE/.agents"$'\n'"$WORKTREE/.git"
+fi
 credential_policy
 
-TOOL='' TOOL_USE_ID='' SESSION_ID='' CMD='' AGY_CWD='' FILE_PATH='' INPUT_JSON='' CACHE_INPUT=''
 {
   IFS= read -r -d '' TOOL
   IFS= read -r -d '' TOOL_USE_ID
@@ -336,6 +306,43 @@ write_armed() {
       agy_version: $version, judge_tier: $tier, judge_model: $judge_model,
       step_idx: null, model: $model, input: "", cwd: "", error: ""
     }' >> "$LOG" 2>/dev/null || true
+}
+
+native_abstain() {
+  # Record full, exact inputs only for calls that actually reach native review.
+  # Candidates are private and protected by the same policy as pending holds.
+  # Multiple concurrent calls remain distinct; an ambiguous panel is never
+  # answered. File prompts with no supported exact binding remain unbound.
+  local slug candidate
+  [ "$NATIVE_AUTO" = 1 ] && [ "$TOOL" = run_command ] || return 0
+  slug=$(tool_slug) || return 1
+  case "$slug" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  candidate="$PENDING_DIR/$slug.candidate"
+  mkdir -p "$PENDING_DIR" || return 1
+  printf '%s' "$PAYLOAD" | jq -c --arg gen "$GEN" \
+    '{gen:$gen, session:.conversationId, step:.stepIdx, tool:.toolCall.name, args:.toolCall.args}' \
+    > "$candidate" || return 1
+}
+
+native_control_boundary() {
+  # Known Firstmate state/decision writers are supervisor-only. A literal
+  # invocation must not become ordinary vendor-reviewed residue. Plain
+  # read-and-build inspection of these public scripts stays allowed.
+  local i path leaf
+  [ "$NATIVE_AUTO" = 1 ] && [ "$TOOL" = run_command ] && [ -n "$NOT_APPROVABLE" ] || return 0
+  tokenize "$CMD"
+  for ((i=0; i<${#T_TXT[@]}; i++)); do
+    [ "${T_KIND[i]}" = w ] || continue
+    leaf=${T_TXT[i]##*/}
+    case "$leaf" in
+      fm-agy-permission-policy.sh|fm-agy-native-lib.sh|fm-agy-hook.sh|fm-busy-event.sh|fm-control.sh) ;;
+      *) continue ;;
+    esac
+    path=$(physical_target "${T_TXT[i]}" "${AGY_CWD:-$WORKTREE}" 0 2>/dev/null) || continue
+    [ "$path" = "$(norm_abs "$SCRIPT_DIR/$leaf")" ] || continue
+    refuse 'invoking Firstmate permission, lifecycle or busy-state control is reserved to the supervisor'
+    return 0
+  done
 }
 
 evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
@@ -462,10 +469,26 @@ own_read() {
   return 1
 }
 
+native_activation_call() {
+  # The fixed nonce printf reads no source. Brief read exclusions must not
+  # prevent the pre-brief activation proof itself from running.
+  [ "$NATIVE_AUTO" = 1 ] && [ "$TOOL" = run_command ] && [ -z "$NOT_APPROVABLE" ] || return 1
+  tokenize "$CMD"
+  [ "${#T_TXT[@]}" = 4 ] && [ "${T_KIND[*]}" = 'w w r w' ] \
+    && [ "${T_TXT[0]}" = /usr/bin/printf ] && [ "${T_TXT[2]}" = '>' ] || return 1
+  local i nonce=${T_TXT[1]}
+  case "$nonce" in ''|*[!0-9a-f]*) return 1 ;; esac
+  [ "${#nonce}" = 48 ] && [ "${T_TXT[3]}" = "$TASKTMP/agy-activation-$GEN-$nonce" ] || return 1
+  for i in 0 1 2 3; do
+    [ "${T_VAR[i]}${T_GLOB[i]}${T_SUBS[i]}" = 000 ] || return 1
+  done
+}
+
 apply_read_constraints() {
   READ_CONSTRAINTS=$(brief_read_constraints)
   [ -n "$READ_CONSTRAINTS" ] || return 0
   own_read && return 0
+  native_activation_call && return 0
   case "$TOOL" in
     run_command|read_file|view_file|grep_search|list_dir|search_web|read_url_content)
       no_approve "brief read exclusions require scope review"
@@ -505,6 +528,7 @@ case "$EVENT" in
     else
       evaluate_tool
     fi
+    native_control_boundary
     apply_read_constraints
     # The armed line is written even for a call about to be denied: any hook
     # invocation proves this launch's wiring is live, and the canary watches
@@ -528,7 +552,22 @@ case "$EVENT" in
     fi
     [ -n "$POLICY" ] && [ -r "$POLICY" ] \
       || deny "firstmate agy permission policy: per-task policy file is missing or unreadable"
+    if [ "$NATIVE_AUTO" = 1 ]; then
+      case "$GEN" in ''|*[!A-Za-z0-9._-]*) deny 'firstmate agy native policy has no valid generation' ;; esac
+      [ "$(cat "${POLICY%/*}/$TASK.busy-gen" 2>/dev/null)" = "$GEN" ] \
+        || deny 'firstmate agy native policy generation is stale or unavailable'
+    fi
+    if [ "$NATIVE_AUTO" = 1 ] && [ "$TOOL" = run_command ]; then
+      for declined in "$PENDING_DIR"/*.native-declined; do
+        [ -f "$declined" ] || continue
+        if jq -e --arg gen "$GEN" --arg cmd "$CMD" --arg cwd "${AGY_CWD:-$WORKTREE}" --arg wt "$WORKTREE" \
+          '.gen == $gen and .args.CommandLine == $cmd and ((.args.Cwd // $wt) == $cwd)' "$declined" >/dev/null; then
+          deny 'firstmate declined this native call; do not retry it'
+        fi
+      done
+    fi
     if [ -z "$NOT_APPROVABLE" ]; then
+      native_abstain || deny 'firstmate agy native policy could not retain exact call identity'
       log_record approve policy "read-and-build set"
       exit 0
     fi
@@ -554,7 +593,7 @@ case "$EVENT" in
       deny "firstmate declined this call; do not retry it"
     fi
     escalate_reason='' escalate_source='first judge'
-    if { [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 1 ]; } && [ -n "$CACHE_DIR" ] \
+    if { [ "$NATIVE_AUTO" = 1 ] || [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 1 ]; } && [ -n "$CACHE_DIR" ] \
       && once_key=$(cache_key 2>/dev/null) && [ -n "$once_key" ] \
       && [ -f "$CACHE_DIR/$once_key.once" ]; then
       # Firstmate's one-shot approval of an uncached call: the token is
@@ -564,6 +603,7 @@ case "$EVENT" in
       if mv -f "$CACHE_DIR/$once_key.once" "$CACHE_DIR/$once_key.once-spent" 2>/dev/null \
         && tool_slug > "$CACHE_DIR/$once_key.once-spent"; then
         log_record approve firstmate "one-shot approval consumed"
+        native_abstain || deny 'firstmate agy native policy could not retain exact call identity'
         exit 0
       fi
       deny "firstmate agy permission policy: could not consume the one-shot approval"
@@ -578,6 +618,13 @@ case "$EVENT" in
       # Only the exact one-shot token above authorizes this retry; a reusable
       # cache entry from an older policy must not authorize credential reads.
       escalate_reason=$NOT_APPROVABLE escalate_source='firstmate policy'
+      log_record escalate policy "$NOT_APPROVABLE"
+    elif [ "$NATIVE_AUTO" = 1 ] && [ -z "$READ_CONSTRAINTS" ]; then
+      native_abstain || deny 'firstmate agy native policy could not retain exact call identity'
+      log_record native-review native "ordinary command review delegated to native Auto"
+      exit 0
+    elif [ "$NATIVE_AUTO" = 1 ]; then
+      escalate_reason=$NOT_APPROVABLE escalate_source='firstmate scope policy'
       log_record escalate policy "$NOT_APPROVABLE"
     elif cache_lookup; then
       log_record approve cache "$CACHE_REASON (static: $NOT_APPROVABLE)"
@@ -599,7 +646,7 @@ case "$EVENT" in
       if [ ! -e "$marker" ]; then
         ckey=$(cache_key 2>/dev/null || true)
         mclass=judge
-        if [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 1 ]; then mclass=never; fi
+        if [ "$NATIVE_AUTO" = 1 ] || [ -n "$NEVER_APPROVE" ] || [ -n "$SENSITIVE_HIT" ] || [ "$JUDGE_SCRIPT_UNCACHEABLE" = 1 ]; then mclass=never; fi
         printf '%s\n%s\n%s\n%s\n' "$key" "$summary" "$ckey" "$mclass" \
           > "$marker" 2>/dev/null || true
         status_append "needs-decision [key=$key]: agy worker held a tool call for firstmate - $TOOL ($escalate_source: $(one_line "$escalate_reason" 160)): $(one_line "$summary" 300)"
@@ -608,6 +655,29 @@ case "$EVENT" in
     deny "held for firstmate: $(one_line "$escalate_reason" 200). Do not retry unless firstmate approves it."
     ;;
   post-tool-use)
+    if [ "$NATIVE_AUTO" = 1 ]; then
+      slug=$(tool_slug)
+      case "$slug" in ''|*[!A-Za-z0-9._-]*) exit 0 ;; esac
+      marker="$PENDING_DIR/$slug.pending"
+      if [ -f "$marker" ] && [ "$(sed -n '4p' "$marker")" = native ]; then
+        # The exact native invocation completed after a one-shot selection.
+        # It never creates the legacy reusable approval cache.
+        if [ "$(cat "$PENDING_DIR/$slug.native.sent" 2>/dev/null)" = approve ]; then
+          if [ "$(jq -cS .args "$PENDING_DIR/$slug.candidate" 2>/dev/null)" != \
+            "$(printf '%s' "$PAYLOAD" | jq -cS .toolCall.args)" ]; then
+            log_record anomaly native 'native completion did not match the approved exact input'
+            status_append "needs-decision [at=$(date +%s)] [key=agy-permission-$slug]: native completion differs from the exact approved input; inspect the worker before resuming"
+            exit 0
+          fi
+          printf '%s\n' "$GEN" > "$PENDING_DIR/$slug.native.completed" || exit 1
+          close_pending "$marker" approved "native one-shot approval completed the exact invocation" firstmate
+          rm -f "$PENDING_DIR/$slug.native" "$PENDING_DIR/$slug.native.sent"
+        else
+          close_pending "$marker" anomaly "native held call completed without a recorded one-shot approval; inspect the worker" policy
+        fi
+      fi
+      rm -f "$PENDING_DIR/$slug.candidate"
+    fi
     # A held call that later ran is matched by the same deterministic input
     # summary the escalation writes, not by the call's key - the retry
     # arrives at a new stepIdx. Only a firstmate approval authorizes the run:
@@ -619,6 +689,7 @@ case "$EVENT" in
       [ "$(sed -n '2p' "$m" 2>/dev/null)" = "$summary" ] || continue
       mckey=$(sed -n '3p' "$m" 2>/dev/null)
       mclass=$(sed -n '4p' "$m" 2>/dev/null)
+      case "$mclass" in native|native-unbound) continue ;; esac
       # An earlier authorized invocation completing cannot close a later
       # one-shot hold merely because its command is identical.
       [ "$mclass" != never ] || [ "${m##*/}" = "$(tool_slug).pending" ] || continue

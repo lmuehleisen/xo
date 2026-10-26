@@ -7,6 +7,7 @@ The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 This fork's own evidence - its reviewed launches, remote-less dispatch, task leases, tmux shell submission, Claude Code operational input, composer refresh, stranded-doorbell recovery, merge-grant gate, and its agy and Devin adapters - lives in [runtime-backends-fork.md](runtime-backends-fork.md).
 The shared credential classifier's real Devin and agy pre-tool veto evidence is recorded in [Shared credential hook veto](runtime-backends-fork.md#shared-credential-hook-veto).
+The 2026-10-26 agy 1.4.7 native Auto verification and its explicit live-decline limit are recorded in [Native Auto workers](runtime-backends-fork.md#native-auto-workers).
 
 ## Devin exit and native resume
 

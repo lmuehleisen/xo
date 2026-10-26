@@ -1,6 +1,7 @@
 # agy (Antigravity CLI)
 
-Google's Antigravity CLI, with worker and primary compatibility refreshed on 2026-10-23 with agy 1.4.6.
+Google's Antigravity CLI, with native worker Auto verified on agy 1.4.7.
+The verification record below owns dated worker and primary results.
 Verified for interactive primary, secondmate, crewmate, and scout work.
 `../../../../../bin/fm-spawn.sh` owns the concrete launch and grant mechanics, through the fork-only `../../../../../bin/fm-agy-lib.sh` it sources.
 agy updates itself often and without asking, so treat every version-scoped fact here as refreshable rather than settled, and re-run the live guard after an upgrade.
@@ -10,11 +11,11 @@ agy updates itself often and without asking, so treat every version-scoped fact 
 | Fact | Value |
 |---|---|
 | Binary | Absolute `agy` from `PATH`, resolved once and refused if absent. A single self-updating Go binary; the installed path is the real executable, not a launcher. |
-| Launch | `-i "<prompt>"` runs the opening prompt and KEEPS the interactive session. `-p` is a one-shot headless run and is never used for a worker. |
+| Launch | Native Auto starts interactively without the task prompt and verifies activation before delivering it. Manual and recorded legacy launches retain `-i`. Headless `-p` is never a worker route. |
 | Directory grants | `--add-dir`, repeatable, and MANDATORY - see "The worktree grant" below. |
-| Approvals | agy 1.3.5+ ships a reviewed `--mode auto` with per-account availability; it is not a Firstmate worker route. `--mode accept-edits` covers file edits only; shell commands always prompt. See "Approvals" below. |
+| Approvals | New Auto workers use verified native Auto plus deterministic task constraints. Manual retains native review. See "Approvals" below. |
 | Busy state | `agy-hook`: PreInvocation opens; fullyIdle Stop closes. The worker binds its generation and main conversation; interruption emits no Stop and conservatively leaves busy. |
-| Spawn start | A ship or scout spawn reports success only after the worker hook's PreInvocation record replaces spawn's seed; otherwise it records a failure and closes the endpoint, so an agy launch parked before its first model call never looks dispatched. `../../../../../bin/fm-spawn.sh` owns the bound. |
+| Spawn start | Native Auto must prove activation and a real harmless result before receiving the brief, then prove a later worker invocation accepted the brief. `../../../../../bin/fm-agy-lib.sh` owns the gates and bounds. |
 | Rendered tail | Not a state source, but the running turn's footer is the one ASCII busy token: `esc to cancel` while a turn runs, `? for shortcuts` when idle. The right of the footer names the active mode and model, e.g. `accept-edits · Gemini 3.8 Flash · medium`. |
 | Turn end | Native Stop; see "Native hooks and primary integration" below. |
 | Exit | `/exit` (alias `quit`), one Enter; prints `Resume with -c (or command below): agy --conversation=<uuid>`. |
@@ -51,92 +52,44 @@ Trust is not inherited from a parent directory, so every fresh worktree would ra
 
 ## Approvals
 
-Since agy 1.3.5 the CLI ships a reviewed `--mode auto`: per the [1.3.5 release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.3.5) it approves file edits and safe commands without asking, still prompts before irreversible actions, and sends commands that would leave the terminal sandbox through a separate review agent.
-Availability is per-account: an account without it gets `warning: --mode auto is not available for this account; continuing in the default mode` and a silent fallback to default review, so the flag alone does not prove the mode is active.
-Under headless `-p` a permissioned command is auto-denied while the run still exits 0, so exit status does not prove a task ran there either.
-Firstmate does not route workers through agy's auto mode.
-The options this adapter uses are the default review mode, `--mode accept-edits`, and the blanket `--dangerously-skip-permissions` under the policy layer.
+The [worker permission setting](../../../../../docs/configuration.md#worker-permission-mode-configcrew-permissions) owns the `auto`/`manual` mapping.
+New Auto workers use native sandboxing and command review with Firstmate's deterministic constraints.
+Cold mode requests may fall back on agy 1.4.7, so neither the requested flag nor headless exit 0 proves activation.
+[`fm-agy-native-lib.sh`](../../../../../bin/fm-agy-native-lib.sh) owns the supported warm transition and real-result launch proof.
+The verified native route supports tmux and Herdr; other backends refuse it instead of silently selecting prompted review or bypass.
+Manual remains an explicit native-review choice, and secondmates retain their separate primary integration.
 
-`config/crew-permissions` selects a policy-layered bypass for agy crewmate and scout launches in Auto, while Manual keeps the default review mode:
+[`fm-agy-permission-policy.sh`](../../../../../bin/fm-agy-permission-policy.sh) owns exact task roots, protected wiring/instructions, credential metadata, force/publication and brief-scope constraints.
+Ordinary residue goes to the vendor's native reviewer without a Firstmate worker judge or reusable judge approval.
+An outside-sandbox command can still be approved by native Auto; the deterministic constraints and the separate publication gate continue to apply.
+Static command analysis cannot establish what every opaque program will do and is not an OS security boundary.
 
-| Setting | agy launch | Effect |
-|---|---|---|
-| `auto` (or absent) | `--dangerously-skip-permissions` with Firstmate's permission policy and judge | The policy layer checks writes, refuses unsafe calls, judges residue, and holds decisions for Firstmate. |
-| `manual` | no `--mode` flag | agy's default review mode; edits prompt too. |
-| anything else | refused | The launch stops; there is no fallback onto the bypass. |
+### Native pending decisions
 
-The default bypass is never bare: the launch refuses unless the policy hooks, executable/context compatibility evidence, judge, and startup canary pass their gates.
-`--no-agy-bypass` selects `--mode accept-edits` for a single agy crewmate or scout launch; agy secondmates remain outside the worker policy layer.
+The watcher turns a complete live command panel into a durable keyed decision only when it matches one exact outstanding hook input.
+The policy owner's `approve`, `decline` and `resume` verbs own one-shot choices and cancellation reconciliation; read that script's header before resolving a native key.
+Conversation-wide and persistent approval choices are never selected.
+Unknown, clipped, changed or ambiguous panels remain unapproved and surface for inspection or guarded relaunch.
 
-**`accept-edits` covers file edits, not shell commands.**
-Verified: under `--mode accept-edits` a write through the file tool completed with no prompt, while `date` was still denied headless and still prompted interactively.
+Live one-shot approval and decline/reconciliation were verified on agy 1.4.7 through Herdr.
+Other model/backend combinations retain their separately recorded startup/tool coverage rather than a separate live No claim.
+A decline is not settled from its footer: a new accepted Stop must prove reconciliation or the decision remains open.
+The [verification record](../../../../../docs/verification/runtime-backends-fork.md#native-auto-workers) owns the measured limits and refresh commands.
 
-### Prompted approval mode
+### Recorded legacy tasks
 
-Manual review and the explicit `--no-agy-bypass` option retain agy's answerable approval prompts.
+New-worker `--agy-bypass`, `--no-agy-bypass` and `--agy-judge` flags are deprecated and refuse with a migration diagnostic.
+Recorded legacy tasks retain their bypass/judge, accept-edits or manual posture on relaunch and keep their existing pending decisions until normal retirement.
+Legacy judge selection, exact retry approvals and verdict caches remain implemented for those tasks.
+Shared command-policy and judge-tier code also remains available to Devin and explicitly selected judges for other adapters.
 
-The prompt is a rendered, answerable choice, so the stall is visible to a supervisor rather than silent:
+### Prompted review
 
-```
-Requesting permission for:
-   <command>
-Run this command?
-> 1. Yes, run command
-  2. Yes, and always allow in this conversation for commands that start with '<prefix>'
-  3. Yes, and always allow for commands that start with '<prefix>' (Persist to settings.json)
-  4. No, cancel
-```
-
-Option 2 grants for the rest of that conversation without touching any file; option 3 persists into the operator's global settings and should not be chosen on their behalf.
-A denial is handled cleanly - the pane prints `⎿ User declined the tool call` and stays usable.
-
-Two consequences worth planning around:
-
-- The standard brief's status protocol is an `echo ... >>` shell command, so an agy worker requests approval for **every status line it appends**, including its final `done:`.
-- The model chooses its own tool.
-  `gemini-3.8-flash` frequently writes files with a shell heredoc rather than the edit tool, and those writes prompt even under `accept-edits`.
-
-There is no per-session or per-project allow-list Firstmate can set to soften this, and no hook can substitute for one.
-`permissions.allow` (entries like `command(ls)`) is read only from the operator's global `settings.json`, with per-project overrides under `~/.gemini/config/projects/`; a workspace-local `.agents/settings.json` is NOT loaded, verified with the workspace trusted.
-Both usable locations are the operator's own machine state, so Firstmate does not write them.
-Verified on agy 1.2.4 and 1.2.5: a `PreToolUse` hook fires for every tool class and can `deny` with a reason the model reads, `force_ask` a prompt past the allowlist, or rewrite arguments through `overwrite`, but it cannot approve - `decision:"allow"` still shows the ordinary prompt and `permissionOverrides` grants nothing.
-An operator who wants a quieter agy worker can add their own allow rules there deliberately.
-
-Headless `-p` runs behave differently and are not the worker path: a tool needing approval is auto-denied with a stderr notice naming the missing rule, and the run still exits 0.
-
-### Policy layer for bypass launches
-
-`../../../../../bin/fm-spawn.sh` uses `--dangerously-skip-permissions` with the firstmate-owned policing adapter, `../../../../../bin/fm-agy-permission-policy.sh`, by default for agy crewmate and scout launches in Auto.
-`--no-agy-bypass` selects the prompted `accept-edits` mode for one launch, while `--agy-judge <tier>[:<model>]` selects a different judge for the policy layer.
-An unmet gate refuses the launch rather than emitting a bare bypass, and a relaunch carries its recorded posture while it still resolves onto an agy worker.
-A secondmate is a firstmate instance rather than a worker this layer polices, so it stays excluded.
-The posture first covered scouts only and now covers ships too.
-That matters for how the write guards below are read: on a read-only scout they were belt-and-braces, and on a ship they are the only write restriction firstmate relies on for a bypassed worker.
-None of them reads the task kind - every write target is resolved physically against the policy file's own worktree and scratch roots - so the widening changed who they protect rather than what they check.
-
-Under bypass the hook decision surface collapses to two effective outcomes, verified live on agy 1.2.6: `deny` still blocks with its reason, and abstention runs the call - `allow`, `ask`, and even `force_ask` have no prompt left to act on, so they cannot surface a question.
-The layer was re-verified on agy 1.2.11 on 2026-09-25, where a subagent's own tool calls also reach the same `PreToolUse` hooks under the subagent's conversation id; `../../../../../docs/verification/runtime-backends-fork.md` owns the evidence.
-The adapter therefore emits only `deny` or silence; every "ask the human" case denies with `held for firstmate`, writes a pending marker under `<policy>-pending/` keyed `agy-permission-<conversationId>-s<stepIdx>`, and appends a `needs-decision` status line.
-A held call is binding: a retry is matched against the open marker and the declined record before any cache lookup or judge run, so the same call can never run on a re-judged verdict or a shifted step index - only a firstmate `approve` opens it, and `decline` leaves a durable record that stops the retry from re-escalating.
-An approval lands in the per-task verdict cache for ordinary calls; for a never-approve class it is a one-shot token that the authorized retry consumes.
-Markers deliberately survive `Stop` - nothing in a bypassed session is still waiting, so the marker means "firstmate still owes this call a decision" and closes only on approve, decline, a retried call's PostToolUse, or `retire`.
-
-File-tool writes are checked against the resolved physical path, and a target under `.agents/`, `.git/`, or firstmate's own worker wiring is refused outright.
-agy 1.4.4 and 1.4.6 emit `read_file`, `write_file`, and `edit_file` with an absolute `Path`; the adapter checks that operand through the same credential and write-root policy as the legacy file tools.
-The observer records the path without file or replacement contents.
-Under bypass a statically visible exec write or removal outside the task write roots is refused rather than judged - there is no native prompt behind the judge to correct a bad verdict - while credential reads hold for firstmate.
-Static analysis cannot classify every command a worker can compose, so a command it cannot see into goes to the judge; this layer reduces risk and is not a security boundary.
-Under a brief's read exclusions, a file-tool read of the worker's own brain directory (`~/.gemini/antigravity-cli/brain/<conversationId>`, where agy stores fetched pages) or of a firstmate skill file the brief says to read and follow still runs without a judge call, and the judge is told both; the adapter's header owns the rule.
-
-[`bin/fm-agy-admission.sh`](../../../../../bin/fm-agy-admission.sh) owns bounded synthetic verification, private executable/context receipts, patch-family eligibility, and explicit migration of the historical manually verified baseline.
-Its required explicit worker model prevents a mutable default from inheriting another model's native-tool evidence.
-Finite fixtures and unchanged local receipts do not prove arbitrary commands, untested tool shapes, or unchanged server-side behavior.
-The other launch defences remain `jq`, no project-supplied `.agents/hooks.json` in the worktree or ancestors up to the git root, and the generation-bound startup canary that closes the endpoint when the adapter never arms.
-The judge is selected per task from the tiers `../../../../../bin/fm-judge-tier-lib.sh` owns, and agy judges agy by default: without `--agy-judge` the tier calls `agy -p` under its own sandbox on `gemini-3.8-flash-low`, with a 100-second budget pinned beside the Devin adapter's, and its prompt rides on the process argument list, so a call under review is visible in `ps` while the judge runs.
-`--agy-judge <tier>[:<model>]` selects another tier - a Devin SWE-2 judge for an agy worker, for instance - and refuses the launch when the tier is unknown or its executable is not installed, rather than falling back onto the default.
-The resolved tier is printed before the launch, repeated on the spawned line, recorded as `agy_judge=` in the task's metadata, and named in every judge-decided log record, so which judge adjudicated a call stays readable after teardown removes the per-task policy file.
-The layer's decision log is the same `state/agy-permission-log.jsonl` the observer writes.
-`judge-probe` runs the same static analysis and judge call on a payload and prints the verdict while writing nothing, so tiers can be compared on identical inputs.
+Manual review can require approval for file edits and shell commands, including status appends and inbox acknowledgments.
+Recorded `accept-edits` launches approve in-workspace file edits but still require shell review.
+The operator's allow rules can affect whether any particular native call prompts.
+Firstmate does not change global settings or install persistent allow rules on the operator's behalf.
+Headless permission denial may still exit 0 and is never accepted as worker-completion evidence.
 
 ## Native hooks and primary integration
 
@@ -164,9 +117,10 @@ Composer delivery needs the native footer or accept-edits mode cell as well as t
 An unstyled accept-edits hint, a manual-mode row with no identifying footer, and rendered busy-only acknowledgement of a queued Enter remain unproven; the adapter does not manufacture a successful delivery for them.
 Native background-task observation uses the returned log with `view_file`; delegation-shaped native tools retain the shared pre-tool guard.
 
-Unsupported surfaces remain explicit: headless primary supervision, native SessionStart and compaction refresh, semantic interrupt completion, and automatic shell approval are not supported by this integration.
+Unsupported surfaces remain explicit: headless primary supervision, native SessionStart and compaction refresh, and general semantic interrupt completion are not supported by this integration.
+Native Auto decision handling retains the per-context verification limits above.
 The optional quota helper now uses Agy's own catalog for the reviewed bucket bindings owned by `../../../../../bin/fm-quota-axi-lib.sh`; the agent-side quota procedure remains authoritative.
-Runtime backend lifecycle guarantees remain those of each backend's capability table; the live verification here covers tmux on macOS.
+Runtime backend lifecycle guarantees remain those of each backend's capability table; native worker activation is verified on tmux and Herdr, with current evidence in the verification owner.
 Remote secondmate launch and relaunch remain unsupported and are refused by `../../../../../bin/fm-remote-secondmate-control.sh`; that Herdr-only path is separate from the verified local secondmate integration.
 
 ## Model and effort
@@ -205,5 +159,6 @@ Treat it as another reason an agy pane can sit idle-looking with work outstandin
 ## Verification
 
 `../../../../../docs/verification/runtime-backends.md` owns the dated evidence.
-`tests/fm-agy-harness.test.sh` is the portable regression.
-The credentialed guards are `tests/fm-agy-signals-live-e2e.test.sh` (`FM_AGY_SIGNALS_LIVE=1`) and `tests/fm-agy-primary-live-e2e.test.sh` (`FM_AGY_PRIMARY_LIVE=1`).
+`tests/fm-agy-harness.test.sh` and `tests/fm-agy-native.test.sh` are the portable regressions.
+The native worker guard is `tests/fm-agy-native-live-e2e.test.sh` (`FM_AGY_NATIVE_LIVE=1`).
+The compatibility guards are `tests/fm-agy-signals-live-e2e.test.sh` (`FM_AGY_SIGNALS_LIVE=1`) and `tests/fm-agy-primary-live-e2e.test.sh` (`FM_AGY_PRIMARY_LIVE=1`).

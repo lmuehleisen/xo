@@ -626,7 +626,7 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
     gemini) printf '%s\n' "$state/$id.gemini-settings.json" ;;
     # The directory and per-generation session bindings are retired through
     # fm-agy-hook.sh retire-worker; these are the flat wiring artifacts. The
-    # bypass layer's sibling $id.agy-permission-pending/ markers are retired
+    # native/legacy layer's sibling pending markers are retired
     # through fm-agy-permission-policy.sh retire before the policy file goes,
     # so each open decision is closed as not-run while the policy file still
     # names the status file.

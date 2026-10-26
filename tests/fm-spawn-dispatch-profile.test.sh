@@ -751,6 +751,8 @@ SH
   expect_code 0 "$status" "raw launch naming agy should spawn: $out"
   assert_contains "$out" "spawned raw-agy-z16 harness=agy" "raw agy launch did not record the agy harness name"
   assert_meta_profile "$HOME_DIR/state/raw-agy-z16.meta" agy default default
+  grep -qx 'agy_posture=raw' "$HOME_DIR/state/raw-agy-z16.meta" || fail 'raw agy launch was mislabeled as a wired native worker'
+  ! grep -q '^agy_bypass=\|^agy_judge=' "$HOME_DIR/state/raw-agy-z16.meta" || fail 'raw agy launch inherited legacy policy state'
   launch=$(cat "$LAUNCH_LOG")
   # Byte-exact like the other raw-launch pins in this file: the generic fleet
   # prefixes (private tmux server, compact-adviser switch, task inbox, AI-

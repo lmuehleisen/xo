@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # fm-agy-admission.sh - bounded, synthetic agy worker compatibility admission.
 #
-# Usage: fm-agy-admission.sh ensure|manual-baseline <absolute-agy> <model>
+# Usage: fm-agy-admission.sh ensure|ensure-native|manual-baseline <absolute-agy> <model>
 #          <effective-effort-or-empty> <judge-tier> <judge-model> <absolute-judge>
+# Native form: ensure-native <absolute-agy> <model> <effort-or-empty>
+#              native-tmux|native-herdr '' ''
 #
 # ensure admits candidates >=1.4.4,<1.5.0 only after the complete existing
 # bypass, observer and interactive-signals guards. The historical
@@ -11,6 +13,11 @@
 # release outside the candidate family. Neither path certifies version text.
 # Matching exact receipts, including manually verified baselines, are reused.
 # A mutable default model is not a tested context: select --model explicitly.
+# ensure-native admits >=1.4.7,<1.5.0 with native Auto, observer and signals
+# guards bound to the selected backend. Ordinary safe native approvals need
+# not prompt. Receipts explicitly record whether live approval and decline
+# were observed; deterministic native-control fixtures cover the cancellation
+# protocol when harmless live canaries auto-approve. They are not live proof.
 #
 # The stdout result is the receipt path. Progress and failures go to stderr.
 # Private receipts live at $FM_HOME/state/agy-compatibility (FM_STATE_OVERRIDE
@@ -31,9 +38,17 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 EVIDENCE="$SCRIPT_DIR/fm-agy-admission.py"
 mode=${1:-}
 shift || exit 2
-if [ "$#" -ne 6 ] || { [ "$mode" != ensure ] && [ "$mode" != manual-baseline ]; }; then
+if [ "$#" -ne 6 ] || { [ "$mode" != ensure ] && [ "$mode" != ensure-native ] && [ "$mode" != manual-baseline ]; }; then
   sed -n '4,5s/^# *//p' "${BASH_SOURCE[0]}" >&2
   exit 2
+fi
+if [ "$mode" = ensure-native ]; then
+  case "$4:$5:$6" in native-tmux::|native-herdr::) ;; *)
+    echo 'agy compatibility: native admission requires a verified backend context and cannot carry a judge' >&2; exit 1 ;;
+  esac
+elif [[ "$4" == native-* ]]; then
+  echo 'agy compatibility: native context requires ensure-native' >&2
+  exit 1
 fi
 umask 077
 mkdir -p "$STATE"
@@ -62,6 +77,14 @@ if python3 "$EVIDENCE" match "$receipt" "$work/binding.json" 2>/dev/null; then
   exit 0
 fi
 version=$(jq -r .version "$work/binding.json")
+first_guard=bypass
+if [ "$mode" = ensure-native ]; then
+  first_guard=native
+  case "$version" in 1.4.[7-9]|1.4.[1-9][0-9]*) ;; *)
+    echo "agy compatibility: native Auto candidate $version is outside >=1.4.7,<1.5.0" >&2
+    exit 1 ;;
+  esac
+fi
 eligible=$(python3 - "$version" <<'PY'
 import sys
 v = tuple(map(int, sys.argv[1].split(".")))
@@ -96,14 +119,15 @@ fi
 export AGY_CLI_DISABLE_AUTO_UPDATE=1 FM_AGY_LIVE_BIN="$1"
 export FM_AGY_LIVE_MODEL="$2" FM_AGY_LIVE_EFFORT="$3"
 export FM_AGY_LIVE_JUDGE_TIER="$4" FM_AGY_LIVE_JUDGE_MODEL="$5" FM_AGY_LIVE_JUDGE_BIN="$6"
+if [ "$first_guard" = native ]; then export FM_AGY_NATIVE_LIVE_BACKEND="${4#native-}"; fi
 export FM_AGY_ADMISSION_PROOF_DIR="$work" FM_AGY_ADMISSION_BINDING="$work/binding.json"
-for guard in bypass observer signals; do
+for guard in "$first_guard" observer signals; do
   limit=360
   [ "$guard" != observer ] || limit=150
   if [ "${FM_TEST_SEAM:-0}" = 1 ]; then limit=${FM_TEST_AGY_GUARD_SECONDS:-$limit}; fi
   echo "agy compatibility: checking $guard (bounded ${limit}s); attempts, side effects and completion are required" >&2
   if ! fm_run_timed "$limit" env -u FM_CREDENTIAL_HOOK_ONLY \
-      FM_AGY_BYPASS_LIVE=1 FM_AGY_OBSERVER_LIVE=1 FM_AGY_SIGNALS_LIVE=1 \
+      FM_AGY_NATIVE_LIVE=1 FM_AGY_BYPASS_LIVE=1 FM_AGY_OBSERVER_LIVE=1 FM_AGY_SIGNALS_LIVE=1 \
       bash "$FM_ROOT/tests/fm-agy-$guard-live-e2e.test.sh" >&2; then
     echo "agy compatibility: $guard failed or timed out; no receipt published, worker not launched" >&2
     exit 1
