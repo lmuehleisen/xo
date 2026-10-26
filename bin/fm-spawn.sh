@@ -7862,12 +7862,10 @@ sq_ompcfg=$(shell_quote "${OMP_WORKER_CFG:-$FM_ROOT/.omp/fm-worker-overlay.yml}"
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 sq_tasktmp=$(shell_quote "$TASK_TMP")
-# Every template-token substitution that expands into adapter launch content -
-# flags, resume args, attribution JSON, adapter config overrides - exists only
-# for the launch templates. A raw launch command runs verbatim, so none of them
-# touch it: a literal __MODELFLAG__ or __CLAUDEATTRIBUTION__ in a raw command
-# is the operator's own text, never an empty expansion or a rewritten flag.
-if [ "$RAW_LAUNCH" -eq 0 ]; then
+# Template-token substitutions stay scoped to canonical launches except OMP,
+# whose raw path retains upstream model/effort validation and substitutions.
+# Other raw commands keep literal adapter tokens unchanged.
+if [ "$RAW_LAUNCH" -eq 0 ] || [ "$HARNESS" = omp ]; then
   MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
   [ "$HARNESS" != devin ] || MODELFLAG=$(model_flag_for_harness devin "$(fm_devin_launch_model "$MODEL")")
   # A pinned Pi launch confines Pi's model lookup to the declared provider.
