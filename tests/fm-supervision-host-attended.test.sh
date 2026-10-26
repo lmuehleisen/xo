@@ -5,6 +5,7 @@
 . "$(dirname "${BASH_SOURCE[0]}")/supervision-host-helpers.sh"
 
 test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main
+test_engine_in_another_time_zone_handles_its_granted_rows
 test_attended_captain_outcome_reaches_main_through_branch_outcomes
 test_captain_leaving_mid_turn_keeps_its_captain_outcome_for_the_return
 test_quiet_record_without_its_daemon_is_a_present_captain

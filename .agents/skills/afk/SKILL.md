@@ -43,8 +43,9 @@ The record names either no phone channel or the one-way Discord captain alerts (
      If the native launch fails, run `bin/fm-afk-launch.sh stop` to roll back the prepared lifecycle.
      Do not wrap it in `nohup ... &` (Codex/herdr can reap fire-and-forget shell children after a tool call returns).
    - **Every other harness** (claude, codex, opencode, omp, and cursor on a home that does not run the supervision host, and kimi): run `bin/fm-afk-launch.sh start`.
-     It is the single owner of the daemon terminal: it creates a NON-VISIBLE tracked terminal for the current backend and passes the captain pane in as `FM_SUPERVISOR_TARGET`, and the detected primary harness in as `FM_DAEMON_PRIMARY_HARNESS`, so the daemon injects into the captain, not its own new pane, and its busy guard reads the captain's harness (docs/herdr-backend.md "Away-mode supervisor support").
+     It is the single owner of the daemon terminal: on pane backends it creates a NON-VISIBLE tracked terminal for the current backend and passes the captain pane in as `FM_SUPERVISOR_TARGET`, and the detected primary harness in as `FM_DAEMON_PRIMARY_HARNESS`, so the daemon injects into the captain, not its own new pane, and its busy guard reads the captain's harness (docs/herdr-backend.md "Away-mode supervisor support").
      Claude uses this path, not its background bash tool, because Claude Code's background-task manager can kill a long-running background job while the session stays alive.
+     On the t3code backend there is no terminal to create, so `start` refuses and only the native path above works; a Codex captain hosted by T3 Code has no away daemon (docs/t3code-backend.md "Active limits").
    Both daemon paths require the record `enter` wrote and share `bin/fm-afk-start.sh` as the daemon entry.
    The daemon is **presence-gated**: it injects escalations only while `state/.afk` exists, and stays quiet otherwise.
 3. **Announce, then read back after entry.**
@@ -107,7 +108,8 @@ Destructive, irreversible, and security-sensitive actions are never pre-authoriz
 
 ## The daemon, where it still runs
 
-On the harnesses that still launch the daemon (every verified harness except Pi and pi-signed, and except away mode on a home that runs the supervision host), the mechanics below are unchanged.
+On the harness and backend combinations that still launch the daemon, the mechanics below are unchanged.
+Pi, pi-signed, a home that runs the supervision host, and the T3 Code limits above remain outside this section.
 
 ### Operational prefix contract
 
@@ -122,9 +124,11 @@ For other harnesses, the operational prefix travels with the message text; neith
 
 ### Busy-guard and composer guard
 
-The daemon never injects into an in-use pane. Two checks run before every
-injection, dispatched through `bin/fm-backend.sh` for the supervisor's own
-backend (see [supervisor backend configuration](../../../docs/configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target)):
+The daemon never injects into an in-use pane. T3 Code has no composer and uses
+the native status and turn transport owned by
+[`docs/t3code-backend.md`](../../../docs/t3code-backend.md#away-mode). Two
+checks run before every pane injection, dispatched through `bin/fm-backend.sh`
+for the supervisor's own backend (see [supervisor backend configuration](../../../docs/configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target)):
 
 - **Primary-pane busy guard** - `pane_is_busy` trusts the backend's native `busy` when available, otherwise matches rendered output against only the detected primary harness's signature.
   This narrow delivery guard never classifies a recorded worker task and never uses a global union of vendor patterns.
@@ -138,8 +142,7 @@ A busy primary pane, or any composer verdict other than `empty`, defers the inje
 In afk mode the composer guard is belt-and-suspenders (no human is typing), but it protects against the race window between the captain returning and their message landing, a dead shell, and the daemon's own previous injection sitting unsent.
 
 **Max-defer escape (the daemon must never silently wedge).**
-If anything stays buffered past `FM_MAX_DEFER_SECS` (default 300), the daemon
-attempts one normal flush, which still requires an idle pane and an affirmatively empty composer.
+If anything stays buffered past `FM_MAX_DEFER_SECS` (default 300), the daemon attempts one normal flush, which still requires an idle endpoint and, on pane backends, an affirmatively empty composer.
 The alarm is defense in depth rather than a substitute for keeping every genuinely idle supported composer injectable.
 If that submit cannot be confirmed, it raises a loud, rate-limited wedge alarm:
 an ERROR in the daemon log naming the last delivery failure, a durable
@@ -149,9 +152,8 @@ So a guard false-positive becomes a visible stall, never an unbounded silent no-
 
 ### Submit model
 
-The digest is typed **once** (`send-keys -l` on tmux, `pane send-text` on
-herdr - both literal, non-submitting sends), then submitted with Enter and
-**verified** through the selected backend's submit primitive.
+On tmux and Herdr, the digest is typed **once** with a literal, non-submitting send (`send-keys -l` on tmux, `pane send-text` on Herdr).
+Enter submits it, and the selected backend's submit primitive verifies delivery.
 Enter is retried (Enter only, never a retype) until the backend confirms the
 submit landed.
 A failed delivery is logged with its stage (initial send or Enter delivery, where no confirmation retry ran and the text may already be typed on backends such as herdr whose Enter could not be sent; typing, where the digest never showed and no Enter was sent; or Enter confirmation), the payload's byte count, and the transport's own error output.
@@ -167,7 +169,7 @@ When away mode ends, the daemon and `bin/fm-afk-return.sh` clear its own unsent 
 `recover_owned_input` and `clear_owned_input_at_exit` in `bin/fm-supervise-daemon.sh` own that contract.
 
 **Busy-queued Enter exception (opencode).** OpenCode keeps queued text visible while it is mid-turn, so the supported supervisor adapters delegate the final delivery decision to `fm_composer_queued_enter_verdict` in `bin/fm-composer-lib.sh` rather than treating visible text alone as a swallowed Enter.
-The daemon still clears its buffer only on the backend's `empty` success verdict; [`docs/tmux-backend.md`](../../../docs/tmux-backend.md), [`docs/herdr-backend.md`](../../../docs/herdr-backend.md), and [`docs/rex-backend.md`](../../../docs/rex-backend.md#current-operation-and-safety) own the backend-specific confirmation signals.
+The daemon still clears its buffer only on the backend's `empty` success verdict; [`docs/tmux-backend.md`](../../../docs/tmux-backend.md), [`docs/herdr-backend.md`](../../../docs/herdr-backend.md), [`docs/rex-backend.md`](../../../docs/rex-backend.md#current-operation-and-safety), and [`docs/t3code-backend.md`](../../../docs/t3code-backend.md#away-mode) own the backend-specific confirmation signals.
 
 ### Classification policy
 
@@ -194,6 +196,7 @@ Classify each wake this way, applying the steering-inbox exception before status
 - `stale` with a terminal status, a bare legacy captain-relevant line, or an unrecognized status prefix such as `parked:` -> escalate.
   Nonterminal progress remains transient even when its prose contains a legacy free-text token or its seen-status marker already matches, so record a marker and self-handle.
   If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a possible wedge.
+  For T3 native uncertainty, follow the [stale-alert retention contract](../../../docs/t3code-backend.md#away-mode).
   This bounds wedge-detection latency to the threshold plus a tick: a delay, never a loss.
   A stale detail that ends with `blocked-on-prompt:` and a dialog name means the pane shows that dialog, so the worker cannot continue until someone answers it.
   An escalation this path already sends keeps that name, whether it comes from the status log or from housekeeping.
@@ -222,7 +225,8 @@ A long typed burst is folded, either wrapped as pasted content or cut to its tai
   pointer to its digest file, so no typed line is long enough to be folded as
   pasted content.
 - **Busy and composer guards on the supervisor pane** - before injecting, the daemon runs the detected-primary-harness rendered busy guard and reads `fm_backend_composer_state` directly.
-  Only `empty` permits injection; `pending` protects half-typed or swallowed input, and `unknown` protects unreadable panes and bare dead-shell prompts.
+  On pane backends, only `empty` permits injection; `pending` protects half-typed or swallowed input, and `unknown` protects unreadable panes and bare dead-shell prompts.
+  For T3 Code, follow the [native injection contract](../../../docs/t3code-backend.md#away-mode).
   Every other result preserves the buffer for retry, so the daemon never merges its digest into the captain's half-typed line or types it into a shell.
 - The active backend passes its capture plus declarative styled, cursor, identity, and row capabilities to the shared screen classifier; all structural recognition and verdict logic remains in `bin/fm-composer-lib.sh`.
   Styled captures let that owner remove dim/faint and dark-TRUECOLOR ghost or placeholder text while shape detection uses the ANSI-stripped screen, so a dark border is not lost with ghost content.
@@ -260,7 +264,7 @@ A long typed burst is folded, either wrapped as pasted content or cut to its tai
 Treat `state/.subsuper-escalations`, its `.since` sidecar, `state/.subsuper-inject-wedged`, and `state/.subsuper-unknown-acked` as session-scoped delivery artifacts, not as the durable work record.
 Always enter through `bin/fm-afk-launch.sh`, which clears prior-session artifacts only for a fresh entry and preserves the current session's buffer on refresh.
 Always exit through `bin/fm-afk-launch.sh stop`, which keeps `state/.afk` present through the daemon's shutdown flush, clears it, and archives the posture record last.
-`docs/herdr-backend.md` "Away-mode supervisor support" owns the current mechanism, and `docs/verification/runtime-backends.md` "Away-mode transport" owns active evidence.
+`docs/herdr-backend.md` "Away-mode supervisor support" and `docs/t3code-backend.md` "Away mode" own the backend mechanisms, and `docs/verification/runtime-backends.md` "Away-mode transport" owns active evidence.
 
 ### Reliability properties
 
