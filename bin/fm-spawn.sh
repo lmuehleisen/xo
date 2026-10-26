@@ -3524,11 +3524,9 @@ if [ "$KIND" != secondmate ]; then
   EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
 fi
 
-# A raw launch command runs verbatim: its first word's basename records the
-# adapter for the task record only, so no executable is resolved, no CLI surface
-# is probed, and no catalog check runs - all of which exist to serve the launch
-# templates a raw command never carries.
-[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
+# Raw commands other than OMP avoid executable resolution and adapter probes.
+# OMP retains upstream resolution and validation for both launch paths.
+{ [ "$RAW_LAUNCH" -eq 0 ] || [ "$HARNESS" = omp ]; } && case "$HARNESS" in
 commandcode)
   COMMANDCODE_BIN=$(command -v commandcode) || {
     echo "error: commandcode executable not found on PATH" >&2
@@ -7963,12 +7961,12 @@ LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OMPEXT__/$sq_ompext}
 LAUNCH=${LAUNCH//__OMPWORKERCFG__/$sq_ompcfg}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
-# The adapter-specific substitutions exist for the launch templates only: a raw
-# launch command runs verbatim, so this step is skipped for it entirely. The
+# The adapter-specific substitutions exist for the launch templates only; OMP
+# also retains upstream substitutions on its raw-command path. The
 # binary variables resolve inside the placeholder-gated blocks above, so each
 # substitution still tolerates an unset value rather than aborting under set -u
 # if a template ever drops its placeholder.
-[ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
+{ [ "$RAW_LAUNCH" -eq 0 ] || [ "$HARNESS" = omp ]; } && case "$HARNESS" in
 pi | pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
