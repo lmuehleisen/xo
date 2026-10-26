@@ -217,29 +217,6 @@ test_spawn_model_validation_scoped_to_listed_providers() {
   pass "fm-spawn: omp model validation is scoped to providers the listing can prove"
 }
 
-test_raw_omp_launch_skips_catalog_validation() {
-  local rec id=omp-raw-q5 out status
-  rec=$(make_spawn_case raw-launch omp "$id")
-  read_case_record "$rec"
-  cat > "$FAKEBIN_DIR/omp" <<SH
-#!/usr/bin/env bash
-if [ "\${1:-}" = models ]; then
-  : > "$CASE_DIR/catalog-read"
-  exit 1
-fi
-exit 0
-SH
-  chmod +x "$FAKEBIN_DIR/omp"
-  out=$(run_scout_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
-    "$id" "$PROJ_DIR" 'omp --session raw-fixture')
-  status=$?
-  expect_code 0 "$status" "a raw omp command must launch without a canonical executable binding: $out"
-  assert_contains "$(cat "$LAUNCH_LOG")" 'omp --session raw-fixture' "the raw command was changed"
-  assert_absent "$CASE_DIR/catalog-read" "raw launch unexpectedly queried the omp catalog"
-  assert_absent "$HOME_DIR/state/$id.omp-ext.ts" "raw launch unexpectedly installed canonical worker wiring"
-  pass "fm-spawn: a raw omp command skips canonical model validation and worker wiring"
-}
-
 test_secondmate_launch_relies_on_discovery() {
   # A seeded secondmate home, launched for real through fm-spawn on omp: the
   # launch must carry the posture overlay and pin --cwd to the home. Its only
@@ -990,7 +967,6 @@ test_detection_anchored_name_and_marker_precedence
 test_lock_identity_and_liveness_classification
 test_spawn_launch_line_and_worker_wiring
 test_spawn_model_validation_scoped_to_listed_providers
-test_raw_omp_launch_skips_catalog_validation
 test_secondmate_launch_relies_on_discovery
 test_secondmate_config_pinned_model_is_validated
 test_secondmate_omp_profile_pin

@@ -64,15 +64,15 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### reviewed-worker-permissions
 
-- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
+- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so pane-backed Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
 - Class: intended.
-- Seam: permission resolution and `launch_template` in `bin/fm-spawn.sh`, the omitted upstream bypass-only failover helper and suite, `docs/configuration.md`, the T3 limit in `docs/t3code-backend.md`, and its reviewed-launch replacement coverage in `tests/fm-backend-t3code.test.sh` (shared).
-- Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; `tests/fm-backend-t3code.test.sh` `test_spawn_refuses_reviewed_worker_permissions`; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
-- Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; upstream's separate Codex restricted setting is represented by the fork's existing manual review posture, and T3 Code full-access launches refuse before mutation because they cannot honor either reviewed posture; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
+- Seam: permission resolution and `launch_template` in `bin/fm-spawn.sh`, the omitted upstream bypass-only failover helper and suite, and `docs/configuration.md` (shared).
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
+- Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; upstream's separate Codex restricted setting is represented by the fork's existing manual review posture; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
 
 ### codex-reviewed-launch
 
-- Intent: Codex workers launch with `--approve-for-me`, or with manual review when `config/crew-permissions` is `manual`, never with approvals and sandbox bypassed; README "Reviewed worker permissions".
+- Intent: Pane-backed Codex workers launch with `--approve-for-me`, or with manual review when `config/crew-permissions` is `manual`, never with approvals and sandbox bypassed; README "Reviewed worker permissions".
 - Class: intended.
 - Seam: the Codex arms of `launch_template` in `bin/fm-spawn.sh` (shared) print the selected permission flags in place of upstream's `--dangerously-bypass-approvals-and-sandbox`; an alternative would keep the template lines byte-identical to upstream and substitute the flags at launch time instead.
   The automatic-review brief also carries sandbox retry guidance from `fm_brief_codex_reviewed_sandbox` in `bin/fm-dod-lib.sh`, added by `bin/fm-spawn.sh` and described in the Codex harness reference (shared).
@@ -436,11 +436,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### raw-launch-verbatim
 
-- Intent: an explicit raw command avoids adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
+- Intent: explicit raw commands for harnesses other than OMP avoid adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
 - Class: carried.
 - Seam: `RAW_LAUNCH` guards around adapter resolution, model checks, busy wiring, template substitutions and post-launch readiness in `bin/fm-spawn.sh`.
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` raw-adapter and literal-placeholder cases.
-- Upstream: applies portions of adapter setup to raw commands; drop when the raw path preserves the same command and wiring boundaries.
+- Upstream: OMP launch, validation, and profile selection follow upstream; the remaining harnesses retain the raw-command boundary and can converge when upstream preserves the same command and wiring boundaries.
 
 ### launch-submit-proof
 

@@ -561,7 +561,8 @@
 #   omp_profile= in the task record and on the spawned line. Every spawn,
 #   relaunch, and recovery re-reads the file; an absent file changes nothing.
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
-#   Claude, Codex, and agy launches read config/crew-permissions: absent or auto
+#   Pane-backed Claude and Codex launches, and agy launches, read
+#   config/crew-permissions: absent or auto
 #   uses Claude's --permission-mode auto / Codex's --approve-for-me
 #   (workspace-write with automatic review); manual uses Claude manual / Codex
 #   on-request with human review. agy's native Auto is account-dependent and
@@ -576,7 +577,7 @@
 #   and an uninspectable path, a non-file, an unreadable file, or any value other
 #   than auto or manual after trimming refuses the spawn, whatever its harness.
 #   The flags apply to ship, scout, and secondmate launches, not an already-running
-#   primary, other harnesses, or the explicit raw-command escape hatch.
+#   primary, native T3 threads, other harnesses, or the explicit raw-command escape hatch.
 #   Secondmate homes inherit the file from the primary (bin/fm-config-inherit-lib.sh).
 #   There is no fallback to permission or sandbox bypass on failure or denial.
 #   Both modes add only the owning home's state directory and the brief's
@@ -3678,7 +3679,7 @@ OMP_PROFILE_MATE=
 OMP_PROFILE_RAW=
 [ "$RAW_LAUNCH" = 0 ] || OMP_PROFILE_RAW=$ARG3
 OMP_PROFILE_PIN=$(fm_omp_profile_select "$HARNESS" "$CONFIG" "$OMP_PROFILE_MATE" "$OMP_PROFILE_RAW") || exit 1
-if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = omp ]; then
+if [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" "$OMP_PROFILE_PIN" || exit 1
 fi
 if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = kiro ]; then
@@ -3711,16 +3712,84 @@ WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT_ROOT%%$'\t'*}
 # account and environment, so a launch setting only a Firstmate-built command
 # line can apply refuses here instead of being silently widened or dropped.
 if [ "$BACKEND" = t3code ]; then
+  # Resolve upstream permission settings only for the native T3 runtime.
+  if ! CLAUDE_PERM_PRESENT=$(fm_config_source_present "$CONFIG/claude-permission-mode"); then
+    exit 1
+  fi
+  CLAUDE_PERMISSION_MODE=bypass
+  if [ "$CLAUDE_PERM_PRESENT" = 1 ]; then
+    if [ ! -f "$CONFIG/claude-permission-mode" ] || [ ! -r "$CONFIG/claude-permission-mode" ]; then
+      echo "error: config/claude-permission-mode must be a readable regular file holding one of: bypass, auto" >&2
+      exit 1
+    fi
+    CLAUDE_PERMISSION_MODE=$(tr -d '[:space:]' <"$CONFIG/claude-permission-mode" || true)
+    case "$CLAUDE_PERMISSION_MODE" in
+    bypass | auto) ;;
+    *)
+      echo "error: config/claude-permission-mode holds '$CLAUDE_PERMISSION_MODE'; accepted values are: bypass (--dangerously-skip-permissions, the default when the file is absent), auto (--permission-mode auto)" >&2
+      exit 1
+      ;;
+    esac
+  fi
+  if ! CODEX_APPROVAL_PRESENT=$(fm_config_source_present "$CONFIG/codex-approval-mode"); then
+    exit 1
+  fi
+  CODEX_APPROVAL_MODE=bypass
+  if [ "$CODEX_APPROVAL_PRESENT" = 1 ]; then
+    if [ ! -f "$CONFIG/codex-approval-mode" ] || [ ! -r "$CONFIG/codex-approval-mode" ]; then
+      echo "error: config/codex-approval-mode must be a readable regular file holding one of: bypass, approve-for-me" >&2
+      exit 1
+    fi
+    if ! CODEX_APPROVAL_MODE=$(perl -0777 -pe 's/\A\s+|\s+\z//g' <"$CONFIG/codex-approval-mode"); then
+      echo 'error: could not read config/codex-approval-mode' >&2
+      exit 1
+    fi
+    case "$CODEX_APPROVAL_MODE" in
+      bypass | approve-for-me) ;;
+      *)
+        echo "error: config/codex-approval-mode holds '$CODEX_APPROVAL_MODE'; accepted values are: bypass (the default), approve-for-me" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  # Resolve the opt-in Codex posture before any spawn or relaunch mutation.
+  # docs/t3code-backend.md owns the T3 permission-setting limits.
+  CODEX_PERMISSION_MODE=bypass
+  if ! CODEX_PERM_PRESENT=$(fm_config_source_present "$CONFIG/codex-permission-mode"); then
+    exit 1
+  fi
+  if [ "$CODEX_PERM_PRESENT" = 1 ]; then
+    if [ ! -f "$CONFIG/codex-permission-mode" ] || [ ! -r "$CONFIG/codex-permission-mode" ]; then
+      echo "error: config/codex-permission-mode must be a readable regular file holding bypass or restricted" >&2
+      exit 1
+    fi
+    CODEX_PERMISSION_MODE=$(cat "$CONFIG/codex-permission-mode") || exit 1
+    case "$CODEX_PERMISSION_MODE" in
+    bypass | restricted) ;;
+    *)
+      echo "error: config/codex-permission-mode must contain bypass or restricted" >&2
+      exit 1
+      ;;
+    esac
+  fi
+  # Restricted is incompatible with T3's full-access runtime.
+  if [ "$CODEX_PERMISSION_MODE" = restricted ]; then
+    CODEX_APPROVAL_MODE=restricted
+  fi
   if [ "$RAW_LAUNCH" = 1 ]; then
     echo "error: backend=t3code cannot run a raw launch command because T3 starts the agent itself; pass a harness name or choose another backend" >&2
     exit 1
   fi
-  case "$HARNESS" in
-    claude|codex)
-      echo "error: backend=t3code requires T3's full-access runtime mode and cannot honor config/crew-permissions=$CREW_PERMISSION_MODE; choose a backend that supports reviewed worker launches" >&2
-      exit 1
-      ;;
-  esac
+  if [ "$HARNESS" = claude ] && [ "$CLAUDE_PERMISSION_MODE" != bypass ]; then
+    echo "error: backend=t3code runs claude at T3's full-access runtime mode and cannot honor config/claude-permission-mode=$CLAUDE_PERMISSION_MODE; remove that file or choose another backend" >&2
+    exit 1
+  fi
+  if [ "$HARNESS" = codex ] && [ "$CODEX_APPROVAL_MODE" != bypass ]; then
+    codex_posture_setting="config/codex-approval-mode=$CODEX_APPROVAL_MODE"
+    [ "$CODEX_PERMISSION_MODE" != restricted ] || codex_posture_setting="config/codex-permission-mode=restricted"
+    echo "error: backend=t3code runs codex at T3's full-access runtime mode and cannot honor $codex_posture_setting; remove that file or choose another backend" >&2
+    exit 1
+  fi
   if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     echo "error: backend=t3code cannot apply config/launch-env-allowlist because T3 starts the agent with its provider instance's environment; remove that file or choose another backend" >&2
     exit 1
@@ -4729,7 +4798,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
       cat "$SOURCE_BRIEF" &&
       # Raw commands only record their leading executable as the harness; this
       # permission mode does not control their approval or sandbox flags.
-      if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = codex ] && [ "$CREW_PERMISSION_MODE" = auto ]; then
+      if [ "$BACKEND" != t3code ] && [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = codex ] && [ "$CREW_PERMISSION_MODE" = auto ]; then
         printf '\n' && fm_brief_codex_reviewed_sandbox
       fi &&
       if [ "$NO_MISTAKES_PIPELINE" -eq 1 ]; then
@@ -7608,6 +7677,12 @@ fi
   echo "worktree=$WT"
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
+  if [ "$BACKEND" = t3code ]; then
+    case "$HARNESS" in
+      claude) echo "approval_mode=$CLAUDE_PERMISSION_MODE" ;;
+      codex) echo "approval_mode=$CODEX_APPROVAL_MODE" ;;
+    esac
+  fi
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "${EFFECTIVE_MODE:-}" ] || [ "$KIND" != ship ] || echo "effective_mode=$EFFECTIVE_MODE"

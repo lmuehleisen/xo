@@ -1758,7 +1758,6 @@ test_spawn_secondmate_runs_thread_in_home_with_env() {
   [ "$(t3_json_field "$settings" 'd.env.LAVISH_AXI_HOST')" = undefined ] || fail "a key an earlier spawn wrote and this one does not must not linger"
   [ "$(t3_json_field "$settings" 'Object.keys(d.env).length')" = 19 ] || fail "the env block should hold the home's entry, the 17 Firstmate keys, and their list, got $(t3_json_field "$settings" 'Object.keys(d.env)')"
   [ "$(t3_json_field "$settings" 'd.env.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "settings env must carry GOTMPDIR"
-  # shellcheck disable=SC2329 # Passed as a callback to assert_t3_secondmate_env.
   read_settings() { t3_json_field "$settings" "d.env[\"$1\"]"; }
   assert_t3_secondmate_env read_settings "claude secondmate settings env" "$home" "$thread" autoarm "$id"
   t3_excluded "$home" .claude/settings.local.json || fail "the settings file must be git-excluded in the home"
@@ -1784,7 +1783,6 @@ test_spawn_codex_secondmate_writes_toml_env() {
   toml="$home/.codex/config.toml"
   assert_present "$toml" "a codex secondmate home gets .codex/config.toml"
   [ "$(t3_toml_env "$toml" GOTMPDIR)" = "/tmp/fm-$id/gotmp" ] || fail "config.toml must set GOTMPDIR, got '$(cat "$toml")'"
-  # shellcheck disable=SC2329 # Passed as a callback to assert_t3_secondmate_env.
   read_toml() { t3_toml_env "$toml" "$1"; }
   assert_t3_secondmate_env read_toml "codex secondmate config.toml" "$home" "$thread" persistent "$id"
   t3_excluded "$home" .codex/config.toml || fail "config.toml must be git-excluded in the home"
@@ -2720,26 +2718,6 @@ test_housekeeping_removes_the_iterated_stale_marker() {
   pass "away housekeeping clears the stale marker it rechecked when two records share an endpoint"
 }
 
-test_spawn_refuses_reviewed_worker_permissions() {
-  local harness mode id model out rc
-  for harness in claude codex; do
-    case "$harness" in claude) model=claude-sonnet-5 ;; codex) model=gpt-5.6-sol ;; esac
-    for mode in absent auto manual; do
-      id=$(t3_uid "t3review-$harness-$mode")
-      t3_case "spawn-reviewed-$harness-$mode"
-      [ "$mode" = absent ] || printf '%s\n' "$mode" > "$CONFIG/crew-permissions"
-      t3_worker_setup "$id"
-      out=$(t3_worker_spawn "$id" "$harness" --model "$model"); rc=$?
-      expect_code 1 "$rc" "T3 full-access must refuse a reviewed $harness launch: $out"
-      assert_contains "$out" 'cannot honor config/crew-permissions=' "the refusal must identify the review boundary"
-      [ -z "$(t3_dispatch_types)" ] || fail "a refused reviewed launch mutated T3"
-      [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "a refused reviewed launch leased a slot"
-      assert_absent "$CASE_DIR/state/$id.meta" "a refused reviewed launch wrote task metadata"
-    done
-  done
-  pass "T3 full-access refuses default, automatic, and manual reviewed worker launches before mutation"
-}
-
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
   exit
@@ -2791,19 +2769,46 @@ test_busy_classify_trusts_native_idle_and_busy
 test_control_lib_tables
 test_control_exit_refused_before_any_call
 test_control_relaunch_refused_before_any_dispatch
+test_spawn_leases_slot_creates_thread_and_starts_launch_turn
 test_claude_pr_tool_clause_version_boundary
+test_spawn_codex_preserves_tracked_codex_config
 test_tracked_codex_overlay_recovery
+test_spawn_codex_refuses_tracked_codex_config
+test_spawn_claude_refuses_tracked_claude_local_md
+test_spawn_claude_refuses_worktree_symlink
 test_untracked_codex_config_is_preserved
 test_codex_cleanup_without_journal_needs_no_python
+test_codex_worker_ignores_untracked_config_in_main_checkout
+test_spawn_codex_scout_writes_toml_env_with_traceparent
+test_spawn_codex_warns_unless_codex_trusts_the_project
+test_spawn_secondmate_runs_thread_in_home_with_env
+test_spawn_codex_secondmate_writes_toml_env
+test_spawn_refuses_t3code_when_token_rejected
 test_scout_teardown_stops_and_archives_before_slot_return
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete codex
 test_pooled_t3_secondmate_home_returned_only_after_provider_exits
 test_teardown_refuses_when_t3_is_unreachable
+test_spawn_refuses_launch_settings_t3_cannot_honor claude-permission-mode auto "config/claude-permission-mode=auto"
+test_spawn_refuses_launch_settings_t3_cannot_honor codex-approval-mode approve-for-me "config/codex-approval-mode=approve-for-me" codex
+test_spawn_refuses_launch_settings_t3_cannot_honor codex-permission-mode restricted "config/codex-permission-mode=restricted" codex
+test_spawn_codex_accepts_bypass_approval_mode
+test_spawn_refuses_launch_settings_t3_cannot_honor launch-env-allowlist HOME "config/launch-env-allowlist"
+test_spawn_refuses_raw_launch_command
+test_spawn_abort_returns_lease_only_after_archive ok
+test_spawn_abort_returns_lease_only_after_archive fail
+test_uncertain_thread_launch_keeps_lease
+test_spawn_never_writes_inherited_git_config
+test_spawn_secondmate_refuses_symlinked_claude_settings
+test_launch_gate_failure_returns_lease
+test_refused_launch_turn_archives_thread_and_returns_lease
+test_misbound_thread_launch_returns_lease
+test_dirty_leased_slot_is_kept_without_a_thread
+test_clean_slot_refresh_failure_returns_lease
+test_aborted_t3_secondmate_spawn_removes_home_env
 test_nested_t3_secondmate_home_reaped_before_removal
+test_uncertain_launch_message_keeps_task_record
+test_spawn_rejected_lease_is_neither_cleaned_nor_returned
 test_teardown_keeps_tracked_claude_local_md
 test_fractional_poll_event_wait
 test_housekeeping_removes_the_iterated_stale_marker
-
-test_spawn_refuses_reviewed_worker_permissions
-echo "skip: T3 full-access spawn scenarios are unavailable under reviewed worker permissions"

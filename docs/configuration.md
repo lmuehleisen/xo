@@ -486,7 +486,7 @@ Paseo and tern stay explicit-only because their runtime markers leak into every 
 ### Accepted backends and secondmate limits
 
 Any value other than `tmux`, `herdr`, `zellij`, `orca`, `cmux`, `paseo`, `rex`, `t3code`, or `tern` is rejected until another adapter is implemented and verified.
-`fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, `cmux`, `paseo`, `rex`, `t3code`, and `tern` for ship and scout tasks; `backend=orca`, `backend=cmux`, `backend=paseo`, and `backend=tern` all still refuse `--secondmate` until secondmate launch semantics are designed for each, while T3 Code's Claude and Codex launch paths refuse because its full-access mode cannot honor the [reviewed worker permission posture](#worker-permission-mode-configcrew-permissions).
+`fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, `cmux`, `paseo`, `rex`, `t3code`, and `tern` for ship and scout tasks; `backend=orca`, `backend=cmux`, `backend=paseo`, and `backend=tern` all still refuse `--secondmate` until secondmate launch semantics are designed for each; T3 Code supports Claude and Codex workers and secondmates through its [native full-access launch path](t3code-backend.md#active-limits).
 
 `codex-app` is not an accepted runtime backend yet; [`docs/codex-app-backend.md`](codex-app-backend.md) owns the Codex App boundary.
 
@@ -1082,13 +1082,14 @@ A local standalone-clone home cannot receive a primary-local commit through that
 
 ## Worker permission mode (config/crew-permissions)
 
-Claude and Codex workers use reviewed execution by default; agy and Devin use their adapter-specific permission behavior described below and in their harness references.
+Pane-backed Claude and Codex workers use reviewed execution by default; agy and Devin use their adapter-specific permission behavior described below and in their harness references.
+Explicit T3 Code threads retain the [upstream full-access posture](t3code-backend.md#active-limits).
 An optional home-local `config/crew-permissions` selects `auto` (the default) or `manual`; `bin/fm-spawn.sh --help` owns exact launch flags, validation, directory grants, and exclusions.
 The setting is read for each new launch or relaunch, including a secondmate agent launched by this home; it does not change already-running agents or the primary's permission mode.
 The primary's file is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), so a secondmate's own workers use the same review posture, and removing the primary's file restores the default there too.
 No global agent settings or hooks are installed by selecting a mode.
 Other harness adapters and explicit raw launch commands retain their existing permission behavior.
-This is the only worker permission setting: no value selects Claude's `--dangerously-skip-permissions`, and the upstream-only `config/claude-permission-mode` file is not read.
+For pane-backed workers this is the only permission setting: no value selects Claude's `--dangerously-skip-permissions`, and `config/claude-permission-mode` is not read on that path.
 
 Auto requests Claude's classifier-backed permission mode and Codex's automatic approval reviewer with workspace-write sandboxing.
 agy's own reviewed `--mode auto` exists since 1.3.5 ([release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.3.5)) but is gated per account: a refused request warns and silently falls back to default review, and headless `-p` auto-denies permissioned commands while still exiting 0.
@@ -1099,8 +1100,8 @@ The policy layer's executable-compatibility, hook, write-guard, and judge gates 
 For a policy-layer launch, availability depends on the installed CLI, account, and managed policy; a denied or unsupported launch must be reported rather than retried without the policy layer.
 Manual approval prompts can leave an unattended task waiting for intervention; with agy, Manual keeps its full review prompts and `--no-agy-bypass` selects `accept-edits`, which still prompts for shell commands.
 Both modes preserve the separate project delivery and merge-approval rules.
-Workers receive additional access to the owning home's shared state directory and their brief/report directory, not the entire home; the shared state layout is not a per-task security boundary.
-Every Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.
+Pane-backed workers receive additional access to the owning home's shared state directory and their brief/report directory, not the entire home; the shared state layout is not a per-task security boundary.
+Every pane-backed Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.
 Claude Code path-checks its Read, Glob, and Grep tools against its working directories, and since 2.1.257 the first outside read in auto mode parks the pane on a one-time question, so the grant keeps those channels readable without that question.
 Protected Git writes and operations outside the allowed sandbox still require the harness's normal review.
 
