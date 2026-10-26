@@ -5872,8 +5872,8 @@ EOF
     T3CODE_ABORT_CLEANUP=1
     ;;
   esac
-  # Orca's own abort cleanup owns its terminal and worktree.
-  [ "$BACKEND" = orca ] || SPAWN_PRELAUNCH_ENDPOINT=1
+  # Orca and T3 own their native endpoint abort cleanup.
+  [ "$BACKEND" = orca ] || [ "$BACKEND" = t3code ] || SPAWN_PRELAUNCH_ENDPOINT=1
 fi
 if [ "$KIND" = secondmate ]; then
   FM_INHERITABLE_CONFIG=trace-context \
@@ -8375,6 +8375,7 @@ if [ "$BACKEND" = t3code ]; then
   T3CODE_ABORT_CLEANUP=0
   T3CODE_LEASED=0
   T3CODE_HOME_ENV=0
+  SPAWN_PRELAUNCH_WIRING=0
 else
   if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
     if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||
