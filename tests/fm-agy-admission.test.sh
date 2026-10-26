@@ -21,8 +21,8 @@ new_case() {
   mkdir -p "$CODE/tests" "$CODE/.agents" "$HOME_DIR/state"
   cp -R "$ROOT/bin" "$CODE/bin"
   cp "$ROOT/.agents/hooks.json" "$CODE/.agents/"
-  cp "$ROOT/tests/"{lib.sh,agy-live-helpers.sh,git-config-helpers.sh,tmproot-guard.sh} "$CODE/tests/"
-  for guard in bypass observer signals; do
+  cp "$ROOT/tests/"{lib.sh,agy-live-helpers.sh,git-config-helpers.sh,tmproot-guard.sh,fm-agy-native.test.sh,agy-native-terminal-fixture.py} "$CODE/tests/"
+  for guard in bypass native observer signals; do
     cat > "$CODE/tests/fm-agy-$guard-live-e2e.test.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -31,6 +31,7 @@ guard=${0##*/fm-agy-}; guard=${guard%-live-e2e.test.sh}
 printf '%s\n' "$guard" >> "$FM_ADMISSION_FIXTURE_LOG"
 case "${FM_ADMISSION_FIXTURE_MODE:-}:$guard" in
   fail:bypass) exit 1 ;;
+  fail:native) exit 1 ;;
   timeout:bypass) sleep 20 ;;
   incomplete:bypass) exit 0 ;;
   replace:bypass) printf '\n# replacement\n' >> "$FM_AGY_LIVE_BIN" ;;
@@ -56,10 +57,12 @@ SH
 }
 
 admit() {  # [ensure|manual-baseline] [model]
+  local tier=agy judge_model=fixture-judge judge_bin="$BINARY"
+  if [ "${1:-}" = ensure-native ]; then tier=native-tmux; judge_model=''; judge_bin=''; fi
   FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE="$HOME_DIR/state" \
     FM_ADMISSION_FIXTURE_LOG="$CASE/attempts" \
     bash "$CODE/bin/fm-agy-admission.sh" "${1:-ensure}" "$BINARY" "${2-fixture-model}" '' \
-    agy fixture-judge "$BINARY" 2> "$CASE/admission.stderr"
+    "$tier" "$judge_model" "$judge_bin" 2> "$CASE/admission.stderr"
 }
 
 assert_receipt() {
@@ -179,5 +182,29 @@ if admit ensure '' >/dev/null; then fail 'implicit default model was certified';
 mv "$BINARY" "$CASE/not-selected"
 if admit >/dev/null; then fail 'unknown executable identity was certified'; fi
 pass 'agy admission: missing identity and implicit model fail closed'
+
+new_case native-context 1.4.7
+RECEIPT=$(admit ensure-native)
+[ "$(attempts)" = 3 ] || fail 'native admission omitted a guard'
+python3 "$CODE/bin/fm-agy-admission.py" assert "$RECEIPT" "$BINARY" fixture-model '' native-tmux '' '' \
+  || fail 'complete native evidence did not bind the native context'
+if python3 "$CODE/bin/fm-agy-admission.py" assert "$RECEIPT" "$BINARY" fixture-model '' agy fixture-judge "$BINARY" 2>/dev/null; then
+  fail 'native receipt certified a legacy judge context'
+fi
+if python3 "$CODE/bin/fm-agy-admission.py" assert "$RECEIPT" "$BINARY" fixture-model '' native-herdr '' '' 2>/dev/null; then
+  fail 'native receipt certified another backend'
+fi
+[ "$(admit ensure-native)" = "$RECEIPT" ] && [ "$(attempts)" = 3 ] || fail 'matching native receipt did not reuse proof'
+if FM_HOME="$HOME_DIR" bash "$CODE/bin/fm-agy-admission.sh" ensure-native "$BINARY" fixture-model '' agy fixture-judge "$BINARY" >/dev/null 2>&1; then
+  fail 'native admission accepted a legacy judge context'
+fi
+pass 'agy admission: native receipts bind model, effort and backend independently of legacy judge proof'
+
+new_case native-failure 1.4.7
+if FM_ADMISSION_FIXTURE_MODE=fail admit ensure-native >/dev/null; then fail 'failed native guard published approval'; fi
+new_case native-too-old 1.4.6
+if admit ensure-native >/dev/null; then fail 'native route admitted an unproven pre-1.4.7 release'; fi
+[ ! -e "$CASE/attempts" ] || fail 'unsupported native candidate reached model prompts'
+pass 'agy admission: native guard failure and unsupported startup versions refuse certification'
 
 printf '# all fm-agy-admission tests passed\n'

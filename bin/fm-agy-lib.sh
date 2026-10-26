@@ -1,139 +1,39 @@
 #!/usr/bin/env bash
-# fm-agy-lib.sh - shared Agy effort normalization and worker wiring for
-# bin/fm-spawn.sh, bin/fm-teardown.sh, and the quota resolver: executable
-# resolution, the permission posture and
-# its --agy-bypass gates, the worker hook install, the post-launch readiness
-# gate, and the matching retires. Sourced, never executed.
+# fm-agy-lib.sh - agy effort, permission posture, worker wiring and cleanup.
+# Sourced by fm-spawn.sh, fm-teardown.sh and the quota resolver.
 #
-# Kept out of the upstream-owned spawn and teardown scripts so an upstream
-# merge meets one-line call sites there instead of the whole agy arm.
-# Launch and quota catalog lookups share agy_effort_level below.
-# Worker functions are the code those scripts ran inline before, moved
-# unchanged. bin/fm-agy-hook.sh owns the worker hooks,
-# bin/fm-agy-permission-policy.sh owns the bypass permission layer, and the
-# harness-adapters agy reference owns the operating facts.
+# New wired ships/scouts map crew-permissions=auto to --mode auto --sandbox.
+# The task brief is withheld until fm-agy-native-lib.sh proves active Auto,
+# a real harmless tool result and generation-bound Stop; the task's own later
+# PreInvocation must then prove brief delivery. No default-review/bypass
+# fallback is allowed. Manual retains native review; secondmates and explicit
+# raw commands remain outside the worker policy layer.
 #
-# agy installs native hooks through fm-agy-hook.sh in an owned state directory;
-# PreInvocation opens semantic busy and fullyIdle Stop closes it and signals
-# turn-end. The same transport composes primary and secondmate supervision.
-# Every agy launch grants physically resolved worktree and hook paths: without
-# the worktree grant agy writes into its own scratch, and an unresolved path
-# parks on a non-workspace approval prompt.
-# An agy ship or scout spawn reports success only once the worker hook's
-# PreInvocation record replaces the fm-spawn seed (FM_AGY_READY_POLLS polls,
-# default 120, every FM_AGY_POLL_INTERVAL seconds, default 0.5); otherwise it
-# closes the endpoint, appends failed:, retires a fresh spawn's hooks, and exits
-# 1. When closure cannot be confirmed (the backend still finds the target), the
-# task record, busy generation, and hooks are kept for teardown instead, and
-# the failure says the worker may still be running.
-#   agy crewmate and scout launches use the reviewed policy layer by default
-#   when config/crew-permissions is auto or absent. --no-agy-bypass selects
-#   accept-edits explicitly; manual keeps agy's prompt posture. The policy
-#   layer installs bin/fm-agy-permission-policy.sh
-#   beside the worker hooks - an armed heartbeat on PreInvocation and Stop,
-#   and a hard-deny/judge decision on PreToolUse after the log-only observer
-#   - so the bypass is policed rather than bare. The
-#   launch refuses rather than falls back when any gate fails: jq missing, a
-#   policy-layer launch without matching executable/context evidence from
-#   fm-agy-admission.sh, a project-supplied
-#   .agents/hooks.json in the task worktree or its ancestors up to the git
-#   root, an unwritable policy file, or a failed hook install. After the
-#   session starts, a canary (FM_AGY_ARMED_POLLS, default 40) refuses and
-#   closes the endpoint when the adapter's armed line never reaches the
-#   observer log - dead wiring is never trusted under bypass, and the armed
-#   line is stamped with this launch's busy generation so a stale record from
-#   an earlier launch or a reused task id cannot satisfy it. A relaunch
-#   inherits the recorded posture through meta when it resolves onto an agy
-#   scout again and retires the old generation's policy wiring first. agy
-#   cannot silently approve through a
-#   hook, so the layer's approvals are abstentions; what it still buys is
-#   hard refusals that hold under bypass, a judge for the residue, and
-#   durable escalation records firstmate can resolve.
-#   --agy-judge <tier>[:<model>] selects WHICH judge answers that residue,
-#   from the tiers bin/fm-judge-tier-lib.sh knows. It requires the policy
-#   layer, whose default judge needs no flag: agy judges agy, on that tier's own
-#   model. Selecting another tier refuses rather than falls back when the tier
-#   is unknown or its executable is not installed. The resolved tier is printed
-#   before the launch, repeated on the spawned line, and recorded as agy_judge=
-#   so a relaunch re-judges on the same tier and a later reader of the decision
-#   log can tell which judge adjudicated this task's calls.
+# Native workers grant only the physical worktree, task data/scratch and
+# owned hooks, never the shared state directory. The policy independently
+# enforces exact task writes, protected wiring, credentials and publication.
+# fm-agy-admission.sh owns executable/model/effort/backend compatibility proof.
+# jq, Python 3, owned hook wiring and readable per-task policy are required.
+# Project .agents/hooks.json files refuse a policy-layer launch.
 #
-#   fm_agy_permission_flags <crew-permission-mode>
-#       prints permission flags for the selected agy posture
-#   fm_agy_default_posture <harness> <kind>
-#       selects the policy-layer default for an agy worker launch
-#   fm_agy_relaunch_inherit
-#       a relaunch's inheritance of the recorded bypass posture and judge tier
-#   fm_agy_bypass_validate
-#       the agy policy-layer and judge gates, resolving the selected tier
-#   fm_agy_permission_dirs
-#       prints the physically resolved --add-dir grants for the launch
-#   fm_agy_spawn_wire
-#       the bypass posture's install-time gates, its policy file, and the
-#       worker hook install (spawn)
-#   fm_agy_spawn_ready_gate
-#       the post-launch started and bypass-armed gates
-#   agy_wait_for_started, agy_wait_for_armed, agy_endpoint_close_confirmed,
-#   agy_spawn_fail <detail>
-#       the gates' helpers
-#   fm_agy_meta_lines
-#       prints the bypass posture's task-record lines
-#   fm_agy_relaunch_retire_policy <harness> <state-dir> <id>
-#   fm_agy_relaunch_retire_hooks <harness> <state-dir> <id>
-#       the relaunch retire steps bin/fm-spawn.sh's clear_relaunch_harness_wiring
-#       runs around its shared wiring-path removal
-#   fm_agy_teardown_retire <state-dir> <id>
-#   fm_agy_teardown_remove_state <state-dir> <id>
-#       teardown's retire of the bypass layer and worker hooks, and its removal
-#       of the per-task policy state. Retire archives an agy task with
-#       bin/fm-agy-audit.sh after permission resolution and before deletion;
-#       an archive failure stops cleanup without deleting the task records.
-#
-# The spawn-side functions read bin/fm-spawn.sh's globals rather than taking
-# them as arguments: AGY_BYPASS, AGY_BYPASS_POSTURE_SET, AGY_BYPASS_OPT_OUT,
-# AGY_JUDGE_ARG,
-# AGY_JUDGE_SET, AGY_JUDGE_TIER, AGY_JUDGE_MODEL, AGY_JUDGE_BIN, AGY_BIN,
-# ARG3, RELAUNCH_META, RELAUNCH_PRIOR_HARNESS, MODEL, MODEL_SET, EFFORT,
-# EFFORT_SET, HARNESS, KIND, RAW_LAUNCH, RELAUNCH,
-# CREW_PERMISSION_MODE, WT, STATE, STATE_REAL, ID, BUSY_GEN, TASK_TMP, BRIEF,
-# FM_ROOT, SCRIPT_DIR, BACKEND, T, W, ZELLIJ_TAB_ID, and
-# SPAWN_FRESH_COMMIT_PENDING, plus shell_quote, status_stamp_line,
-# fm_meta_get, fm_busy_record_read, fm_backend_kill, fm_backend_target_exists,
-# and bin/fm-judge-tier-lib.sh. fm_agy_relaunch_inherit and
-# fm_agy_bypass_validate set AGY_BYPASS, AGY_JUDGE_ARG, AGY_JUDGE_TIER, and
-# AGY_JUDGE_MODEL; fm_agy_spawn_wire sets AGY_JUDGE_BIN. The validate, wire,
-# and ready-gate functions exit the spawn on a refusal, exactly as the inline
-# code did.
+# --agy-bypass, --no-agy-bypass and --agy-judge refuse new worker launches.
 
-# The level agy receives as --effort for <effort> and <model>, or nothing. A
-# model id already carrying a level wins, and xhigh and max cap at high;
-# effort_flag_for_harness's agy arm records why.
+# Launch and quota resolution share this model/effort normalization.
 agy_effort_level() {  # <effort> <model>
-  case "$2" in
-  *-low | *-medium | *-high) return 0 ;;
-  esac
+  case "$2" in *-low | *-medium | *-high) return 0 ;; esac
   case "$1" in
-  low | medium) printf '%s\n' "$1" ;;
-  high | xhigh | max) printf '%s\n' high ;;
+    low | medium) printf '%s\n' "$1" ;;
+    high | xhigh | max) printf '%s\n' high ;;
   esac
 }
 
-# Native reviewed Auto is account-dependent and is not this worker route.
-# The blanket option is
-# --dangerously-skip-permissions. For agy crewmate and scout launches, auto
-# selects the policy layer below by default; --no-agy-bypass selects
-# --mode accept-edits, verified on agy 1.2.0 to auto-approve file edits inside
-# the granted directories while STILL prompting for every shell command (a
-# `date` call was denied under accept-edits). manual omits --mode entirely,
-# leaving agy's default review mode where edits prompt too.
-# The policy layer is the reviewed path onto --dangerously-skip-permissions: it launches only with the
-# bin/fm-agy-permission-policy.sh hook layer installed beside the
-# worker hooks, so the bypass is policed rather than bare. Its gates are in
-# fm_agy_bypass_validate; secondmates and raw launch commands stay outside it.
+# The selected native posture, or the recorded legacy review/bypass flags.
 fm_agy_permission_flags() {  # <crew-permission-mode>
   case "${1-}" in
   auto)
-    if [ "$AGY_BYPASS" -eq 1 ]; then
+    if [ "${AGY_NATIVE_AUTO:-0}" -eq 1 ]; then
+      printf '%s' '--mode auto --sandbox'
+    elif [ "$AGY_BYPASS" -eq 1 ]; then
       printf '%s' '--dangerously-skip-permissions'
     else
       printf '%s' '--mode accept-edits'
@@ -144,13 +44,13 @@ fm_agy_permission_flags() {  # <crew-permission-mode>
   esac
 }
 
-# Select the policy-layer default only on wired agy task launches. Explicit
-# opt-out, manual review, and secondmates keep their selected prompt posture.
+# Select native Auto only for new wired workers. Recorded postures and
+# secondmate/manual launches retain their own route.
 fm_agy_default_posture() {  # <harness> <kind>
   [ "$1" = agy ] && [ "$2" != secondmate ] || return 0
   [ "$AGY_BYPASS_POSTURE_SET" = 0 ] || return 0
   [ "$CREW_PERMISSION_MODE" = auto ] || return 0
-  AGY_BYPASS=1
+  AGY_NATIVE_AUTO=1
   AGY_BYPASS_POSTURE_SET=1
 }
 
@@ -163,48 +63,69 @@ fm_agy_default_posture() {  # <harness> <kind>
 # field, which resolves to this adapter's own tier in fm_agy_bypass_validate.
 fm_agy_relaunch_inherit() {
   [ "$ARG3" = agy ] && [ "$KIND" != secondmate ] || return 0
+  [ "${RELAUNCH_PRIOR_HARNESS:-agy}" = agy ] || return 0
   # Retain the exact tested context on a same-adapter restart. A switch from
   # another harness must select its agy model rather than borrowing that id.
   if [ "${RELAUNCH_PRIOR_HARNESS:-}" = agy ]; then
     [ "$MODEL_SET" -eq 1 ] || MODEL=$(fm_meta_get "$RELAUNCH_META" model)
     [ "$EFFORT_SET" -eq 1 ] || EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
     [ "$MODEL" != default ] || MODEL=
+    case "$(fm_meta_get "$RELAUNCH_META" agy_posture)" in
+      native-auto|manual|accept-edits|legacy-bypass|'') ;;
+      *) echo 'error: unrecognized recorded agy permission posture; preserve the task and repair its record before relaunch' >&2; exit 1 ;;
+    esac
+  fi
+  if [ "$(fm_meta_get "$RELAUNCH_META" agy_posture)" = native-auto ]; then
+    AGY_NATIVE_AUTO=1
+    CREW_PERMISSION_MODE=auto
+    AGY_BYPASS_POSTURE_SET=1
+    return 0
+  fi
+  if [ "$(fm_meta_get "$RELAUNCH_META" agy_posture)" = manual ] \
+    || { [ "$(fm_meta_get "$RELAUNCH_META" agy_permission_mode)" = manual ] \
+      && [ -z "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" ]; }; then
+    AGY_NATIVE_AUTO=0 AGY_BYPASS_POSTURE_SET=1 CREW_PERMISSION_MODE=manual
+    return 0
   fi
   case "$(fm_meta_get "$RELAUNCH_META" agy_bypass)" in
     on)
+      AGY_NATIVE_AUTO=0
+      CREW_PERMISSION_MODE=auto
       AGY_BYPASS=1
       AGY_BYPASS_POSTURE_SET=1
       ;;
     off)
+      AGY_NATIVE_AUTO=0
+      CREW_PERMISSION_MODE=auto
       AGY_BYPASS=0
       AGY_BYPASS_POSTURE_SET=1
       AGY_BYPASS_OPT_OUT=1
       ;;
   esac
+  if [ "${RELAUNCH_PRIOR_HARNESS:-}" = agy ] && [ "$AGY_BYPASS_POSTURE_SET" = 0 ]; then
+    # Older prompted workers may predate the explicit bypass field. Keep
+    # their existing accept-edits posture rather than silently migrating it.
+    AGY_NATIVE_AUTO=0 AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=1 AGY_BYPASS_OPT_OUT=1
+    CREW_PERMISSION_MODE=auto
+  fi
   if [ "$AGY_BYPASS" -eq 1 ]; then
     AGY_JUDGE_ARG=$(fm_meta_get "$RELAUNCH_META" agy_judge || true)
   fi
 }
 
-# The policy layer is the reviewed path onto agy's
-# --dangerously-skip-permissions: firstmate's permission layer
-# (bin/fm-agy-permission-policy.sh) rides the worker hook file it installs, so
-# the bypass is policed rather than bare. It applies by default to agy
-# crewmate and scout spawns on the wired launch path - a raw launch command
-# installs no hooks at all - when config/crew-permissions is auto or absent.
-# --no-agy-bypass selects accept-edits, while manual is itself an explicit
-# prompt posture. A secondmate is a firstmate instance rather than a worker
-# this layer polices, so it stays excluded.
-# A relaunch inherits the recorded posture through fm_agy_relaunch_inherit, so
-# every check below and at install time applies to it unchanged.
-# The posture first covered scouts only and now covers ships too. On a
-# read-only scout the layer's write guards were belt-and-braces; on a ship
-# they are the only write restriction firstmate relies on for a bypassed
-# worker. The guards never read the task kind - they resolve
-# every write target physically against the policy file's worktree and scratch
-# roots - so widening the gate changed who they protect, not what they check,
-# and tests/fm-agy-harness.test.sh exercises them on the ship path.
+# Native prerequisites and deprecated-flag refusal, followed by the legacy
+# bypass gates required to preserve recorded running tasks on relaunch.
 fm_agy_bypass_validate() {
+  if [ "${AGY_BYPASS_SET:-0}" = 1 ] || [ "$AGY_JUDGE_SET" = 1 ]; then
+    echo "error: --agy-bypass, --no-agy-bypass and --agy-judge are deprecated for new workers; config/crew-permissions selects verified native Auto or explicit manual review; recorded legacy tasks retain their posture on relaunch" >&2
+    exit 1
+  fi
+  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+    case "${BACKEND:-tmux}" in tmux|herdr) ;; *)
+      echo "error: agy native Auto requires live-verified mode-transition and viewport primitives; backend '${BACKEND:-unknown}' is not verified; choose manual review explicitly or a verified backend" >&2
+      exit 1 ;;
+    esac
+  fi
   # Every agy task, including manual and raw launches, archives at teardown.
   # Refuse before acquiring an endpoint rather than discover a missing audit
   # dependency only after the task has completed.
@@ -279,7 +200,12 @@ fm_agy_bypass_validate() {
 # taking the recorded path unchanged.
 fm_agy_permission_dirs() {
   local permission_dirs
-  permission_dirs="--add-dir $(shell_quote "$(cd "$WT" && pwd -P)") --add-dir $(shell_quote "$STATE_REAL") --add-dir $(shell_quote "$(cd "$(dirname "$BRIEF")" && pwd -P)") "
+  permission_dirs="--add-dir $(shell_quote "$(cd "$WT" && pwd -P)") --add-dir $(shell_quote "$(cd "$(dirname "$BRIEF")" && pwd -P)") "
+  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+    permission_dirs="$permission_dirs--add-dir $(shell_quote "$(cd "$TASK_TMP" && pwd -P)") "
+  else
+    permission_dirs="$permission_dirs--add-dir $(shell_quote "$STATE_REAL") "
+  fi
   if [ "$KIND" != secondmate ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     permission_dirs="$permission_dirs--add-dir $(shell_quote "$STATE_REAL/$ID.agy-hooks") "
   fi
@@ -290,6 +216,10 @@ fm_agy_spawn_wire() {
   local agy_policy agy_version agy_wt_real agy_check_dir \
     agy_git_root agy_task_data agy_grants_sha
   [ "$RAW_LAUNCH" -eq 0 ] || return 0
+  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+    fm_agy_native_wire
+    return
+  fi
   agy_policy=
   if [ "$AGY_BYPASS" -eq 1 ]; then
     # The bypass posture's gates, each refusing rather than falling
@@ -305,7 +235,7 @@ fm_agy_spawn_wire() {
     # - and the policy file itself, which install-worker then verifies
     #   exists before merging the adapter into the hooks.
     command -v jq >/dev/null 2>&1 || {
-      echo "error: cannot spawn agy policy-layer worker: jq is required by the permission policy hook; install jq or select --no-agy-bypass" >&2
+      echo "error: cannot relaunch recorded agy bypass worker: jq is required by its permission policy hook" >&2
       exit 1
     }
     if [ "$AGY_JUDGE_TIER" = agy ]; then
@@ -326,7 +256,7 @@ fm_agy_spawn_wire() {
     agy_git_root=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$agy_wt_real")
     while :; do
       [ ! -e "$agy_check_dir/.agents/hooks.json" ] && [ ! -L "$agy_check_dir/.agents/hooks.json" ] || {
-        echo "error: cannot spawn agy policy-layer worker: $agy_check_dir/.agents/hooks.json exists; the bypass posture needs firstmate's worker hooks to be the only hooks in force; choose manual review explicitly with config/crew-permissions=manual or --no-agy-bypass; manual workers are not judge coverage" >&2
+        echo "error: cannot relaunch recorded agy bypass worker: $agy_check_dir/.agents/hooks.json exists; its policy requires firstmate's worker hooks to be the only hooks in force; preserve the task for explicit posture review" >&2
         exit 1
       }
       [ "$agy_check_dir" != "$agy_git_root" ] || break
@@ -386,7 +316,7 @@ fm_agy_spawn_wire() {
 # spawn's admission cannot inherit that earlier executable's receipt.
 fm_agy_launch_guard() {
   local value
-  [ "$AGY_BYPASS" -eq 1 ] || return 0
+  [ "$AGY_BYPASS" -eq 1 ] || [ "${AGY_NATIVE_AUTO:-0}" -eq 1 ] || return 0
   printf 'python3 %s assert ' "$(shell_quote "$SCRIPT_DIR/fm-agy-admission.py")"
   for value in "$AGY_ADMISSION_RECEIPT" "$AGY_BIN" "${MODEL:-}" \
     "$(agy_effort_level "${EFFORT:-}" "${MODEL:-}")" \
@@ -409,7 +339,7 @@ agy_wait_for_started() {
     # A valid record reads "<state> <source> <event> <seq>".
     if record=$(fm_busy_record_read "$STATE_REAL" "$ID"); then
       source=${record#* }
-      [ "${source%% *}" != agy-hook ] || return 0
+      if [ "${source%% *}" = agy-hook ] && [ "${record##* }" -gt "${1:-0}" ]; then return 0; fi
     fi
     i=$((i + 1))
     [ "$i" -ge "$max" ] || sleep "$interval"
@@ -479,6 +409,23 @@ agy_spawn_fail() { # <detail>
 
 fm_agy_spawn_ready_gate() {
   [ "$HARNESS" = agy ] && [ "$KIND" != secondmate ] && [ "$RAW_LAUNCH" -eq 0 ] || return 0
+  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+    # shellcheck source=bin/fm-agy-native-lib.sh
+    . "$SCRIPT_DIR/fm-agy-native-lib.sh"
+    if ! fm_agy_native_activate "$BACKEND" "$T" "$STATE_REAL" "$ID" "$BUSY_GEN" "$TASK_TMP" \
+      || ! agy_wait_for_armed; then
+      agy_spawn_fail "agy native Auto activation failed: active mode, real harmless result and generation-bound hooks were not all proven; no task brief was sent"
+      exit 1
+    fi
+    local seq prompt
+    seq=$(fm_agy_native_seq "$STATE_REAL" "$ID") || exit 1
+    prompt=$("$SCRIPT_DIR/fm-operational-input.sh" encode launch-brief < "$BRIEF") || exit 1
+    if ! fm_agy_native_submit "$BACKEND" "$T" "$ID" "$prompt" || ! agy_wait_for_started "$seq"; then
+      agy_spawn_fail "agy native Auto was verified but task brief delivery was not confirmed"
+      exit 1
+    fi
+    return 0
+  fi
   if ! agy_wait_for_started; then
     agy_spawn_fail "agy did not report starting its brief through its worker hook in window $T"
     exit 1
@@ -491,9 +438,8 @@ fm_agy_spawn_ready_gate() {
   fi
 }
 
-# The bypass posture records on; an explicit --no-agy-bypass records off so a
-# relaunch preserves that choice. Auto/manual prompt modes without an explicit
-# opt-out leave the field absent.
+# Native posture has no bypass/judge fields. Legacy metadata retains on/off
+# so relaunch cannot silently migrate a recorded task's permissions.
 # The judge tier rides the recorded posture so a relaunch re-judges on the
 # same tier, and so the task's own record answers which judge decided its
 # held and approved calls.
@@ -502,10 +448,21 @@ fm_agy_meta_lines() {
   local version=''
   # Raw launch commands do not resolve a binary; keep its version unknown.
   if [ -n "${AGY_BIN:-}" ]; then
-    version=$("$AGY_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    version=$(AGY_CLI_DISABLE_AUTO_UPDATE=1 "$AGY_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
   fi
   echo "agy_version=$version"
   echo "agy_permission_mode=$CREW_PERMISSION_MODE"
+  if [ "${RAW_LAUNCH:-0}" = 1 ]; then
+    echo 'agy_posture=raw'
+  elif [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+    echo 'agy_posture=native-auto'
+  elif [ "$AGY_BYPASS" = 1 ]; then
+    echo 'agy_posture=legacy-bypass'
+  elif [ "$CREW_PERMISSION_MODE" = manual ]; then
+    echo 'agy_posture=manual'
+  else
+    echo 'agy_posture=accept-edits'
+  fi
   if [ "$AGY_BYPASS" -eq 1 ]; then
     echo "agy_bypass=on"
   elif [ "$AGY_BYPASS_OPT_OUT" -eq 1 ]; then
@@ -514,7 +471,45 @@ fm_agy_meta_lines() {
   [ "$AGY_BYPASS" -eq 0 ] || echo "agy_judge=$AGY_JUDGE_TIER:$AGY_JUDGE_MODEL"
 }
 
-# The bypass adapter's retire closes every pending escalation as not-run
+# Native admission has its own context and coverage; legacy judge receipts
+# cannot authorize this launch. Exact task roots stay in the deterministic
+# policy, while ordinary residue goes to the vendor's native reviewer.
+fm_agy_native_wire() {
+  local wt dir git_root policy task_data grants_sha config
+  command -v jq >/dev/null 2>&1 || { echo 'error: agy native policy requires jq' >&2; exit 1; }
+  wt=$(cd "$WT" && pwd -P) || exit 1
+  dir=$wt
+  git_root=$(git -C "$WT" rev-parse --show-toplevel) || exit 1
+  while :; do
+    [ ! -e "$dir/.agents/hooks.json" ] && [ ! -L "$dir/.agents/hooks.json" ] || {
+      echo "error: agy native policy requires owned hook wiring; project hooks exist at $dir/.agents/hooks.json" >&2
+      exit 1
+    }
+    [ "$dir" != "$git_root" ] || break
+    dir=$(dirname "$dir")
+  done
+  AGY_JUDGE_TIER="native-$BACKEND" AGY_JUDGE_MODEL='' AGY_JUDGE_BIN=''
+  AGY_ADMISSION_RECEIPT=$("$SCRIPT_DIR/fm-agy-admission.sh" ensure-native "$AGY_BIN" "${MODEL:-}" \
+    "$(agy_effort_level "${EFFORT:-}" "${MODEL:-}")" "$AGY_JUDGE_TIER" '' '') || exit 1
+  policy="$STATE_REAL/$ID.agy-permission.json"
+  task_data=$(cd "$(dirname "$BRIEF")" && pwd -P) || exit 1
+  grants_sha=$("$SCRIPT_DIR/fm-agy-permission-policy.sh" grants-digest "$BRIEF") || exit 1
+  config=${CONFIG:-${FM_HOME:-}/config}
+  jq -n --arg task "$ID" --arg worktree "$wt" --arg status "$STATE_REAL/$ID.status" \
+    --arg inbox "$STATE_REAL/$ID.inbox" --arg data "$task_data" --arg tasktmp "$TASK_TMP" \
+    --arg brief "$BRIEF" --arg log "$STATE_REAL/agy-permission-log.jsonl" --arg agy "$AGY_BIN" \
+    --arg version "$(jq -r .binding.version "$AGY_ADMISSION_RECEIPT")" --arg gen "$BUSY_GEN" \
+    --arg grants_sha "$grants_sha" --arg config "$config" --arg credential_home "$HOME" \
+    --argjson registry_required "$( [ -e "$config/declared-credentials.json" ] && printf true || printf false )" \
+    '{posture:"native-auto", task:$task, worktree:$worktree, status:$status, inbox:$inbox,
+      data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen,
+      agy_version:$version, grants_sha:$grants_sha, config:$config,
+      credential_user_home:$credential_home, credential_registry_required:$registry_required}' > "$policy" || exit 1
+  "$SCRIPT_DIR/fm-agy-permission-policy.sh" register-credentials "$policy" </dev/null || exit 1
+  "$SCRIPT_DIR/fm-agy-hook.sh" install-worker "$STATE_REAL" "$ID" "$BUSY_GEN" "$WT" "$policy" || exit 1
+}
+
+# The policy owner's retire closes every pending escalation as not-run
 # while the policy file still names the status file, then removes the
 # pending directory; the policy file itself goes with the shared wiring paths
 # and the worker hooks with their directory after (fm_agy_relaunch_retire_hooks).
@@ -532,12 +527,12 @@ fm_agy_relaunch_retire_hooks() {  # <harness> <state-dir> <id>
 fm_agy_teardown_retire() {  # <state-dir> <id>
   local state=$1 id=$2
   if [ -e "$state/$id.agy-permission.json" ] || [ -d "$state/$id.agy-permission-pending" ]; then
-    # The bypass adapter's retire closes every pending escalation as not-run
+    # The policy owner's retire closes every pending escalation as not-run
     # while the policy file still names the status file.
     "$SCRIPT_DIR/fm-agy-permission-policy.sh" retire "$state/$id.agy-permission.json" </dev/null || return 1
   fi
   # Archive before metadata/status removal; an archival failure keeps them
-  # available for recovery rather than silently losing judge coverage proof.
+  # available for recovery rather than silently losing permission evidence.
   if [ -f "$state/$id.meta" ] && grep -q '^harness=agy$' "$state/$id.meta"; then
     bash "$SCRIPT_DIR/fm-agy-audit.sh" "$state" "$id" || return 1
   fi
@@ -546,7 +541,7 @@ fm_agy_teardown_retire() {  # <state-dir> <id>
   fi
 }
 
-# The bypass layer's policy file, escalation markers, and verdict cache
+# Native/legacy policy files, decision markers and exact approval stores
 # (bin/fm-agy-permission-policy.sh).
 fm_agy_teardown_remove_state() {  # <state-dir> <id>
   rm -f "$1/$2.agy-permission.json"

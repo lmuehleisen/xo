@@ -10,12 +10,16 @@ import time
 
 root, lab = (Path(arg).resolve() for arg in sys.argv[1:])
 home = lab / "home"
-home.mkdir()
 shutil.copytree(root / "bin", home / "bin")
 shutil.copytree(root / "docs" / "supervision-protocols", home / "docs" / "supervision-protocols")
 for name in [".agents", "state", "data", "config", "projects"]:
-    (home / name).mkdir()
-(home / "AGENTS.md").write_text("# Isolated adapter verification\nFollow the test prompt and native Firstmate hook instructions.\n")
+    (home / name).mkdir(exist_ok=True)
+(home / "AGENTS.md").write_text(
+    "# Isolated adapter verification\n"
+    "Follow the test prompt and native Firstmate hook instructions.\n"
+    "Only execute the injected startup, wake drain, exact queue acknowledgement and watcher-arm commands.\n"
+    "A child status is synthetic: drain and acknowledge it, then rearm; do not investigate, run status commands, clean up or send messages.\n"
+    "The only real work is this isolated adapter verification.\n")
 subprocess.run(["git", "init", "-q", str(home)], check=True)
 # The nudge must reach the model and cause the named command. Avoid bootstrap,
 # external startup checks, or real fleet work in this ephemeral home.
@@ -39,7 +43,8 @@ hooks["firstmate-live-observer"] = {
     "PostToolUse": [{"matcher": "*", "hooks": [handler("PostToolUse")]}],
 }
 (home / ".agents" / "hooks.json").write_text(json.dumps(hooks))
-socket = "/tmp/fm-agy-primary-" + str(os.getpid()) + ".sock"
+tmux_dir = os.environ["FM_AGY_PRIMARY_LIVE_TMUX_DIR"]
+socket = str(Path(tmux_dir) / ("tmux-" + str(os.getuid())) / "default")
 tmux = ["tmux", "-S", socket]
 version = subprocess.check_output(["agy", "--version"], text=True).strip()
 
@@ -114,8 +119,10 @@ def send(prompt):
 try:
     shellrc = lab / "shellrc"
     shellrc.write_text("PS1='FM_LIVE_SHELL_READY> '\n")
-    call("new-session", "-d", "-s", "probe", "-n", "primary", "-c", str(home), "-x", "180", "-y", "55",
-         shlex.join(["/bin/bash", "--noprofile", "--rcfile", str(shellrc), "-i"]))
+    subprocess.run(["tmux", "new-session", "-d", "-s", "probe", "-n", "primary", "-c", str(home),
+                    "-x", "180", "-y", "55",
+                    shlex.join(["/bin/bash", "--noprofile", "--rcfile", str(shellrc), "-i"])],
+                   env=dict(os.environ, TMUX_TMPDIR=tmux_dir), check=True)
     wait_until(lambda out: "FM_LIVE_SHELL_READY>" in out, "fixture shell readiness", seconds=15)
     print("ok - agy primary fixture: interactive shell is ready before launch delivery", flush=True)
     call("new-window", "-d", "-t", "probe", "-n", "worker", "sleep 300")
@@ -160,11 +167,10 @@ try:
     wait_until(lambda out: "? for shortcuts" in out and "esc to cancel" not in out, "settled wake")
     assert all(row["cwd"] == str(home / ".agents") for row in events())
     print("ok - agy primary: native watcher completion re-enters the model without polling or injected keys", flush=True)
-    # Secondmate scope uses the same hook registration. Test a real linked home
+    # Secondmate scope uses the same hook registration. Test a marked home
     # boundary through the production helper without creating a fleet record.
-    subprocess.run(["git", "-C", str(home), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "fixture"], check=True)
     linked = lab / "secondmate"
-    subprocess.run(["git", "-C", str(home), "worktree", "add", "-qb", "secondmate", str(linked)], check=True, capture_output=True)
+    linked.mkdir()
     for directory in ["bin", "state"]:
         (linked / directory).mkdir()
     (linked / "AGENTS.md").write_text("# Firstmate\n")
@@ -174,7 +180,7 @@ try:
     probe_env = dict(os.environ, FM_ROOT_OVERRIDE=str(linked), FM_HOME=str(linked), FM_STATE_OVERRIDE=str(linked / "state"), JETSKI_APP_DATA_DIR="antigravity-cli")
     result = subprocess.run([str(root / "bin/fm-agy-hook.sh"), "primary", "Stop"], input=json.dumps(payload), text=True, capture_output=True, env=probe_env, check=True)
     assert json.loads(result.stdout)["decision"] == "continue"
-    print("ok - agy primary: the same guard includes a marked linked secondmate home", flush=True)
+    print("ok - agy primary: the same guard includes a marked secondmate home", flush=True)
     send("/exit")
     wait_until(lambda out: call("display-message", "-p", "-t", "probe:primary", "#{pane_current_command}").strip() != "agy", "exit", seconds=20)
     print("# all agy primary live checks passed (agy " + version + ")", flush=True)
@@ -186,5 +192,3 @@ except Exception as error:
             shutil.copyfile(transcript, lab / "transcript.jsonl")
     print("not ok - agy " + version + ": " + str(error), file=sys.stderr)
     raise
-finally:
-    subprocess.run(tmux + ["kill-server"], capture_output=True)

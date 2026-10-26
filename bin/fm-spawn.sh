@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>] [--herdr-resume-lock-wait] [--agy-bypass|--no-agy-bypass] [--agy-judge <tier>[:<model>]]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>] [--herdr-resume-lock-wait] [--agy-bypass|--no-agy-bypass] [--agy-judge <tier>[:<model>]]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -533,13 +533,9 @@
 #   Claude, Codex, and agy launches read config/crew-permissions: absent or auto
 #   uses Claude's --permission-mode auto / Codex's --approve-for-me
 #   (workspace-write with automatic review); manual uses Claude manual / Codex
-#   on-request with human review. agy's native Auto is account-dependent and
-#   not this route; auto selects its policy-layered bypass posture for
-#   crewmates and scouts; --no-agy-bypass selects --mode accept-edits, which
-#   auto-approves file edits inside the granted directories but STILL prompts
-#   for every shell command, and manual leaves agy's default review mode where
-#   edits prompt too. The bypass is never bare: the worker hooks, permission
-#   policy, judge, and startup canary must all pass their gates.
+#   on-request with human review. New agy workers use verified native Auto
+#   plus deterministic constraints; manual retains default native review.
+#   bin/fm-agy-lib.sh owns agy's staged launch, exact grants and legacy rules.
 #   The file is resolved once, before any mutation, on every spawn: surrounding
 #   whitespace (including a CRLF ending) is trimmed, proven absence means auto,
 #   and an uninspectable path, a non-file, an unreadable file, or any value other
@@ -644,8 +640,7 @@
 # it writes state/<id>.muse-session to bind the pane to muse's own session event
 # log; muse, gemini, devin, kiro, commandcode, and polytoken are crewmate/scout only and are refused for --secondmate.
 # agy installs native hooks through fm-agy-hook.sh; bin/fm-agy-lib.sh's header
-# owns its launch grants, readiness gate, default policy posture, and the
-# --agy-bypass, --no-agy-bypass, and --agy-judge options.
+# owns launch grants, readiness, native Auto and deprecated legacy flags.
 # rovo installs no hook either - its eventHooks fire at tool granularity only,
 # never turn-end - so it carries no busy-source wiring at all and no turn-end
 # hook. A positional brief is dead-on-arrival (rovo loads, never works, and drops
@@ -943,8 +938,7 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-role-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
-# The judge tier registry, so --agy-judge is validated here at launch rather
-# than discovered by a worker whose first residue call finds no judge.
+# Judge tiers remain available to Devin and recorded legacy agy tasks.
 # shellcheck source=bin/fm-judge-tier-lib.sh
 . "$SCRIPT_DIR/fm-judge-tier-lib.sh"
 # The fork-only Devin and agy worker wiring (their headers list the globals
@@ -993,6 +987,7 @@ UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 TRACEPARENT_SET=0
 AGY_BYPASS=0
+AGY_NATIVE_AUTO=0
 AGY_BYPASS_SET=0
 AGY_BYPASS_POSTURE_SET=0
 AGY_BYPASS_OPT_OUT=0
@@ -3132,9 +3127,7 @@ launch_command_template() { # <harness> <kind> <permission-flags>
   # write silently landed in agy's own scratch directory
   # (~/.gemini/antigravity-cli/scratch) while the model reported success, so a
   # worker without it would look productive and change nothing in the task's
-  # local copy. __PERMISSIONDIRS__ carries all three grants - the task
-  # worktree, this home's state directory, and the brief's directory - because
-  # each has to be a PHYSICALLY RESOLVED path; see the substitution below.
+  # local copy. bin/fm-agy-lib.sh owns physical grants for each posture.
   #
   # The approval posture is $permission_flags above; native worker hooks are
   # installed separately through fm-agy-hook.sh below.
@@ -3146,7 +3139,11 @@ launch_command_template() { # <harness> <kind> <permission-flags>
   agy)
     printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS AGY_CLI_DISABLE_AUTO_UPDATE=1 __AGYBIN__ '
     printf '%s' "$permission_flags"
-    printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+    if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+      printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__--log-file __AGYNATIVELOG__'
+    else
+      printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+    fi
     ;;
   # polytoken (Polytoken CLI): a pane-attached TUI worker whose control verbs
   # ride the daemon REST API (the captain-approved hybrid). The launch runs in
@@ -7200,7 +7197,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort model_family ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id home projects control_relaunch_tx agy_bypass agy_judge worker_tmux_dir opencode_launch_failure polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort model_family ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id home projects control_relaunch_tx agy_bypass agy_judge agy_posture agy_permission_mode agy_version worker_tmux_dir opencode_launch_failure polytoken_session polytoken_port polytoken_credential", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -7509,6 +7506,7 @@ gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemi
 omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
 agy)
   LAUNCH=${LAUNCH//__AGYBIN__/"$(shell_quote "${AGY_BIN:-}")"}
+  LAUNCH=${LAUNCH//__AGYNATIVELOG__/"$(shell_quote "$STATE_REAL/$ID.agy-hooks/native.log")"}
   LAUNCH="$(fm_agy_launch_guard)$LAUNCH"
   ;;
 devin)

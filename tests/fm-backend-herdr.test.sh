@@ -4101,6 +4101,11 @@ test_send_key_normalizes_and_targets_pane() {
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_key default:w1:p2 Escape' "$ROOT"
   expect_code 0 $? "send_key should succeed"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''escape' "send_key did not normalize Escape to escape"
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_key native-proof:w1:p2 BTab' "$ROOT"
+  expect_code 0 $? "native mode transition should succeed"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''shift+tab' "send_key did not normalize BTab to shift+tab"
+  assert_contains "$(cat "$log")" $'\x1f''--session'$'\x1f''native-proof' "mode transition lost its explicit named session"
   pass "fm_backend_herdr_send_key: normalizes the key and targets the right pane"
 }
 
