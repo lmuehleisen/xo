@@ -68,13 +68,13 @@ The same suite drives the real spawn entry point with fake providers and endpoin
 It also refuses a recorded pool slot whose project identity cannot be established; `tests/fm-secondmate-harness.test.sh` checks that an unrelated non-Git secondmate home does not block an ordinary crew spawn.
 The generated lease command is also exercised in a real private tmux pane: the child enters the worktree, and exiting it leaves the outer project shell alive for guarded backend cleanup.
 On 2026-09-26, `tests/fm-spawn-prelaunch-rollback.test.sh` passed on macOS on Apple silicon with tmux 3.7c on a private `-S` socket and the fixture treehouse from `tests/lib.sh`.
-It drives the real spawn entry point into two refusals after the slot was leased and before launch delivery - an `--agy-bypass` scout over a tracked `.agents/hooks.json`, and a non-private staged-launch directory after the task record was published - and checks that each closes its window, returns the slot with `treehouse return --force`, and leaves no lease receipt, busy-state, task record, or agy wiring behind.
+The current regression drives the real spawn entry point into two refusals after the slot was leased and before launch delivery - a native Auto scout over a tracked `.agents/hooks.json`, and a non-private staged-launch directory after the task record was published - and checks that each closes its window, returns the fixture slot, and leaves no lease receipt, busy-state, task record, or agy wiring behind.
 A third refusal over a slot holding a file the spawn did not write closes the window but keeps the lease, its receipt, and the file.
 The same suite spawns a raw agy launch command without resolving the agy executable.
 
 ```
 $ bash tests/fm-spawn-prelaunch-rollback.test.sh
-ok - fm-spawn.sh: an agy bypass refusal after leasing returns the slot and closes its window
+ok - fm-spawn.sh: an agy native hooks refusal after leasing returns the slot and closes its window
 ok - fm-spawn.sh: a refusal after the record was published but before launch rolls everything back
 ok - fm-spawn.sh: a refused spawn keeps the lease on a slot holding content it did not write
 ok - fm-spawn.sh: a raw agy launch command spawns without resolving the agy executable
@@ -303,9 +303,71 @@ The agy crewmate adapter was verified on 2026-09-10 with agy 1.2.0 on macOS on A
 The live guard uses throwaway workspaces on a private tmux socket and checks that the operator's global trusted-workspace list stays unchanged.
 agy updates itself, so re-run the live guard after any upgrade before trusting these facts.
 
+### Native Auto workers
+
+Verified on 2026-10-26 with agy 1.4.7.
+The credentialed guard is `tests/fm-agy-native-live-e2e.test.sh`; it runs production activation, deterministic hooks, actual status/inbox effects, accepted Stop and owned-hook retirement in an isolated backend lab.
+It uses physically resolved grants without granting the synthetic state directory.
+
+```sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=herdr \
+  FM_AGY_LIVE_MODEL=gemini-3.8-flash-high \
+  bin/fm-test-run.sh tests/fm-agy-native-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - native Auto: warm activation, actual random command result and accepted Stop
+ok - native Auto: exact status append completed through native review
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.4.7, herdr)
+```
+
+Cold Auto requests fell back before warm activation; completion of a tool-free warm-up followed by a bounded Shift+Tab transition reached active Auto.
+The activation gate independently verifies a random harmless tool result and the generation-bound native Stop before task-brief delivery.
+Complete native, observer and signals admission passed for these executable/model/backend contexts:
+
+| Model | Backend | Result |
+|---|---|---|
+| `gemini-3.8-flash-high` | Herdr | Pass |
+| `gemini-4-argon-medium` | Herdr | Pass |
+| `gemini-4-argon-high` | Herdr | Pass |
+| `gemini-3.8-flash-high` | tmux | Pass |
+
+The admission entry point is `bin/fm-agy-admission.sh ensure-native`; its header owns exact context arguments and receipt reuse.
+A production-hook native file write into a synthetic foreign-task root was denied, and the target stayed absent.
+
+Live one-shot command approval produced the exact status append and closed the same keyed decision through PostToolUse.
+Native Auto also approved harmless outside-sandbox calls itself, including an exact inbox acknowledgment.
+Harmless outside-sandbox calls can auto-complete, so ordinary calls need not produce a prompt.
+Live decline/reconciliation passed on agy 1.4.7 with `gemini-3.8-flash-high` through Herdr.
+A recursive permission change on a newly created disposable directory outside all native grants and system temporary storage reached the native approval panel.
+The production decision path selected option 4, No, and the directory and sentinel retained their original modes and contents.
+A new main-conversation invocation produced `CANCEL_ACK` and an accepted Stop, closed the exact keyed decision and returned semantic busy state to idle.
+This is a live No proof for that context, not a claim that every model/backend or risky action was separately declined.
+
+```sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=herdr \
+  FM_AGY_LIVE_MODEL=gemini-3.8-flash-high \
+  FM_AGY_NATIVE_LIVE_DECLINE_PROBE=permissions \
+  bin/fm-test-run.sh tests/fm-agy-native-live-e2e.test.sh
+```
+
+```text
+ok - native Auto: live decline reconciled through a new accepted Stop
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.4.7, herdr)
+```
+
+`tests/fm-agy-native.test.sh` additionally uses captured panel/cancellation shapes and production hooks for delayed, foreign, malformed, non-idle and missing Stop cases, changed contexts, uncertain delivery and idempotent resume.
+Those adversarial fixtures supplement the live normal path.
+Native compatibility receipts record live approval/decline observations separately from their required activation coverage.
+
 ### accept-edits covers file edits, not shell commands
 
-This probe characterizes the `accept-edits` mode selected by `--no-agy-bypass`; agy Auto uses the separate policy layer described below.
+This probe characterizes recorded legacy `accept-edits` workers.
+New Auto workers use [Native Auto](#native-auto-workers).
 The same mode, same granted directory, two tool classes:
 
 ```sh
@@ -387,7 +449,7 @@ Ordinary typed input, wrapped text, and a shell below a stale composer remain pr
 
 Verified on 2026-09-17 with agy 1.2.5 on macOS on Apple silicon: the worker hook file written by `bin/fm-agy-hook.sh install-worker` carries `PreToolUse` and `PostToolUse` matcher groups, each appending one JSONL line per tool call to `state/agy-permission-log.jsonl` and abstaining.
 A real headless run (`-p`, `gemini-3.6-flash-low`, cheapest tier) with the installed hook directory granted emitted both lines while the observed `run_command` executed unchanged - the abstain contract holds against the real emitter.
-The direct bypass in this lab command lets the headless tool run; worker launches use the same flag only with Firstmate's permission policy after the spawn gates pass.
+The direct bypass in this lab command lets the headless observer canary run; recorded legacy worker launches retain that flag behind their existing policy gates.
 
 ```sh
 FM_AGY_OBSERVER_LIVE=1 bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
@@ -398,14 +460,14 @@ ok - agy 1.2.5: installed worker hooks emit a PreToolUse and PostToolUse line wh
 # agy observer live checks passed (agy 1.2.5)
 ```
 
-The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, the field caps, the never-log-contents rule, every inert failure path, concurrent appends, the default-on Auto posture, Manual and explicit opt-out, relaunch posture selection, and the install-time refusal of a malformed merged `hooks.json`.
+The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, field caps, never-log-contents rule, inert failure paths, concurrent appends, native/manual and legacy posture selection, and refusal of malformed merged hooks.
 
-### Bypass permission layer
+### Legacy bypass permission layer
 
 Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
 The manually verified release set is `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4`; `bin/fm-agy-permission-policy.sh verified-versions` prints it, and the per-release refresh evidence is below.
 A version without that evidence - 1.2.8 through 1.2.10, 1.3.0, 1.3.2 through 1.3.4, and 1.4.1 through 1.4.3 - stays outside the set.
-A policy-layer launch requires an executable-bound receipt regardless: `bin/fm-agy-admission.sh ensure` proves a candidate in the `>=1.4.4,<1.5.0` family with the full live guards, and `manual-baseline` runs the same checks on a release in this set.
+A recorded legacy bypass launch requires an executable-bound receipt: `bin/fm-agy-admission.sh ensure` proves a candidate in the `>=1.4.4,<1.5.0` family with the legacy live guards, and `manual-baseline` runs those checks on a release in this set.
 
 ```sh
 FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
@@ -438,7 +500,7 @@ Admission checks beyond the guard, on agy 1.2.11 (2026-09-25) with the productio
 - Default judge tier: `judge-probe` on a residue `run_command` printed `tier=agy model=gemini-3.6-flash-low static=residue verdict=approve reason=...` and left every file in the case state directory byte-identical.
 
 `--sandbox` composition probe, 2026-09-19, agy 1.2.7: the flag composes with the bypass launch in headless mode, but the probe found no containment the adapter could rely on in that mode, and its interactive-session behaviour under a spawned pane is unverified.
-The launch therefore stays on `--dangerously-skip-permissions` alone, with the policy layer's write guards as the write restriction.
+Recorded legacy launches retain `--dangerously-skip-permissions` with the policy layer's write guards; new workers use the native route above.
 
 #### Release refreshes
 
@@ -556,7 +618,7 @@ Changed-file lint and the four focused portable suites `fm-agy-admission.test.sh
 
 ### Primary and secondmate supervision
 
-Verified on 2026-09-10 with Agy 1.2.0 and `gemini-3.8-flash` at low effort on macOS using a throwaway Firstmate home and private tmux socket.
+Refreshed on 2026-10-26 with agy 1.4.7 and `gemini-3.8-flash` at low effort using a marked throwaway Firstmate home and helper-owned private tmux socket.
 The startup fixture acquired the real session lock and rendered the production supervision instructions; it omitted fleet bootstrap and external startup checks.
 The native registration, transport, shared guard, watcher, queue drain and acknowledgement were production code.
 
@@ -570,8 +632,8 @@ ok - agy primary fixture: native agy process started
 ok - agy primary: native nudge reaches the model and real session lock is acquired
 ok - agy primary: Stop forces a bounded recovery and the real watcher arms
 ok - agy primary: native watcher completion re-enters the model without polling or injected keys
-ok - agy primary: the same guard includes a marked linked secondmate home
-# all agy primary live checks passed (agy 1.2.0)
+ok - agy primary: the same guard includes a marked secondmate home
+# all agy primary live checks passed (agy 1.4.7)
 ```
 
 The opening invocation receives the session-start nudge, while later invocations can execute pending tools without repeated injection.
@@ -579,7 +641,7 @@ Native `Stop.executionNum` advances on a forced continuation and resets for a fr
 In confirmed primary scope, native PreToolUse decisions preserve review with `ask` or refuse a disallowed tool with `deny`; no `allow` bypass is installed.
 When native review asks, the fixture allows only its own exact commands and its generation-bound queue acknowledgement.
 It keeps its terminal captures, observer events, and transcripts for a failed check.
-The linked secondmate check verifies the production scope boundary; it does not provision a persistent fleet home.
+The marked secondmate check verifies the production scope boundary; it does not provision a persistent fleet home.
 Headless primary supervision, compaction refresh, semantic interrupt completion, and runtime backends other than tmux were not verified by this run.
 
 ### Inherited primary hooks in worker worktrees

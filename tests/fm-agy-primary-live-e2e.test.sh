@@ -10,8 +10,16 @@ set -eu
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fm_live_gate opt-in FM_AGY_PRIMARY_LIVE agy tmux python3 jq
 LAB=$(fm_test_tmproot fm-agy-primary-live)
+LAB_HOME_HELPER=${LAB_HOME_HELPER:-$ROOT/bin/fm-lab-home.sh}
+LAB_HOME="$LAB/home"
+LAB_TMUX_DIR=''
 cleanup() {
   local rc=$? evidence
+  trap - EXIT
+  if [ -n "$LAB_TMUX_DIR" ]; then
+    tmux -S "$LAB_TMUX_DIR/tmux-$(id -u)/default" kill-server >/dev/null 2>&1 || true
+    "$LAB_HOME_HELPER" teardown "$LAB_HOME" || rc=1
+  fi
   if [ "$rc" -ne 0 ]; then
     evidence=$(mktemp -d "${TMPDIR:-/tmp}/agy-primary-evidence.XXXXXX")
     cp -R "$LAB/." "$evidence/"
@@ -26,4 +34,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap 'exit 131' QUIT
-python3 "$ROOT/tests/agy-primary-live-probe.py" "$ROOT" "$LAB"
+"$LAB_HOME_HELPER" create "$LAB_HOME" >/dev/null
+LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$LAB_HOME")
+FM_AGY_PRIMARY_LIVE_TMUX_DIR="$LAB_TMUX_DIR" \
+  python3 "$ROOT/tests/agy-primary-live-probe.py" "$ROOT" "$LAB"
