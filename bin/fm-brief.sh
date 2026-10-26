@@ -524,7 +524,7 @@ INBOX_SECTION=${INBOX_SECTION%$'\n'}
 # Emitted only when config/wait-no-turns is present. The no-mistakes wait
 # commands appear only in a pipeline ship brief (config/no-mistakes opted in),
 # because every other brief tells the worker not to invoke no-mistakes.
-WAIT_EXTERNAL='PR checks, a heavy-test slot'
+WAIT_EXTERNAL='PR checks'
 WAIT_COMMANDS="\`gh pr checks <pr> --watch\`"
 WAIT_RESPOND=
 WAIT_PAUSED_OWN='a long foreground command'
