@@ -381,7 +381,8 @@ family_for_basename() {
     fm-harness-liveness-drift-live-e2e.test.sh|\
     fm-devin-signals-live-e2e.test.sh|fm-commandcode-signals-live-e2e.test.sh|fm-cortex-signals-live-e2e.test.sh|fm-muse-signals-live-e2e.test.sh|fm-rovo-signals-live-e2e.test.sh|fm-agy-signals-live-e2e.test.sh|fm-polytoken-signals-live-e2e.test.sh|\
     fm-kiro-signals-live-e2e.test.sh|\
-    fm-launch-prompt-signals-live-e2e.test.sh|\
+    fm-launch-prompt-signals-live-e2e.test.sh|fm-backend-t3code-live-e2e.test.sh|\
+    fm-backend-t3code-pr-tools-live-e2e.test.sh|fm-kimi-trust-prompt-live-e2e.test.sh|\
     fm-agy-primary-live-e2e.test.sh|fm-agy-observer-live-e2e.test.sh|\
     fm-agy-bypass-live-e2e.test.sh|\
     fm-devin-permission-policy-live-e2e.test.sh|fm-devin-rate-limit-retry-live-e2e.test.sh|\
@@ -1551,7 +1552,7 @@ families_for_unmapped_bin() {
 # Conservative path → family map. Over-selects rather than under-selects.
 # Never expands to the complete suite.
 families_for_changed_path() {
-  local path=$1 fixture_ref fixture_rest capture_ref
+  local path=$1 fixture_ref fixture_rest
   case "$path" in
     tests/fm-backend-herdr-eventwait.test.py)
       printf '%s\n' real-herdr-gated
@@ -1972,16 +1973,6 @@ families_for_changed_path() {
       fixture_ref=${fixture_ref%%/*}/${fixture_rest%%/*}
       if [ -d "tests/$fixture_ref" ]; then
         families_for_test_reference "$fixture_ref" \
-          || printf '%s\n' "__unmapped__:$path"
-      fi
-      ;;
-    tests/captures/*/*)
-      # A recorded capture selects the suites that read its directory, by the
-      # same rule as a fixture directory.
-      capture_ref=${path#tests/captures/}
-      capture_ref=${capture_ref%%/*}
-      if [ -d "tests/captures/$capture_ref" ]; then
-        families_for_test_reference "captures/$capture_ref" \
           || printf '%s\n' "__unmapped__:$path"
       fi
       ;;

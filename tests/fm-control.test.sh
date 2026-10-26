@@ -36,7 +36,7 @@ TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 fm_test_require_tmproot "$TMP_ROOT"
 trap 'fm_test_rm_tmproot "${TMP_ROOT:-}"' EXIT
 
-VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor muse omp devin kiro commandcode"
+VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor muse omp devin kiro commandcode cortex"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
