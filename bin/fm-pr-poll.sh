@@ -59,10 +59,17 @@ esac
 
 # Every component is revalidated here rather than trusted from the sidecar, and
 # the stored URL must then be exactly reconstructible from those components, so
-# a doctored sidecar cannot redirect this poll at another host or project.
+# a doctored sidecar cannot silently address a different project or a differently
+# spelled URL. The host is one of those components: a GitHub Enterprise host is
+# recorded only by bin/fm-pr-lib.sh after this home named it in
+# config/github-hosts, and it is re-checked for shape here like every other
+# provider's, because this static body sources nothing and cannot read config.
 case "$provider" in
   github)
-    [ "$host" = github.com ] || exit 0
+    [ "${#host}" -ge 1 ] && [ "${#host}" -le 253 ] || exit 0
+    case "$host" in
+      .*|*.|*..*|*[!a-z0-9.-]*) exit 0 ;;
+    esac
     owner=${path%%/*}
     repo=${path#*/}
     [ "${#owner}" -ge 1 ] && [ "${#owner}" -le 39 ] || exit 0
@@ -73,22 +80,22 @@ case "$provider" in
     case "$repo" in
       .|..|*[!A-Za-z0-9._-]*) exit 0 ;;
     esac
-    [ "$url" = "https://github.com/$owner/$repo/pull/$number" ] || exit 0
-    state=$(gh pr view "$url" --json state -q .state 2>/dev/null) || exit 0
+    [ "$url" = "https://$host/$owner/$repo/pull/$number" ] || exit 0
+    state=$(GH_HOST=$host gh pr view "$url" --json state -q .state 2>/dev/null) || exit 0
     if [ "$state" = MERGED ]; then
       printf '%s\n' merged
     elif [ "$state" = CLOSED ] && [ "$readiness" = 1 ]; then
       printf '%s\n' closed
     elif [ "$state" = OPEN ] && [ "$readiness" = 1 ]; then
       script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 0
-      activity=$(gh pr view "$url" --json headRefOid,updatedAt --jq '[.headRefOid,.updatedAt] | @tsv' 2>/dev/null) || exit 0
+      activity=$(GH_HOST=$host gh pr view "$url" --json headRefOid,updatedAt --jq '[.headRefOid,.updatedAt] | @tsv' 2>/dev/null) || exit 0
       [ -n "$activity" ] || exit 0
-      blockers=$("$script_dir/fm-pr-state.sh" "$url" 2>/dev/null) || exit 0
+      blockers=$(GH_HOST=$host "$script_dir/fm-pr-state.sh" "$url" 2>/dev/null) || exit 0
       if printf '%s\n' "$blockers" | grep -Eq '^BOT REVIEW SETTLE: wait [0-9]+s after latest PR activity before readiness$'; then
         exit 0
       fi
       command -v jq >/dev/null 2>&1 || exit 0
-      checks=$(gh pr checks "$url" --json name,state,bucket 2>/dev/null) || true
+      checks=$(GH_HOST=$host gh pr checks "$url" --json name,state,bucket 2>/dev/null) || true
       if [ -z "$checks" ] && printf '%s\n' "$blockers" | grep -Fxq 'CHECKS: none reported yet'; then
         checks='[]'
       fi
@@ -102,7 +109,7 @@ case "$provider" in
         2>/dev/null) || exit 0
       # Bind duplicate suppression to the PR's live activity and head, so a
       # refreshed done report can earn a new recheck on the same PR.
-      latest_activity=$(gh pr view "$url" --json headRefOid,updatedAt --jq '[.headRefOid,.updatedAt] | @tsv' 2>/dev/null) || exit 0
+      latest_activity=$(GH_HOST=$host gh pr view "$url" --json headRefOid,updatedAt --jq '[.headRefOid,.updatedAt] | @tsv' 2>/dev/null) || exit 0
       [ "$activity" = "$latest_activity" ] || exit 0
       # shellcheck source=bin/fm-pr-lib.sh
       . "$script_dir/fm-pr-lib.sh"

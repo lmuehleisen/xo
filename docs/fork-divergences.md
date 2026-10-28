@@ -58,21 +58,21 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: no required pipeline; `no-mistakes` delivery tokens ship as `direct-PR` unless `config/no-mistakes` opts in; README "No required `no-mistakes`".
 - Class: intended.
-- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh` (including the `config/wait-no-turns` waiting section, which names no-mistakes wait commands only in a pipeline ship brief), `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` (including the delivery sentence in the firstmate-self-repo skill) and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` and its `tests/fm-no-mistakes-required.test.sh` compliance test are deleted.
+- Seam: `bin/fm-dod-lib.sh`, `bin/fm-brief.sh` (including the `config/wait-no-turns` waiting section, which names no-mistakes wait commands only in a pipeline ship brief), `bin/fm-promote.sh`, `bin/fm-spawn.sh`, `bin/fm-project-mode.sh` (the registry and default remap to `direct-PR`), `bin/fm-home-seed.sh` (no pipeline initialization), `bin/fm-bootstrap.sh`, `bin/fm-pr-check.sh`, `bin/fm-remote-home-provision.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, the optional validation-progress read in `bin/fm-rex-marks.sh`, `bin/fm-crew-state.sh`, `bin/fm-inactive-reconcile.sh`, the no-mistakes wording in shared skills under `.agents/skills/` (including the delivery sentence in the firstmate-self-repo skill) and their harness references, the `CONTRIBUTING.md` required-checks line, and the `VISION.md` Scope line (shared); upstream's `.github/workflows/no-mistakes-required.yml` and its `tests/fm-no-mistakes-required.test.sh` compliance test are deleted.
 - Guard: `tests/fm-brief.test.sh` `test_no_mistakes_*` and `test_workers_wait_without_spending_turns`; `tests/fm-task-delivery.test.sh` `test_no_mistakes_*`; `tests/fm-bootstrap.test.sh` `test_no_mistakes_opt_in_reports_unavailable_cli`.
 - Upstream: requires the no-mistakes pipeline for every ship and enforces its minimum version at bootstrap.
 
 ### reviewed-worker-permissions
 
-- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
+- Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so pane-backed Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
 - Class: intended.
 - Seam: permission resolution and `launch_template` in `bin/fm-spawn.sh`, the omitted upstream bypass-only failover helper and suite, and `docs/configuration.md` (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
-- Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
+- Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; upstream's separate Codex restricted setting is represented by the fork's existing manual review posture; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
 
 ### codex-reviewed-launch
 
-- Intent: Codex workers launch with `--approve-for-me`, or with manual review when `config/crew-permissions` is `manual`, never with approvals and sandbox bypassed; README "Reviewed worker permissions".
+- Intent: Pane-backed Codex workers launch with `--approve-for-me`, or with manual review when `config/crew-permissions` is `manual`, never with approvals and sandbox bypassed; README "Reviewed worker permissions".
 - Class: intended.
 - Seam: the Codex arms of `launch_template` in `bin/fm-spawn.sh` (shared) print the selected permission flags in place of upstream's `--dangerously-bypass-approvals-and-sandbox`; an alternative would keep the template lines byte-identical to upstream and substitute the flags at launch time instead.
   The automatic-review brief also carries sandbox retry guidance from `fm_brief_codex_reviewed_sandbox` in `bin/fm-dod-lib.sh`, added by `bin/fm-spawn.sh` and described in the Codex harness reference (shared).
@@ -83,7 +83,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: new agy Auto workers use verified native review plus deterministic task constraints; recorded legacy workers retain their existing posture and decisions.
 - Class: intended.
-- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-native-lib.sh`, `bin/fm-agy-native.py`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including generation-bound approval evidence and cleanup audit, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
+- Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-native-lib.sh`, `bin/fm-agy-native.py`, `bin/fm-agy-admission.sh`, `bin/fm-agy-admission.py`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including executable-bound admission, generation-bound approval evidence and cleanup audit, with fixtures in `tests/agy-admission-helpers.sh` and `tests/agy-live-helpers.sh`, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
 - Guard: `tests/fm-agy-native.test.sh`, `tests/fm-agy-harness.test.sh`, `tests/fm-agy-admission.test.sh`, and the opt-in `tests/fm-agy-native-live-e2e.test.sh`; existing policy/bypass tests retain legacy coverage.
 - Limit: live No/reconciliation proof covers agy 1.4.7 with Flash High on Herdr; the [verification record](verification/runtime-backends-fork.md#native-auto-workers) owns other model/backend limits and adversarial fixture coverage.
 - Upstream: its own agy adapter has no fork permission layer.
@@ -212,7 +212,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: OpenCode crewmates and scouts run on OpenCode V2 through a Firstmate-owned plugin and per-spawn private config, the primary stays on the legacy OpenCode V1 path, and OpenCode secondmates are refused before launch; README prerequisites and the OpenCode harness reference.
 - Class: intended.
-- Seam: fork-only `.opencode/plugins/lib/fm-process.js`, `.opencode/plugins/lib/fm-v2-plugin.js`, `tests/opencode-v2-live.sh`, and `tests/opencode-v2-herdr-live.sh`, plus the OpenCode hunks in `bin/fm-spawn.sh`, `bin/fm-composer-lib.sh`, `bin/fm-control.sh`, `bin/fm-control-lib.sh`, `bin/fm-harness.sh`, `bin/fm-busy-event.sh` (`--if-seq`), `bin/fm-busy-lib.sh`, `bin/fm-remote-doctor.sh`, `bin/fm-remote-entrypoint.sh`, `bin/fm-remote-secondmate-control.sh`, and the legacy `.opencode/plugins/fm-primary-*.js` modules, the omitted upstream V2 primary entry points, the event-subscription cleanup and awaited tool-hook registration in the shared upstream helper `.opencode/plugins/lib/fm-opencode2.js`, the shared upstream fixture `tests/opencode-v2-live-fixture.py` retargeted at the worker plugin, the OpenCode harness reference, its evidence in `docs/verification/runtime-backends.md` and `docs/verification/supervision.md`, and the "OpenCode V1" primary wording in shared docs (shared).
+- Seam: fork-only `.opencode/plugins/lib/fm-process.js`, `.opencode/plugins/lib/fm-v2-plugin.js`, `.opencode/plugins/lib/fm-launch-model.js`, `tests/opencode-model-fixture.mjs`, `tests/opencode-model-live.sh`, `tests/opencode-v2-live.sh`, and `tests/opencode-v2-herdr-live.sh`, plus the OpenCode hunks in `bin/fm-spawn.sh`, `bin/fm-composer-lib.sh`, `bin/fm-control.sh`, `bin/fm-control-lib.sh`, `bin/fm-harness.sh`, `bin/fm-busy-event.sh` (`--if-seq`), `bin/fm-busy-lib.sh`, `bin/fm-remote-doctor.sh`, `bin/fm-remote-entrypoint.sh`, `bin/fm-remote-secondmate-control.sh`, and the legacy `.opencode/plugins/fm-primary-*.js` modules, the omitted upstream V2 primary entry points, the event-subscription cleanup and awaited tool-hook registration in the shared upstream helper `.opencode/plugins/lib/fm-opencode2.js`, the shared upstream fixture `tests/opencode-v2-live-fixture.py` retargeted at the worker plugin, the OpenCode harness reference, its evidence in `docs/verification/runtime-backends.md` and `docs/verification/supervision.md`, and the "OpenCode V1" primary wording in shared docs (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_opencode_*` cases; `tests/fm-control-relaunch.test.sh` `test_opencode_*` cases; `tests/fm-spawn-prelaunch-rollback.test.sh` `test_opencode_*` cases; `tests/fm-composer-lib.test.sh` `test_matrix_opencode_leftbar_signals`; `tests/fm-busy-adapter-wiring.test.sh` `test_opencode_plugin_semantic_lifecycle`, `test_opencode_v2_cleanup_aborts_the_stream_and_reports_failures`, `test_opencode_v2_boundary_registers_tool_hook_before_setup_resolves`, and `test_secondmate_opencode_is_refused_without_busy_wiring`; `tests/fm-busy-state.test.sh` sequence cases; `tests/fm-remote-doctor.test.sh`; live, `tests/fm-opencode-primary-live-e2e.test.sh`, whose token-free half drives `tests/opencode-v2-live-fixture.py` and whose credentialed half drives `tests/opencode-v2-live.sh`.
 - Upstream: supports both OpenCode major versions and V2 primary plugins; XO shares its V2 event and tool helper and live-fixture technique but retains its verified worker-only V2 adapter, private plugin configuration, shutdown-aware session identity, bare launch with guarded brief delivery, and deferred V2 primary/secondmate boundary until those guarantees have equivalent proof.
 
@@ -437,11 +437,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### raw-launch-verbatim
 
-- Intent: an explicit raw command avoids adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
+- Intent: explicit raw commands for harnesses other than OMP avoid adapter probing, template substitutions, ready gates and hook wiring while retaining generic task isolation.
 - Class: carried.
 - Seam: `RAW_LAUNCH` guards around adapter resolution, model checks, busy wiring, template substitutions and post-launch readiness in `bin/fm-spawn.sh`.
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` raw-adapter and literal-placeholder cases.
-- Upstream: applies portions of adapter setup to raw commands; drop when the raw path preserves the same command and wiring boundaries.
+- Upstream: OMP launch, validation, and profile selection follow upstream; the remaining harnesses retain the raw-command boundary and can converge when upstream preserves the same command and wiring boundaries.
 
 ### launch-submit-proof
 
@@ -549,10 +549,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### ci-shard-split
 
-- Intent: portable serial CI runs as fourteen shards, with the supervision-host suite split into attended, dialog, away, and recovery suites and watcher triage split into ordinary and declared-wait suites, so each shard stays inside the CI job limit.
+- Intent: portable serial CI runs as fourteen shards, with the supervision-host suite split into attended, dialog, away, and recovery suites and watcher triage split into ordinary and declared-wait suites, so each shard stays inside the CI job limit; canonical lint supports `NofM` partitions and CI uses three.
 - Class: carried.
-- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-dialog.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, fork-only `tests/watch-triage-helpers.sh` and `tests/fm-watch-triage-waits.test.sh`, the shared `tests/fm-watch-triage.test.sh` driver, plus the shard matrix in `.github/workflows/ci.yml`, shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
-- Guard: `tests/fm-test-run.test.sh` shard cases; every integration ports upstream's new supervision-host tests into the split suites.
+- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-dialog.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, fork-only `tests/watch-triage-helpers.sh` and `tests/fm-watch-triage-waits.test.sh`, the shared `tests/fm-watch-triage.test.sh` driver, plus the shard and lint matrices in `.github/workflows/ci.yml`, partition parsing and balancing in `bin/fm-lint.sh`, shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
+- Guard: `tests/fm-test-run.test.sh` shard cases; `tests/fm-lint.test.sh`; `tests/fm-ci-workflow.test.sh`; every integration ports upstream's new supervision-host tests into the split suites.
 - Upstream: runs nine serial shards and one supervision-host suite; drop once upstream shards equivalently.
 
 ### pi-saved-trust-denial
@@ -603,8 +603,17 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-supervision-host-recovery.test.sh` `test_activation_skips_the_lease_lock_when_no_branch_lease_is_held`.
 - Upstream: always runs `fm-lease.sh release-actor`, which waits for the lease-command lock that a guarded main mutation such as a teardown holds for its whole run; drop once upstream's release no longer waits for that lock when there is nothing to release.
 
+### captain-alerts
+
+- Intent: optional one-way away-outcome notifications; `docs/configuration.md` "Captain alerts to Discord".
+- Class: carried.
+- Seam: fork-only `bin/fm-captain-alert.sh` and `tests/fm-captain-alert.test.sh`, its away reach, arm, and return-health calls in `bin/fm-afk-contract.sh`, `bin/fm-afk-launch.sh`, and `bin/fm-afk-return.sh`, and the corresponding afk skill, architecture, configuration, scripts, and wedge-alarm prose (shared).
+- Guard: `tests/fm-captain-alert.test.sh`.
+- Upstream: has no equivalent one-way outcome notifier; drop once the same opt-in delivery, secrecy, failure reporting, and bounded queue behavior is available.
+
 ## Incidental
 
+- `ssh-remote-spelling`: equivalent shell quoting of the SSH remote prefix in `bin/fm-pr-health.sh`; realign when the same literal-scanning compatibility is available.
 - `muse-fixture-symlink`: a fork fixture change that upstream PR #3539 duplicates.
 - `pi-package-discovery`: fork-only `tests/pi-package.sh` and its callers in `tests/fm-calm-pi-extension.test.sh`, `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-branch-live-e2e.test.sh` let SDK suites find a Homebrew Pi install; offer the discovery helper upstream and realign when taken.
 - `hold-doc-layout`: `docs/captain-hold-lifecycle.md` keeps the fork's condensed layout around the hunks its entries own; realign the layout when convenient.

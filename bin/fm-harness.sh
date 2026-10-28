@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|commandcode|polytoken|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|commandcode|polytoken|cortex|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate [id]  print the harness the PRIMARY uses to launch
@@ -178,7 +178,7 @@ harness_marker() {
   # identified, and any rule that must be RELIABLE under grok has to test the hook
   # markers too (see .claude/settings.json Stop entries, docs/turnend-guard.md).
   [ "${GROK_AGENT:-}" = "1" ] && { echo grok; return; }
-  # codex, opencode, kimi, muse, devin, commandcode, and polytoken publish no harness-identity marker at all, so
+  # codex, opencode, kimi, muse, devin, commandcode, polytoken, and cortex publish no harness-identity marker at all, so
   # they are never named here and are identified by ancestry alone. That is the
   # whole reason a foreign marker must not outrank ancestry: with markers winning
   # unconditionally, any retained CLAUDECODE would silently rename one of them.
@@ -299,6 +299,12 @@ harness_process_verdict() {  # <pid>
     # than searching argv for kiro. macOS exports KIRO_* variables, but the
     # markerless AL2 build still needs structural ancestry for identity.
     kiro-cli|kiro-cli-chat) echo "comm kiro"; return ;;
+    # Cortex Code is a Bun-compiled single binary whose process name is exactly
+    # `cortex` (verified, cortex 1.1.104: /proc comm=cortex, exe=cortex). It
+    # publishes only CORTEX_* variables to its own hooks, never an identity
+    # marker a parent harness could not also carry, so like devin it is
+    # detected by anchored ancestry alone.
+    cortex) echo "comm cortex"; return ;;
     # Command Code runs as a node bundle that sets its own process title, so
     # the kernel process name is exactly `command-code` (verified, Command Code
     # 1.74.1: comm=command-code and the rewritten argv is the same word).
@@ -462,7 +468,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|commandcode|polytoken)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|commandcode|polytoken|cortex)
       printf '%s\n' "$pin"
       ;;
     *)

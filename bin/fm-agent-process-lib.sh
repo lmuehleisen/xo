@@ -54,7 +54,7 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
     # anchored the same way (verified, polytoken 0.8.19: a TUI pane's foreground
     # process is comm `polytoken`, the same binary name as its per-session
     # daemon), so a `*polytoken*` glob never claims an unrelated command.
-    agy|devin|command-code|polytoken) printf 'agent' ;;
+    agy|devin|command-code|polytoken|cortex) printf 'agent' ;;
     # Kiro's launcher and macOS chat backend have exact native names. A glob
     # would claim unrelated commands containing kiro; the live guard owns proof.
     kiro-cli|kiro-cli-chat) printf 'agent' ;;
