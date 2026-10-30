@@ -75,7 +75,10 @@
 #   With it set, this tool makes no quota-axi call, applies no quota floor or
 #   runway gate, ranks nothing by spendPriority, and resolves the matched
 #   rule's `use` profiles in declared order; preferred_provider still narrows
-#   the pool; declared order then picks within it. Every candidate line still
+#   the pool for profiles and lanes; declared order then picks within it.
+#   A lane also skips quota-derived pace gates, while its non-quota gates
+#   (live caps, experiment admission and data policies) remain in force.
+#   Every candidate line still
 #   prints, stating quota ranking is off by home declaration. Without the
 #   setting, behavior is unchanged. The declared value must be a boolean;
 #   anything else is an actionable configuration error.
@@ -1009,6 +1012,17 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       end
     end;
   def evaluate($c): evaluate_route($c; false; 0);
+  # Apply the same family restriction before either profile or lane selection.
+  def preferred_pool($cands):
+    ([$cands[] | select($cfg.preferred_provider != null and .provider == $cfg.preferred_provider)]) as $family |
+    ([$family[] | select(.eligible)]) as $preferred |
+    {pool: (if ($preferred | length) > 0 then $preferred else $cands end),
+     restricted: (($preferred | length) > 0)}
+    + (if $cfg.preferred_provider == null then {}
+       else {decision: ($cfg.preferred_provider + ": " +
+         (if ($family | length) == 0 then "not in matched profiles; preserve the selected rule"
+          elif ($preferred | length) > 0 then "prefer eligible family candidates"
+          else "fall back; every matched family candidate is ineligible" end))} end);
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -1062,7 +1076,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ] as $classes0 |
     ([$classes0[] | select(.gate == null) | .candidates[] | select(rankable)]) as $others |
     [$classes0[] |
-      if .gate == "others-ahead-of-pace" and .excluded == null then
+      if ($sq | not) and .gate == "others-ahead-of-pace" and .excluded == null then
         ([.candidates[] | select(rankable)] | max_by(.spendScore)) as $own |
         (if ($others | length) == 0 then "pace gate closed: no ungated class in the lane has a rankable \($metric)"
          elif any($others[]; ahead_of_pace | not) then
@@ -1099,13 +1113,22 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   # stops at its first class with any eligible route, ranked or not, so unknown
   # quota escalates instead of silently skipping to a later class.
   def lane_pick($le):
+    preferred_pool($le.candidates) as $preference |
+    (if $preference.restricted then
+       $le | .candidates = $preference.pool |
+       .classes |= map(.candidates |= map(select(.eligible and .provider == $cfg.preferred_provider)))
+     else $le end) as $le |
     ([$le.classes[] | select(.experiment != null and .excluded == null) | .candidates[] | select(rankable)]) as $sampled |
     if ($sampled | length) > 0 then argmax_pick($sampled; " among sampled experiment routes")
     elif $le.order == "ordered" then
       ([$le.classes[] | select(any(.candidates[]; .eligible))] | first) as $first |
       if $first == null then {status: "escalate", reason: "no class in the ordered lane has an eligible route"}
       else argmax_pick($first.candidates; " in first viable class \($first.name)") end
-    else argmax_pick($le.candidates; "") end;
+    else argmax_pick($le.candidates; "") end
+    | . + (if $preference.decision then {preferred_provider: $preference.decision} else {} end)
+    | if $preference.restricted and .status == "escalate" then
+        .reason += " in preferred provider \($cfg.preferred_provider); uncertainty does not authorize fallback"
+      else . end;
   ($a.choice) as $picked |
   (confidence_floor($picked)) as $picked_floor |
   # A declared floor is checked against the probability of that option whether
@@ -1171,6 +1194,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ($sel.lane) as $le | (lane_pick($le)) as $pick |
     ([$le.candidates[] | select(.unranked)]) as $unranked |
     $ev + {status: $pick.status, note: $sel.note, candidates: $le.candidates}
+    + (if $pick.preferred_provider then {preferred_provider: $pick.preferred_provider} else {} end)
     + (if $pick.status == "clear" then {chosen: $pick.chosen, tie_break: $pick.tie_break} else {reason: $pick.reason} end)
     + (if $pick.status == "clear" and ($unranked | length) > 0 then
          {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
@@ -1181,19 +1205,14 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   elif ($sel.use | length) == 0 then $ev + {status: "escalate", reason: "no profiles configured for \($sel.source)", note: $sel.note, candidates: []}
   else
     ($sel.use | map(evaluate(.))) as $cands |
-    ([$cands[] | select(.provider == $cfg.preferred_provider)]) as $family |
-    ([$family[] | select(.eligible)]) as $preferred |
-    (if ($preferred | length) > 0 then $preferred else $cands end) as $pool |
-    ($ev + (if $cfg.preferred_provider == null then {}
-      else {preferred_provider: ($cfg.preferred_provider + ": " +
-        (if ($family | length) == 0 then "not in matched profiles; preserve the selected rule"
-         elif ($preferred | length) > 0 then "prefer eligible family candidates"
-         else "fall back; every matched family candidate is ineligible" end))} end)) as $ev |
+    preferred_pool($cands) as $preference |
+    ($preference.pool) as $pool |
+    ($ev + (if $preference.decision then {preferred_provider: $preference.decision} else {} end)) as $ev |
     ([$pool[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
     ([$cands[] | select(.unranked)]) as $unranked |
     if ($elig | length) == 0 then $ev + {status: "escalate",
       reason: ("no rankable eligible candidate" +
-        (if ($preferred | length) > 0 then " in preferred provider \($cfg.preferred_provider); uncertainty does not authorize fallback" else "" end)),
+        (if $preference.restricted then " in preferred provider \($cfg.preferred_provider); uncertainty does not authorize fallback" else "" end)),
       note: $sel.note, candidates: $cands}
     else
       (if $sq then ($elig | first) else ($elig | max_by(.spendScore)) end) as $best |
@@ -1246,7 +1265,7 @@ TEXT=$(jq -r '
          elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  \($metric)=\(show(.spendScore))  runway=\(show(.runway))" else "" end)
       + (if .planning then "  native_\($metric)=\(show(.nativeSpend))  planning_horizon_seconds=\(.planning.horizonSeconds)  planning_window=\(.planning.windowId | flat)" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
-      + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .sq then "eligible (quota ranking off: home declares a single shared quota)" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
+      + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .sq and .eligible then "eligible (quota ranking off: home declares a single shared quota)" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
       + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)
       + (if .class then "  live=\(.live)" + (if .max_live then " max_live=\(.max_live)" else "" end)
           + (if .live_cap_group then " live_cap_group=\(.live_cap_group | flat) group_live=\(.group_live) group_max_live=\(.group_max_live)" else "" end) else "" end)),

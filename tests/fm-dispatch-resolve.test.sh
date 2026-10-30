@@ -3253,6 +3253,51 @@ pass "shared-quota keeps preferred_provider narrowing: the preferred family wins
 # restore the shared response fixture for the false-path test below
 write_response "$RESPONSE" rule_4 0.9
 
+# Shared quota composes with lane provider preference and skips quota pace
+# gates without dropping class/data eligibility or candidate evidence.
+cat > "$RULES" <<'JSON'
+{"shared_quota":true,"preferred_provider":"codex","classes":{
+ "luna":{"family":"claude","routes":[{"harness":"claude","model":"sonnet"}]},
+ "sol":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-6.1-sol"}]}},
+ "rules":[{"lane":"shared","when":"Routine work","order":"pool","classes":["luna","sol"]}]}
+JSON
+reset_log
+run_lane code out err "$BRIEF" --lane shared --project example
+expect_code 0 "$code" "shared-quota lane resolves"
+assert_contains "$out" "profile: --harness 'codex'" "lane preference wins over declared nonpreferred first class"
+assert_contains "$out" 'preferred_provider: codex: prefer eligible family candidates' "lane preference is disclosed"
+[ "$(printf '%s\n' "$out" | grep -c '^  candidate: ')" -eq 2 ] || fail "preferred lane hid candidate evidence"
+assert_absent "$LOG/quota-axi.calls" "shared-quota lane never reads provider quota"
+jq '.rules[0].order = "ordered"' "$RULES" > "$TMP_ROOT/shared-lane.json" && mv "$TMP_ROOT/shared-lane.json" "$RULES"
+run_lane code out err "$BRIEF" --lane shared --project example
+assert_contains "$out" "profile: --harness 'codex'" "ordered lane applies preference before class ordering"
+
+jq 'del(.preferred_provider) | .rules[0].order = "pool" |
+ .rules[0].classes = [{class:"luna",gate:"others-ahead-of-pace"},"sol"]' "$RULES" > "$TMP_ROOT/shared-lane.json" && mv "$TMP_ROOT/shared-lane.json" "$RULES"
+run_lane code out err "$BRIEF" --lane shared --project example
+assert_contains "$out" "profile: --harness 'claude'" "shared-quota lane skips the quota-derived pace gate"
+assert_not_contains "$out" 'pace gate closed' "shared quota must not infer a pace gate from absent provider quota"
+assert_absent "$LOG/quota-axi.calls" "shared-quota pace bypass never reads quota"
+
+jq '.preferred_provider = "codex" | .data_policies = {restricted:{allow_projects:["other"]}} |
+ .classes.sol.data_policy = "restricted"' "$RULES" > "$TMP_ROOT/shared-lane.json" && mv "$TMP_ROOT/shared-lane.json" "$RULES"
+run_lane code out err "$BRIEF" --lane shared --project example
+assert_contains "$out" "profile: --harness 'claude'" "shared quota retains non-quota data-policy exclusion"
+assert_contains "$out" 'preferred_provider: codex: fall back; every matched family candidate is ineligible' "lane preference falls back only on concrete exclusion"
+assert_contains "$out" 'not eligible: data policy restricted' "the excluded preferred route remains visible"
+
+jq 'del(.shared_quota,.data_policies,.classes.sol.data_policy) |
+ .rules[0].classes = ["luna","sol"]' "$RULES" > "$TMP_ROOT/shared-lane.json" && mv "$TMP_ROOT/shared-lane.json" "$RULES"
+lane_quota claude=0.9 codex=0.2
+run_lane code out err "$BRIEF" --lane shared --project example
+assert_contains "$out" "profile: --harness 'codex'" "metered lanes also narrow the preferred pool before ranking"
+lane_quota claude=0.9
+run_lane code out err "$BRIEF" --lane shared --project example
+assert_contains "$out" 'status: escalate' "an eligible unmeasured preferred lane cannot fall back"
+assert_contains "$out" 'uncertainty does not authorize fallback' "preferred-lane uncertainty is disclosed"
+assert_not_contains "$out" '  profile:' "unrankable preferred lane must not choose a different family"
+pass "shared-quota lanes honor preference, bypass pace gates, and preserve non-quota eligibility"
+
 # --- shared_quota false: byte-for-byte the quota-ranked path ------------------
 jq '.shared_quota = false' "$BASE_RULES" > "$RULES"
 reset_log
