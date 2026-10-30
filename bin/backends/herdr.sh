@@ -1840,22 +1840,76 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
   return 0
 }
 
+# External server ownership (issue #7320). A service manager such as a systemd
+# user unit can own a session's server, and then only it may start one: a
+# Firstmate-started server races the owner during a unit restart or a
+# `server live-handoff`, while `status` briefly reports not running, and splits
+# panes across two servers. The owner declares itself with marker files in the
+# session directory, the directory holding the `.server.socket` that
+# `status --json` reports whether or not the server is running
+# (docs/verification/runtime-backends.md "Session directory"), shared by every
+# Firstmate home on that session:
+#   firstmate-server-owner      persistent; first line names the owner
+#   firstmate-server-replacing  present only while the owner replaces the server
+# docs/herdr-backend.md "Externally managed servers" owns the operator contract.
+FM_BACKEND_HERDR_SERVER_OWNER_MARKER=firstmate-server-owner
+FM_BACKEND_HERDR_SERVER_REPLACING_MARKER=firstmate-server-replacing
+
+# fm_backend_herdr_server_owner_name: the owner named by <owner-marker>'s first
+# line, or a generic name when it names none.
+fm_backend_herdr_server_owner_name() {  # <owner-marker>
+  local name
+  name=$(head -n 1 "$1" 2>/dev/null | tr -d '[:cntrl:]' | cut -c1-200)
+  name=${name#"${name%%[![:space:]]*}"}
+  name=${name%"${name##*[![:space:]]}"}
+  printf '%s' "${name:-an external service manager}"
+}
+
 # fm_backend_herdr_server_ensure: start the herdr server for <session>
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. The server outlives its launcher and passes its startup environment to
 # every later pane, so remove home, harness identity, and supervision selection
-# inherited from whichever agent happened to start it. The server is exec'd
-# rather than run through fm_backend_herdr_cli: a backgrounded shell function
-# leaves a bash wrapper waiting on the server that still holds the caller's
-# saved stdout and stderr, so a caller silencing this function under ssh or the
-# remote job worker would never see EOF. The client choice matches
-# fm_backend_herdr_cli's. Bounded poll for the server to report running.
+# inherited from whichever agent happened to start it. Bounded poll for the
+# server to report running.
+#
+# A running server returns after one marker check in the session directory,
+# unless that directory holds a replacement marker. While the session directory
+# holds an owner marker with the server down, or a replacement marker at all,
+# this never starts or releases callers to the server: it polls the
+# non-starting fm_backend_herdr_server_running_state read up to 60 times, 0.5s
+# apart, until the replacement marker is gone and the server reports running,
+# and fails naming the replacement or the owner otherwise. A replacement marker that
+# clears with no owner marker hands back to the Firstmate-owned start below.
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i client_bin=herdr
-  running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-  [ "$running" = "true" ] && return 0
+  local session=$1 status running socket out i dir owner_marker replacing_marker owner polls=60 client_bin=herdr
+  status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null)
+  running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
+  socket=$(printf '%s' "$status" | jq -r '.server.socket // empty' 2>/dev/null)
+  if [ -z "$socket" ]; then
+    [ "$running" = "true" ] && return 0
+  else
+    dir=$(dirname "$socket")
+    owner_marker="$dir/$FM_BACKEND_HERDR_SERVER_OWNER_MARKER"
+    replacing_marker="$dir/$FM_BACKEND_HERDR_SERVER_REPLACING_MARKER"
+    [ "$running" = "true" ] && [ ! -e "$replacing_marker" ] && return 0
+    i=0
+    while [ -e "$owner_marker" ] || [ -e "$replacing_marker" ]; do
+      if [ "$i" -ge "$polls" ]; then
+        if [ -e "$replacing_marker" ]; then
+          echo "error: herdr server for session '$session' is being replaced ($replacing_marker) and the replacement did not finish after $polls checks; Firstmate will not start or use a server while that marker exists" >&2
+        else
+          owner=$(fm_backend_herdr_server_owner_name "$owner_marker")
+          echo "error: herdr server for session '$session' is managed by $owner ($owner_marker) and did not report running after $polls checks; Firstmate will not start it - start or repair it through $owner" >&2
+        fi
+        return 1
+      fi
+      sleep 0.5
+      i=$((i + 1))
+      [ ! -e "$replacing_marker" ] && [ "$(fm_backend_herdr_server_running_state "$session")" = running ] && return 0
+    done
+  fi
   if [ "${FM_BACKEND_HERDR_CLIENT_SESSION:-}" = "$session" ]; then
     client_bin=$(fm_backend_herdr_bin)
   fi

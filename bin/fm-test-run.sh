@@ -292,7 +292,7 @@ family_for_basename() {
   case "$1" in
     fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-bearings-board.test.sh|\
-    fm-brief.test.sh|fm-dod-lib.test.sh|fm-vendor-auth-probe.test.sh|\
+    fm-brief.test.sh|fm-dod-lib.test.sh|fm-merge-local.test.sh|fm-vendor-auth-probe.test.sh|\
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
@@ -306,7 +306,7 @@ family_for_basename() {
     fm-harness-precedence.test.sh|\
     fm-kimi-harness.test.sh|fm-devin-harness.test.sh|fm-commandcode-harness.test.sh|fm-cortex-harness.test.sh|fm-muse-harness.test.sh|fm-rovo-harness.test.sh|fm-agy-harness.test.sh|fm-kiro-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
-    fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
+    fm-operational-input.test.sh|fm-pi-primary-types.test.sh|fm-read-repetition.test.sh|\
     fm-calm-claude-mod.test.sh|\
     fm-harness-adapter-references.test.sh|fm-project-mode.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
@@ -316,7 +316,7 @@ family_for_basename() {
     fm-tmux-submit-busy.test.sh|fm-trace-context-lib.test.sh|\
     fm-tmux-submit-busy-agy.test.sh|\
     fm-transition-lib.test.sh|\
-    fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
+    fm-test-run.test.sh|fm-test-isolation-proof.test.sh|fm-test-tap-verify.test.sh)
       printf '%s\n' pure-contract-unit
       ;;
     fm-daemon.test.sh|fm-guard-stale-banner.test.sh|fm-pi-watch-extension.test.sh|\
@@ -328,9 +328,10 @@ family_for_basename() {
     fm-mail.test.sh|fm-mail-check.test.sh|\
     fm-turnend-foreign-owner-arm-fix.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
-    fm-watch-inbox-meta.test.sh|\
-    fm-watch-triage.test.sh|fm-watch-triage-waits.test.sh|fm-rate-limit-retry.test.sh|fm-task-inbox.test.sh|\
-    fm-watch-completed-ship-hold.test.sh|\
+    fm-watch-triage-fork.test.sh|fm-rate-limit-retry.test.sh|fm-watch-completed-ship-hold.test.sh|\
+    fm-watch-inbox-meta.test.sh|fm-watch-open-decisions.test.sh|\
+    fm-watch-triage.test.sh|fm-watch-triage-pause.test.sh|\
+    fm-watch-triage-wedge-defer.test.sh|fm-task-inbox.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh|fm-watch-wedge-cap.test.sh|\
     fm-watch-wedge-cap-unconfigured-parity.test.sh)
       printf '%s\n' watcher-wake-lock
@@ -406,7 +407,8 @@ family_for_basename() {
     fm-pi-worker-publish-policy-live-e2e.test.sh|\
     fm-herdr-submit-confirm-live-e2e.test.sh|\
     fm-bearings-board-lavish-live-e2e.test.sh|\
-    fm-backend-rex-composer-live-e2e.test.sh|fm-watch-wedge-cap-live.test.sh)
+    fm-backend-rex-composer-live-e2e.test.sh|\
+    fm-watch-wedge-cap-live.test.sh|fm-read-repetition-live.test.sh)
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
@@ -435,9 +437,12 @@ family_for_basename() {
     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-owned-digest-recovery.test.sh|\
     fm-afk-inject-delivery-proof.test.sh|fm-afk-inject-titled-composer.test.sh|\
     fm-afk-return.test.sh|fm-afk-sentinel.test.sh|\
-    fm-supervision-host.test.sh|fm-supervision-host-attended.test.sh|\
-    fm-supervision-host-dialog.test.sh|\
-    fm-supervision-host-away.test.sh|fm-supervision-host-recovery.test.sh|fm-host-mirror.test.sh)
+    fm-supervision-host.test.sh|fm-supervision-host-fork.test.sh|\
+        fm-host-mirror.test.sh|\
+    fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|\
+    fm-supervision-host-fork.test.sh|fm-supervision-host.test.sh|fm-supervision-host-drain.test.sh|\
+    fm-supervision-host-hook.test.sh|fm-supervision-host-park.test.sh|\
+    fm-host-mirror.test.sh)
       printf '%s\n' afk
       ;;
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|fm-contributions.test.sh|\
@@ -470,7 +475,7 @@ family_for_basename() {
     fm-extension-binding.test.sh|fm-gitignore-config.test.sh|\
     fm-peek-remote.test.sh|\
     fm-pending-reply.test.sh|fm-pi-branch-extension.test.sh|\
-    fm-procevent-quota.test.sh|fm-procevent-when.test.sh|fm-procevent.test.sh|\
+    fm-procevent-extension-errors.test.sh|fm-procevent-quota.test.sh|fm-procevent-when.test.sh|fm-procevent.test.sh|\
     fm-live-gate.test.sh|\
     fm-project-origin.test.sh|fm-public-followup.test.sh|fm-quota-choose.test.sh|\
     fm-remote-entrypoint.test.sh|fm-remote-secondmate-parent-binding.test.sh|\
@@ -571,6 +576,18 @@ EOF
 # refresh procedure are owned by docs/fm-test-portable-shards.md.
 portable_parallel_weight_hints() {
   cat <<'EOF'
+tests/fm-watch-triage-fork.test.sh 60000
+tests/fm-supervision-host-fork.test.sh 300000
+tests/fm-watch-triage-wedge-defer.test.sh 526980
+tests/fm-watch-triage-pause.test.sh 466750
+tests/fm-warm-compact.test.sh 1500
+tests/fm-warm-compact-herdr-live-e2e.test.sh 170
+tests/fm-test-tap-verify.test.sh 1000
+tests/fm-supervision-host-park.test.sh 329326
+tests/fm-supervision-host-hook.test.sh 403793
+tests/fm-supervision-host-drain.test.sh 45950
+tests/fm-read-repetition.test.sh 602
+tests/fm-read-repetition-live.test.sh 1110
 tests/fm-arm-pretool-check.test.sh 33778
 tests/fm-backend-herdr.test.sh 36331
 tests/fm-backend-t3code.test.sh 239245
@@ -979,13 +996,9 @@ tests/fm-stow-audit.test.sh 2171
 tests/fm-stow-cascade.test.sh 3501
 tests/fm-subagent-pretool-check.test.sh 1465
 tests/fm-supervision-events.test.sh 1455
-tests/fm-supervision-host-attended-live-e2e.test.sh 111
-tests/fm-supervision-host-attended.test.sh 710000
-tests/fm-supervision-host-away.test.sh 95480
-tests/fm-supervision-host-dialog.test.sh 630000
-tests/fm-supervision-host-live-e2e.test.sh 97
-tests/fm-supervision-host-recovery.test.sh 232954
-tests/fm-supervision-host.test.sh 150393
+tests/fm-supervision-host-attended-live-e2e.test.sh 49
+tests/fm-supervision-host-live-e2e.test.sh 75
+tests/fm-supervision-host.test.sh 435581
 tests/fm-tangle-guard.test.sh 13857
 tests/fm-task-delivery.test.sh 61600
 tests/fm-task-inbox.test.sh 107216
@@ -1020,8 +1033,7 @@ tests/fm-watch-checkpoint.test.sh 34079
 tests/fm-watch-completed-ship-hold.test.sh 11466
 tests/fm-watch-inbox-meta.test.sh 283
 tests/fm-watch-recovery-loop.test.sh 61655
-tests/fm-watch-triage-waits.test.sh 930000
-tests/fm-watch-triage.test.sh 740000
+tests/fm-watch-triage.test.sh 592950
 tests/fm-watch-wedge-cap-live.test.sh 255
 tests/fm-watch-wedge-cap-unconfigured-parity.test.sh 52167
 tests/fm-watch-wedge-cap.test.sh 446482
@@ -1041,7 +1053,7 @@ portable_serial_unhinted() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-unhinted.XXXXXX") || return 1
   portable_serial_weight_hints | awk 'NF { print $1 }' | LC_ALL=C sort -u >"$tmp/hinted"
   list_portable_serial | LC_ALL=C sort -u >"$tmp/serial"
-  comm -23 "$tmp/serial" "$tmp/hinted"
+  LC_ALL=C comm -23 "$tmp/serial" "$tmp/hinted"
   rm -rf "$tmp"
 }
 
@@ -1209,8 +1221,8 @@ run_coverage_guard() {
     return 1
   fi
   cat "$tmp/s1" "$tmp/s2" | LC_ALL=C sort -u >"$tmp/shards_union"
-  missing=$(comm -23 "$tmp/proven" "$tmp/shards_union" || true)
-  extra=$(comm -13 "$tmp/proven" "$tmp/shards_union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/proven" "$tmp/shards_union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/proven" "$tmp/shards_union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable shards must equal the proven-isolated set"
     [ -z "$missing" ] || { log "missing from shards:"; printf '%s\n' "$missing" >&2; }
@@ -1256,8 +1268,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/serial_shards_raw" >"$tmp/serial_shards"
-  missing=$(comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
-  extra=$(comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable serial shards must equal the portable serial lane"
     [ -z "$missing" ] || { log "missing from serial shards:"; printf '%s\n' "$missing" >&2; }
@@ -1269,7 +1281,7 @@ run_coverage_guard() {
   for pair in "shards_union:serial" "shards_union:herdr" "serial:herdr"; do
     a=${pair%%:*}
     b=${pair#*:}
-    comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
+    LC_ALL=C comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
     if [ -s "$tmp/overlap" ]; then
       log "coverage guard: overlap between $a and $b:"
       cat "$tmp/overlap" >&2
@@ -1287,8 +1299,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/union_raw" >"$tmp/union"
-  missing=$(comm -23 "$tmp/all" "$tmp/union" || true)
-  extra=$(comm -13 "$tmp/all" "$tmp/union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/all" "$tmp/union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/all" "$tmp/union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: union of portable shards + portable serial + Herdr must equal tests/*.test.sh"
     [ -z "$missing" ] || { log "missing from union:"; printf '%s\n' "$missing" >&2; }
@@ -1325,7 +1337,7 @@ run_coverage_guard() {
     "$ROOT/bin/fm-test-isolation-proof.sh" --list | LC_ALL=C sort -u >"$tmp/proof_list"
     if ! cmp -s "$tmp/proven" "$tmp/proof_list"; then
       log "coverage guard: embedded proven-isolated set diverges from bin/fm-test-isolation-proof.sh --list"
-      comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
+      LC_ALL=C comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
       rm -rf "$tmp"
       return 1
     fi
@@ -1579,6 +1591,9 @@ families_for_changed_path() {
       # through run_script_bounded, so it cannot regress fixture Git isolation.
       printf '%s\n' pure-contract-unit
       ;;
+    bin/fm-test-tap-verify.sh)
+      printf '%s\n' "__script__:fm-test-tap-verify.test.sh"
+      ;;
     bin/backends/herdr*|bin/fm-herdr-lab.sh|tests/herdr-test-safety.sh|tests/herdr-client-pair-fixture.sh)
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
@@ -1716,6 +1731,11 @@ families_for_changed_path() {
       printf '%s\n' pr-forge
       printf '%s\n' "__script__:fm-dispatch-resolve.test.sh"
       ;;
+    .pi/extensions/fm-primary-read-repetition.ts|.pi/extensions/lib/fm-primary-read-repetition-policy.ts|tests/fixtures/fm-read-repetition-sdk.mjs|tests/fixtures/fm-read-repetition-live.mjs)
+      printf '%s\n' __script__:fm-read-repetition.test.sh
+      printf '%s\n' __script__:fm-read-repetition-live.test.sh
+      printf '%s\n' __script__:fm-pi-primary-types.test.sh
+      ;;
     .pi/extensions/fm-branch-supervision.ts|.pi/extensions/lib/fm-async-exec.ts|\
     .pi/extensions/lib/fm-branch-dispatch.ts|.pi/extensions/lib/fm-native-contract.ts)
       # The portable suites that actually load these files, named one by one.
@@ -1729,11 +1749,11 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-watch-recovery-loop.test.sh
       printf '%s\n' __script__:fm-wake-queue.test.sh
       printf '%s\n' __script__:fm-pi-primary-types.test.sh
-      printf '%s\n' __script__:fm-supervision-host.test.sh \
-        __script__:fm-supervision-host-attended.test.sh \
-        __script__:fm-supervision-host-dialog.test.sh \
-        __script__:fm-supervision-host-away.test.sh \
-        __script__:fm-supervision-host-recovery.test.sh
+      printf '%s\n' __script__:fm-supervision-host-fork.test.sh
+      printf '%s\n' __script__:fm-supervision-host.test.sh
+      printf '%s\n' __script__:fm-supervision-host-drain.test.sh
+      printf '%s\n' __script__:fm-supervision-host-hook.test.sh
+      printf '%s\n' __script__:fm-supervision-host-park.test.sh
       # Whether an arriving outcome still lets the captain type is a fact only
       # a real Pi TUI can answer, so the live guards are selected too.
       printf '%s\n' live-harness-optin
@@ -1825,9 +1845,11 @@ families_for_changed_path() {
       ;;
     bin/fm-extension.mjs|bin/fm-extension.sh|docs/examples/process-event-extension/*)
       printf '%s\n' __script__:fm-extension-binding.test.sh
+      printf '%s\n' __script__:fm-procevent-extension-errors.test.sh
       ;;
     bin/fm-procevent.sh|bin/fm-procevent-lib.sh|bin/fm-procevent-extension-capture.pl)
       printf '%s\n' __script__:fm-extension-binding.test.sh
+      printf '%s\n' __script__:fm-procevent-extension-errors.test.sh
       printf '%s\n' __script__:fm-procevent.test.sh
       printf '%s\n' __script__:fm-procevent-when.test.sh
       printf '%s\n' __script__:fm-remote-reply.test.sh

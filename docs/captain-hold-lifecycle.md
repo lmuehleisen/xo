@@ -33,7 +33,12 @@ A hold whose `--until` date has passed keeps those annotations while tasks-axi r
 
 The `complete` subcommand unions the reviewed captain-held task ids into `decision_keys=` and appends `decisions_reviewed=1` while originating task metadata is live.
 A post-teardown visual review can complete against the surviving report and durable tasks without recreating volatile task metadata.
-It accepts `--none` as an explicit semantic inventory result, refused while the origin still has a lifecycle-open keyed status decision, and verifies every listed task against tasks-axi before recording completion.
+The [lifecycle policy](../.agents/skills/captain-hold-lifecycle/SKILL.md#policy) assigns caller authority, including the scout's brief-scoped exception for an empty inventory.
+`tests/fm-brief.test.sh` pins that the scout brief's outside-worktree rule names exactly that `complete --none` command, so the write boundary and the completion step cannot drift apart again.
+
+`complete` accepts `--none` as an explicit semantic inventory result.
+`--none` is refused while the origin still has a lifecycle-open keyed status decision.
+Before recording completion, `complete` verifies every listed task against tasks-axi.
 An answered entry that markdown Done retention moved into the configured Done archive still counts, while an archived close with no recorded answer does not.
 An origin cannot inventory itself except for a completed ship's own durable approval hold; a later worker event disallows that exception.
 Other historical self-inventories require a separate held task with `--origin`, replacement of only the invalid entry in the final `decision_keys=` line, and another `complete` call.

@@ -16,6 +16,14 @@ This skill is the single owner of the completion-aware profile-array selection p
 Do not add a daemon, opaque composite score, routing wrapper, hard-coded model-specific policy, or producer-side route recommendation.
 The [worker helper](../../../bin/fm-quota-choose.sh) and [typed resolver](../../../docs/configuration.md#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model) own their deterministic mapping boundaries.
 
+## Shared-quota opt-out
+
+When the home's `config/crew-dispatch.json` declares a top-level `"shared_quota": true`, this home draws every provider's usage from one single shared budget, so per-provider quota rows do not describe what is left, and this skill's quota snapshot, the quota parts of the eligibility and runway gates, and `spendPriority` ranking are off by home declaration.
+Make no `quota-axi` call, apply no quota row, quota floor, runway gate, or `spendPriority` rank, and choose the matched rule's first declared profile that its authoritative catalog supports and that meets the required reasoning class; catalog eligibility and reasoning-class fit still apply.
+`preferred_provider` is not a quota signal, so it still applies: `preferred_provider` still narrows the pool; declared order then picks within it.
+Account for every candidate as always, stating in place of quota evidence that quota ranking is off by home declaration.
+The declared value must be a boolean; anything else is an actionable configuration error.
+
 ## Worker-side quota helper
 
 The canonical shell helper for a worker that has already performed its model-selection reasoning and now needs to pick the first viable candidate is `bin/fm-quota-choose.sh`.
@@ -35,6 +43,7 @@ It never removes this skill's authority, and its `ambiguous`, `escalate`, and `e
 
 ## Read the default TOON
 
+When the home declares the [shared-quota opt-out](#shared-quota-opt-out), skip this section's quota reading and every quota-derived check built on it (quota rows, floors, runway, and `spendPriority`); catalog eligibility and reasoning-class fit still apply.
 Use `bin/fm-quota-read.sh` for every quota or auth read; it applies the [home provider scope](../../../docs/configuration.md#quota-provider-scope-configquota-providers) and refuses malformed configuration.
 
 Start each intake by running `bin/fm-quota-read.sh` once with no `--json`, and reuse that TOON for every candidate.
@@ -57,7 +66,7 @@ Read `bin/fm-quota-read.sh auth --json` only when a candidate's credential surfa
 
 For each candidate, preserve explicit `harness`, `model`, and `provider`; `harness-adapters` owns identity, and model/provider never infer harness.
 
-## Three gates, then the selected score
+## Three gates, then provider preference and the selected score
 
 Apply the three cheap orthogonal gates first.
 The selected score ranks only among candidates that pass all three.
@@ -118,7 +127,18 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 
 ## Rank by the selected score
 
-Among candidates that pass all three gates, pick the highest known value of the snapshot's selected metric.
+Among candidates that pass all three gates, first apply the optional top-level `preferred_provider` from `config/crew-dispatch.json`.
+Its schema is owned by [Crew dispatch profiles](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
+Within the already matched rule or default, restrict ranking to eligible candidates of that family when any remain.
+Do not introduce other profiles, change a Claude-only rule, or override an explicit captain choice or approval requirement.
+Only concrete evidence that every matched preferred candidate is ineligible authorizes fallback to other families.
+Unknown quota, missing account evidence, and unrankable scalars do not establish ineligibility.
+If preferred candidates remain eligible but none can be ranked, escalate with that uncertainty instead of switching families.
+When no matched profile belongs to the preferred family, preserve the rule's candidate set.
+With the field absent, keep the existing candidate set unchanged.
+Print the preferred-family decision, including the reason for any fallback.
+
+Within the resulting candidate set, pick the highest known value of the snapshot's selected metric.
 For `spendPressure`, positive means behind a steady spending schedule, zero means its limiting budget window is on schedule, and negative means ahead.
 Legacy `spendPriority` retains its historical-burn meaning.
 Rank only finite values in [-100,100] with `selection.status == known`.

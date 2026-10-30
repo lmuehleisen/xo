@@ -29,13 +29,13 @@ unset _FM_SESSION_LOCK_LIB_DIR
 # Known harness command names; extend when a new adapter is verified. omp is
 # anchored exactly like pi: its process name is the bare word `omp` (verified,
 # omp 18.1.11), and a substring match would claim ompd or comp.
-FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$|^agy$'
+FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$'
 
 # The same harnesses as exact executable names. Keep in sync with
 # FM_HARNESS_RE. Used only for the stricter path evidence below, where the
 # loose regex would also match ordinary firstmate paths such as
 # bin/fm-claude-stop-autoarm.sh.
-FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi omp agy)
+FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi omp)
 
 # Print the exact harness name carried by executable path $1 - its own basename
 # or any directory component - or return 1.
@@ -378,6 +378,34 @@ fm_harness_pid_alive() {
   comm=$(fm_ps_comm "$pid") || return 1
   args=$(fm_ps_args "$pid")
   fm_harness_process_matches "$comm" "$args"
+}
+
+# Liveness and identity of a session-lock pid for readers outside this file:
+# the supervision host's main-session key and the Claude auto-arm. A tagged
+# Windows pid is answered from the Windows process table, as above; any other
+# value goes to the generic fm_pid_alive and fm_pid_identity in
+# bin/fm-wake-lib.sh, which those readers already have sourced.
+fm_session_pid_alive() {  # <value>
+  local winpid
+  if winpid=$(fm_win_untag_pid "$1"); then
+    fm_win_command "$winpid" >/dev/null
+    return
+  fi
+  fm_pid_alive "$1"
+}
+
+# A tagged pid's identity is its Windows pid and executable path rather than a
+# start time. Every reader pairs it with the session sidecar id, which a new
+# session always changes, so a reused Windows pid still reads as a different
+# session.
+fm_session_pid_identity() {  # <value>
+  local winpid comm
+  if winpid=$(fm_win_untag_pid "$1"); then
+    comm=$(fm_win_command "$winpid") || return 1
+    printf 'win-pid=%s command=%s\n' "$winpid" "$comm"
+    return 0
+  fi
+  fm_pid_identity "$1"
 }
 
 # --- trusted same-session identity -------------------------------------------

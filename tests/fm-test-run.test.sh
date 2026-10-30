@@ -129,14 +129,14 @@ init_changed_fixture_repo() {
   : >"$repo/tests/wake-helpers.sh"
   printf '# wake-helpers.sh\n' >"$repo/tests/supervision-host-helpers.sh"
   printf '# wake-helpers.sh\n' >>"$repo/tests/fm-daemon.test.sh"
-  for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
-    fm-supervision-host-dialog.test.sh \
-    fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
+  for script in fm-supervision-host.test.sh fm-supervision-host-fork.test.sh \
+    fm-supervision-host-hook.test.sh \
+    fm-supervision-host-drain.test.sh fm-supervision-host-park.test.sh; do
     printf '#!/usr/bin/env bash\n# supervision-host-helpers.sh\n' >"$repo/tests/$script"
     chmod +x "$repo/tests/$script"
   done
   printf '# wake-helpers.sh\n' >"$repo/tests/watch-triage-helpers.sh"
-  for script in fm-watch-triage.test.sh fm-watch-triage-waits.test.sh; do
+  for script in fm-watch-triage.test.sh fm-watch-triage-pause.test.sh fm-watch-triage-wedge-defer.test.sh fm-watch-triage-fork.test.sh; do
     printf '#!/usr/bin/env bash\n# watch-triage-helpers.sh\n' >"$repo/tests/$script"
     chmod +x "$repo/tests/$script"
   done
@@ -460,9 +460,9 @@ test_changed_wake_helper_preserves_split_host_coverage() {
   # The direct shared-helper path is the control: every host wrapper is found.
   printf '\n' >>"$repo/tests/supervision-host-helpers.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
-  for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
-    fm-supervision-host-dialog.test.sh \
-    fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
+  for script in fm-supervision-host.test.sh fm-supervision-host-fork.test.sh \
+    fm-supervision-host-hook.test.sh \
+    fm-supervision-host-drain.test.sh fm-supervision-host-park.test.sh; do
     assert_contains "$listed" "tests/$script" "shared host helper selects $script"
   done
   printf '# wake-helpers.sh\n' >"$repo/tests/supervision-host-helpers.sh"
@@ -472,12 +472,12 @@ test_changed_wake_helper_preserves_split_host_coverage() {
   printf '\n' >>"$repo/tests/wake-helpers.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-daemon.test.sh" "wake fixture selects its direct reader"
-  for script in fm-supervision-host.test.sh fm-supervision-host-attended.test.sh \
-    fm-supervision-host-dialog.test.sh \
-    fm-supervision-host-away.test.sh fm-supervision-host-recovery.test.sh; do
+  for script in fm-supervision-host.test.sh fm-supervision-host-fork.test.sh \
+    fm-supervision-host-hook.test.sh \
+    fm-supervision-host-drain.test.sh fm-supervision-host-park.test.sh; do
     assert_contains "$listed" "tests/$script" "wake fixture selects its indirect host reader $script"
   done
-  for script in fm-watch-triage.test.sh fm-watch-triage-waits.test.sh; do
+  for script in fm-watch-triage.test.sh fm-watch-triage-pause.test.sh fm-watch-triage-wedge-defer.test.sh fm-watch-triage-fork.test.sh; do
     assert_contains "$listed" "tests/$script" "wake fixture selects its indirect triage reader $script"
   done
   assert_not_contains "$listed" "tests/fm-pr-merge.test.sh" "wake fixture must not select unrelated forge coverage"
@@ -1658,9 +1658,10 @@ SH
 # green but whose wall clock outgrew its caller's invocation budget. The caller
 # gets killed mid-run and retries invisibly, so an over-budget run has to be a
 # failure, not a note in the log.
-# tests/fm-watch-triage.test.sh finishes in about 434s alone and about 698s
-# under CI load, so the automatic --changed bound must leave a slow but healthy
-# watcher-wake-lock script room while still bounding a genuinely hung one
+# tests/fm-watch-triage.test.sh is the slowest watcher-wake-lock member at about
+# 593s under CI load (pause and wedge-defer siblings are 467s and 527s), so the
+# automatic --changed bound must leave a slow but healthy watcher-wake-lock
+# script room while still bounding a genuinely hung one
 # (upstream issue #3869). The stub records the bound the runner hands it.
 test_changed_bound_gives_slow_watcher_suites_headroom() {
   local tmp repo script bound rc

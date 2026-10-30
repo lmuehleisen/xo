@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# fm-supervision-host behavior cases with shared fixtures.
+# shellcheck source=tests/supervision-host-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/supervision-host-helpers.sh"
+
+fm_test_run \
+  test_latch_trips_after_two_engine_errors_then_probes_and_recovers \
+  test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes \
+  test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main \
+  test_engine_turn_is_bounded_and_its_descendants_reaped \
+  test_restarted_host_stops_what_a_killed_predecessor_left \
+  test_idle_engine_conversation_is_compacted_once_across_hosts \
+  test_engine_conversation_the_next_turn_would_not_resume_is_not_compacted \
+  test_compaction_abandoned_at_the_park_boundary_is_not_marked_done \
+  test_park_boundary_ends_the_park_before_the_hook_timeout \
+  test_park_boundary_holds_under_back_to_back_closes \
+  test_park_boundary_rechecked_just_before_the_engine_turn \
+  test_park_test_clock_requires_the_marker \
+  test_park_seconds_at_or_beyond_the_hook_registration_fall_back_to_the_default \
+  test_park_limit_lets_a_turn_outlive_the_boundary \
+  test_first_cycle_status_streams_and_owner_options_reach_it \
+  test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event \
+  test_unverified_engine_hands_every_away_wake_to_main \
+  test_host_outside_the_lock_owner_stands_down \
+  test_tagged_lock_holder_reaches_the_engine_whole \
+  test_superseded_host_leaves_the_owner_untouched
