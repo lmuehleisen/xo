@@ -24,6 +24,7 @@ make_case() {
   PROJECT_DIR="$CASE_DIR/project"
   POOL_DIR="$CASE_DIR/pool"
   FAKEBIN_DIR=$(make_spawn_fakebin "$CASE_DIR/fake")
+  fm_fake_exit0 "$FAKEBIN_DIR" no-mistakes
   mkdir -p "$HOME_DIR/data" "$HOME_DIR/projects" "$HOME_DIR/state" "$HOME_DIR/config"
   printf 'codex\n' > "$HOME_DIR/config/crew-harness"
   printf -- '- project [%s] - fixture (added 2026-01-01)\n' "$tokens" > "$HOME_DIR/data/projects.md"

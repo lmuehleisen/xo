@@ -437,9 +437,6 @@ family_for_basename() {
     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-owned-digest-recovery.test.sh|\
     fm-afk-inject-delivery-proof.test.sh|fm-afk-inject-titled-composer.test.sh|\
     fm-afk-return.test.sh|fm-afk-sentinel.test.sh|\
-    fm-supervision-host.test.sh|fm-supervision-host-fork.test.sh|\
-        fm-host-mirror.test.sh|\
-    fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|\
     fm-supervision-host-fork.test.sh|fm-supervision-host.test.sh|fm-supervision-host-drain.test.sh|\
     fm-supervision-host-hook.test.sh|fm-supervision-host-park.test.sh|\
     fm-host-mirror.test.sh)

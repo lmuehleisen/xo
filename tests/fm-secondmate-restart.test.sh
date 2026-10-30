@@ -716,7 +716,7 @@ SH
   assert_no_grep 'fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" "refused Ultra crossed the lifecycle transport"
   # Remote text delivery correlates even an ordinary nudge. Only that nudge
   # should cross the transport; no earlier persistence request may be sent.
-  [ "$(grep -c '^fm-remote-secondmate-control.sh send ' "$dir/ssh.log")" = 1 ] \
+  [ "$(grep -c '^fm-remote-secondmate-control.sh send-stdin ' "$dir/ssh.log")" = 1 ] \
     || fail "refused remote Ultra sent a persistence request before its fallback nudge"
   cmp -s "$dir/meta.before" "$dir/home/state/sm2.meta" || fail "refused remote Ultra changed metadata"
   pass "remote secondmate Codex Ultra refuses before persist and lifecycle transport"

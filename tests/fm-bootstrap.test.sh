@@ -1529,18 +1529,18 @@ SH
     FM_TEST_SECURITY_LOG="$case_dir/security.log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
   [ "$out" = 'CREW_DISPATCH: invalid config/crew-dispatch.json - approval must be "captain" when present' ] \
     || fail "a declared typesafe source must activate resolver-field validation, got: $out"
-  printf '%s\n' '{"rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$case_dir/home/config/crew-dispatch.json"
   for declaration in \
     '{"openrouter":{"source":"macos-keychain","service":"openrouter-api-key"}}' \
     '{"typesafe":{"source":"macos-keychain","service":"typesafe-api-key","key":"inline"}}'; do
     printf '%s\n' "$declaration" > "$cred"
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_TEST_SECURITY_LOG="$case_dir/security.log" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-    [ "$out" = 'CREW_DISPATCH: invalid config/crew-dispatch.json - unverified harness: gemini' ] \
-      || fail "a declaration that is not a valid typesafe source must keep the verified-harness baseline ($declaration), got: $out"
+    [ -z "$out" ] \
+      || fail "a declaration that is not a valid typesafe source must leave resolver-only fields inactive ($declaration), got: $out"
   done
   [ ! -s "$case_dir/security.log" ] || fail "bootstrap must never run the credential tool, got: $(cat "$case_dir/security.log")"
   rm -f "$cred"
+  printf '%s\n' '{"rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$case_dir/home/config/crew-dispatch.json"
   : > "$case_dir/child-env.log"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     TYPESAFE_API_KEY=test-key FM_TEST_CHILD_ENV_LOG="$case_dir/child-env.log" \

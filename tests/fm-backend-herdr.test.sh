@@ -27,6 +27,11 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the her
 herdr_forget_inherited_pane
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
+# Release identities shared by the compatibility fixtures.
+AT_FLOOR_PROTOCOL=19
+AT_FLOOR_VERSION=0.8.0
+BELOW_FLOOR_PROTOCOL=17
+BELOW_FLOOR_VERSION=0.7.5
 # Pin the ambient-home default to a marker-free fixture: FM_HOME resolves to
 # the suite's own root when unset, and a secondmate-marked checkout (any
 # treehouse crew home carries .fm-secondmate-home) would flip the default
@@ -815,6 +820,7 @@ test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one() {
 }
 
 
+# shellcheck disable=SC2016 # The body expands in run_with_clients' child shell.
 test_cli_caches_the_selected_client_within_a_process() {
   local dir out
   dir="$TMP_ROOT/client-pair-cache"; make_herdr_client_pair "$dir"
@@ -831,6 +837,7 @@ test_cli_caches_the_selected_client_within_a_process() {
 }
 
 
+# shellcheck disable=SC2016 # The body expands in run_with_clients' child shell.
 test_cli_scopes_the_selected_client_to_its_session() {
   local dir out
   dir="$TMP_ROOT/client-pair-cross-session"
@@ -897,6 +904,7 @@ SH
 }
 
 
+# shellcheck disable=SC2016 # The body expands in run_with_clients' child shell.
 test_cli_unrelated_failure_never_triggers_reselection() {
   local dir out rc
   dir="$TMP_ROOT/client-pair-unrelated"; make_herdr_client_pair "$dir"
@@ -911,6 +919,7 @@ test_cli_unrelated_failure_never_triggers_reselection() {
 }
 
 
+# shellcheck disable=SC2016 # The body expands in run_with_clients' child shell.
 test_cli_single_client_pays_no_selection_read() {
   local dir out
   dir="$TMP_ROOT/client-single"; make_herdr_client_pair "$dir"
@@ -4217,6 +4226,7 @@ test_composer_state_inactive_session_fails_fast_without_server_autostart() {
 }
 
 
+# shellcheck disable=SC2016 # Positional parameters expand in the child shell.
 test_composer_state_piped_reader_does_not_hang() {
   local out rc=0
   out=$( fm_run_timed 3 bash -c '. "$0/bin/fm-backend.sh"; ( fm_backend_composer_state herdr nonexistent-session:p2 ) 2>&1 | head -20' "$ROOT" ) || rc=$?
@@ -6073,6 +6083,7 @@ test_server_ensure_releases_caller_output() {
       bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest >/dev/null 2>&1; echo ensured' "$ROOT" \
       | cat > "$dir/out"
   ) &
+  # shellcheck disable=SC2031 # This is the background pipeline started above.
   reader=$!
   for i in $(seq 1 50); do
     kill -0 "$reader" 2>/dev/null || break

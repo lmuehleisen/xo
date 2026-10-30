@@ -828,7 +828,7 @@ reset_log
 run code out err "$BRIEF" --project pager
 HOME_DIR=$PRIMARY_HOME
 assert_equals '' "$out" "a declaration in another home is not consulted"
-assert_contains "$err" "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $OTHER_HOME/.env)" "a home with no declaration is off"
+assert_contains "$err" 'dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback)' "a home with no declaration is off"
 assert_absent "$LOG/security.argv" "another home's declaration is never read"
 EFFECTIVE_CONFIG="$TMP_ROOT/effective-config"
 mkdir -p "$EFFECTIVE_CONFIG"

@@ -128,12 +128,12 @@ run_pr() {
 pass "fm-project-mode: an entry with no pr token, a missing project, or an absent registry reports pr auto"
 
 [ "$(run_pr hand)" = "manual" ] || fail "pr=manual did not resolve: $(run_pr hand)"
-[ "$(run_mode hand)" = "no-mistakes off" ] || fail "pr=manual changed the two-word output: $(run_mode hand)"
+[ "$(run_mode hand)" = "direct-PR off" ] || fail "pr=manual changed the two-word output: $(run_mode hand)"
 [ "$(run_forge hand)" = "none" ] || fail "pr=manual changed the forge: $(run_forge hand)"
 err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" hand 2>&1 >/dev/null)
 [ -z "$err" ] || fail "a registered pr=manual warned: $err"
 [ "$(run_pr hand-first)" = "manual" ] || fail "pr=manual placed first did not resolve: $(run_pr hand-first)"
-[ "$(run_mode hand-first)" = "no-mistakes on" ] || fail "pr=manual placed first displaced the mode or +yolo: $(run_mode hand-first)"
+[ "$(run_mode hand-first)" = "direct-PR on" ] || fail "pr=manual placed first displaced the mode or +yolo: $(run_mode hand-first)"
 [ "$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --branch-prefix hand-first 2>/dev/null)" = "" ] \
   || fail "pr=manual placed first displaced the empty branch= override"
 pass "fm-project-mode: pr=manual binds in any token order and leaves mode, yolo, forge, and branch alone"

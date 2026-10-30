@@ -676,10 +676,12 @@ test_empty_write_prune_from_the_environment_widens_the_probe() {
   printf 'window=test:fm-wenv\nkind=ship\nworktree=%s\n' "$wt" > "$state/wenv.meta"
   # The one thing written since the anchor sits exactly where the DEFAULT list prunes.
   printf 'pack\n' > "$wt/.git/objects/fresh"
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
   env -u FM_WORKTREE_WRITE_PRUNE \
     bash -c '. "$1"; crew_worktree_written_since wenv "$2" "$3"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$state" "$anchor" \
     && fail "the default skip list let .git churn count as write evidence"
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
   FM_WORKTREE_WRITE_PRUNE='' \
     bash -c '. "$1"; crew_worktree_written_since wenv "$2" "$3"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$state" "$anchor" \
@@ -7070,3 +7072,6 @@ test_required_captain_hold_tests_fail_without_tasks_axi() {
   done
   pass "all four required captain-hold tests fail when tasks-axi is unavailable"
 }
+
+WEDGE_GUARD_CRITICAL='printf "%s\n" "{\"name\":\"ticket\",\"status\":\"CRITICAL\",\"recommendation\":\"ticket 7 is held by a live job\"}"'
+HOLD_WATCH_PID=

@@ -3607,3 +3607,13 @@ test_compaction_abandoned_at_the_park_boundary_is_not_marked_done() {
   stop_home_processes "$home"
   pass "host: a compaction abandoned at the park boundary is not marked done"
 }
+
+# Shared setup runs after every helper is defined and before a suite's cases.
+trap suite_cleanup EXIT
+MIRROR_ROOT="$TMP_ROOT/mirror-root"
+mkdir -p "$MIRROR_ROOT"
+git init -q "$MIRROR_ROOT"
+: > "$MIRROR_ROOT/AGENTS.md"
+ln -s "$ROOT/bin" "$MIRROR_ROOT/bin"
+LEFT_WATCHER=
+LEFT_ARM=
