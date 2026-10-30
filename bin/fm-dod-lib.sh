@@ -532,6 +532,7 @@ fm_dod_manual_pr_block() {  # <branch> <forge-cli> <draft-check> <contract-suffi
   cat <<EOF
 # Definition of done
 Delivery contract: mode=no-mistakes$suffix pr=manual
+Delivery pipeline: no-mistakes
 Ship branch: $branch
 This project's pull-request text is written by hand: the pipeline's \`pr\` step would rewrite the title and body you write on every validated push, so **no-mistakes runs here as a validation pass that pushes the branch**, and you then open the PR yourself.
 Pass \`--skip pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, \`lint\`, and \`push\` still run, and \`ci\` has no pipeline-opened PR to watch.

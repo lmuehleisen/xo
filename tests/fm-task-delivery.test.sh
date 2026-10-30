@@ -2001,6 +2001,8 @@ test_pr_manual_brief_hands_the_pr_text_to_the_worker() {
   brief="$home/data/pr-manual-b1/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes pr=manual" "$brief" \
     || fail "the brief did not record pr=manual on its delivery contract line"
+  grep -qx "Delivery pipeline: no-mistakes" "$brief" \
+    || fail "the manual-PR contract did not preserve the opted-in pipeline marker"
   # shellcheck disable=SC2016 # Backticks are literal generated Markdown.
   assert_grep 'Pass `--skip pr,ci` on every `no-mistakes axi run` for this task' "$brief" \
     "the worker was not told to skip the pr and ci steps"
