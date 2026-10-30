@@ -2065,7 +2065,9 @@ EOF
   touch "$home/config/no-mistakes"
   fm_fake_exit0 "$fakebin" no-mistakes
   local PATH="$fakebin:$PATH"
-  write_brief "$home" pr-manual-a1 no-mistakes
+  FM_HOME="$home" "$BRIEF" pr-manual-a1 proj --mode no-mistakes >/dev/null \
+    || fail "a pipeline brief without the manual PR-text token should scaffold"
+  fill_brief_subsections "$home/data/pr-manual-a1/brief.md" "Open the PR." "Ship it."
   out=$(run_spawn "$home" "$fakebin" pr-manual-a1 "$proj" claude --mode no-mistakes --yolo off 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "a pr=manual project launched on a brief that records no pr token"
