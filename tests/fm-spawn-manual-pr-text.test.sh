@@ -34,7 +34,7 @@ make_case() {
   git -C "$PROJECT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
   git -C "$PROJECT_DIR" worktree add --quiet --detach "$POOL_DIR" "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
   mkdir -p "$HOME_DIR/config"
-  touch "$HOME_DIR/config/no-mistakes"
+  [ "${FM_MANUAL_PR_PIPELINE_OFF:-0}" = 1 ] || touch "$HOME_DIR/config/no-mistakes"
   FM_HOME="$HOME_DIR" "$BRIEF" "$id" project --mode no-mistakes "$@" >/dev/null \
     || fail "the brief for $id should scaffold"
   content=$(cat "$HOME_DIR/data/$id/brief.md")
@@ -81,7 +81,19 @@ test_spawn_refuses_a_pr_text_mismatch_before_launch() {
   pass "fm-spawn: a brief and registry that disagree on pr=manual refuse before launch in both directions"
 }
 
+test_manual_pr_project_launches_with_pipeline_disabled() {
+  local id=pr-text-remap out status
+  FM_MANUAL_PR_PIPELINE_OFF=1 make_case remap "$id" "no-mistakes pr=manual" --pr manual
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off); status=$?
+  expect_code 0 "$status" "a remapped manual-text project should launch"$'\n'"$out"
+  grep -qx 'effective_mode=direct-PR' "$HOME_DIR/state/$id.meta" \
+    || fail "remapped manual-text task did not record direct-PR delivery"
+  pass "fm-spawn: a manual-text project launches through direct-PR with the pipeline off"
+}
+
 test_spawn_launches_when_brief_and_registry_agree_on_pr_text
 test_spawn_refuses_a_pr_text_mismatch_before_launch
+
+test_manual_pr_project_launches_with_pipeline_disabled
 
 echo "# all fm-spawn-manual-pr-text tests passed"

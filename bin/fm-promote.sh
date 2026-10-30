@@ -287,8 +287,9 @@ fi
 # An unbound project keeps the exact wording it always had.
 PROMOTE_FORGE_WORDS=
 [ "$FORGE" = none ] || PROMOTE_FORGE_WORDS=" forge=$FORGE"
+EFFECTIVE_PR_TEXT=$(fm_effective_pr_text "$PR_TEXT" "$EFFECTIVE_MODE")
 PROMOTE_PR_WORDS=
-[ "$PR_TEXT" = auto ] || PROMOTE_PR_WORDS=" pr=$PR_TEXT"
+[ "$EFFECTIVE_PR_TEXT" = auto ] || PROMOTE_PR_WORDS=" pr=$EFFECTIVE_PR_TEXT"
 PROMOTE_CONSENT_WORDS=
 [ -z "$UPSTREAM_CONSENT" ] || PROMOTE_CONSENT_WORDS=" upstream-consent=$UPSTREAM_CONSENT"
 
@@ -357,7 +358,7 @@ EOF
     printf '%s\n' "$PROMOTION_ASK_USER_BLOCK"
   fi
   printf '\n'
-  fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT" || return 1
+  fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$EFFECTIVE_PR_TEXT" || return 1
   [ "$EFFECTIVE_MODE" = "$MODE" ] || fm_no_mistakes_remap_note
 }
 mkdir -p "$DATA/$ID"

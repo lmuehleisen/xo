@@ -870,7 +870,8 @@ case "$EFFECTIVE_MODE" in
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
-DOD=$(fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || exit 1
+EFFECTIVE_PR_TEXT=$(fm_effective_pr_text "$PR_TEXT" "$EFFECTIVE_MODE")
+DOD=$(fm_dod_block "$EFFECTIVE_MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$EFFECTIVE_PR_TEXT") || exit 1
 [ "$EFFECTIVE_MODE" = "$MODE" ] || DOD=$DOD$'\n'$(fm_no_mistakes_remap_note)
 
 cat > "$BRIEF" <<EOF

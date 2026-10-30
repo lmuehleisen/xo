@@ -4823,7 +4823,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
         # so a Gerrit brief is told to publish its change rather than open a PR.
         OVERLAY_FORGE=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]forge=\([^ ]*\).*$/\1/p' "$SOURCE_BRIEF" | head -n 1)
         printf '\n# Current delivery instructions\nThese instructions supersede earlier no-mistakes pipeline and --intent instructions.\n' &&
-          fm_dod_block direct-PR "$ID" "$BRANCH" "${OVERLAY_FORGE:-none}" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT"
+          fm_dod_block direct-PR "$ID" "$BRANCH" "${OVERLAY_FORGE:-none}" "$BASE_BRANCH" "$UPSTREAM_CONSENT"
       fi
   } >"$BRIEF_TMP" || {
     rm -f -- "$BRIEF_TMP"
@@ -4940,7 +4940,7 @@ if [ "$KIND" = ship ]; then
     exit 1
   fi
   [ -n "$STANDING_PR" ] || STANDING_PR=auto
-  [ "$MODE" = no-mistakes ] || STANDING_PR=auto
+  STANDING_PR=$(fm_effective_pr_text "$STANDING_PR" "$EFFECTIVE_MODE")
   BRIEF_PR=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]pr=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   [ -n "$BRIEF_PR" ] || BRIEF_PR=auto
   if [ "$BRIEF_PR" != "$STANDING_PR" ]; then

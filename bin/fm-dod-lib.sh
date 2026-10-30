@@ -1089,6 +1089,8 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
 # no-mistakes token when that state is off, and the mode unchanged otherwise;
 # bin/fm-brief.sh, bin/fm-spawn.sh, and bin/fm-promote.sh call it before
 # fm_dod_block and fm_ship_rule_one, and the latter two refuse `unavailable`.
+# fm_effective_pr_text <pr> <effective-mode> drops the pipeline-only PR-text
+# token on a remapped direct-PR contract, whose worker already owns PR text.
 # fm_no_mistakes_remap_note prints the line a remapped Definition of done ends
 # with, so the worker learns why no pipeline runs.
 # fm_dod_pipeline_recorded <brief> reads the "Delivery pipeline: no-mistakes"
@@ -1117,6 +1119,14 @@ fm_effective_delivery_mode() {  # <mode> <config-dir>
     echo direct-PR
   else
     printf '%s\n' "$1"
+  fi
+}
+
+fm_effective_pr_text() {  # <pr> <effective-mode>
+  if [ "$2" = no-mistakes ]; then
+    printf '%s\n' "$1"
+  else
+    printf '%s\n' auto
   fi
 }
 
