@@ -177,6 +177,22 @@ esac
 SH
 chmod +x "$STUB"
 
+# Keep grant cleanup traces in each synthetic home for shutdown diagnostics.
+# The native trace descriptor is available on CI's Bash 5, not stock Bash 3.
+cat > "$TMP_ROOT/grant-trace-env" <<'SH'
+case "$0" in
+  */fm-wake-grant.sh)
+    if [ "${BASH_VERSINFO[0]}" -ge 5 ] && [ -d "${FM_HOME:-}" ]; then
+      exec 7>> "$FM_HOME/grant.trace"
+      BASH_XTRACEFD=7
+      PS4='+${BASHPID}:${LINENO}: '
+      set -x
+    fi
+    ;;
+esac
+SH
+export BASH_ENV="$TMP_ROOT/grant-trace-env"
+
 export FM_REPO="$ROOT"
 export FM_SUPERVISION_ENGINE_CLAUDE_BIN="$STUB"
 export FM_SUPERVISION_HOST_PRIMARY=claude
@@ -3511,6 +3527,8 @@ dump_host_handback_diagnostics() {  # <home> [wait-name]
       printf '%s\n' "--- $record ---" >&2
       cat "$home/state/$record" >&2 2>/dev/null || true
     done
+    printf '%s\n' '--- grant.trace (tail) ---' >&2
+    tail -n 100 "$home/grant.trace" >&2 2>/dev/null || true
   fi
   printf '%s\n' '--- process tree ---' >&2
   if ps -axo pid,ppid,pgid,etime,command >/dev/null 2>&1; then
