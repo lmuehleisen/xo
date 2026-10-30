@@ -1992,7 +1992,7 @@ test_pr_manual_brief_hands_the_pr_text_to_the_worker() {
   home="$TMP_ROOT/pr-manual-brief/home"
   mkdir -p "$home/data" "$home/state" "$home/config"
   touch "$home/config/no-mistakes"
-  local stub PATH
+  local stub PATH="$PATH"
   stub=$(fm_fakebin "$home/pipeline")
   fm_fake_exit0 "$stub" no-mistakes
   PATH="$stub:$PATH"
@@ -2129,7 +2129,7 @@ test_promotion_carries_the_pr_text_binding() {
   sendroot="$TMP_ROOT/pr-manual-promote/sendroot"
   mkdir -p "$home/state" "$home/data" "$home/projects/proj" "$sendroot/bin" "$home/config"
   touch "$home/config/no-mistakes"
-  local stub PATH
+  local stub PATH="$PATH"
   stub=$(fm_fakebin "$home/pipeline")
   fm_fake_exit0 "$stub" no-mistakes
   PATH="$stub:$PATH"

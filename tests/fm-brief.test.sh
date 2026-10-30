@@ -557,7 +557,7 @@ test_no_mistakes_pipeline_opt_in() {
     sed "s/stub-$kind/plain-$kind/g" "$off/data/stub-$kind/brief.md" | cmp -s - "$off/data/plain-$kind/brief.md" \
       || fail "$kind: an installed no-mistakes CLI changed the brief without config/no-mistakes"
     [ "$kind" = no-mistakes ] && continue
-    sed "s#$on/#$off/#g; s/opted-$kind/plain-$kind/g" "$on/data/opted-$kind/brief.md" \
+    sed "s#$on#$off#g; s/opted-$kind/plain-$kind/g" "$on/data/opted-$kind/brief.md" \
       | cmp -s - "$off/data/plain-$kind/brief.md" \
       || fail "$kind: config/no-mistakes changed a brief that is not a no-mistakes ship"
   done

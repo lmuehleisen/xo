@@ -1010,7 +1010,7 @@ FM_DISPATCH_BASE_URL=http://127.0.0.1:8080 FM_DISPATCH_API_KEY=unused OPENAI_API
   OPENROUTER_API_KEY=unused run code out err "$BRIEF" --project pager
 expect_code 0 "$code" "config-absent off exits 0"
 assert_equals '' "$out" "config-absent off prints nothing on stdout"
-assert_equals "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $HOME_DIR/.env)" "$err" \
+assert_equals 'dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback)' "$err" \
   "config-absent off is the original single stderr line, byte for byte"
 assert_absent "$LOG/argv" "config-absent off makes no network call"
 assert_absent "$LOG/quota-axi.calls" "config-absent off reads no quota"

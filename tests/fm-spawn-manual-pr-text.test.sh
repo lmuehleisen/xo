@@ -33,6 +33,8 @@ make_case() {
   printf 'base\n' > "$PROJECT_DIR/README.md"
   git -C "$PROJECT_DIR" add README.md
   git -C "$PROJECT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  git clone --quiet --bare "$PROJECT_DIR" "$CASE_DIR/origin.git"
+  git -C "$PROJECT_DIR" remote add origin "file://$CASE_DIR/origin.git"
   git -C "$PROJECT_DIR" worktree add --quiet --detach "$POOL_DIR" "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
   mkdir -p "$HOME_DIR/config"
   [ "${FM_MANUAL_PR_PIPELINE_OFF:-0}" = 1 ] || touch "$HOME_DIR/config/no-mistakes"

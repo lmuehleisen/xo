@@ -279,7 +279,7 @@ end
 # concludes with the simulated outcome, and the Full suite verdict is executed
 # by run_full_suite_verdict with that outcome as its needed jobs' results.
 published_checks() {  # [KEY=VALUE]...
-  local rows name conclusion outcome=success arg
+  local rows name conclusion outcome=success arg full_result=skipped
   for arg in "$@"; do
     case $arg in outcome=*) outcome=${arg#outcome=} ;; esac
   done
@@ -293,7 +293,7 @@ doc.fetch("jobs").each do |id, job|
   expansions = matrix.empty? ? [{}] : matrix.flat_map { |k, values| values.map { |v| { "matrix.#{k}" => v.to_s } } }
   expansions.each do |extra|
     name = interpolate(job.fetch("name", id), context.merge(extra))
-    conclusion = !runs ? "skipped" : id == "full-suite" ? "verdict" : context.fetch("simulated.outcome")
+    conclusion = !runs ? "skipped" : id == "full-suite" ? "verdict" : id == "ci-pass" ? "aggregate" : context.fetch("simulated.outcome")
     puts [name, conclusion].join("\t")
   end
 end
@@ -302,9 +302,40 @@ end
   while IFS=$'\t' read -r name conclusion; do
     if [ "$conclusion" = verdict ]; then
       if run_full_suite_verdict "$@" needs="$outcome" >/dev/null; then conclusion=success; else conclusion=failure; fi
+      full_result=$conclusion
+    elif [ "$conclusion" = aggregate ]; then
+      if run_ci_pass_verdict "$full_result" "$@" >/dev/null; then conclusion=success; else conclusion=failure; fi
     fi
     printf '%s\t%s\n' "$name" "$conclusion"
   done <<<"$rows"
+}
+
+# Run the fork's aggregate against the same simulated jobs as published_checks,
+# including the Full suite result, so skipped lanes cannot simulate a green PR.
+run_ci_pass_verdict() {  # <full-suite result> [KEY=VALUE]...
+  local full_result=$1 script
+  shift
+  script=$(ruby -ryaml -rjson -rshellwords -e "$EXPRESSION_RUBY" -e "$CONTEXT_RUBY" -e '
+doc = YAML.load_file(ARGV.shift)
+full_result = ARGV.shift
+context = simulated_context(doc.fetch("name"), ARGV)
+jobs = doc.fetch("jobs")
+gate = jobs.fetch("ci-pass")
+needs = Array(gate.fetch("needs")).to_h do |id|
+  result = if !Expression.condition(jobs.fetch(id)["if"], context) then "skipped"
+    elsif id == "full-suite" then full_result
+    else context.fetch("simulated.outcome") end
+  [id, {"result" => result}]
+end
+gate.fetch("steps").each do |step|
+  env = step.fetch("env", {}).map do |key, value|
+    resolved = key == "NEEDS_JSON" ? JSON.generate(needs) : interpolate(value, context)
+    "#{key}=#{resolved.shellescape}"
+  end.join(" ")
+  puts "#{env} bash -c #{step.fetch("run").shellescape} || exit $?"
+end
+' "$CI_WORKFLOW" "$full_result" "$@") || return 2
+  bash -c "$script" 2>&1
 }
 
 # Print the PR's visible checks after several runs on one head, given in the
@@ -330,7 +361,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate ci-pass'
+FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate full-suite ci-pass'
 NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash publish-identity'
 HEAVY_TIER_JOBS='tests-herdr'
 
@@ -415,7 +446,7 @@ test_only_the_full_ci_label_joins_the_pr_group() {
   pass "only the full-ci label joins and supersedes the PR's group; other labels cancel nothing"
 }
 
-QUICK_JOBS='test-coverage invariants full-suite'
+QUICK_JOBS='test-coverage publish-identity invariants full-suite ci-pass'
 
 # DOP-167 direction A: an outside PR without the label runs only the quick
 # checks and the Full suite verdict, which fails naming the label.
@@ -518,8 +549,8 @@ test_unrelated_label_never_masks_an_earlier_failure() {
     while IFS=$'\t' read -r name conclusion; do
       case "$expect:$name" in
         all-failed:*) want=failure ;;
-        waiting:'Full suite') want=failure ;;
-        waiting:'Test coverage guard'|waiting:'Repo invariants') want=success ;;
+        waiting:'Full suite'|waiting:'ci-pass') want=failure ;;
+        waiting:'Test coverage guard'|waiting:'Repo invariants'|waiting:'Publish identity and leak check') want=success ;;
         waiting:*) want=skipped ;;
       esac
       [ "$conclusion" = "$want" ] \
@@ -746,7 +777,7 @@ RUBY
   local event skip_push expected actual
   while read -r event skip_push expected; do
     [ "$skip_push" != - ] || skip_push=
-    actual=$(job_runs_under ci-pass "$event" "$skip_push" '' failure) \
+    actual=$(job_runs_under ci-pass event="$event" association=OWNER skip_push="$skip_push" needs=failure) \
       || fail "could not resolve the ci-pass condition for $event FM_CI_SKIP_PUSH=$skip_push"
     [ "$actual" = "$expected" ] \
       || fail "after a failed lane, ci-pass on $event with FM_CI_SKIP_PUSH=$skip_push must resolve $expected, got $actual"

@@ -510,9 +510,9 @@ jobs:
   # only in the local pre-push gate. CI runs after publication, so this is a
   # merge block and detection, not prevention.
   publish-identity:
-    name: Publish identity and leak check
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Publish identity and leak check
     runs-on: ubuntu-24.04
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
