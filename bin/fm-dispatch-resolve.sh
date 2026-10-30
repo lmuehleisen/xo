@@ -1069,7 +1069,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       | . + {excluded: class_exclusion(.)}
       | . as $k
       | . + {candidates: [.routes[] |
-          (if $k.excluded != null then {profile: ., eligible: false, reason: $k.excluded} else evaluate_route(.; $k.unmetered; $k.spend_priority) end)
+          (if $k.excluded != null then {profile: ., provider: provider_of(.), eligible: false, reason: $k.excluded} else evaluate_route(.; $k.unmetered; $k.spend_priority) end)
           + {class: $k.name, family: $k.family, live: $k.live, max_live: $k.max_live,
              live_cap_group: $k.live_cap_group, group_live: $k.group_live, group_max_live: $k.group_max_live}
           + (if $k.experiment != null then {experiment: true} else {} end)]}
