@@ -3,6 +3,16 @@
 # shellcheck source=tests/watch-triage-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/watch-triage-helpers.sh"
 
+if [ -n "${FM_TEST_STOCK_BASH:-}" ]; then
+  fm_test_run test_turn_ended_churn_existing_marker_absorbed
+  exit 0
+fi
+
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit 0
+fi
+
 fm_test_run \
   test_status_span_actionable_classifier \
   test_status_span_survives_a_later_routine_append \

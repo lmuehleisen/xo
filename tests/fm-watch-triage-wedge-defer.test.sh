@@ -3,6 +3,11 @@
 # shellcheck source=tests/watch-triage-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/watch-triage-helpers.sh"
 
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit 0
+fi
+
 fm_test_run \
   test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict \
   test_wedge_threshold_keeps_a_wait_past_a_default_key_answer \
