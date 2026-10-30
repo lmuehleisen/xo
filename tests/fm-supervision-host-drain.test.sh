@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# fm-supervision-host behavior cases with shared fixtures.
+# shellcheck source=tests/supervision-host-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/supervision-host-helpers.sh"
+
+fm_test_run \
+  test_report_surface_enforces_actor_turn_and_scope \
+  test_report_after_the_return_is_queued_for_main \
+  test_dispatch_entry_scopes_rows_and_renders_the_away_tail \
+  test_branch_outcomes_only_on_a_host_home_off_pi \
+  test_branch_outcomes_put_captain_first_and_collapse_routine_overflow \
+  test_branch_outcomes_collapse_repeated_captain_outcomes_per_task \
+  test_branch_outcomes_present_a_long_away_window_once \
+  test_branch_outcomes_budgets_count_bytes \
+  test_branch_outcomes_stay_unread_when_a_projection_fails \
+  test_branch_outcomes_stay_unread_without_jq \
+  test_branch_outcomes_stay_unread_when_the_drain_cannot_print \
+  test_branch_outcomes_date_a_legacy_backlog_without_adopting_it \
+  test_branch_ack_keeps_older_keyed_decision_open \
+  test_branch_outcomes_date_an_outcome_carried_across_a_switch_off_pi \
+  test_branch_outcomes_keep_an_unshown_outcome_until_acknowledged \
+  test_branch_outcomes_keep_a_drain_presented_outcome_across_a_switch_to_pi \
+  test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair

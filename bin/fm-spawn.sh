@@ -17,7 +17,10 @@
 #   refuses a brief whose `forge=` disagrees with the registered binding in
 #   either direction, and refuses --yolo on for a forge=gerrit or
 #   forge=external project, where yolo is inactive (bin/fm-project-mode.sh's
-#   header carries that decision). A forge=external ship also refuses a missing
+#   header carries that decision). The project's pr=manual binding is read the
+#   same way and agrees with the brief's " pr=manual" contract suffix in either
+#   direction; only a no-mistakes ship takes it, so a no-mistakes-prod-only
+#   project's direct-PR task expects none. A forge=external ship also refuses a missing
 #   review tool adapter and an unusable personal backup remote, installs the
 #   per-task pre-push guard (bin/fm-git-push-guard.sh) even when the home keeps
 #   AI trailers, and records forge=external, backup_remote=, and backup_prefix=
@@ -427,17 +430,26 @@
 #   primary checkout while that marker is set.
 #   A secondmate runs in its own home and is not marked.
 #   Only after this isolation check, every fresh ship or scout requires a clean
-#   task worktree.
-#   Before a fresh ship or scout worker starts, its clean task worktree fetches
-#   origin, resolves the current remote default branch (or uses --base-branch,
-#   described above), and resets to its tip.
-#   An explicit local-only ship task in a project with no remotes instead uses
-#   local main (or master), without fetching or trusting the primary's HEAD.
-#   That path requires a same-repository worktree with no commits outside the
-#   local default's history; dirty, divergent, or unknown-default bases refuse.
-#   Any configured remote retains the origin refresh requirement, even local-only.
-#   An unreachable origin, unresolved default branch, or non-clean worktree
-#   refuses the spawn rather than risking a PR based on stale history.
+#   task worktree. When an origin configuration is detected, spawn fetches it,
+#   resolves the current remote default branch (or uses --base-branch, described
+#   above), and resets to its tip. A home that creates the default-off
+#   config/spawn-base-primary-checkout flag (docs/configuration.md) instead
+#   resets a local-only ship or a scout without --base-branch to that same
+#   branch in the primary checkout when it strictly contains origin's tip: a
+#   local-only project lands work there through bin/fm-merge-local.sh and never
+#   pushes, so origin stays frozen at the last push. A publishing mode
+#   (bin/fm-dod-lib.sh fm_mode_publishes) and a named base branch keep origin's
+#   tip, because that work is delivered against origin. Two branches that have
+#   diverged also keep origin's tip, with a note counting both sides. The
+#   primary's commit is read from the local object store, so nothing more is
+#   fetched, and every base this picks contains origin's tip, so the reset
+#   discards nothing the origin-only rule would have kept. When no origin
+#   configuration is detected, an explicit local-only ship uses local main or
+#   master and refuses dirty, divergent, or unknown-default bases. Relaunch reuses the
+#   recorded worktree without fetching or resetting its base. An unreachable
+#   detected origin, unresolved default branch, or non-clean worktree refuses
+#   a fresh spawn rather than risking a PR based on stale history or
+#   discarding local work.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -652,7 +664,7 @@
 # a mate's completed turns stay in its own home. Codex stays unknown until a semantic
 # source exists. Grok keeps its rendered-tail fallback and is not given a parent
 # turn-end hook. Cursor's transcript binding is written for a secondmate the same way
-# as for a crewmate. Muse, gemini, agy, devin, rovo, and kiro are refused as secondmates.
+# as for a crewmate. Muse, gemini, devin, rovo, cortex, and kiro are refused as secondmates.
 # A raw launch command for a claude, pi, pi-signed, or omp secondmate is not armed
 # and retires any arm an earlier launch of that mate left, so its verdict is unknown:
 # the raw command carries no --settings or -e flag to load the wiring.
@@ -797,6 +809,9 @@
 #   pane export happens on the remote host (bin/fm-remote-secondmate-control.sh).
 #   Local spawns never pass it and resolve their own carrier exactly as before.
 set -eu
+
+# Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
+shopt -u patsub_replacement 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -1439,7 +1454,7 @@ spawn_remote_secondmate() {
     harness=$("$FM_ROOT/bin/fm-harness.sh" secondmate "$id")
   fi
   case "$harness" in
-  claude | codex | opencode | pi | pi-signed | grok | kimi | cursor) ;;
+  claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | omp) ;;
   *)
     fm_lock_release "$registry_lock" || true
     fm_lock_release "$SPAWN_TASK_LOCK" || true
@@ -1875,7 +1890,11 @@ spawn_slot_holds_only_spawn_wiring() {
     return 1
   }
   harness=$(fm_control_harness_family "$HARNESS") || harness=
-  allowed=$(fm_control_harness_wiring_paths "$harness" "$WT" "$STATE_REAL" "$ID" 2>/dev/null || true)
+  # No harness wiring exists before the canonical state directory is set.
+  allowed=
+  if [ -n "${STATE_REAL:-}" ]; then
+    allowed=$(fm_control_harness_wiring_paths "$harness" "$WT" "$STATE_REAL" "$ID" 2>/dev/null || true)
+  fi
   status_out=$(spawn_slot_status) || return 1
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
@@ -2531,6 +2550,9 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   fi
   fm_backend_runtime_check "$BACKEND" || exit 1
+  if [ "$BACKEND" = rex ]; then
+    fm_backend_rex_local_server_ensure || exit 1
+  fi
   if [ "$BACKEND" = orca ]; then
     ORCA_LAUNCH_ENV_ENABLED=$(fm_config_source_present "$CONFIG/launch-env-tmux-session") || exit 1
     if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
@@ -3478,6 +3500,8 @@ fm_agy_bypass_validate
 # kiro has none either: this task verified only crewmate-side launch, busy state,
 # interrupt, exit, and resume on the V2 engine, and docs/supervision-protocols/
 # carries no kiro wake protocol (kiro-cli 2.21.4).
+# devin has none either: only its worker lifecycle hooks are verified, and
+# docs/supervision-protocols/ carries no devin wake protocol (devin 3000.11.1).
 # commandcode has none either: only its worker busy mod is verified, and
 # docs/supervision-protocols/ carries no Command Code wake protocol (1.74.1).
 # polytoken has none either: only the crewmate/scout lifecycle is verified;
@@ -4910,6 +4934,26 @@ if [ "$KIND" = ship ]; then
     echo "error: forge mismatch for $ID: $PROJ_NAME is registered forge=$STANDING_FORGE but $SOURCE_BRIEF records forge=$BRIEF_FORGE; keep the filled ## Captain's intent and ## Firstmate spec bodies, remove $SOURCE_BRIEF, re-scaffold it with $forge_scaffold, then re-fill those two subsections, so the worker's publication matches the project's forge" >&2
     exit 1
   fi
+  # The registered PR-text binding is read the same way: a brief that disagrees
+  # would hand the pipeline's pr step the text a person owns, or the worker text
+  # the pipeline owns. direct-PR already leaves the text to the worker, so a
+  # conditional-policy project's direct-PR task expects none.
+  if ! STANDING_PR=$("$FM_ROOT/bin/fm-project-mode.sh" --pr "$PROJ_NAME" 2>/dev/null); then
+    "$FM_ROOT/bin/fm-project-mode.sh" --pr "$PROJ_NAME" >/dev/null || true
+    echo "error: $ID cannot launch: the registry entry for $PROJ_NAME does not resolve to a delivery posture (see the refusal above); correct data/projects.md and spawn again" >&2
+    exit 1
+  fi
+  [ -n "$STANDING_PR" ] || STANDING_PR=auto
+  STANDING_PR=$(fm_effective_pr_text "$STANDING_PR" "$EFFECTIVE_MODE")
+  BRIEF_PR=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]pr=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
+  [ -n "$BRIEF_PR" ] || BRIEF_PR=auto
+  if [ "$BRIEF_PR" != "$STANDING_PR" ]; then
+    pr_scaffold="fm-brief.sh $ID $PROJ_NAME --mode $MODE"
+    [ "$STANDING_FORGE" = none ] || pr_scaffold="$pr_scaffold --forge $STANDING_FORGE"
+    [ "$STANDING_PR" = auto ] || pr_scaffold="$pr_scaffold --pr $STANDING_PR"
+    echo "error: PR-text mismatch for $ID: $PROJ_NAME is registered pr=$STANDING_PR but $SOURCE_BRIEF records pr=$BRIEF_PR; keep the filled ## Captain's intent and ## Firstmate spec bodies, remove $SOURCE_BRIEF, re-scaffold it with $pr_scaffold, then re-fill those two subsections, so the worker owns the PR text exactly when the project says so" >&2
+    exit 1
+  fi
   # Merge authority on a Gerrit forge is refused rather than quietly dropped, on
   # the captain's decision of 2026-09-15: a Code-Review+2 is a positive
   # attributed claim that a named human approved, and firstmate must not
@@ -5151,8 +5195,32 @@ spawn_worktree_has_origin_config() ( # <worktree>
   return 1
 )
 
-freshen_spawn_worktree_base() { # <worktree> [<base-branch>]
-  local worktree=$1 base=${2:-} default target expected actual status remotes local_base=0
+# The opt-in half of the base rule the header owns: return 0 and set
+# SPAWN_PRIMARY_BASE_REV when <project>'s own <default> should be this fresh
+# slot's base instead of origin's tip <origin-rev>. A pool slot shares the
+# primary checkout's object store, so reading that commit fetches nothing, and a
+# commit the slot cannot read keeps origin's tip.
+SPAWN_PRIMARY_BASE_REV=
+spawn_base_from_primary_checkout() { # <worktree> <project> <default> <origin-rev> <mode>
+  local worktree=$1 project=$2 default=$3 origin_rev=$4 mode=$5 primary_rev ahead behind
+  SPAWN_PRIMARY_BASE_REV=
+  if [ -z "$project" ] || fm_mode_publishes "$mode"; then
+    return 1
+  fi
+  primary_rev=$(git -C "$project" rev-parse --verify --quiet "refs/heads/$default^{commit}" 2>/dev/null) || return 1
+  ahead=$(git -C "$worktree" rev-list --count "$origin_rev..$primary_rev" 2>/dev/null) || return 1
+  behind=$(git -C "$worktree" rev-list --count "$primary_rev..$origin_rev" 2>/dev/null) || return 1
+  [ "$ahead" -gt 0 ] || return 1
+  if [ "$behind" -eq 0 ]; then
+    SPAWN_PRIMARY_BASE_REV=$primary_rev
+    return 0
+  fi
+  echo "note: pooled worktree '$worktree': $default in the primary checkout has diverged from origin/$default (ahead by $ahead, behind by $behind); starting from origin's tip" >&2
+  return 1
+}
+
+freshen_spawn_worktree_base() { # <worktree> <base-branch> <project> <mode>; 2 when the worktree is not clean
+  local worktree=$1 base=${2:-} project=${3:-} mode=${4:-} default target expected actual status remotes local_base=0
   local project_common worktree_common reset_mode=--hard
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
     echo "error: could not inspect pooled worktree '$worktree' before refreshing its base" >&2
@@ -5218,6 +5286,11 @@ freshen_spawn_worktree_base() { # <worktree> [<base-branch>]
     echo "error: '$target' is not a commit for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   }
+  if [ "$local_base" -eq 0 ] && [ -z "$base" ] && [ -e "$CONFIG/spawn-base-primary-checkout" ] \
+    && spawn_base_from_primary_checkout "$worktree" "$project" "$default" "$expected" "$mode"; then
+    target="$default in the primary checkout"
+    expected=$SPAWN_PRIMARY_BASE_REV
+  fi
   if [ "$local_base" -eq 1 ] && ! git -C "$worktree" merge-base --is-ancestor HEAD "$expected"; then
     echo "error: pooled worktree '$worktree' has commits not contained in '$target'; refusing to discard unlanded local work" >&2
     return 1
@@ -5851,7 +5924,7 @@ EOF
       [ -n "$WT" ] || { echo "error: treehouse get --lease did not report a worktree for $ID" >&2; exit 1; }
       validate_spawn_worktree "treehouse get --lease" "$WT (leased to $ID; once inspected, release it with 'treehouse return --force $WT' from $PROJ_ABS)"
       T3CODE_LEASED=1
-      freshen_spawn_worktree_base "$WT" "$BASE_BRANCH" || {
+      freshen_spawn_worktree_base "$WT" "$BASE_BRANCH" "$PROJ_ABS" "$MODE" || {
         if [ "$?" -eq 2 ]; then
           T3CODE_LEASED=0
           echo "error: $WT stays leased to $ID; once inspected, release it with 'treehouse return --force $WT' from $PROJ_ABS" >&2
@@ -6658,7 +6731,7 @@ if [ -n "$HERDR_RECLAIM_WT" ]; then
   RELAUNCH=1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != t3code ]; then
-  freshen_spawn_worktree_base "$WT" "$BASE_BRANCH" || exit 1
+  freshen_spawn_worktree_base "$WT" "$BASE_BRANCH" "$PROJ_ABS" "$MODE" || exit 1
 fi
 
 # Re-assert the durable task copy after either treehouse acquisition or endpoint

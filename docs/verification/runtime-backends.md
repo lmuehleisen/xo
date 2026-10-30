@@ -1643,6 +1643,30 @@ rc=1
 The refusal is a JSON error on stderr with exit 1 and empty stdout, and both client generations report `.server.compatible` and `.server.protocol` per named session, which is what the selection in `bin/backends/herdr.sh` reads.
 `tests/fm-backend-herdr.test.sh` pins the bypass, same-process same-session caching, cross-session isolation, forced reselection, and both status shapes against fakes; `tests/fm-backend-herdr-smoke.test.sh` refreshes the real status normalization against the installed binary's running lab server.
 
+### Session directory
+
+Measured 2026-10-15 on Linux x86_64 with Herdr 0.9.5, reading only `status`: the default and an empty `sessions/probe` session under a fresh `XDG_CONFIG_HOME` with no server, then the host's running `firstmate` session.
+
+```sh
+herdr --version
+d=$(mktemp -d /tmp/hx.XXXXXX); mkdir -p "$d/herdr/sessions/probe"
+for s in default probe; do XDG_CONFIG_HOME="$d" herdr --session "$s" status --json | jq -c --arg d "$d" '{session: .server.session, running: .server.running, socket: (.server.socket | sub("^" + $d; "$XDG_CONFIG_HOME"))}'; done
+herdr --session firstmate status --json | jq -c --arg h "$HOME" '{session: .server.session, running: .server.running, socket: (.server.socket | sub("^" + $h; "~"))}'
+HERDR_SOCKET_PATH=/tmp/xx/zz.sock herdr --session default status --json | jq -c '.server.socket | sub("^" + env.HOME; "~")'
+```
+
+```text
+herdr 0.9.5
+{"session":null,"running":false,"socket":"$XDG_CONFIG_HOME/herdr/herdr.sock"}
+{"session":"probe","running":false,"socket":"$XDG_CONFIG_HOME/herdr/sessions/probe/herdr.sock"}
+{"session":"firstmate","running":true,"socket":"~/.config/herdr/sessions/firstmate/herdr.sock"}
+"~/.config/herdr/herdr.sock"
+```
+
+A session whose server is stopped still reports its socket, the socket's directory is the session directory `herdr session list --json` reports as `session_dir`, it follows `XDG_CONFIG_HOME`, and an inherited `HERDR_SOCKET_PATH` does not move it under `--session`, so the [externally managed server](../herdr-backend.md#externally-managed-servers) markers stay readable through a restart without an extra Herdr call.
+The `status` read created nothing under the fresh config directory.
+`tests/fm-backend-herdr.test.sh` pins the marker behavior against fakes.
+
 ### Submit confirmation
 
 Measured 2026-08-19 against Herdr 0.8.0 and Claude Code 2.1.236 in an isolated `fm-lab-` session.
@@ -3554,6 +3578,27 @@ Error: Invalid OMP profile "BAD". Profile names must match ^[a-z0-9][a-z0-9._-]{
 `bin/fm-omp-profile-lib.sh` enforces the same name rule before launch, and `tests/fm-omp-harness.test.sh` pins the flag position, the profile-scoped catalog check, and the unpinned launch through a fake omp.
 Repeat these commands after an omp upgrade to refresh this record.
 
+### Remote second mate on Linux
+
+Verified on 2026-10-28 against omp 18.13.3 (a Bun-compiled binary installed through mise) on Linux x86_64 with Herdr 0.9.1, driven from a macOS primary through a scratch home on both sides.
+The agent process reads `comm=omp` with its executable inside the mise install tree, so the anchored name identifies it on Linux as on macOS and no launcher-specific identity rule is needed:
+
+```text
+$ bin/fm-spawn.sh <id> --secondmate          # config/secondmate-harness: omp anthropic/claude-opus-5-5 high
+spawned <id> harness=omp kind=secondmate mode=secondmate yolo=off window=remote:<id> worktree=<remote-home> remote=<host> backend=herdr
+$ bin/fm-on.sh <id> fm-remote-secondmate-control.sh state <id>
+alive
+$ bin/fm-remote-secondmate-relaunch.sh <id> omp anthropic/claude-opus-5-5 high
+relaunched <id> harness=omp from=omp model=anthropic/claude-opus-5-5 effort=high backend=herdr endpoint=fm-remote:w1:p2 worktree=<remote-home>
+# on the host, the relaunched agent process
+comm=omp FM_OMP_HARNESS=omp HERDR_SESSION=fm-remote
+$ bin/fm-teardown.sh <id>
+teardown <id> complete (remote <host>:<remote-home>)
+```
+
+Two `bin/fm-send.sh fm-<id>` steers, one before and one after the relaunch, were moved to `handled/` by the agent and answered with correlated lines in the remote `state/parent-replies.status`; the second answer reported `bin/fm-harness.sh` resolving `omp` from the agent's own tool shell and the session lock held by the omp process.
+Retirement removes the remote home, and with it the route state that holds the busy records omp arms, so the host-local teardown skips retiring those records once that state directory is gone.
+`tests/fm-remote-secondmate-omp.test.sh` is the portable regression for the remote gates and retirement; repeat the commands above after an omp or Herdr upgrade to refresh this record.
 ## OpenCode V2
 
 Verified on 2026-10-12 with `opencode v2.0.27` on macOS and a private tmux server.
@@ -3725,3 +3770,37 @@ Repeat the hooked-worker check above before publication if watcher or task-inbox
 
 Verified on 2026-10-13 with kiro-cli 2.24.0 and tmux: interactive V2 launch, native hooks, anchored process ancestry, scoped idle composer, task-bound turn-marker cancellation fallback, Escape and `/quit` exit.
 [The Kiro verification record](kiro.md) contains the exact live refresh command, output, platform facts, and supported limits.
+
+## Pi repeated-read containment
+
+Verified on 2026-10-27 UTC on Linux x86_64 with Node 24.22.1 and npm 11.19.1.
+The operator contract, opt-in default and migration procedure are owned by [configuration](../configuration.md#pi-repeated-read-containment).
+The supported SDK matrix is Pi 1.1.0 and 1.2.0, with each release's sibling packages pinned to the same version rather than resolving newer 1.x packages through public dependency ranges.
+TypeScript 5.9.3 checked all tracked Pi consumers with strict no-emit settings for both versions.
+The real SDK fixture uses synthetic provider responses, intercepted fetches and fake Bash operations; it never sends a request to an inference endpoint.
+
+```sh
+bash tests/fm-pi-primary-types.test.sh
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.1.0
+ok - read guard real SDK events/abort against Pi 1.1.0
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.2.0
+ok - read guard real SDK events/abort against Pi 1.2.0
+```
+
+Each SDK passed alternating synthetic 85/65-pair histories, SSH-shaped reads, `cut`, outer groups, multiline `nl`/`wc`/`head`/`tail`/`od` pipelines, escaped-newline continuations, duplicate batches and truncated results with compaction.
+Changing output, failed results, foreign ownership, absent opt-in, unknown grouped stages and grouped mutators remained allowed; unrecognized commands are outside the detector rather than denied execution.
+The resumed SDK session retained the stop across marked operational input, extension input and a journal reopen, then accepted deliberate RPC user input.
+No provider fetch occurred after a stop notice, including the small-context compaction case.
+
+Installed Pi 1.4.0 separately passed the token-free RPC guard below, using a synthetic in-process provider, a fake Bash tool and private home/session directories.
+It executed the known multiline grouped read three times, aborted before a fourth execution, refused an operational reset, accepted a fresh RPC user reset and persisted one stop notice plus a proven-owner activation receipt.
+The guard verifies that its Pi process group exits during cleanup.
+
+```sh
+bash bin/fm-test-run.sh tests/fm-read-repetition-live.test.sh
+ok - Pi 1.4.0 installed RPC read guard: veto, abort, durable latch, operational denial and user reset
+```
+
+`tests/fm-read-repetition.test.sh` independently exercises ownership denials and regain, configuration bounds, default-off registration, reset provenance, bounded history, group-recognition controls and preservation of the ignored legacy guard/helper/configuration through a real pre-feature Git fast-forward.
+No macOS or Windows ancestry, native-adapter interception, separate native-tool execution, terminal screenshot/display, worker or fleet-wide protection is claimed.
+The runtime fixture does not reproduce spontaneous model-loop onset or establish a model/serving root cause.

@@ -460,7 +460,6 @@ setup_remote_case() {  # <case-dir> <id> <ssh-mode>
   cat > "$fb/fake-ssh" <<'SH'
 #!/usr/bin/env bash
 set -u
-cat > /dev/null
 while [ "$#" -gt 0 ]; do
   case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
 done
@@ -469,16 +468,17 @@ argv_b64=$4
 decode() { printf '%s' "$1" | base64 --decode 2>/dev/null || printf '%s' "$1" | base64 -D; }
 rargs=()
 while IFS= read -r -d '' a; do rargs+=("$a"); done < <(decode "$argv_b64")
+stdin_payload=$(cat)
 printf '%s\n' "${rargs[*]}" >> "$FM_FAKE_SSH_LOG"
 case "${FM_FAKE_SSH_MODE:-ok}" in
   unreachable) exit 255 ;;
 esac
 case "${rargs[1]:-}" in
-  send)
+  send-stdin)
     # Model the live remote mate: act on the instruction and report back on the
     # parent channel, carrying the correlation token the request embedded.
     if [ -n "${FM_FAKE_ANSWER_STATUS:-}" ]; then
-      corr=$(printf '%s' "${rargs[3]:-}" | grep -oE 'corr=[0-9a-f]{16}' | head -1)
+      corr=$(printf '%s' "$stdin_payload" | grep -oE 'corr=[0-9a-f]{16}' | head -1)
       [ -z "$corr" ] || printf 'done [%s]: open records written down\n' "$corr" \
         >> "$FM_FAKE_ANSWER_STATUS"
     fi
@@ -551,7 +551,7 @@ test_remote_mate_restarts_over_the_transport_hop() {
   [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 codex big-model high" ] \
     || fail "the host-local relaunch did not carry the parent's resolved profile: $relaunch_line"
   # The persist request crossed the SAME hop before the restart did.
-  [ "$(grep -n '^fm-remote-secondmate-control.sh send' "$dir/ssh.log" | head -1 | cut -d: -f1)" \
+  [ "$(grep -n '^fm-remote-secondmate-control.sh send-stdin' "$dir/ssh.log" | head -1 | cut -d: -f1)" \
      -lt "$(grep -n '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" | head -1 | cut -d: -f1)" ] \
     || fail "the remote mate was restarted before it was asked to persist"$'\n'"$(cat "$dir/ssh.log")"
   pass "T6 a remote mate restarts through the host-local control plane over the fm-on hop"
@@ -716,7 +716,7 @@ SH
   assert_no_grep 'fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" "refused Ultra crossed the lifecycle transport"
   # Remote text delivery correlates even an ordinary nudge. Only that nudge
   # should cross the transport; no earlier persistence request may be sent.
-  [ "$(grep -c '^fm-remote-secondmate-control.sh send ' "$dir/ssh.log")" = 1 ] \
+  [ "$(grep -c '^fm-remote-secondmate-control.sh send-stdin ' "$dir/ssh.log")" = 1 ] \
     || fail "refused remote Ultra sent a persistence request before its fallback nudge"
   cmp -s "$dir/meta.before" "$dir/home/state/sm2.meta" || fail "refused remote Ultra changed metadata"
   pass "remote secondmate Codex Ultra refuses before persist and lifecycle transport"

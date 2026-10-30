@@ -24,6 +24,15 @@ Commits take their identity from git config or the launch pin only, and pushes a
 For contributions to [upstream Firstmate](https://github.com/kunchenguid/firstmate), follow that repository's contribution instructions.
 Upstream enforces its own pull-request requirements independently of this fork.
 The [upstream submission procedure](.agents/skills/firstmate-coding-guidelines/SKILL.md#upstream-no-mistakes-submissions) owns the pipeline publication steps.
+### The `full-ci` label
+
+CI on a pull request from an author without write access runs only the quick checks at first: `Test coverage guard`, `Repo invariants` and the PR text check.
+Lint and the behavior suites wait for a maintainer, or the maintainer's fleet, to add the `full-ci` label when the pull request is picked up for review.
+Until then the `Full suite` check fails with a message naming the label; that is expected and needs no action from you.
+Adding the label runs the full suite, and every later push to that pull request runs it again.
+This keeps the repository's public CI within GitHub's limit on jobs running at once.
+Pull requests from this repository's own branches or from authors with write access run the full suite without the label.
+
 
 ## Agent-driven contributions
 
@@ -37,9 +46,10 @@ Add required status checks with `strict_required_status_checks_policy: false`; a
 Bind the checks to the GitHub Actions app already producing them, rather than accepting the same context from any integration.
 No new app installation or manual runner setup is needed for that setting.
 
-Require exactly two contexts: `ci-pass`, the aggregate gate in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) that passes only when every other CI job ran and passed, plus the separate `PR text check` context from the `PR text` workflow, which no `needs` edge can reach across workflows.
+Require exactly two contexts: `ci-pass`, the aggregate gate in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) that passes only when every other CI job ran and passed, including the full-suite verdict, plus the separate `PR text check` context from the `PR text` workflow, which no `needs` edge can reach across workflows.
 This fork has no no-mistakes compliance job, so upstream's `PR must be raised via no-mistakes` context is never required here.
 The timing aggregate is not a substitute for individual jobs because it can succeed while collecting evidence from a failed run.
+The individual lanes skip on an outside pull request until it has the `full-ci` label, and a skipped job satisfies a required check, so `Full suite` must be required too: it fails until the label is on and whenever a lane failed or was cancelled.
 
 Apply the approved rule change only after the corresponding workflow is green and landed, confirming exact names and the Actions integration id from real checks first.
 Snapshot the current ruleset, amend that same rule with the authenticated GitHub API or settings UI, and read back both the ruleset and effective branch rules.
@@ -124,20 +134,22 @@ Its header and `--help` own the flags, family labels, lanes, and changed-file ma
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
 CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, lint, invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated; pushes to `main` are never cancelled, and the workflow owns that contract and its rationale.
+Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated, and a newer push to `main` cancels the older `main` run so only the newest merge's run finishes; the workflow owns that contract, the `full-ci` gate described under [The `full-ci` label](#the-full-ci-label), and their rationale.
 A fork can set the repository variable `FM_CI_SKIP_PUSH` to `1` to skip the push run of `CI`, and `FM_CI_SKIP_MACOS` to `1` to skip the stock macOS Bash job, without a tracked edit that drifts from upstream.
 Each skip is a job-level condition, so a skipped job reports success rather than leaving the pull request pending, and with neither variable set every job runs on upstream and on every fork exactly as before.
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.
 Leave the `sleep 0.1` cadence in the suites' bounded condition waits alone.
-Those sleeps look like recoverable overhead - `fm-watch-triage.test.sh` alone issues about 1,900 of them, each paying a flat ~100ms scheduler wake-up penalty on macOS - but they are not overhead added to the clock; they are how a test waits for a subject that only moves on `fm-watch.sh`'s own one-second `FM_POLL` cadence.
-Sampling less often does not remove that wait, it only delays detection: raising the interval to 0.5s and charging each sample proportionally measured `fm-watch-triage.test.sh` at 435s and 440s against 390s and 393s for the unchanged script, back to back on 2026-09-03, because each of its ~40 poll-cycle waits and ~73 process-exit waits paid up to half a second more.
+Those sleeps look like recoverable overhead - the watch-triage suite (`fm-watch-triage.test.sh`, `fm-watch-triage-pause.test.sh`, and `fm-watch-triage-wedge-defer.test.sh`) issues about 1,900 of them, each paying a flat ~100ms scheduler wake-up penalty on macOS - but they are not overhead added to the clock; they are how a test waits for a subject that only moves on `fm-watch.sh`'s own one-second `FM_POLL` cadence.
+Sampling less often does not remove that wait, it only delays detection: raising the interval to 0.5s and charging each sample proportionally measured the unsplit suite at 435s and 440s against 390s and 393s for the unchanged script, back to back on 2026-09-03, because each of its ~40 poll-cycle waits and ~73 process-exit waits paid up to half a second more.
 Some of those loops are also catching a transient rather than waiting for a settled condition, so a coarser sample can step over the state they assert on.
 Discover tests by listing `tests/*.test.sh`: each is a self-contained bash script named `<subject>.test.sh`, and its header comment describes what it covers, so pass one to `bin/fm-test-run.sh` to focus on a subject with canonical timing output.
-Shared test helpers live in `tests/lib.sh` (reporters, temp roots, git fixtures), `tests/fixtures.sh` (fake toolchain and spawn-world builders), `tests/wake-helpers.sh`, `tests/secondmate-helpers.sh`, `tests/git-config-helpers.sh` (fixture Git isolation from the host's global and system configuration and from an inherited repository location such as `GIT_DIR`, already sourced by `tests/lib.sh` and `tests/herdr-test-safety.sh`; a suite that sources neither must source it itself before its first Git operation so a direct invocation stays isolated), and `tests/tmproot-guard.sh` (the one guard every cleanup trap uses to remove a fixture temp root, already sourced by `tests/lib.sh`; a suite that avoids the library sources it itself and removes roots only through `fm_test_rm_tmproot`).
+Shared test helpers live in `tests/lib.sh` (reporters, temp roots, git fixtures), `tests/fixtures.sh` (fake toolchain and spawn-world builders), `tests/wake-helpers.sh`, `tests/secondmate-helpers.sh`, `tests/supervision-host-helpers.sh` (stub-engine fixtures for the split supervision-host suites), `tests/watch-triage-helpers.sh` (shared fixtures for the split watch-triage suites), `tests/tmproot-guard.sh` (the fixture cleanup guard), and `tests/git-config-helpers.sh` (fixture Git isolation from the host's global and system configuration and from an inherited repository location such as `GIT_DIR`, already sourced by `tests/lib.sh` and `tests/herdr-test-safety.sh`; a suite that sources neither must source it itself before its first Git operation so a direct invocation stays isolated).
 Source those instead of copying a fake toolchain into a new suite.
 A fixture may shorten a production timeout to keep a failure path prompt, but never below what the real work inside that window costs on a loaded machine: a fork, an exec, a lock acquisition, a beacon publication, or a first-poll check.
 Where a case's assertion is not about the timeout itself, give that window headroom over the measured loaded cost, and bound the test's own waiting with iteration-counted poll loops, which stretch under load where a wall-clock budget does not.
+Supervision host and Stop-hook hand-back waits are the exception: use `wait_until_deadline` (a 60s wall-clock budget well above the loaded hand-back cost) so a timeout dumps `host.out`, `hook.out`/`hook.err`, the supervision-host log, health file, and a process tree.
 Tests that need a real optional backend or an explicit opt-in (real herdr/zellij/cmux/paseo/rex/tern smoke tests, the live Pi regression) skip themselves and print the tool or environment gate needed to enable them, so the portable suite remains safe on machines without those tools.
+The complete [`tests/fm-watch-triage-pause.test.sh`](tests/fm-watch-triage-pause.test.sh) suite requires compatible `tasks-axi` on `PATH`, as specified in [Backlog backend](docs/configuration.md#backlog-backend-taskstoml--configbacklog-backend).
 [`tests/rex-test-safety.sh`](tests/rex-test-safety.sh) owns the real-Rex suites' private-server isolation and capability gates.
 The [Herdr backend guide](docs/herdr-backend.md#destructive-lab-safety) owns the lane's isolation boundary, while [runtime backend verification](docs/verification/runtime-backends.md#herdr) owns active empirical evidence; live harness credential tests remain opt-in.
 
