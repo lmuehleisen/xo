@@ -276,7 +276,8 @@ FM_QUOTA_AGY_JQ='
     (if ($ids | index($model)) != null then $model
      elif $effort != "" and ($ids | index($model + "-" + $effort)) != null
      then $model + "-" + $effort else "" end) as $listed |
-    if $listed | test("^gemini-[a-zA-Z0-9.-]+$") then "gemini"
+    if $listed | test("^gemini-([a-zA-Z0-9]+[.-])*argon([.-][a-zA-Z0-9]+)*$") then "gemini_argon"
+    elif $listed | test("^gemini-[a-zA-Z0-9.-]+$") then "gemini"
     elif $listed | test("^(claude|gpt)-[a-zA-Z0-9.-]+$") then "claude_gpt"
     else "" end;
 '
