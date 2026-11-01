@@ -897,10 +897,10 @@ EOF
     || fail "agy secondmates stay outside the worker bypass policy layer"
   ! grep -q '^agy_bypass=' "$home/state/$id.meta" \
     || fail "agy secondmates must not record a worker bypass posture"
-  grep -q '^supervision_model=autoarm$' "$home/state/$id.meta" || fail 'agy secondmate must record autoarm'
+  grep -Fq 'FM_SUPERVISION_MODEL=autoarm' "$home/launch.log" || fail 'agy secondmate must launch with autoarm'
   [ ! -e "$home/state/$id.busy-gen" ] || fail 'agy secondmate must not arm a parent worker busy record'
   grep -Fq -- '--mode accept-edits' "$home/launch.log" || fail 'agy secondmate permissions changed'
-  pass "fm-spawn.sh: agy secondmate records autoarm without worker wiring or changing permissions"
+  pass "fm-spawn.sh: agy secondmate launches with autoarm without worker wiring or changing permissions"
 }
 
 # --- start confirmation -----------------------------------------------------

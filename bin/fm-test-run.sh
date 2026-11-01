@@ -1648,6 +1648,11 @@ families_for_changed_path() {
       printf '%s\n' watcher-wake-lock
       printf '%s\n' "__script__:fm-backend-t3code.test.sh"
       ;;
+    bin/fm-turnend-guard.sh|bin/fm-turnend-guard-agy.sh)
+      printf '%s\n' pure-contract-unit
+      printf '%s\n' watcher-wake-lock
+      printf '%s\n' live-harness-optin
+      ;;
     bin/fm-wake*|bin/fm-inactive-reconcile.sh|\
     bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
@@ -1803,14 +1808,14 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       ;;
-    bin/fm-arm-pretool-check.sh|bin/fm-cd-pretool-check.sh|bin/fm-subagent-pretool-check.sh|bin/fm-turnend-guard.sh)
+    bin/fm-arm-pretool-check.sh|bin/fm-cd-pretool-check.sh|bin/fm-subagent-pretool-check.sh)
       printf '%s\n' pure-contract-unit
       printf '%s\n' watcher-wake-lock
       printf '%s\n' __script__:fm-agy-primary.test.sh
       printf '%s\n' live-harness-optin
       ;;
     bin/fm-agy-hook.sh|.agents/hooks.json|tests/agy-primary-live-probe.py|\
-    bin/fm-sessionstart-agy.sh|bin/fm-turnend-guard-agy.sh)
+    bin/fm-sessionstart-agy.sh)
       printf '%s\n' __script__:fm-agy-primary.test.sh
       printf '%s\n' __script__:fm-agy-harness.test.sh
       printf '%s\n' __script__:fm-agy-signals-live-e2e.test.sh
