@@ -50,6 +50,7 @@ Until they land, their current behavior stays as described in their own owners.
 | The arm owners | Each primary's existing arm owner | Runs the host for a home that runs it and delivers a handed-back wake to main; see [Arm owners](#arm-owners). |
 | The engine | `bin/fm-supervision-engine-lib.sh` | Owns the home gate, including the default on Claude and the opt-out, the verified-engine list, and one bounded engine turn, including the reap of engine tool processes that outlive it. |
 | Row eligibility and the offer rule | `bin/fm-branch-dispatch.mjs` | The command entry to `.pi/extensions/lib/fm-branch-dispatch.ts`, so the host and the Pi extension compute branch-claimable rows, their task scope, and whether the branch may take a close (`branchOfferForWake`) from one owner; it also renders the wake message with the same away-posture tail, or the dialog mirror at its head. |
+| Warm-cache compaction | `bin/fm-warm-compact-lib.sh` | While parked, the host compacts the idle primary and its idle engine conversation once per idle episode when the home opted in; [configuration.md](configuration.md#warm-cache-compaction-configwarm-compact) owns the gate and guards. |
 | The grant and the drain | `bin/fm-wake-grant.sh` | Publishes the branch's rows bound to the host's own process; [watcher-continuity.md](watcher-continuity.md#per-actor-acknowledgement) owns the per-actor drain and acknowledgement the engine runs. |
 | The prompt | `bin/fm-branch-prompt.sh` | Emits the same byte-stable prompt the Pi branch runs; each wake names its host's report surface. |
 | The report surface | `bin/fm-branch-report.sh` | The command twin of the Pi branch's `fm_branch_report` tool, with the same task scoping; see [The report surface](#the-report-surface). |
@@ -443,9 +444,9 @@ Each arm owner's own suite covers its host mode against a stub host.
 | Test | What it covers |
 |---|---|
 | `tests/fm-supervision-host.test.sh` | Report and dispatch surfaces, `BRANCH OUTCOMES`, and Stop-hook handoff and acknowledged hand-back retries against the shared stub-engine fixtures. |
-| `tests/fm-supervision-host-attended.test.sh` | Attended dispatch, main-only hand-backs, successor takeover, and dialog delivery through the real host and watcher. |
-| `tests/fm-supervision-host-away.test.sh` | Away wakes, outcomes on return, incomplete turns, and acknowledgements through the real host and watcher. |
-| `tests/fm-supervision-host-recovery.test.sh` | Engine-error latches, park bounds, restart cleanup, and host ownership through the real host and watcher. |
+| `tests/fm-supervision-host-fork.test.sh` | Attended dispatch, main-only hand-backs, successor takeover, and dialog delivery through the real host and watcher. |
+| `tests/fm-supervision-host-drain.test.sh` | Away wakes, outcomes on return, incomplete turns, and acknowledgements through the real host and watcher. |
+| `tests/fm-supervision-host-park.test.sh` | Engine-error latches, park bounds, restart cleanup, and host ownership through the real host and watcher. |
 | `tests/fm-claude-stop-autoarm.test.sh` | The Claude arm owner's host mode against a stub host. |
 | `tests/fm-cursor-primary.test.sh` | The Cursor arm owner's host mode against a stub host. |
 | `tests/fm-pi-watch-extension.test.sh` | The OpenCode plugin's host mode against a stub host. |

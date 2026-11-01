@@ -51,4 +51,4 @@ EOF
   pass "in-flight captain holds are actionable without promoting deferred, blocked, external, unheld, or closed work"
 }
 
-test_inflight_captain_hold_actionability
+fm_test_run test_inflight_captain_hold_actionability

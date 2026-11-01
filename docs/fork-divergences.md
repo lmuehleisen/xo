@@ -277,11 +277,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### agy-adapter-mechanics
 
-- Intent: agy primary and local secondmate support, native lifecycle hooks, physical directory grants, and model-aware effort support.
+- Intent: agy primary and local secondmate support, native worker lifecycle hooks, the verified primary PreInvocation/background-command transport, physical directory grants, and model-aware effort support.
 - Class: carried; these are functional additions to upstream's worker adapter.
-- Seam: fork-only `bin/fm-agy-lib.sh`, and the large fork diff in shared `tests/fm-agy-harness.test.sh`.
+- Seam: fork-only `bin/fm-agy-lib.sh`, and the large fork diff in shared `tests/fm-agy-harness.test.sh`, and the retained primary `.agents/hooks.json`, `docs/supervision-protocols/agy.md`, and native-hook verification.
 - Guard: `tests/fm-agy-harness.test.sh`.
-- Upstream: ships a worker-only adapter without equivalent native hook wiring or all the fork's directory and effort mappings; the fork already uses its bounded shared catalog probing.
+- Upstream: ships a adapter with a different primary SessionStart/Stop-park transport, without equivalent worker hook wiring or all the fork's directory and effort mappings; the fork already uses its bounded shared catalog probing.
   Drop each remaining seam when upstream supports its behavior, keeping the separately intended `agy-permission-posture` entry.
 
 ### worktree-leases
@@ -520,7 +520,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: a supervision host taking over from a slow watcher waits the watcher's full stop allowance, so recovery does not loop.
 - Class: carried.
 - Seam: the takeover wait in `take_over_cycle` in `bin/fm-watch-arm.sh`, its note in `docs/watcher-continuity.md`, and evidence in `docs/verification/supervision.md` (shared).
-- Guard: `tests/fm-supervision-host-attended.test.sh` `test_host_takeover_waits_full_stop_bound` and its decimal and prefixed-receipt variants.
+- Guard: `tests/fm-supervision-host-fork.test.sh` `test_host_takeover_waits_full_stop_bound` and its decimal and prefixed-receipt variants.
 - Upstream: waits five seconds after TERM before a plain attach, losing the handover snapshot on a slow exit; drop once its takeover honors the full stop allowance.
 
 ### scout-readonly-cleanup
@@ -549,11 +549,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### ci-shard-split
 
-- Intent: portable serial CI runs as fourteen shards, with the supervision-host suite split into attended, dialog, away, and recovery suites and watcher triage split into ordinary and declared-wait suites, so each shard stays inside the CI job limit; canonical lint supports `NofM` partitions and CI uses three.
+- Intent: portable serial CI runs as fourteen shards, using upstream's supervision-host and watch-triage suite boundaries plus focused fork regression suites, so each shard stays inside the CI job limit; canonical lint supports `NofM` partitions and CI uses three.
 - Class: carried.
-- Seam: fork-only `tests/supervision-host-helpers.sh`, `tests/fm-supervision-host-attended.test.sh`, `tests/fm-supervision-host-dialog.test.sh`, `tests/fm-supervision-host-away.test.sh`, and `tests/fm-supervision-host-recovery.test.sh`, fork-only `tests/watch-triage-helpers.sh` and `tests/fm-watch-triage-waits.test.sh`, the shared `tests/fm-watch-triage.test.sh` driver, plus the shard and lint matrices in `.github/workflows/ci.yml`, partition parsing and balancing in `bin/fm-lint.sh`, shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md`, and the stub left in `tests/fm-supervision-host.test.sh` (shared).
+- Seam: the shard and lint matrices in `.github/workflows/ci.yml`, partition parsing and balancing in `bin/fm-lint.sh`, measured shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, and `CONTRIBUTING.md`; upstream split suites share `tests/supervision-host-helpers.sh` and `tests/watch-triage-helpers.sh`, with fork-only regressions in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`.
 - Guard: `tests/fm-test-run.test.sh` shard cases; `tests/fm-lint.test.sh`; `tests/fm-ci-workflow.test.sh`; every integration ports upstream's new supervision-host tests into the split suites.
-- Upstream: runs nine serial shards and one supervision-host suite; retain the split until the fork fits that layout with headroom.
+- Upstream: runs ten serial shards and split supervision-host and watcher-triage suites; retain the fork shard count until it fits that layout with headroom.
   Successful suite durations in green runs [40214527890](https://github.com/lmuehleisen/xo/actions/runs/40214527890) and [40116342702](https://github.com/lmuehleisen/xo/actions/runs/40116342702) sum to 258.03 and 264.77 minutes respectively when shard sums are rounded to hundredths, implying a nine-shard minimum of 28.67 and 29.42 minutes even with perfect balance and no job setup.
   Their measured shard sums in numerical order were 19.41, 19.25, 20.91, 24.44, 11.33, 14.92, 19.81, 16.15, 18.62, 17.48, 19.11, 19.12, 16.56, 20.92 minutes and 19.89, 19.09, 18.39, 25.92, 10.24, 14.55, 20.03, 21.63, 19.60, 19.53, 20.45, 19.25, 19.13, 17.07 minutes.
   The post-merge candidate run [40419989504](https://github.com/lmuehleisen/xo/actions/runs/40419989504) measured 20.90, 19.58, 21.24, 19.98, 10.13, 20.04, 19.99, 22.70, 17.68, 20.64, 18.32, 17.97, 16.29, 16.15 minutes; two shards contained failures, so its 261.61-minute total (summing the rounded shard values) is not a complete successful baseline.
@@ -605,7 +605,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: the supervision host skips its branch-lease release when no lease names the branch actor, so a slow main mutation holding the lease-command lock cannot delay a watcher cycle.
 - Class: carried.
 - Seam: `fm_lease_actor_holds_any` in `bin/fm-lease-lib.sh`, and its call in `release_branch_leases` plus the matching OWNERSHIP note in `bin/fm-supervision-host.sh` (shared).
-- Guard: `tests/fm-supervision-host-recovery.test.sh` `test_activation_skips_the_lease_lock_when_no_branch_lease_is_held`.
+- Guard: `tests/fm-supervision-host-fork.test.sh` `test_activation_skips_the_lease_lock_when_no_branch_lease_is_held`.
 - Upstream: always runs `fm-lease.sh release-actor`, which waits for the lease-command lock that a guarded main mutation such as a teardown holds for its whole run; drop once upstream's release no longer waits for that lock when there is nothing to release.
 
 ### captain-alerts
@@ -625,6 +625,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - `codex-verification`: the Codex busy-negotiation sentence in `bin/fm-busy-lib.sh` keeps the fork's verification wording; realign when convenient.
 - `pi-custom-run-cases`: the custom-triggered run cases in `tests/fm-pi-branch-extension.test.sh` and `tests/fm-pi-watch-extension.test.sh` pin upstream's own handling with no divergent behavior of their own; realign when convenient.
 - `pi-compatibility-notes`: Pi 1.0.3 provider, thinking, TUI and trust-dialog observations in the Pi harness reference, `bin/fm-busy-lib.sh` and `docs/verification/runtime-backends.md`, plus the regular-TUI fixture in `tests/fm-calm-pi-extension.test.sh`; consolidate into the upstream reference when it covers those versions.
+- `upstream-suite-splits`: upstream supervision-host and watch-triage split suites retain shared fixtures and fork-only cases in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`; helper functions stay shared so bounds and fixture behavior remain consistent.
 - `test-fixture-portability`: host-independent PATH and process-holder fixtures in `tests/fm-on.test.sh`, `tests/fm-remote-doctor.test.sh` and `tests/fm-remote-herdr-guard.test.sh`, Git-version-neutral hook refusal checks in `tests/fm-git-strip-ai-trailers.test.sh`, the open but unwritable stdout fixture in `tests/fm-public-followup.test.sh`, and condition-based waits in `tests/fm-watch-arm.test.sh`, `tests/fm-remote-job.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh` and `tests/fm-herdr-groups.test.sh`, including the latter's physical temporary-socket path; realign when upstream fixtures preserve the same assertions on supported hosts.
 - `fixture-diagnostics`: failure-only output improvements in `tests/fm-gotmp.test.sh`, `tests/fm-remote-secondmate-lifecycle-e2e.test.sh`, `tests/fm-spawn-pool-base-freshen.test.sh`, `tests/fm-remote-job-launchagent.test.sh` and `tests/fm-calm-pi-extension.test.sh`, plus whitespace-only layout in `tests/fm-remote-doctor.test.sh`; offer the fixes upstream and realign when taken.
 - `fixture-assertions`: the Gemini no-key routing baseline in `tests/fm-bootstrap.test.sh` and the bounded-lint environment assertion in `tests/fm-ci-workflow.test.sh`; realign these equivalent test descriptions when convenient.

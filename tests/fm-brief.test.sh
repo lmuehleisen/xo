@@ -557,7 +557,7 @@ test_no_mistakes_pipeline_opt_in() {
     sed "s/stub-$kind/plain-$kind/g" "$off/data/stub-$kind/brief.md" | cmp -s - "$off/data/plain-$kind/brief.md" \
       || fail "$kind: an installed no-mistakes CLI changed the brief without config/no-mistakes"
     [ "$kind" = no-mistakes ] && continue
-    sed "s#$on/#$off/#g; s/opted-$kind/plain-$kind/g" "$on/data/opted-$kind/brief.md" \
+    sed "s#$on#$off#g; s/opted-$kind/plain-$kind/g" "$on/data/opted-$kind/brief.md" \
       | cmp -s - "$off/data/plain-$kind/brief.md" \
       || fail "$kind: config/no-mistakes changed a brief that is not a no-mistakes ship"
   done
@@ -1116,6 +1116,30 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 # The scout's crew-hosted Lavish loop follows the effective Lavish mode: the
 # home toggle, a per-brief --lavish override that wins both ways, and the
 # pinned lavish-axi's availability.
+test_scout_completion_write_exception_is_task_scoped() {
+  local home id brief command
+  home="$TMP_ROOT/scout completion home"
+  mkdir -p "$home/data"
+  for id in inventory-alpha inventory-beta; do
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" sample --scout >/dev/null \
+      || fail "scout completion scaffold failed"
+    brief="$home/data/$id/brief.md"
+    command="FM_HOME='$home' bash '$ROOT/bin/fm-captain-hold.sh' complete '$id' --none"
+    assert_grep "except for the task's empty-inventory attestation through \`fm-captain-hold.sh complete --none\`, exactly as specified under Definition of done." "$brief" \
+      "scout outside-write rule did not name its exact completion gate"
+    assert_grep "Only when the reviewed inventory is empty, run \`$command\`." "$brief" \
+      "scout did not receive the empty-inventory command for its own task and home"
+    assert_grep 'This exception permits only that command, not direct metadata edits, another task, or any backlog write.' "$brief" \
+      "scout completion exception granted broader write authority"
+    assert_grep 'If any captain call remains, ask firstmate to register the inventory and attest completion before you report done.' "$brief" \
+      "scout was instructed to write a non-empty inventory itself"
+    assert_grep 'If the command refuses, report the refusal to firstmate and stop rather than bypassing the completion gate.' "$brief" \
+      "scout was allowed to bypass a refused completion"
+  done
+  pass "fm-brief.sh: scouts may attest only their own empty inventory through the guarded command"
+}
+
+
 test_scout_lavish_follows_toggle_and_override() {
   local home stub path brief out
   home="$TMP_ROOT/scout-lavish"
@@ -1777,6 +1801,7 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
+test_scout_completion_write_exception_is_task_scoped
 test_scout_and_secondmate_scaffold
 test_briefs_list_local_skills
 test_inbox_listing_command_is_safe_on_empty_inbox

@@ -63,12 +63,13 @@ CMD_SET=0
 BACKGROUND=""
 CLAUDE_MODE=0
 CURSOR_MODE=0
+AGY_MODE=0
 PUBLISH_ONLY=0
 CMD_CWD=""
 
 usage() {
   cat <<'EOF'
-Usage: fm-arm-pretool-check.sh [--command <cmd>] [--background true|false] [--claude|--cursor] [--publish-only]
+Usage: fm-arm-pretool-check.sh [--command <cmd>] [--background true|false] [--claude|--cursor|--agy] [--publish-only]
 
 With no --command, reads a PreToolUse-style JSON payload on stdin (Grok
 toolInput.command, or Claude/Codex/Cursor tool_input.command).
@@ -77,6 +78,7 @@ The deny reason is written to stderr, with a Grok decision object on stdout
 unless --claude is supplied.
 With --cursor, a deny is Cursor's own decision object on stdout and exit 0,
 because Cursor reads the returned object rather than the exit status.
+With --agy, a deny is Antigravity's decision object on stdout and exit 0.
 Malformed transport and an unavailable classifier runtime fail open for the
 watcher policy; a command the publish policy must see is denied instead.
 EOF
@@ -150,6 +152,10 @@ while [ "$#" -gt 0 ]; do
       PUBLISH_ONLY=1
       shift
       ;;
+    --agy)
+      AGY_MODE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -185,6 +191,10 @@ render_deny() {
     printf '{"permission":"deny","user_message":"%s"}\n' "$escaped"
     exit 0
   fi
+  if [ "$AGY_MODE" -eq 1 ]; then
+    printf '{"decision":"deny","reason":"%s"}\n' "$escaped"
+    exit 0
+  fi
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$escaped" >&2
   [ "$CLAUDE_MODE" -eq 1 ] || printf '{"decision":"deny","reason":"%s"}\n' "$escaped"
   exit 2
@@ -210,7 +220,7 @@ if [ "$CMD_SET" -eq 0 ]; then
   if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
     exit 0
   fi
-  if ! CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null); then
+  if ! CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolCall.args.CommandLine // .toolCall.args.command // .toolInput.command // .tool_input.command // empty)' 2>/dev/null); then
     ! publish_needed "$RAW_PAYLOAD" || publish_unavailable "the hook payload is not valid JSON"
     exit 0
   fi

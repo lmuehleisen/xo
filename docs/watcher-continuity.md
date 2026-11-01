@@ -94,8 +94,8 @@ While supervision is still needed and away mode remains inactive, an actionable 
 
 The hook handles the session lock as follows:
 
-- A numeric session-lock owner that fails the shared `fm_harness_pid_alive` predicate is reclaimed through `bin/fm-lock.sh` before auto-arm state changes.
-- A live owner the session does not own, an absent lock, or a malformed lock keeps the competing hook inert.
+- A session-lock owner, including a tagged `win:<pid>` holder on Windows/Git Bash, that fails the shared `fm_harness_pid_alive` predicate is reclaimed through `bin/fm-lock.sh` before auto-arm state changes.
+- A live owner the session does not own, an absent lock, or an unusable lock keeps the competing hook inert.
 
 Whether the session owns that lock is the shared `fm_session_lock_owned_by_self` verdict in `bin/fm-session-lock-lib.sh`.
 That verdict accepts either of two cases:
@@ -285,6 +285,7 @@ Every presented row is claimed to exactly one actor under the durable queue lock
 - A branch grant is published through `bin/fm-wake-grant.sh` under that same lock in `state/.branch-eligible-rows`.
   The grant is bound to the live branch process and extension generation recorded in `state/.branch-eligible-owner`.
   Publication is refused if main already claimed any requested row.
+  Activation, publication, release, and deactivation exit nonzero if queue-lock acquisition fails, preserving both grant records and leaving another owner's lock intact.
 - A main drain validates that owner evidence under the queue lock and reclaims the grant when its process is gone or its identity no longer matches.
 - A main drain claims every currently unclaimed row and excludes an active branch grant from both presentation and acknowledgement.
 
@@ -354,7 +355,8 @@ Under the away-posture record the exclusion lifts and a check row is offered to 
 
 `fm-wake-drain.sh` never reclassifies a row itself.
 It filters the queue to the current actor's opaque claim before same-key deduplication, then presents and acknowledges only that actor-local view.
-A missing or empty branch snapshot is refused loudly rather than read as "nothing eligible", because reaching the drain without the non-empty handoff promised by the extension is a wiring bug.
+A missing or empty branch snapshot is refused loudly rather than read as "nothing eligible".
+With a live branch owner, a missing snapshot means the branch's own acknowledgement already consumed the grant, and the refusal says so; otherwise reaching the drain without the non-empty handoff promised by the extension is a wiring bug.
 A branch acknowledgement retires the check-row receipts - inactive-outcome, inactive-reconcile notice, and secondmate stall - of exactly the granted sequences it consumes, so a branch-consumed check is never re-queued by its producer.
 Attended, a grant names no check row and each scan finds nothing.
 
@@ -488,7 +490,7 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 - A handling successor that must surface a real crew event instead of going blind.
 - A handling successor that resurfaces a row appended between its predecessor's close and its own startup handoff.
 
-`tests/fm-supervision-host-attended.test.sh` also drives the real host hand-back and Stop-hook path through delayed takeover cleanup, the full stop allowance, decimal bounds, and TERM receipt spellings, proving an acknowledged empty recovery settles after one resurface while real successor downtime still resurfaces once.
+`tests/fm-supervision-host-fork.test.sh` also drives the real host hand-back and Stop-hook path through delayed takeover cleanup, the full stop allowance, decimal bounds, and TERM receipt spellings, proving an acknowledged empty recovery settles after one resurface while real successor downtime still resurfaces once.
 
 `tests/fm-watch-triage.test.sh` proves TERM stops a watcher blocked inside a poll's pane capture and still releases its lock and records an acknowledgeable stop.
 It also exercises a single TERM with a live foreign downtime-marker lock holder, retained stale singleton and subsequent arm-style recovery, including decimal `08` and zero `00` cleanup bounds.
@@ -514,7 +516,8 @@ It checks that a newly appended keyed decision is classified without rereading e
 - Unchanged AFK and need boundaries.
 - Single-flight.
 - Supersession of a dead session's orphaned claim by the replacement session's first Stop, including a resumed session that carries the dead one's conversation id, and a claim with no readable session lock.
-- A recycled background bridge keeping its live claim on the trusted session id pinned to the lock holder's recorded pid-identity.
+- A recycled background bridge keeping its live claim on the trusted session id pinned to the lock holder's recorded session-lock identity.
+- The Windows/Git Bash session-lock readers for the supervision-host key, claim read-back, and mid-turn health, plus untagged-value parity with the numeric helpers, in `tests/fm-session-lock-windows-consumers.test.sh`.
 - Bounded failure retries.
 - Benign live-watcher cycle ends.
 - One-notice failure episodes.

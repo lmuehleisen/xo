@@ -332,7 +332,7 @@ The guard lets the watcher coordinator act first, so the plugins do not race for
 Agy is a nudge-tier harness.
 `.agents/hooks.json` invokes `bin/fm-agy-hook.sh` on `PreInvocation`.
 Only `invocationNum=0` can inject the shared startup nudge, and only until this session owns the home lock.
-Agy has no native SessionStart event.
+This fork retains the verified PreInvocation nudge rather than upstream's native SessionStart registration.
 Verified interactive first-invocation delivery does not establish a compaction or instruction-refresh channel.
 
 ### Grok

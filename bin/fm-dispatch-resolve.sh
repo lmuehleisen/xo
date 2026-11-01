@@ -5,13 +5,43 @@
 # Usage:
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>] [--completion-horizon <seconds>]
 #                          [--lane <name>] [--exclude-family <family>] [--data-tag <tag>]...
+#   fm-dispatch-resolve.sh --supports-credential-source <source>
 #
 # Opt-in gate: FM_DISPATCH_PROVIDER and FM_DISPATCH_MODEL select the provider
 #   and model from the environment or $FM_HOME/.env (environment wins). With no
 #   provider set, retain the original typesafe.ai/jev-latest key gate exactly.
-#   OpenRouter requires both its provider selection and a model. The selected
-#   key lives in a non-exported shell variable and reaches curl through fd 3,
-#   never argv, logs, or child environments.
+#   OpenRouter and OpenAI require both their provider selection and a model.
+#   The generic systemone provider requires a model and FM_DISPATCH_BASE_URL
+#   (http:// or https://) and posts to <base>/v1/systemone; its optional
+#   FM_DISPATCH_API_KEY, when absent, means no Authorization header. The openai
+#   provider maps the System One request to OpenAI's Decisions API and maps its
+#   answer back before validation. The typesafe and openrouter keys come from the
+#   environment, else $FM_HOME/.env, else the credential source declared for that
+#   provider (below); the openai and systemone keys come from the environment or
+#   $FM_HOME/.env only. The selected key lives in a non-exported shell variable
+#   and reaches curl through fd 3, never argv, logs, or child environments.
+#
+# Credential source declaration: the optional $CONFIG/dispatch-credential-sources.json
+#   ($CONFIG is FM_CONFIG_OVERRIDE, else $FM_HOME/config) is a JSON object keyed
+#   by provider (typesafe or openrouter). Each value says where that provider's
+#   key lives and holds no key: {"source": "macos-keychain", "service": "<name>",
+#   "account": "<name>"}, where account is optional and no other field is
+#   accepted. bin/fm-credential-source-lib.sh owns the schema and its adapters;
+#   macos-keychain reads the generic-password item with `security
+#   find-generic-password -s <service> [-a <account>] -w`, so only the service
+#   and account reach argv. The file is read only when neither the environment
+#   nor .env supplied a key, and only the selected provider's entry is used.
+#   With no entry for that provider and no key the tool is off as above. An
+#   unreadable or invalid file exits 2 naming the problem, never a value. A
+#   declared source this host cannot run, or that yields no key within
+#   5 seconds, is an error outcome ending "nothing sent", with no network or
+#   quota call, so it is not mistaken for an unconfigured resolver.
+#
+# Capability probe: --supports-credential-source <source> prints "supported"
+#   and exits 0, or prints "unsupported" and exits 1, for a source name such as
+#   macos-keychain on this host. It reads no declaration, retrieves no
+#   credential, and runs no credential tool, so a configuration installer can
+#   refuse an unsupported activation before it writes anything.
 #
 #   With no explicit provider, retain the TypeSafe-first gate and the home-only
 #   OpenRouter fallback, which uses the legacy System One endpoint.
@@ -30,11 +60,28 @@
 #   candidate binds to one row through quota_row in
 #   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
 #   reads its own account's row and an expanded provider with no row for the
-#   candidate is unmeasured, never blocked), and the selected-score argmax over
-#   the eligible candidates after the completion-horizon gate. The model never
-#   sees quota, catalogs, approvals,
+#   candidate is unmeasured, never blocked), then the optional preferred_provider
+#   family restriction before the selected score ranks the remaining candidates.
+#   An eligible but wholly unrankable preferred family escalates rather than
+#   authorizing another family.
+#   Completion-runway gates still apply before ranking.
+#   The model never sees quota, catalogs, approvals, preferred_provider,
 #   confidence floors, `why`, or `use`. With no rules, it returns a non-clear
 #   result so firstmate keeps using the existing intake.
+#
+# Shared-quota opt-out: an optional top-level "shared_quota": true in the
+#   rules file declares this home draws every provider's usage from one single
+#   shared budget, so per-provider quota rows do not describe what is left.
+#   With it set, this tool makes no quota-axi call, applies no quota floor or
+#   runway gate, ranks nothing by spendPriority, and resolves the matched
+#   rule's `use` profiles in declared order; preferred_provider still narrows
+#   the pool for profiles and lanes; declared order then picks within it.
+#   A lane also skips quota-derived pace gates, while its non-quota gates
+#   (live caps, experiment admission and data policies) remain in force.
+#   Every candidate line still
+#   prints, stating quota ranking is off by home declaration. Without the
+#   setting, behavior is unchanged. The declared value must be a boolean;
+#   anything else is an actionable configuration error.
 #   docs/configuration.md "Crew dispatch profiles" owns the declared fields and
 #   "Typed dispatch resolution" owns this tool's operator contract.
 #
@@ -81,8 +128,9 @@
 #   metric the snapshot selects.
 #
 # Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
-#   exists, every string value of the built request is checked against it
-#   before the POST. Each non-blank, non-# line is a literal matched
+#   exists, the endpoint URL and every string value of the final
+#   provider-specific request body (and of any JSON text a string carries) are
+#   checked against it before the POST. Each non-blank, non-# line is a literal matched
 #   case-insensitively, with surrounding whitespace trimmed and every run of
 #   whitespace, on both sides, treated as one space. A match, or a list that
 #   is not a readable regular file, prints one
@@ -105,15 +153,19 @@
 #     Lane candidate lines end with live=<count> [max_live=<cap>] and, for a
 #     grouped class, live_cap_group=<name> group_live=<count> group_max_live=<cap>.
 #     tie_break: <class> has fewest live workers (<count>) among <spend_metric> ties
+#     preferred_provider: <family and preference or fallback decision, when applied>
+#        (with the shared-quota opt-out: <harness>:<model> provider=.. -> eligible (quota ranking off: home declares a single shared quota))
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
 #   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie
-#   error     -> API, network, response, or quota-axi failure; decide as today
+#   error     -> API, network, response, quota-axi, or declared credential source failure; decide as today
 #   Every outcome exits 0 so an intake is never blocked by this tool.
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, missing jq, an unknown
-#   provider, explicit OpenRouter without a model, --lane, an undeclared --exclude-family or --data-tag), which is
+#   provider, invalid credential sources, a non-typesafe provider without a
+#   model, systemone without a valid base URL, an unknown --lane, or an
+#   undeclared --exclude-family or --data-tag), which is
 #   actionable, never selected around.
 #
 # Private call history: bin/fm-dispatch-history-lib.sh owns the append-only
@@ -155,7 +207,8 @@
 #   result.
 #
 # Environment:
-#   FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, TYPESAFE_API_KEY, and
+#   FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, FM_DISPATCH_BASE_URL,
+#   FM_DISPATCH_API_KEY, OPENAI_API_KEY, TYPESAFE_API_KEY, and
 #   OPENROUTER_API_KEY are read from the environment or $FM_HOME/.env.
 #   An environment-only OpenRouter key cannot activate the implicit fallback.
 #
@@ -170,8 +223,12 @@ unset TYPESAFE_API_KEY
 OPENROUTER_API_KEY_PRIVATE=${OPENROUTER_API_KEY:-}
 export -n OPENROUTER_API_KEY_PRIVATE 2>/dev/null || true
 unset OPENROUTER_API_KEY
-DISPATCH_API_KEY_PRIVATE=
+OPENAI_API_KEY_PRIVATE=${OPENAI_API_KEY:-}
+export -n OPENAI_API_KEY_PRIVATE 2>/dev/null || true
+unset OPENAI_API_KEY
+DISPATCH_API_KEY_PRIVATE=${FM_DISPATCH_API_KEY:-}
 export -n DISPATCH_API_KEY_PRIVATE 2>/dev/null || true
+unset FM_DISPATCH_API_KEY
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -197,6 +254,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-timing-lib.sh"
 # shellcheck source=bin/fm-brief-heading-lib.sh
 . "$SCRIPT_DIR/fm-brief-heading-lib.sh"
+# shellcheck source=bin/fm-credential-source-lib.sh
+. "$SCRIPT_DIR/fm-credential-source-lib.sh"
 
 # shellcheck source=bin/fm-dispatch-history-lib.sh
 . "$SCRIPT_DIR/fm-dispatch-history-lib.sh"
@@ -225,12 +284,24 @@ TS_BASE=https://api.typesafe.ai
 TS_TIMEOUT=5
 OR_BASE=https://openrouter.ai/api
 OR_TIMEOUT=10
+SO_TIMEOUT=10
+OA_BASE=https://api.openai.com
+OA_TIMEOUT=10
 DEFAULT_WHEN="No listed rule applies to this task."
 
 die() { HISTORY_REASON='usage or configuration error'; printf 'error: %s\n' "$1" >&2; exit 2; }
 no_rules() {
   HISTORY_STATUS=escalate HISTORY_REASON='no rules to match'
   printf 'dispatch-resolve:\n  status: escalate\n  reason: no rules to match\n'
+  exit 0
+}
+emit_error() {
+  local reason=$1
+  # HTTP diagnostics may include an arbitrary response body; retain only the
+  # error category in history so a server cannot echo secrets into the log.
+  HISTORY_STATUS=error HISTORY_REASON=${reason%%: *} RESULT='{}'
+  echo "dispatch-resolve: error ($reason)" >&2
+  printf 'dispatch-resolve:\n  status: error\n  reason: %s\n' "$reason"
   exit 0
 }
 usage() {
@@ -245,6 +316,7 @@ COMPLETION_HORIZON=3600
 BRIEF='' PROJECT='' RULES_PATH="$CONFIG/crew-dispatch.json" RULES=''
 NEVER_SEND_PATH="$CONFIG/dispatch-never-send"
 LANE='' EXCLUDE_FAMILY='' DATA_TAGS='[]'
+CRED_PATH="$CONFIG/dispatch-credential-sources.json"
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane) [ $# -ge 2 ] && [ -n "$2" ] || die "--lane needs a lane name"; LANE=$2; shift 2 ;;
@@ -263,6 +335,11 @@ while [ $# -gt 0 ]; do
       fi
       shift 2 ;;
     --project) [ $# -ge 2 ] || die "--project needs a value"; PROJECT=$2; shift 2 ;;
+    --supports-credential-source)
+      trap - EXIT
+      [ $# -ge 2 ] || die "--supports-credential-source needs a value"
+      if fm_credsrc_supported "$2"; then echo supported; exit 0; fi
+      echo unsupported; exit 1 ;;
     -h|--help) trap - EXIT; usage; exit 0 ;;
     -*) die "unknown flag $1" ;;
     *) [ -z "$BRIEF" ] || die "one brief file only"; BRIEF=$1; shift ;;
@@ -295,47 +372,112 @@ harness_installed() {  # <harness>
 }
 
 # ---- opt-in gate ---------------------------------------------------------------
-# A named --lane sends no Choice request and needs no provider or key.
+# declared_key <provider> <private variable>: set the variable from the source
+# $CRED_PATH declares for <provider>. Returns 1 when none is declared, which
+# leaves the off gate in charge. Past that point nothing is mistaken for an
+# unconfigured resolver: an unreadable or invalid declaration is a
+# configuration error, and a declared source this host cannot run or that
+# yields no key is an error outcome. Nothing is sent in either case.
+declared_key() {
+  local provider=$1 src problem value rc
+  [ -e "$CRED_PATH" ] || [ -L "$CRED_PATH" ] || return 1
+  [ -r "$CRED_PATH" ] || die "credential source declaration not readable: $CRED_PATH"
+  command -v jq >/dev/null 2>&1 || die "jq required"
+  problem=$(fm_credsrc_check "$CRED_PATH" typesafe openrouter) \
+    || die "malformed credential source declaration: $CRED_PATH - $problem"
+  fm_credsrc_declares "$CRED_PATH" "$provider" || return 1
+  src=$(fm_credsrc_field "$CRED_PATH" "$provider" source)
+  fm_credsrc_supported "$src" \
+    || emit_error "credential source $src declared for $provider is not supported on this host; nothing sent"
+  value=$(fm_credsrc_read "$CRED_PATH" "$provider"); rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$value" ]; then
+    if fm_timed_out "$rc"; then
+      emit_error "credential source $src declared for $provider did not answer in time; nothing sent"
+    fi
+    emit_error "credential source $src declared for $provider is unavailable; nothing sent"
+  fi
+  printf -v "$2" '%s' "$value"
+}
+
+# select_key <provider> <KEY_NAME> <private variable>: the selected provider's
+# key is the environment copy already in the variable, else KEY_NAME in
+# $FM_HOME/.env, else the source declared for the provider. With none of them
+# the tool is off, exactly as it was before declarations existed.
+select_key() {
+  local provider=$1 name=$2 var=$3
+  [ -n "${!var}" ] || printf -v "$var" '%s' "$(fmx_env_get "$name" "$FM_HOME/.env")"
+  [ -n "${!var}" ] || declared_key "$provider" "$var"
+  if [ -z "${!var}" ]; then
+    HISTORY_STATUS=off HISTORY_REASON='API key absent'
+    echo "dispatch-resolve: off ($name absent from the environment and $FM_HOME/.env)" >&2
+    exit 0
+  fi
+}
+
+# A named lane sends no Choice request and needs no provider or credential.
 DISPATCH_PROVIDER=typesafe
 DISPATCH_MODEL=$TS_MODEL
 if [ -z "$LANE" ]; then
-  DISPATCH_PROVIDER=${FM_DISPATCH_PROVIDER:-}
-  [ -n "$DISPATCH_PROVIDER" ] || DISPATCH_PROVIDER=$(fmx_env_get FM_DISPATCH_PROVIDER "$FM_HOME/.env")
-  DISPATCH_MODEL=${FM_DISPATCH_MODEL:-}
-  [ -n "$DISPATCH_MODEL" ] || DISPATCH_MODEL=$(fmx_env_get FM_DISPATCH_MODEL "$FM_HOME/.env")
-  case "$DISPATCH_PROVIDER" in
-    '')
-      DISPATCH_MODEL=$TS_MODEL
-      DISPATCH_API_KEY_PRIVATE=$TYPESAFE_API_KEY_PRIVATE
-      [ -n "$DISPATCH_API_KEY_PRIVATE" ] || DISPATCH_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
-      DISPATCH_PROVIDER=typesafe
-      if [ -z "$DISPATCH_API_KEY_PRIVATE" ]; then
-        DISPATCH_API_KEY_PRIVATE=$(fmx_env_get OPENROUTER_API_KEY "$FM_HOME/.env")
-        TS_BASE=https://openrouter.ai/api
-        DISPATCH_MODEL='~typesafe/jev-latest'
-      fi
-      ;;
-    typesafe)
-      [ -n "$DISPATCH_MODEL" ] || DISPATCH_MODEL=$TS_MODEL
-      DISPATCH_API_KEY_PRIVATE=$TYPESAFE_API_KEY_PRIVATE
-      [ -n "$DISPATCH_API_KEY_PRIVATE" ] || DISPATCH_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
-      ;;
-    openrouter)
-      [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openrouter"
-      DISPATCH_API_KEY_PRIVATE=$OPENROUTER_API_KEY_PRIVATE
-      [ -n "$DISPATCH_API_KEY_PRIVATE" ] || DISPATCH_API_KEY_PRIVATE=$(fmx_env_get OPENROUTER_API_KEY "$FM_HOME/.env")
-      ;;
-    *) die "unknown FM_DISPATCH_PROVIDER: $DISPATCH_PROVIDER (expected typesafe or openrouter)" ;;
-  esac
-  if [ -z "$DISPATCH_API_KEY_PRIVATE" ]; then
-    HISTORY_STATUS=off HISTORY_REASON='API key absent'
-    if [ "$DISPATCH_PROVIDER" = openrouter ]; then
-      echo "dispatch-resolve: off (OPENROUTER_API_KEY absent from the environment and home .env)" >&2
-    else
-      echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback)" >&2
+DISPATCH_PROVIDER=${FM_DISPATCH_PROVIDER:-}
+[ -n "$DISPATCH_PROVIDER" ] || DISPATCH_PROVIDER=$(fmx_env_get FM_DISPATCH_PROVIDER "$FM_HOME/.env")
+DISPATCH_MODEL=${FM_DISPATCH_MODEL:-}
+[ -n "$DISPATCH_MODEL" ] || DISPATCH_MODEL=$(fmx_env_get FM_DISPATCH_MODEL "$FM_HOME/.env")
+case "$DISPATCH_PROVIDER" in
+  '')
+    DISPATCH_PROVIDER=typesafe
+    DISPATCH_MODEL=$TS_MODEL
+    [ -n "$TYPESAFE_API_KEY_PRIVATE" ] || TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
+    [ -n "$TYPESAFE_API_KEY_PRIVATE" ] || declared_key typesafe TYPESAFE_API_KEY_PRIVATE
+    if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
+      TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get OPENROUTER_API_KEY "$FM_HOME/.env")
+      TS_BASE=https://openrouter.ai/api
+      DISPATCH_MODEL='~typesafe/jev-latest'
     fi
-    exit 0
-  fi
+    if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
+      HISTORY_STATUS=off HISTORY_REASON='API key absent'
+      echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback)" >&2
+      exit 0
+    fi
+    ;;
+  typesafe)
+    [ -n "$DISPATCH_MODEL" ] || DISPATCH_MODEL=$TS_MODEL
+    select_key typesafe TYPESAFE_API_KEY TYPESAFE_API_KEY_PRIVATE
+    ;;
+  openrouter)
+    [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openrouter"
+    select_key openrouter OPENROUTER_API_KEY OPENROUTER_API_KEY_PRIVATE
+    ;;
+  systemone)
+    [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=systemone"
+    DISPATCH_BASE_URL=${FM_DISPATCH_BASE_URL:-}
+    [ -n "$DISPATCH_BASE_URL" ] || DISPATCH_BASE_URL=$(fmx_env_get FM_DISPATCH_BASE_URL "$FM_HOME/.env")
+    [ -n "$DISPATCH_BASE_URL" ] || die "FM_DISPATCH_BASE_URL required when FM_DISPATCH_PROVIDER=systemone"
+    case "$DISPATCH_BASE_URL" in
+      http://?*|https://?*) ;;
+      *) die "FM_DISPATCH_BASE_URL must start with http:// or https://" ;;
+    esac
+    DISPATCH_BASE_URL=${DISPATCH_BASE_URL%/}
+    # The key is optional: a local host may need none.
+    [ -n "$DISPATCH_API_KEY_PRIVATE" ] || DISPATCH_API_KEY_PRIVATE=$(fmx_env_get FM_DISPATCH_API_KEY "$FM_HOME/.env")
+    ;;
+  openai)
+    [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openai"
+    [ -n "$OPENAI_API_KEY_PRIVATE" ] || OPENAI_API_KEY_PRIVATE=$(fmx_env_get OPENAI_API_KEY "$FM_HOME/.env")
+    if [ -z "$OPENAI_API_KEY_PRIVATE" ]; then
+      HISTORY_STATUS=off HISTORY_REASON='API key absent'
+      echo "dispatch-resolve: off (OPENAI_API_KEY absent from the environment and $FM_HOME/.env)" >&2
+      exit 0
+    fi
+    ;;
+  *) die "unknown FM_DISPATCH_PROVIDER: $DISPATCH_PROVIDER (expected typesafe, openrouter, systemone, or openai)" ;;
+esac
+case "$DISPATCH_PROVIDER" in
+  typesafe) ENDPOINT=$TS_BASE/v1/systemone TIMEOUT=$TS_TIMEOUT KEY_PRIVATE=$TYPESAFE_API_KEY_PRIVATE ;;
+  openrouter) ENDPOINT=$OR_BASE/alpha/decisions TIMEOUT=$OR_TIMEOUT KEY_PRIVATE=$OPENROUTER_API_KEY_PRIVATE ;;
+  systemone) ENDPOINT=$DISPATCH_BASE_URL/v1/systemone TIMEOUT=$SO_TIMEOUT KEY_PRIVATE=$DISPATCH_API_KEY_PRIVATE ;;
+  openai) ENDPOINT=$OA_BASE/v1/decisions TIMEOUT=$OA_TIMEOUT KEY_PRIVATE=$OPENAI_API_KEY_PRIVATE ;;
+esac
+export -n KEY_PRIVATE 2>/dev/null || true
 fi
 
 # ---- inputs --------------------------------------------------------------------
@@ -395,6 +537,7 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson codex_ultra_o
     ($items | map([.harness, (.model // null), (.effort // null)] | @json)) as $keys
     | ($keys | length) != ($keys | unique | length);
   if type != "object" then "top-level value must be an object"
+  elif has("preferred_provider") and (provider_id(.preferred_provider) | not) then "preferred_provider must be a lowercase provider ID (for example codex)"
   elif has("rules") and (.rules | type) != "array" then "rules must be an array"
   elif any((.rules // [])[]; type != "object") then "each rule must be an object"
   elif any((.rules // [])[]; (.when | type) != "string" or (.when | length) == 0) then "each rule needs non-empty when"
@@ -407,6 +550,7 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson codex_ultra_o
   elif any((.rules // [])[]; has("select") and ((.select | type) != "string" or (.select | length) == 0)) then "select must be a non-empty string"
   elif any((.rules // [])[]; has("select") and .select != "quota-balanced") then
     "unknown select: " + ([.rules[] | select(has("select") and .select != "quota-balanced") | .select] | unique | join(", "))
+  elif has("shared_quota") and (.shared_quota | type) != "boolean" then "shared_quota must be true or false when present"
   elif any((.rules // [])[]; has("floor") and floor_bad(.floor; true)) then "rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\\z"
   elif any((.rules // [])[] | profiles(.use)[]; profile_bad(.)) then "each use profile needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
   elif any((.rules // [])[]; duplicate_profiles(profiles(.use))) then "each rule use must not contain duplicate harness, model, and effort profiles"
@@ -517,15 +661,7 @@ undeclared_tags=$(jq -r --argjson tags "$DATA_TAGS" '
 ' "$RULES")
 [ -z "$undeclared_tags" ] || die "undeclared data tag: $undeclared_tags (no data policy in $RULES_PATH declares it)"
 
-emit_error() {
-  local reason=$1
-  # HTTP diagnostics may include an arbitrary response body; retain only the
-  # error category in history so a server cannot echo secrets into the log.
-  HISTORY_STATUS=error HISTORY_REASON=${reason%%: *} RESULT='{}'
-  echo "dispatch-resolve: error ($reason)" >&2
-  printf 'dispatch-resolve:\n  status: error\n  reason: %s\n' "$reason"
-  exit 0
-}
+
 
 if [ "$RULE_COUNT" -eq 0 ] && [ -z "$LANE" ]; then
   no_rules
@@ -542,8 +678,10 @@ never_send_off() {
   exit 0
 }
 
-# Checks every string the request carries, so no text reaches the network
-# unchecked. grep's own stderr is discarded because it can echo the pattern.
+# Checks the endpoint and every string the final request body carries,
+# including strings inside JSON text such as OpenAI's serialized input, so no
+# text reaches the network unchecked. grep's own stderr is discarded because
+# it can echo the pattern.
 never_send_check() {
   local list value n=0 rc
   [ -e "$NEVER_SEND_PATH" ] || [ -L "$NEVER_SEND_PATH" ] || return 0
@@ -551,7 +689,9 @@ never_send_check() {
     || never_send_off "$NEVER_SEND_PATH is not a readable regular file"
   # Collapse whitespace runs on both sides so a value the brief wraps across
   # lines or spaces differently still matches
-  jq -r '.. | strings | gsub("\\s+"; " ")' <<<"$REQUEST" > "$SEND_TEXT" 2>/dev/null \
+  jq -r --arg endpoint "$ENDPOINT" '
+    $endpoint, (.. | strings | ., (try (fromjson | .. | strings) catch empty))
+    | gsub("\\s+"; " ")' <<<"$BODY" > "$SEND_TEXT" 2>/dev/null \
     || never_send_off "could not extract the request text to check"
   list=$(jq -Rr 'gsub("\\s+"; " ")' "$NEVER_SEND_PATH" 2>/dev/null) \
     || never_send_off "could not read $NEVER_SEND_PATH"
@@ -615,26 +755,68 @@ else
         }
       }
     }')
+  # OpenAI's Decisions API takes text input and a named choices array, so the
+  # same state and Choice question are rewritten into its shape.
+  if [ "$DISPATCH_PROVIDER" = openai ]; then
+    BODY=$(jq -c '{
+      model,
+      input: (.state | tojson),
+      questions: [{
+        type: "choice", name: "rule", instructions: .questions.rule.instructions,
+        choices: [.questions.rule.criteria | to_entries[] | {value: .key, description: .value}]
+      }]
+    }' <<<"$REQUEST") || emit_error "could not build the OpenAI request"
+  else
+    BODY=$REQUEST
+  fi
   never_send_check
   HISTORY_MODEL=$DISPATCH_MODEL
   T0=$(fm_timing_now_ms)
-  if [ "$DISPATCH_PROVIDER" = openrouter ]; then
-    HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$OR_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
-      -X POST "$OR_BASE/alpha/decisions" -H 'Content-Type: application/json' \
-      -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$DISPATCH_API_KEY_PRIVATE") \
+  if [ -n "$KEY_PRIVATE" ]; then
+    HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
+      -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
+      -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$KEY_PRIVATE") \
       --data-binary @- 2>/dev/null) || HTTP=000
   else
-    HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
-      -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
-      -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$DISPATCH_API_KEY_PRIVATE") \
+    HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
+      -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
       --data-binary @- 2>/dev/null) || HTTP=000
   fi
   T1=$(fm_timing_now_ms)
   LAT_MS=$(( T1 - T0 ))
-  if [ "$DISPATCH_PROVIDER" = openrouter ]; then
-    [ "$HTTP" = 200 ] || emit_error "http $HTTP after ${LAT_MS} ms"
-  else
+  if [ "$DISPATCH_PROVIDER" = typesafe ]; then
     [ "$HTTP" = 200 ] || emit_error "http $HTTP after ${LAT_MS} ms: $(head -c 200 "$RESP_FILE" 2>/dev/null | tr '\n' ' ')"
+  else
+    [ "$HTTP" = 200 ] || emit_error "http $HTTP after ${LAT_MS} ms"
+  fi
+  # Map an OpenAI answer back to the System One shape the shared validation
+  # below checks. A refusal, a missing or duplicated rule answer, or duplicated
+  # option values is not a rule Choice answer. Usage is display-only, so it is
+  # kept only when both token counts are numeric.
+  if [ "$DISPATCH_PROVIDER" = openai ]; then
+    jq -e '
+      (.answers | type) == "array" and
+      ([.answers[] | select(type == "object" and .name == "rule")]) as $rule |
+      ($rule | length) == 1 and $rule[0].type == "choice" and
+      ($rule[0].probabilities | type) == "array" and
+      all($rule[0].probabilities[]; type == "object" and (.value | type) == "string") and
+      ($rule[0].probabilities | map(.value) | length) == ($rule[0].probabilities | map(.value) | unique | length)' \
+      "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
+    if ! jq --arg model "$DISPATCH_MODEL" '
+      ([.answers[] | select(type == "object" and .name == "rule")][0]) as $a |
+      {
+        model: (if (.model | type) == "string" then .model else $model end),
+        answers: {rule: {
+          choice: $a.choice, confidence: $a.confidence,
+          probabilities: ($a.probabilities | map({key: .value, value: .probability}) | from_entries)
+        }}
+      }
+      + (if (.usage.input_tokens | type) == "number" and (.usage.output_tokens | type) == "number"
+         then {usage: {input_tokens: .usage.input_tokens, output_tokens: .usage.output_tokens}} else {} end)' \
+      "$RESP_FILE" > "$RESP_FILE.mapped" 2>/dev/null || ! mv "$RESP_FILE.mapped" "$RESP_FILE"; then
+      rm -f "$RESP_FILE.mapped"
+      emit_error "response is not a rule Choice answer"
+    fi
   fi
   jq -e --slurpfile rules "$RULES" '
     (($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) + ["default"] | sort) as $choices |
@@ -666,10 +848,18 @@ if jq -e 'any((.classes // {})[]; has("experiment"))' "$RULES" >/dev/null; then
   SAMPLE=$((crc % 100))
 fi
 
-# ---- quota evidence: one quota-axi --json snapshot -----------------------------
-command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
-"$SCRIPT_DIR/fm-quota-read.sh" --json > "$QUOTA" || emit_error "quota-axi --json failed"
-fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
+# ---- quota evidence: one quota-axi --json snapshot, skipped entirely under the
+# ---- shared-quota opt-out (a stub keeps the slurpfile contract intact) ---------
+SQ=false
+SHARED_QUOTA=$(jq -r '.shared_quota // false' "$RULES" 2>/dev/null) || SHARED_QUOTA=false
+if [ "$SHARED_QUOTA" = true ]; then
+  printf '{"providers":[]}\n' > "$QUOTA"
+  SQ=true
+else
+  command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
+  "$SCRIPT_DIR/fm-quota-read.sh" --json > "$QUOTA" || emit_error "quota-axi --json failed"
+  fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
+fi
 
 # Agy family bindings come only from its own catalog, never another harness.
 AGY_IDS='[]'
@@ -720,7 +910,7 @@ LIVE_TASKS=$(
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 DIRECT=false
 [ -z "$LANE" ] || DIRECT=true
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson installed "$INSTALLED" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
+RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson sq "$SQ" --argjson installed "$INSTALLED" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
   --argjson planning "$PLANNING_JSON" --argjson planning_present "$PLANNING_PRESENT" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_PLANNING_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
@@ -751,6 +941,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if ($installed[$c.harness] // false) | not then
       {profile: $c, eligible: false, reason: "\($c.harness) tool not installed on this host"}
+    elif $sq then
+      {profile: $c, provider: $p, eligible: true, sq: true, reason: "ok"}
     elif $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
     elif $unmetered then
       {profile: $c, provider: $p, unmetered: true, spendScore: $spend_priority, eligible: true, reason: "unmetered (declared)"}
@@ -820,6 +1012,17 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       end
     end;
   def evaluate($c): evaluate_route($c; false; 0);
+  # Apply the same family restriction before either profile or lane selection.
+  def preferred_pool($cands):
+    ([$cands[] | select($cfg.preferred_provider != null and (.provider // provider_of(.profile)) == $cfg.preferred_provider)]) as $family |
+    ([$family[] | select(.eligible)]) as $preferred |
+    {pool: (if ($preferred | length) > 0 then $preferred else $cands end),
+     restricted: (($preferred | length) > 0)}
+    + (if $cfg.preferred_provider == null then {}
+       else {decision: ($cfg.preferred_provider + ": " +
+         (if ($family | length) == 0 then "not in matched profiles; preserve the selected rule"
+          elif ($preferred | length) > 0 then "prefer eligible family candidates"
+          else "fall back; every matched family candidate is ineligible" end))} end);
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -829,7 +1032,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def confidence_floor($c): if declared_confidence($c) then rule_at($c).min_confidence else ($floor | tonumber) end;
   def rankable: .eligible and ((.unranked // false) | not);
   # Synthetic unmetered scores rank routes but never measure quota pace.
-  def ahead_of_pace: .unmetered != true and .spendScore < 0;
+  def ahead_of_pace: .sq != true and .unmetered != true and .spendScore < 0;
   def blocked($reason): . + {eligible: false, unranked: false, unknown: false, reason: $reason};
   # A data policy admits its class only for an allowed project or data tag, and
   # never with a denied tag.
@@ -873,7 +1076,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ] as $classes0 |
     ([$classes0[] | select(.gate == null) | .candidates[] | select(rankable)]) as $others |
     [$classes0[] |
-      if .gate == "others-ahead-of-pace" and .excluded == null then
+      if ($sq | not) and .gate == "others-ahead-of-pace" and .excluded == null then
         ([.candidates[] | select(rankable)] | max_by(.spendScore)) as $own |
         (if ($others | length) == 0 then "pace gate closed: no ungated class in the lane has a rankable \($metric)"
          elif any($others[]; ahead_of_pace | not) then
@@ -892,6 +1095,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def argmax_pick($cands; $where):
     ([$cands[] | select(rankable)]) as $ranked |
     if ($ranked | length) == 0 then {status: "escalate", reason: "no rankable eligible candidate\($where)"}
+    elif $sq then {status: "clear", chosen: $ranked[0]}
     else ($ranked | max_by(.spendScore)) as $best |
       ([$ranked[] | select(.spendScore == $best.spendScore)]) as $ties |
       (if ([$ties[].class] | unique | length) > 1 then
@@ -909,13 +1113,22 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   # stops at its first class with any eligible route, ranked or not, so unknown
   # quota escalates instead of silently skipping to a later class.
   def lane_pick($le):
+    preferred_pool($le.candidates) as $preference |
+    (if $preference.restricted then
+       $le | .candidates = $preference.pool |
+       .classes |= map(.candidates |= map(select(.eligible and .provider == $cfg.preferred_provider)))
+     else $le end) as $le |
     ([$le.classes[] | select(.experiment != null and .excluded == null) | .candidates[] | select(rankable)]) as $sampled |
     if ($sampled | length) > 0 then argmax_pick($sampled; " among sampled experiment routes")
     elif $le.order == "ordered" then
       ([$le.classes[] | select(any(.candidates[]; .eligible))] | first) as $first |
       if $first == null then {status: "escalate", reason: "no class in the ordered lane has an eligible route"}
       else argmax_pick($first.candidates; " in first viable class \($first.name)") end
-    else argmax_pick($le.candidates; "") end;
+    else argmax_pick($le.candidates; "") end
+    | . + (if $preference.decision then {preferred_provider: $preference.decision} else {} end)
+    | if $preference.restricted and .status == "escalate" then
+        .reason += " in preferred provider \($cfg.preferred_provider); uncertainty does not authorize fallback"
+      else . end;
   ($a.choice) as $picked |
   (confidence_floor($picked)) as $picked_floor |
   # A declared floor is checked against the probability of that option whether
@@ -936,7 +1149,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
    end) as $fb |
   (if $fb.to then $fb.to else $picked end) as $choice |
   (rule_at($choice)) as $rule |
-  (if $rule == null then "none" else floor_state($rule.floor; $rule.floor.provider; "") end) as $rule_floor_state |
+  (if $sq or $rule == null then "none" else floor_state($rule.floor; $rule.floor.provider; "") end) as $rule_floor_state |
   (if $choice != "default" and $rule == null then []
    elif $rule == null then profiles($cfg.default // null)
    else profiles($rule.use)
@@ -981,6 +1194,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     ($sel.lane) as $le | (lane_pick($le)) as $pick |
     ([$le.candidates[] | select(.unranked)]) as $unranked |
     $ev + {status: $pick.status, note: $sel.note, candidates: $le.candidates}
+    + (if $pick.preferred_provider then {preferred_provider: $pick.preferred_provider} else {} end)
     + (if $pick.status == "clear" then {chosen: $pick.chosen, tie_break: $pick.tie_break} else {reason: $pick.reason} end)
     + (if $pick.status == "clear" and ($unranked | length) > 0 then
          {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
@@ -991,12 +1205,18 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   elif ($sel.use | length) == 0 then $ev + {status: "escalate", reason: "no profiles configured for \($sel.source)", note: $sel.note, candidates: []}
   else
     ($sel.use | map(evaluate(.))) as $cands |
-    ([$cands[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
+    preferred_pool($cands) as $preference |
+    ($preference.pool) as $pool |
+    ($ev + (if $preference.decision then {preferred_provider: $preference.decision} else {} end)) as $ev |
+    ([$pool[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
     ([$cands[] | select(.unranked)]) as $unranked |
-    if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", note: $sel.note, candidates: $cands}
+    if ($elig | length) == 0 then $ev + {status: "escalate",
+      reason: ("no rankable eligible candidate" +
+        (if $preference.restricted then " in preferred provider \($cfg.preferred_provider); uncertainty does not authorize fallback" else "" end)),
+      note: $sel.note, candidates: $cands}
     else
-      ($elig | max_by(.spendScore)) as $best |
-      ([$elig[] | select(.spendScore == $best.spendScore)] | length) as $ties |
+      (if $sq then ($elig | first) else ($elig | max_by(.spendScore)) end) as $best |
+      (if $sq then 1 else ([$elig[] | select(.spendScore == $best.spendScore)] | length) end) as $ties |
       if $ties > 1 then $ev + {status: "escalate", reason: "genuine \($metric) tie", note: $sel.note, candidates: $cands}
       else $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $best}
         + (if ($unranked | length) > 0 then
@@ -1035,6 +1255,7 @@ TEXT=$(jq -r '
   (if .fallback then "  fallback: \(.fallback | flat)" else empty end),
   (if .reason then "  reason: \(.reason | flat)" else empty end),
   (if .note then "  note: \(.note | flat)" else empty end),
+  (if .preferred_provider then "  preferred_provider: \(.preferred_provider | flat)" else empty end),
   (if .unranked_note then "  note: \(.unranked_note | flat)" else empty end),
   (if .tie_break then "  tie_break: \(.tie_break | flat)" else empty end),
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
@@ -1044,7 +1265,7 @@ TEXT=$(jq -r '
          elif .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  \($metric)=\(show(.spendScore))  runway=\(show(.runway))" else "" end)
       + (if .planning then "  native_\($metric)=\(show(.nativeSpend))  planning_horizon_seconds=\(.planning.horizonSeconds)  planning_window=\(.planning.windowId | flat)" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
-      + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
+      + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .sq and .eligible then "eligible (quota ranking off: home declares a single shared quota)" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)
       + (if (.bounds // [] | length) > 0 then "  runway_seconds=" + ([.bounds[] | "\(.scope | flat):\(if .runway == "exhausted_now" then "0" elif .runway == "through_reset" then "through_reset" else show(.usableRunwaySeconds // "unknown") end)"] | join(",")) else "" end)
       + (if .class then "  live=\(.live)" + (if .max_live then " max_live=\(.max_live)" else "" end)
           + (if .live_cap_group then " live_cap_group=\(.live_cap_group | flat) group_live=\(.group_live) group_max_live=\(.group_max_live)" else "" end) else "" end)),

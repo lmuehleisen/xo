@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# fm-supervision-host behavior cases with shared fixtures.
+# shellcheck source=tests/supervision-host-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/supervision-host-helpers.sh"
+
+fm_test_run \
+  test_main_only_close_after_handled_turn_restores_inherited_handling \
+  test_main_only_close_after_handled_turn_delivers_restore_failure \
+  test_returned_driver_is_caught_attended \
+  test_returned_driver_is_caught_away \
+  test_lost_boundary_handoff \
+  test_lost_pass_through_handoff \
+  test_acknowledged_handoff_at_the_turn_keeps_the_pass_through_row \
+  test_handoff_retry_respects_the_receiving_pane \
+  test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main \
+  test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn \
+  test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails \
+  test_claude_stop_hook_notifies_when_closed_announced_successor_downtime_restore_fails \
+  test_claude_stop_hook_delivers_a_main_only_pass_through \
+  test_claude_stop_hook_rewakes_main_for_an_inbox_note_after_a_handled_wake \
+  test_claude_stop_hook_rewakes_a_present_captain_beside_a_quiet_record \
+  test_claude_stop_hook_runs_the_host_without_the_file_and_off_opts_out \
+  test_claude_stop_hook_delivers_a_close_that_turns_main_only_at_its_turn \
+  test_successor_left_at_the_turn_survives_the_hook_process_group_teardown \
+  test_claude_stop_hook_notifies_when_at_turn_downtime_write_fails \
+  test_successor_close_during_main_turn_is_delivered_at_the_next_turn_end \
+  test_pass_through_successor_survives_the_hook_process_group_teardown \
+  test_next_park_takes_over_the_cycle_a_pass_through_left_for_main \
+  test_a_park_stopped_mid_take_over_leaves_the_take_over_to_the_next_park \
+  test_unrecorded_successor_is_stopped_rather_than_left_for_main

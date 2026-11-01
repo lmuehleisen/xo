@@ -229,6 +229,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-credential-source-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-credential-source-lib.sh"
 # Shared secondmate endpoint probe + guarded relaunch; the watcher's poll tick
 # drives the same library so session start and ordinary supervision recover
 # from identical evidence through an identical path.
@@ -1183,7 +1185,7 @@ EOF
 }
 
 crew_dispatch_validate() {
-  local file err verified_harnesses codex_max_ok codex_ultra_ok typed_key typed_active=false
+  local file cred err verified_harnesses codex_max_ok codex_ultra_ok typed_key typed_active=false
   file="$CONFIG/crew-dispatch.json"
   [ -f "$file" ] || return 0
   if ! command -v jq >/dev/null 2>&1; then
@@ -1198,6 +1200,13 @@ crew_dispatch_validate() {
   [ -n "$typed_key" ] || typed_key=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
   [ -n "$typed_key" ] || typed_key=$(fmx_env_get OPENROUTER_API_KEY "$FM_HOME/.env")
   [ -z "$typed_key" ] || typed_active=true
+  cred="$CONFIG/dispatch-credential-sources.json"
+  if [ -n "$typed_key" ]; then
+    typed_active=true
+  elif [ -f "$cred" ] && fm_credsrc_check "$cred" typesafe openrouter >/dev/null &&
+    fm_credsrc_declares "$cred" typesafe; then
+    typed_active=true
+  fi
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else
@@ -1264,6 +1273,7 @@ crew_dispatch_validate() {
       | map("\(.h):\(.e)")
       | unique;
     if type != "object" then "top-level value must be an object"
+    elif has("preferred_provider") and (provider_id(.preferred_provider) | not) then "preferred_provider must be a lowercase provider ID (for example codex)"
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"
@@ -1285,6 +1295,7 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | select(has("select") and ((.select? | type) != "string" or (.select | length) == 0))] | length > 0 then "select must be a non-empty string"
     elif [(.rules // [])[]? | .select? // empty | select(. != "quota-balanced")] | length > 0 then
       "unknown select: " + ([ (.rules // [])[]? | .select? // empty | select(. != "quota-balanced") ] | unique | join(", "))
+    elif has("shared_quota") and (.shared_quota | type) != "boolean" then "shared_quota must be true or false when present"
     elif has("default") and ((.default | type) != "object" and (.default | type) != "array") then "default must be a profile object or non-empty profile array"
     elif has("default") and ((.default | type) == "array" and (.default | length) == 0) then "default needs at least one profile"
     elif has("default") and ([profiles(.default)[]? | select(type != "object")] | length) > 0 then "each default profile must be an object"

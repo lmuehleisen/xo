@@ -7,6 +7,7 @@
 #   fm-remote-secondmate-control.sh state <id>
 #   fm-remote-secondmate-control.sh route <id>
 #   fm-remote-secondmate-control.sh send <id> <message> [fire-and-forget]
+#   fm-remote-secondmate-control.sh send-stdin <id> [fire-and-forget]  # message on stdin
 #   fm-remote-secondmate-control.sh key <id> <key>
 #   fm-remote-secondmate-control.sh capture <id> [lines]
 #   fm-remote-secondmate-control.sh observe <id>
@@ -176,7 +177,7 @@ cmd_launch() {
   validate_id "$id"
   validate_home "$id"
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp) ;;
     *) die "unverified remote secondmate harness: $harness" ;;
   esac
   [ "$harness" != opencode ] || die "OpenCode secondmate launches are unsupported; select a harness verified for secondmates"
@@ -249,7 +250,7 @@ cmd_relaunch() {
   validate_id "$id"
   validate_home "$id"
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp) ;;
     *) die "unverified remote secondmate harness: $harness" ;;
   esac
   [ "$harness" != opencode ] || die "OpenCode secondmate launches are unsupported; select a harness verified for secondmates"
@@ -280,7 +281,7 @@ cmd_relaunch() {
   print_route "$id"
 }
 
-cmd_send() {
+cmd_send_body() {
   local id=$1 message=$2 delivery_mode=${3:-} rec ring_rc=0 meta meta_lock
   validate_id "$id"
   [ -z "$delivery_mode" ] || [ "$delivery_mode" = fire-and-forget ] || die "invalid send delivery mode"
@@ -322,6 +323,20 @@ cmd_send() {
     3) printf 'notice: doorbell not typed because the agent in %s has exited; the steer is durably recorded at %s for recovery\n' "$REMOTE_ENDPOINT_TARGET" "$rec" >&2 ;;
     4) printf 'notice: doorbell typed into %s but its Enter did not submit it; the steer is durably recorded at %s\n' "$REMOTE_ENDPOINT_TARGET" "$rec" >&2 ;;
   esac
+}
+
+cmd_send() {
+  local id=$1 message=$2 delivery_mode=${3:-}
+  [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage
+  cmd_send_body "$id" "$message" "$delivery_mode"
+}
+
+cmd_send_stdin() {
+  local id=$1 delivery_mode=${2:-} message
+  [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+  IFS= read -r -d '' message < /dev/stdin || :
+  [ -n "${message//[[:space:]]/}" ] || die "remote steer message must be nonempty"
+  cmd_send_body "$id" "$message" "$delivery_mode"
 }
 
 cmd_key() {
@@ -449,6 +464,7 @@ case "${1:-}" in
   state) shift; [ "$#" -eq 1 ] || usage; validate_id "$1"; validate_home "$1"; state_value "$1" ;;
   route) shift; [ "$#" -eq 1 ] || usage; cmd_route "$1" ;;
   send) shift; [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage; cmd_send "$@" ;;
+  send-stdin) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_send_stdin "$@" ;;
   key) shift; [ "$#" -eq 2 ] || usage; cmd_key "$@" ;;
   capture) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_capture "$@" ;;
   observe) shift; [ "$#" -eq 1 ] || usage; cmd_observe "$@" ;;

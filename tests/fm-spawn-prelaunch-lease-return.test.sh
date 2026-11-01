@@ -64,6 +64,10 @@ SPAWN_SLOT_LEASED_STATUS=$(spawn_slot_status) && SPAWN_SLOT_LEASED_STATUS_OK=1
 if [ "${FM_TEST_WRITE_WIRING:-0}" = 1 ]; then
   mkdir -p "$WT/.claude" && printf '{}\n' > "$WT/.claude/settings.local.json"
 fi
+if [ "${FM_TEST_EARLY_ABORT:-0}" = 1 ]; then
+  unset STATE_REAL
+  SPAWN_PRELAUNCH_ENDPOINT=0
+fi
 spawn_prelaunch_abort_cleanup
 spawn_prelaunch_return_lease
 SH
@@ -198,6 +202,22 @@ EOF
   pass "fm-spawn.sh: a task record that could not be rolled back keeps the lease"
 }
 
+test_abort_before_wiring_initialization_returns_the_clean_slot() {
+  local fields case_dir proj wt fakebin out
+  fields=$(make_case early-abort)
+  IFS='|' read -r case_dir proj wt fakebin <<EOF
+$fields
+EOF
+  fake_cli "$fakebin" herdr "$PANE_GONE"
+  out=$(FM_TEST_EARLY_ABORT=1 run_cleanup herdr fmtest:p7 "$case_dir" "$proj" "$wt" "$fakebin" early-abort)
+  grep -qxF -- "return --force $wt" "$fakebin/treehouse-calls" 2>/dev/null \
+    || fail "early-abort: the clean unwired slot was not returned: $out"
+  [ ! -e "$case_dir/pe-early-abort.treehouse-lease" ] || fail "early-abort: the returned slot kept its receipt"
+  assert_not_contains "$out" 'unbound variable' "early abort must not read uninitialized wiring state"
+  pass "fm-spawn.sh: an abort before state-side wiring returns its clean leased slot"
+}
+
+test_abort_before_wiring_initialization_returns_the_clean_slot
 test_herdr_unknown_presence_keeps_the_lease
 test_herdr_silent_failure_keeps_the_lease
 test_herdr_pane_not_found_returns_the_slot

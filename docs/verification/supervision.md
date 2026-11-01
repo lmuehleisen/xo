@@ -811,7 +811,7 @@ ok - host+hook: real successor downtime still resurfaces for main
 The delayed-cleanup case failed before the fix with `the acknowledged empty close woke main again`, carrying `check: rearm-resurface`.
 The timing, decimal-bound, and prefixed-receipt cases each failed when their corresponding fix was removed.
 These cases run the real host, watcher, arm, drain, and Stop-hook script with a stub session and engine; they do not claim live Claude delivery verification.
-Refresh all five cases with `bin/fm-test-run.sh tests/fm-supervision-host-attended.test.sh`.
+Refresh all five cases with `bin/fm-test-run.sh tests/fm-supervision-host-fork.test.sh`.
 The change is in the common arm takeover used by the host; Claude, Cursor, Codex, Grok, OpenCode, and omp arm-owner integration surfaces and runtime-backend dispatch remain unchanged.
 
 ### Engine and primary delivery
@@ -862,9 +862,9 @@ Deterministic entry points:
 
 ```sh
 bin/fm-test-run.sh tests/fm-supervision-host.test.sh \
-  tests/fm-supervision-host-attended.test.sh \
-  tests/fm-supervision-host-away.test.sh \
-  tests/fm-supervision-host-recovery.test.sh --jobs 1
+  tests/fm-supervision-host-fork.test.sh \
+  tests/fm-supervision-host-drain.test.sh \
+  tests/fm-supervision-host-park.test.sh --jobs 1
 tests/fm-claude-stop-autoarm.test.sh
 tests/fm-afk-launch.test.sh
 tests/fm-supervision-instructions.test.sh
@@ -918,9 +918,9 @@ Deterministic entry points:
 
 ```sh
 bin/fm-test-run.sh tests/fm-supervision-host.test.sh \
-  tests/fm-supervision-host-attended.test.sh \
-  tests/fm-supervision-host-away.test.sh \
-  tests/fm-supervision-host-recovery.test.sh --jobs 1
+  tests/fm-supervision-host-fork.test.sh \
+  tests/fm-supervision-host-drain.test.sh \
+  tests/fm-supervision-host-park.test.sh --jobs 1
 tests/fm-wake-queue.test.sh
 tests/fm-cursor-primary.test.sh
 tests/fm-pi-watch-extension.test.sh
@@ -993,9 +993,9 @@ Deterministic entry points:
 
 ```sh
 bin/fm-test-run.sh tests/fm-supervision-host.test.sh \
-  tests/fm-supervision-host-attended.test.sh \
-  tests/fm-supervision-host-away.test.sh \
-  tests/fm-supervision-host-recovery.test.sh --jobs 1
+  tests/fm-supervision-host-fork.test.sh \
+  tests/fm-supervision-host-drain.test.sh \
+  tests/fm-supervision-host-park.test.sh --jobs 1
 tests/fm-afk-return.test.sh
 tests/fm-branch-supervision.test.sh
 ```

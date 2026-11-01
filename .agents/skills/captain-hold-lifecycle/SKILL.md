@@ -26,6 +26,8 @@ After verifying the branch and test evidence and confirming no further worker wo
 The quiet wait requires a verified stopped ordinary worker; if exit cannot be verified on that backend, report the limitation rather than suppressing an ambiguous live endpoint.
 If an older or direct backlog hold missed the declaration, `bin/fm-captain-hold.sh complete <id> <id>` repairs a still-completed, actively held ship without changing merge authority.
 After inventorying the whole report and review surface, run `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` only when the reviewed surface leaves nothing waiting on the captain.
+A scout may attest its own empty inventory only through the narrow command exception in its generated brief's Definition of done.
+For a non-empty inventory or a refused command, the scout reports to firstmate rather than writing metadata or backlog records.
 A completed investigation and an ended visual review use this same owner and completion command; a visual tool, including Lavish, never owns a parallel completion policy.
 Run the command in the originating work's authoritative `FM_HOME`; secondmate-owned work registers in that secondmate home's backlog, and a question already held anywhere is never re-registered as a second row.
 Do not close a captain-held task merely because the originating investigation completed, its report was archived, its visual review ended, or its task was torn down.
@@ -65,10 +67,10 @@ The absence of a routed work item is not a divergence and the guard never requir
 
 1. Read the complete investigation result and complete the visual review before declaring either complete.
 2. Inventory only genuine unresolved choices that require the captain, and find the task each one gates.
-3. Hold that task - or create one captain-held task for the review's open questions - with a concise reason carrying the question and options.
-4. Run `complete` with the full captain-held inventory for that review pass.
+3. Firstmate holds that task - or creates one captain-held task for the review's open questions - with a concise reason carrying the question and options.
+4. Attest the full inventory for that review pass under the caller authority in Policy above.
 5. Relay the choices to the captain as decisions from Ops' Captain's Call section under `AGENTS.md` section 9; do not use the word hold in captain chat.
-6. Close each call only through `answer` (or a channel that feeds `answers`), close a captured-source reconcile request through evidence-backed `reconcile close`, record a still-active reconciliation through `reconcile note`, use `--until` when the captain defers it, or confirm a channel already closed it.
+6. Close each call only through `answer` (or a channel that feeds `answers`), close a captured-source moot call through evidence-backed `reconcile close`, record a still-active reconciliation through `reconcile note`, use `--until` when the captain defers it, or confirm a channel already closed it.
 7. Confirm Ops reflects the outcome: answered or reconciled-moot calls leave Captain's Call, released work resumes, active reconciliations remain held, and deferred calls sit in Charted Next with their date.
 
 `bin/fm-captain-hold.sh --help` owns command syntax, close modes, legacy-identity compatibility, completion attestation, retry behavior, and close ordering.
