@@ -1697,7 +1697,7 @@ The pre-Enter payload proof then judged the typed command unsent, pressed Ctrl+U
 
 The fix captures the FULL VISIBLE VIEWPORT for every herdr adapter composer read (`pane read --source visible [--format ansi]`, `fm_backend_herdr_composer_state` and `fm_backend_herdr_composer_content`): the composer is by definition inside the viewport, and the viewport is the one bound that always contains it.
 The shared inbox pending-line confirmation read (`bin/fm-task-inbox-lib.sh`) stays a bounded tail on every backend, herdr included; its payloads are task lines, not slash commands, so the popup shape does not arise there.
-The popup rows sit below the composer's closing rule, which is a structural edge row, so the shared classifier still selects only the composer and the menu rows never read as typed text.
+In this capture the popup rows have no agent prompt glyph, so the shared classifier selects only the composer above its closing rule.
 Verified live in the lab: with the popup up the state read answers `pending` (previously `empty`) and the payload proof returns `/exit` (previously empty), the submit presses Enter, and the Claude process exits, leaving the shell prompt.
 Growing the window only adds rows above the composer, so the bottom-most-shape selection, the footer zone, and every previously passing verdict are unchanged.
 
@@ -1721,6 +1721,35 @@ FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh
 ```text
 ok - live Herdr submit confirm: Claude Code (2.1.283 (Claude Code)) on herdr 0.9.0 proves and submits a typed /exit behind its command popup
 ```
+
+### Claude selected command menu below the composer
+
+Measured 2026-11-01 against Herdr 0.9.3 (protocol 22) and Claude Code 2.1.316 in a guarded isolated lab.
+A selected command below the closing rule begins with `❯ /exit`, followed by aligned command descriptions and wrapped descriptions.
+The selection marker previously won the cursorless selection over the actual input row, so payload extraction included the menu and refused Enter.
+Claude Code 2.1.314 on the same Herdr version rendered its menu above the composer and extracted `/exit` without this failure.
+
+The cursorless selector now recognizes the menu only behind a complete rule pair containing a nonempty slash draft, with aligned command/description rows and exactly one selected command equal to that draft.
+It selects the input inside the rules; an empty upper composer, an abbreviated draft, a different selected command, a later draft, or unrelated trailing output does not gain this exception.
+The same shared selector serves extraction and classification; the input remains pending.
+
+Live library checks, with the target bound to the helper's named lab pane:
+
+```sh
+fm_backend_herdr_read_composer "$TARGET" content
+printf '%s\n' "$content"
+fm_backend_herdr_send_text_submit "$TARGET" /exit 3 0.4 1.2
+```
+
+```text
+/exit
+unknown
+```
+
+The submit sent Enter and the agent actually exited; its native registration disappeared during confirmation, so that run returned `unknown` rather than claiming delivery from an absent registration.
+The pre-Enter proof read exactly five characters and performed no Ctrl+U cleanup.
+Refresh the live exit check with `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh`.
+Portable regressions are `tests/fm-composer-lib.test.sh` (selection and refusal boundaries) and `tests/fm-backend-herdr.test.sh` (payload proof sends Enter once instead of clearing the command).
 
 ### Exit-send failure metadata
 

@@ -1681,6 +1681,35 @@ test_cursor_on_proven_box_bottom_classifies_content() {
   pass "fm_composer_classify_screen: a proven box tolerates a bottom-border cursor"
 }
 
+# Claude Code 2.1.316 places its selected command menu BELOW the input's
+# closing rule. The menu's prompt glyph is a selection marker, not a draft.
+test_selected_content_excludes_claude_command_menu() {
+  local screen out caps altered namespaced
+  screen=$'────────────────────────────────────────────────────────────\n❯ /exit\n────────────────────────────────────────────────────────────\n  ❯ /exit             Exit the CLI\n    /context          Visualize current context usage\n    /acme:help        Show available commands\n    /usage-credits    Configure usage credits or request them\n                      from an admin'
+  for caps in "$CAPS_STYLED_NOID" "$CAPS_PLAIN"; do
+    out=$(fm_composer_extract_selected_content "$caps" "$screen")
+    [ "$out" = /exit ] || fail "selected command-menu rows must not enter the payload proof, got '$out'"
+    assert_screen 'a command menu never makes typed input empty' pending "$CAPS_STYLED_NOID" "$screen"
+    namespaced=${screen//\/exit/\/acme:help}
+    out=$(fm_composer_extract_selected_content "$caps" "$namespaced")
+    [ "$out" = /acme:help ] || fail "namespaced slash commands must retain their input, got '$out'"
+
+    # A menu-shaped lower composer must not hide behind an empty/stale input,
+    # or swallow unrelated activity and a later real draft.
+    for altered in "${screen/❯ \/exit/❯ }" "${screen/❯ \/exit/❯ \/other}" "${screen/❯ \/exit/❯ \/ex}" "$screen"$'\n❯ another draft' "$screen"$'\nWorking on request...' "$screen"$'\n                      ❯ another draft'; do
+      out=$(fm_composer_extract_selected_content "$caps" "$altered") || out=unreadable
+      [ "$out" != /exit ] || fail "unproven menu surroundings selected a stale slash draft"
+    done
+  done
+  altered=${screen/❯ \/exit/❯ \/ex}
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$altered")
+  [ "$out" != /ex ] || fail 'an abbreviated draft must not prove a different selected command'
+  altered=${screen/❯ \/exit/❯ ${ESC}[2m/exit${ESC}[0m}
+  assert_screen 'a dimmed slash draft with a command menu cannot become empty' pending "$CAPS_STYLED_NOID" "$altered"
+  pass 'fm_composer_extract_selected_content: a below-composer Claude command menu is excluded, without hiding lower input'
+}
+
+
 test_selected_content_is_composer_scoped_and_wrap_normalized() {
   local screen out
   screen=$'hello captain in transcript\n╭────────────────────╮\n│ unrelated          │\n│ draft               │\n╰────────────────────╯'
@@ -1846,6 +1875,7 @@ test_composer_widening_is_kiro_only() {
   pass "composer widening: the near-gray ceiling, palette greys, and hinted idle row apply on kiro only"
 }
 
+test_selected_content_excludes_claude_command_menu
 test_bare_shell_glyphs_are_unknown
 test_stripped_unbordered_content_uses_plain_content
 test_bare_shell_prompt_with_command_is_not_empty
