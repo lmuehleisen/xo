@@ -13,14 +13,19 @@ set -eu
 . "$(dirname "${BASH_SOURCE[0]}")/agy-live-helpers.sh"
 agy_live_context
 BACKEND=${FM_AGY_NATIVE_LIVE_BACKEND:-tmux}
-fm_live_gate opt-in FM_AGY_NATIVE_LIVE agy jq python3 "$BACKEND"
-AGY_VERSION=$("$AGY_BIN" --version)
-# The native sandbox permits system temporary storage. Put synthetic status
-# and inbox files under the owning home's data instead, so this exercises a
-# real outside-sandbox round trip without granting the shared state directory.
-STATE_PARENT=${FM_AGY_NATIVE_LIVE_STATE_ROOT:-${FM_HOME:-$ROOT}/data}
-[ -d "$STATE_PARENT" ] || fail 'native live state parent must already exist'
-STATE=$(TMPDIR="$STATE_PARENT" fm_test_tmproot fm-agy-native-state)
+if [ "${1:-}" != --test-setup ]; then
+  fm_live_gate opt-in FM_AGY_NATIVE_LIVE agy jq python3 "$BACKEND"
+fi
+# Keep synthetic state outside native grants and system temporary storage.
+# An explicit parent override retains its existing guarded temp-root semantics.
+STATE_PARENT=${FM_AGY_NATIVE_LIVE_STATE_ROOT:-}
+if [ -n "$STATE_PARENT" ]; then
+  [ -d "$STATE_PARENT" ] || fail 'native live state parent must already exist'
+  STATE=$(TMPDIR="$STATE_PARENT" fm_test_tmproot fm-agy-native-state)
+else
+  STATE="$ROOT/.agy-native-live-e2e.$$"
+  mkdir -m 700 "$STATE" || fail 'cannot create native live state lab'
+fi
 LAB=$(fm_test_tmproot fm-agy-native)
 FOREIGN=$(TMPDIR=/tmp fm_test_tmproot fm-agy-native-foreign)
 LAB_HOME="$LAB/home"
@@ -59,7 +64,11 @@ cleanup() {
   fi
   fm_test_rm_tmproot "$FOREIGN"
   if [ "$rc" -eq 0 ]; then
-    TMPDIR="$STATE_PARENT" fm_test_rm_tmproot "$STATE"
+    if [ -n "$STATE_PARENT" ]; then
+      TMPDIR="$STATE_PARENT" fm_test_rm_tmproot "$STATE" || rc=1
+    else
+      fm_test_rm_checkout_lab "$STATE" || rc=1
+    fi
     fm_test_rm_tmproot "$LAB"
   else printf 'native Auto failure evidence: %s (state %s)\n' "$LAB" "$STATE" >&2; fi
   exit "$rc"
@@ -74,6 +83,12 @@ fail() {
   printf 'not ok - agy %s on %s: %s\n' "$AGY_VERSION" "$BACKEND" "$*" >&2
   exit 1
 }
+if [ "${1:-}" = --test-setup ]; then
+  printf '%s\n' "$STATE"
+  [ "${2:-success}" = success ] || exit 1
+  exit 0
+fi
+AGY_VERSION=$("$AGY_BIN" --version)
 "$LAB_HOME_HELPER" create "$LAB_HOME" >/dev/null
 export FM_HOME="$LAB_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$STATE"
 export FM_CONFIG_OVERRIDE="$LAB_HOME/config" FM_DATA_OVERRIDE="$LAB_HOME/data"
