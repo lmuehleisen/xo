@@ -213,6 +213,8 @@ test_agents_hooks_json_registration_and_cwd_contract() {
     and ([.[] | .PreToolUse // empty | .[] | (.matcher | type) == "string" and ([.hooks[].command | type == "string"] | length > 0 and all)] | length > 0 and all)
   ' "$reg" >/dev/null 2>&1 \
     || fail ".agents/hooks.json must be agy named hook specs with flat SessionStart/Stop and grouped PreToolUse handlers"
+  jq -e '[.[] | .SessionStart // empty | .[].timeout] | length > 0 and all(. >= 180)' "$reg" >/dev/null 2>&1 \
+    || fail "SessionStart registration must outlive the bounded startup digest"
   jq -e '[.[] | .Stop // empty | .[].timeout] | length > 0 and all(. == 28800)' "$reg" >/dev/null 2>&1 \
     || fail ".agents/hooks.json Stop must allow the park the 28800s hook budget Cursor and Claude use"
 
@@ -289,6 +291,29 @@ test_sessionstart_agy_primary_secondmate_and_worktree_scope() {
   [ ! -e "$wt/state/.lock" ] || fail "crewmate worktree must not create state/.lock"
 
   pass "fm-sessionstart-agy: runs in primary and seeded secondmate homes, stands down with {} in crewmate worktree"
+}
+
+test_sessionstart_agy_source_field() {
+  local dir payload out
+  dir=$(make_primary_dir "$TMP_ROOT/session-source")
+  # This transport probe records the arguments handed to the shared routing
+  # owner, without running startup or needing a live harness.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*"\n' > "$dir/bin/fm-sessionstart-run.sh"
+  for payload in '{"source":"new","metadata":{"source":"resume"}}' \
+    '{"metadata":{"source":"resume"},"source":"new"}'; do
+    out=$(printf '%s' "$payload" | bash "$dir/bin/fm-sessionstart-agy.sh")
+    printf '%s' "$out" | jq -e '.injectSteps[0].systemMessage.systemMessage == "--source new"' >/dev/null \
+      || fail "nested source changed startup routing: $out"
+  done
+  for payload in '{"source":17}' 'invalid JSON' '{}'; do
+    out=$(printf '%s' "$payload" | bash "$dir/bin/fm-sessionstart-agy.sh")
+    printf '%s' "$out" | jq -e '.injectSteps[0].systemMessage.systemMessage == "--source startup"' >/dev/null \
+      || fail "invalid source must fall back to startup: $out"
+  done
+  out=$(printf '{"source":"resume"}' | bash "$dir/bin/fm-sessionstart-agy.sh" --source clear)
+  printf '%s' "$out" | jq -e '.injectSteps[0].systemMessage.systemMessage == "--source clear"' >/dev/null \
+    || fail "explicit source lost precedence: $out"
+  pass "agy SessionStart: top-level source, malformed fallback and explicit source precedence"
 }
 
 # --- 3. bin/fm-turnend-guard-agy.sh & bin/fm-turnend-guard.sh --agy ----------
@@ -369,6 +394,26 @@ test_turnend_guard_agy_park_timeout_rearms() {
   [ "$(wc -l < "$dir/state/arm-ran")" -eq 1 ] \
     || fail "FM_AGY_PARK_TIMEOUT must bound the total park, not grant each arm attempt a fresh budget"
   pass "fm-turnend-guard-agy: park timeout stops the arm and returns continue with [supervision-park]"
+}
+
+test_turnend_guard_agy_default_deadline() {
+  local dir payload out setting
+  payload='{"executionNum":0,"terminationReason":"NO_TOOL_CALL"}'
+  for setting in 0 999999; do
+    dir=$(make_primary_dir "$TMP_ROOT/stop-default-deadline-$setting")
+    : > "$dir/state/task1.meta"
+    write_arm_fixture "$dir" slow
+    # Shorten only the hook registration. The default must derive its bound
+    # from that public configuration; zero/overlong overrides cannot disable it.
+    jq 'with_entries(.value.Stop |= map(.timeout = 8))' "$dir/.agents/hooks.json" > "$dir/.agents/short-hooks.json"
+    mv "$dir/.agents/short-hooks.json" "$dir/.agents/hooks.json"
+    out=$(FM_AGY_PARK_TIMEOUT="$setting" run_agy_stop "$dir" "$payload")
+    printf '%s' "$out" | jq -e '.decision == "continue" and (.reason | contains("[supervision-park]"))' >/dev/null \
+      || fail "park did not yield before its configured hook timeout: $out"
+    [ -e "$dir/state/arm-ran" ] || fail 'deadline fixture never parked'
+    ! kill -0 "$(cat "$dir/state/arm-ran")" 2>/dev/null || fail 'deadline left its child alive'
+  done
+  pass "agy Stop: default and overlong override yield before the registered hook timeout"
 }
 
 test_turnend_guard_agy_fleet_empty_and_healthy_close() {
@@ -700,9 +745,11 @@ test_session_lock_agy_ancestry_and_supervision_model() {
 fm_test_run \
   test_agents_hooks_json_registration_and_cwd_contract \
   test_sessionstart_agy_primary_secondmate_and_worktree_scope \
+  test_sessionstart_agy_source_field \
   test_turnend_guard_agy_actionable_wake_followup \
   test_turnend_guard_agy_supervision_host_park \
   test_turnend_guard_agy_park_timeout_rearms \
+  test_turnend_guard_agy_default_deadline \
   test_turnend_guard_agy_fleet_empty_and_healthy_close \
   test_turnend_guard_agy_non_normal_termination_reasons \
   test_turnend_guard_agy_loop_ceiling \

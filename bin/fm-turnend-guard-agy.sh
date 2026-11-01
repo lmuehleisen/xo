@@ -10,9 +10,9 @@
 #     runs the supervision host (fm_supervision_host_enabled ... agy).
 #   - The child is polled every FM_AGY_PARK_POLL seconds (default 2) and the
 #     park waits on it under the 28800s hooks.json timeout, so an idle cycle
-#     spends no model turn. Only when FM_AGY_PARK_TIMEOUT is set to a positive
-#     number of seconds, and that total wait across every attempt passes with
-#     the child still running, is the child stopped and
+#     spends no model turn. The wall-clock deadline is derived from this
+#     hook's declared timeout, with a safety margin; FM_AGY_PARK_TIMEOUT can
+#     shorten it. At that total deadline the child is stopped and
 #     {"decision":"continue","reason":"[supervision-park] ..."} returned so the
 #     next turn boundary parks again.
 #   - An actionable close (a signal:/stale:/check:/heartbeat line, or a
@@ -45,6 +45,7 @@ GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 ARM_ATTEMPTS=2
 
+HOOK_STARTED=$(date +%s)
 POLL=${FM_AGY_PARK_POLL:-2}
 PARK_TIMEOUT=${FM_AGY_PARK_TIMEOUT:-0}
 LOOP_CEILING=${FM_AGY_TURNEND_LOOP_CEILING:-180}
@@ -139,13 +140,42 @@ if fm_supervision_host_enabled "$CONFIG" agy; then
   ACTIONABLE_RE='^(signal:|stale:|check:|heartbeat($|:)|supervision-host:)'
 fi
 
+# Like Claude's auto-arm owner, close before the registered hook timeout.
+# Reserve a quarter of its budget, capped at 600s, for child cleanup and JSON
+# delivery. An unreadable declaration falls back to a conservative 600s park.
+agy_hook_deadline_secs() {
+  local timeout margin
+  timeout=$(jq -r '[.[] | .Stop[]?
+    | select((.command // "") | contains("fm-turnend-guard-agy.sh"))
+    | .timeout | numbers | floor] | min // empty' "$FM_ROOT/.agents/hooks.json" 2>/dev/null || true)
+  case "$timeout" in ''|*[!0-9]*|0) printf '600\n'; return ;; esac
+  margin=$((timeout / 4))
+  [ "$margin" -le 600 ] || margin=600
+  [ "$margin" -ge 1 ] || margin=1
+  [ "$timeout" -gt "$margin" ] || { printf '1\n'; return; }
+  printf '%s\n' "$((timeout - margin))"
+}
+PARK_STARTED=$(date +%s)
+PARK_DEADLINE=$((HOOK_STARTED + $(agy_hook_deadline_secs)))
+if [ "$PARK_TIMEOUT" -gt 0 ] && [ "$((PARK_STARTED + PARK_TIMEOUT))" -lt "$PARK_DEADLINE" ]; then
+  PARK_DEADLINE=$((PARK_STARTED + PARK_TIMEOUT))
+fi
+PARK_TIMEOUT=$((PARK_DEADLINE - PARK_STARTED))
+park_timed_out() {
+  if [ -n "$ARM_PID" ]; then
+    kill "$ARM_PID" 2>/dev/null || true
+    wait "$ARM_PID" 2>/dev/null || true
+    ARM_PID=
+  fi
+  continue_turn "[supervision-park] The ${PARK_TIMEOUT}s park deadline was reached while supervision is still needed. End your turn briefly so the Antigravity Stop hook can re-park on the next turn boundary."
+}
+
 # Never leave a park child or its capture file behind, on any exit path.
 trap '[ -n "$ARM_PID" ] && kill "$ARM_PID" 2>/dev/null; [ -n "$ARM_OUT" ] && rm -f "$ARM_OUT" 2>/dev/null; :' EXIT
 
-waited=0
 attempt=0
 while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
-  [ "$PARK_TIMEOUT" -eq 0 ] || [ "$waited" -lt "$PARK_TIMEOUT" ] || break
+  [ "$(date +%s)" -lt "$PARK_DEADLINE" ] || park_timed_out
   attempt=$((attempt + 1))
   ARM_OUT=$(mktemp "$STATE/.agy-park-output.XXXXXX") || { ARM_OUT=; break; }
   if [ "$HOST_MODE" -eq 1 ]; then
@@ -160,13 +190,8 @@ while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
     if ! park_still_ours || ! fm_session_lock_owned_by_self "$STATE" || [ -e "$STATE/.afk" ]; then
       allow_stop
     fi
-    if [ "$PARK_TIMEOUT" -gt 0 ] && [ "$waited" -ge "$PARK_TIMEOUT" ]; then
-      kill "$ARM_PID" 2>/dev/null
-      ARM_PID=
-      continue_turn "[supervision-park] No actionable wake arrived within ${PARK_TIMEOUT}s while supervision is still needed. End your turn briefly so the Antigravity Stop hook can re-park on the next turn boundary."
-    fi
+    [ "$(date +%s)" -lt "$PARK_DEADLINE" ] || park_timed_out
     sleep "$POLL"
-    waited=$((waited + POLL))
   done
   HOST_RC=0
   wait "$ARM_PID" 2>/dev/null || HOST_RC=$?

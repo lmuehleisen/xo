@@ -624,7 +624,7 @@ The prior agy 1.4.7 PreInvocation/background-command result covered the retired 
 Supervisor permissions remain unchanged, and worker native Auto evidence above does not extend to supervisors.
 
 `tests/fm-agy-primary.test.sh` exercises the production event handlers with disposable Git homes and a compiled fake ancestry process, without invoking agy.
-It covers hook registration from both supported working directories, primary and marked-secondmate startup, linked-worker stand-down, native deny versus silent abstention, fail-closed publication, malformed/foreign Stop payloads, locks, normal/abnormal Stop, watcher/host routing, timeout, supersession, away transition, empty fleet, loop ceiling and bounded repair.
+It covers hook registration from both supported working directories, primary and marked-secondmate startup, linked-worker stand-down, native deny versus silent abstention, fail-closed publication, malformed/foreign Stop payloads, locks, normal/abnormal Stop, watcher/host routing, deadline derivation from the registration, shorter timeout overrides, supersession, away transition, empty fleet, loop ceiling and bounded repair.
 Shared cross-harness regressions remain in the arm, cd, subagent, turn-end and supervision suites.
 
 ```sh

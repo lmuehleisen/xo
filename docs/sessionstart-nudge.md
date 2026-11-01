@@ -330,7 +330,7 @@ The guard lets the watcher coordinator act first, so the plugins do not race for
 ### Agy
 
 Antigravity CLI is a run-tier harness.
-`.agents/hooks.json` registers `SessionStart`, anchored to the project root with a 30s timeout, invoking `bin/fm-sessionstart-agy.sh`.
+`.agents/hooks.json` registers `SessionStart`, anchored to the project root with a 180s timeout, invoking `bin/fm-sessionstart-agy.sh`.
 The wrapper drains stdin for the payload's `source` and delegates to `bin/fm-sessionstart-run.sh`, which owns primary or persistent secondmate home scope, source routing, and the digest.
 In linked crewmate worktrees or foreign checkouts, `bin/fm-sessionstart-run.sh` stands down silently and the wrapper emits `{}`.
 In primary or secondmate homes, the wrapper emits the captured digest as `{injectSteps:[{systemMessage:{systemMessage:$digest}}]}` on stdout with exit 0.

@@ -538,10 +538,11 @@ Baton invalidation and the `preCompact` surface remain deferred.
 Antigravity CLI evaluates project-local `.agents/hooks.json` (Stop event) at the end of every agent turn.
 Like Cursor, Antigravity does not expose an asynchronous background rewake channel on Stop.
 `bin/fm-turnend-guard-agy.sh` parks the Stop hook on a tracked child, following the [Cursor park](#cursor-park): `bin/fm-watch-arm.sh`, or `bin/fm-supervision-host.sh park` with `FM_SUPERVISION_HOST_PRIMARY=agy` on a home that runs the supervision host.
-It polls the child every `FM_AGY_PARK_POLL` seconds (default 2) and waits on it under the 28800s hook timeout, so an idle watcher cycle forces no model turn and consumes no `executionNum`; the optional `FM_AGY_PARK_TIMEOUT` bounds the total wait across every attempt:
+It polls the child every `FM_AGY_PARK_POLL` seconds (default 2) and waits on it under the 28800s hook timeout, so an idle watcher cycle forces no model turn and consumes no `executionNum`.
+The header owns a wall-clock deadline derived from the registered timeout with a cleanup margin; `FM_AGY_PARK_TIMEOUT` can shorten the total wait across all attempts:
 
 - An actionable close (a watcher reason line, or a `supervision-host:` line in host mode) resets `state/.turnend-blocks` and returns `{"decision":"continue","reason":"<wake>"}` on stdout, immediately starting a follow-up supervision turn.
-- When an `FM_AGY_PARK_TIMEOUT` bound is set and passes with the child still running, the hook stops the child and returns `{"decision":"continue","reason":"[supervision-park] ..."}` so the next turn boundary parks again.
+- When the park deadline passes with the child still running, the hook stops the child and returns `{"decision":"continue","reason":"[supervision-park] ..."}` so the next turn boundary parks again.
 - A non-actionable close beside a verified healthy watcher, a host that stood down, or a fleet that no longer needs supervision resets `state/.turnend-blocks`, emits `{}`, and lets the turn end cleanly.
 - A park that cannot establish a cycle after two bounded attempts delegates to `bin/fm-turnend-guard.sh --agy` for a bounded 3-block repair nag before failing open.
 

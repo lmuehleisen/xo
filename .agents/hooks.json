@@ -4,7 +4,7 @@
       {
         "type": "command",
         "command": "sh -c \"[ -x ./bin/fm-sessionstart-agy.sh ] && exec ./bin/fm-sessionstart-agy.sh || exec ../bin/fm-sessionstart-agy.sh\" || cd .",
-        "timeout": 30
+        "timeout": 180
       }
     ],
     "PreToolUse": [

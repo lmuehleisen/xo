@@ -11,7 +11,8 @@ When this session owns supervision and away mode is not active:
    Do not run `bin/fm-watch-arm.sh` after an ordinary wake; the next turn end parks again automatically when supervision is still needed.
    Do not invent a wake from an attach-status line alone; drain and act only on real wake records, the drain's `OPEN DECISIONS` entries, or a real watcher reason line.
 4. The Stop-hook park checks its tracked child every `FM_AGY_PARK_POLL` seconds (default 2) and waits on it under the 28800-second hook timeout, so an idle cycle spends no turn.
-   Only when the optional `FM_AGY_PARK_TIMEOUT` bound is set and passes without a wake does it stop the child and returns `{"decision":"continue","reason":"..."}` carrying `[supervision-park]`; end the turn briefly so the next turn boundary parks again.
+   Before the registered hook timeout, the park reaches its own deadline, stops the child and returns `{"decision":"continue","reason":"..."}` carrying `[supervision-park]`; end the turn briefly so the next turn boundary parks again.
+   `bin/fm-turnend-guard-agy.sh` owns deadline derivation; `FM_AGY_PARK_TIMEOUT` can shorten the wait.
    When nothing needs supervision, or the park closed beside a verified healthy watcher, the hook returns `{}` and allows normal turn completion.
    When `.executionNum` reaches the loop ceiling (`FM_AGY_TURNEND_LOOP_CEILING`, default 180) while supervision is still needed, the hook returns one `FIRSTMATE SUPERVISION FOLLOW-UP CEILING REACHED` notice; drain and handle queued wakes yourself, and past the ceiling the hook returns `{}`.
    Only normal turn completions with `.terminationReason == "NO_TOOL_CALL"` trigger a park; other termination reasons pass through with `{}`.

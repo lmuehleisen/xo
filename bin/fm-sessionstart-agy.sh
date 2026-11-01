@@ -29,13 +29,8 @@ done
 
 if [ -z "$SOURCE" ] && [ ! -t 0 ]; then
   PAYLOAD=$(cat 2>/dev/null || true)
-  SOURCE=$(printf '%s' "$PAYLOAD" | awk '
-    BEGIN { RS = "\"" }
-    seen == 2 { print; exit }
-    seen == 1 && $0 ~ /^[[:space:]]*:[[:space:]]*$/ { seen = 2; next }
-    seen == 1 { seen = 0 }
-    $0 == "source" { seen = 1 }
-  ')
+  # Read the top-level field: nested metadata may also carry a source key.
+  SOURCE=$(printf '%s' "$PAYLOAD" | jq -r '.source | select(type == "string")' 2>/dev/null || true)
 fi
 
 DIGEST=$("$SCRIPT_DIR/fm-sessionstart-run.sh" --source "${SOURCE:-startup}" </dev/null 2>/dev/null || true)
