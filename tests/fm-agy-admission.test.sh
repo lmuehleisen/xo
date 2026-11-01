@@ -241,7 +241,8 @@ if FM_HOME="$CODE" bash "$setup_suite" --test-setup failure > "$CASE/state" 2> "
   fail 'synthetic setup failure succeeded'
 fi
 state=$(cat "$CASE/state")
-[ -d "$state" ] && grep -Fq "$state" "$CASE/failure" || fail 'failure evidence was not retained'
+[ -d "$state" ] || fail 'failure state was not retained'
+grep -Fq "$state" "$CASE/failure" || fail 'failure evidence path was not reported'
 fm_test_rm_checkout_lab "$state" 2>/dev/null && fail 'foreign checkout lab was removed'
 # The fixture checkout owns its own cleanup guard.
 bash -c '. "$1/tests/lib.sh"; fm_test_rm_checkout_lab "$2"' _ "$CODE" "$state"
