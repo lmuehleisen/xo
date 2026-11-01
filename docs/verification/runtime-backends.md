@@ -1729,8 +1729,8 @@ A selected command below the closing rule begins with `❯ /exit`, followed by a
 The selection marker previously won the cursorless selection over the actual input row, so payload extraction included the menu and refused Enter.
 Claude Code 2.1.314 on the same Herdr version rendered its menu above the composer and extracted `/exit` without this failure.
 
-The cursorless selector now recognizes the menu only behind a complete rule pair containing a nonempty slash draft, with aligned command/description rows and exactly one selected command matching that draft.
-It selects the input inside the rules; an empty upper composer, a different selected command, a later draft, or unrelated trailing output does not gain this exception.
+The cursorless selector now recognizes the menu only behind a complete rule pair containing a nonempty slash draft, with aligned command/description rows and exactly one selected command equal to that draft.
+It selects the input inside the rules; an empty upper composer, an abbreviated draft, a different selected command, a later draft, or unrelated trailing output does not gain this exception.
 The same shared selector serves extraction and classification; the input remains pending.
 
 Live library checks, with the target bound to the helper's named lab pane:

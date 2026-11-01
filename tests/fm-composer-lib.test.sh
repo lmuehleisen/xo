@@ -1696,11 +1696,14 @@ test_selected_content_excludes_claude_command_menu() {
 
     # A menu-shaped lower composer must not hide behind an empty/stale input,
     # or swallow unrelated activity and a later real draft.
-    for altered in "${screen/❯ \/exit/❯ }" "${screen/❯ \/exit/❯ \/other}" "$screen"$'\n❯ another draft' "$screen"$'\nWorking on request...' "$screen"$'\n                      ❯ another draft'; do
+    for altered in "${screen/❯ \/exit/❯ }" "${screen/❯ \/exit/❯ \/other}" "${screen/❯ \/exit/❯ \/ex}" "$screen"$'\n❯ another draft' "$screen"$'\nWorking on request...' "$screen"$'\n                      ❯ another draft'; do
       out=$(fm_composer_extract_selected_content "$caps" "$altered") || out=unreadable
       [ "$out" != /exit ] || fail "unproven menu surroundings selected a stale slash draft"
     done
   done
+  altered=${screen/❯ \/exit/❯ \/ex}
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$altered")
+  [ "$out" != /ex ] || fail 'an abbreviated draft must not prove a different selected command'
   altered=${screen/❯ \/exit/❯ ${ESC}[2m/exit${ESC}[0m}
   assert_screen 'a dimmed slash draft with a command menu cannot become empty' pending "$CAPS_STYLED_NOID" "$altered"
   pass 'fm_composer_extract_selected_content: a below-composer Claude command menu is excluded, without hiding lower input'

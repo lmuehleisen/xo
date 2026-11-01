@@ -2243,7 +2243,7 @@ _fm_composer_select_claude_command_menu() { # <plain-screen>
       return 1
     elif [[ $raw =~ $entry_re ]]; then
       if [ "${BASH_REMATCH[1]}" = '❯ ' ]; then
-        [[ ${BASH_REMATCH[2]} = "$draft"* ]] || return 1
+        [ "${BASH_REMATCH[2]}" = "$draft" ] || return 1
         selected=$((selected + 1))
       fi
       printf -v continuation '%*s' "$((4 + ${#BASH_REMATCH[2]} + ${#BASH_REMATCH[3]}))" ''

@@ -5353,6 +5353,26 @@ test_send_text_submit_claude_selected_command_menu_is_not_payload() {
 }
 
 
+test_send_text_submit_claude_abbreviation_does_not_prove_selected_command() {
+  local dir log resp fb out text enter_count
+  dir="$TMP_ROOT/submit-claude-abbreviated-menu"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  text=/ex
+  herdr_submit_claude_prefix "$resp" "$text"
+  printf '%s\n' '────────────────────────────────────────────────────────────' '❯ /ex' \
+    '────────────────────────────────────────────────────────────' \
+    '  ❯ /exit             Exit the CLI' > "$resp/4.out"
+  printf '❯\n' > "$resp/6.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text")
+  [ "$out" = send-failed ] || fail "an abbreviated draft must not prove the longer selected command, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 0 ] || fail 'an abbreviated draft must not receive Enter'
+  [ "$(herdr_ctrl_u_count "$log")" -eq 1 ] || fail 'the refused abbreviated draft must be cleared'
+  pass 'fm_backend_herdr_send_text_submit: an abbreviated draft does not prove a different selected command'
+}
+
+
 test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted() {
   local dir log resp fb out enter_count text rule head
   dir="$TMP_ROOT/submit-claude-grey-slash"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -6690,6 +6710,7 @@ test_send_text_submit_refuses_marked_digest_missing_its_head
 test_composer_state_claude_slash_popup_pushes_composer_above_tail_window
 test_send_text_submit_claude_slash_popup_composer_is_still_proven_and_submitted
 test_send_text_submit_claude_selected_command_menu_is_not_payload
+test_send_text_submit_claude_abbreviation_does_not_prove_selected_command
 test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted
 test_send_text_submit_lone_paste_placeholder_submits_the_long_payload
 test_send_text_submit_multiline_paste_placeholder_submits_the_long_payload
