@@ -316,6 +316,19 @@ test_sessionstart_agy_source_field() {
   pass "agy SessionStart: top-level source, malformed fallback and explicit source precedence"
 }
 
+test_sessionstart_agy_large_digest() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/session-large-digest")
+  cat > "$dir/bin/fm-sessionstart-run.sh" <<'SH'
+#!/bin/sh
+head -c 140000 /dev/zero | tr '\000' x
+SH
+  out=$(bash "$dir/bin/fm-sessionstart-agy.sh" </dev/null)
+  printf '%s' "$out" | jq -e '.injectSteps[0].systemMessage.systemMessage == ("x" * 140000)' >/dev/null \
+    || fail 'large startup digest was clipped or lost to an execution argument limit'
+  pass "agy SessionStart: a 140 KB digest is serialized intact without an exec argument"
+}
+
 # --- 3. bin/fm-turnend-guard-agy.sh & bin/fm-turnend-guard.sh --agy ----------
 
 run_agy_stop() {
@@ -746,6 +759,7 @@ fm_test_run \
   test_agents_hooks_json_registration_and_cwd_contract \
   test_sessionstart_agy_primary_secondmate_and_worktree_scope \
   test_sessionstart_agy_source_field \
+  test_sessionstart_agy_large_digest \
   test_turnend_guard_agy_actionable_wake_followup \
   test_turnend_guard_agy_supervision_host_park \
   test_turnend_guard_agy_park_timeout_rearms \

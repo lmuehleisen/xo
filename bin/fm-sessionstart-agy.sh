@@ -39,5 +39,5 @@ if [ -z "$DIGEST" ] || ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-jq -cn --arg msg "$DIGEST" '{injectSteps:[{systemMessage:{systemMessage:$msg}}]}'
+printf '%s' "$DIGEST" | jq -Rsc '{injectSteps:[{systemMessage:{systemMessage:.}}]}'
 exit 0
