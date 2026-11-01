@@ -292,11 +292,8 @@ if command -v tmux >/dev/null 2>&1; then
     parent_socket="$parent_tmux_dir/tmux-$(id -u)/default"
     mkdir -m 700 "${parent_socket%/*}"
     export TMUX_TMPDIR="$parent_tmux_dir"
-    parent_cleanup() {
-      tmux -S "$parent_socket" kill-server >/dev/null 2>&1 || true
-      "$ROOT/bin/fm-lab-home.sh" teardown "$parent_home"
-    }
-    trap parent_cleanup EXIT
+    trap 'tmux -S "$parent_socket" kill-server >/dev/null 2>&1 || true
+      "$ROOT/bin/fm-lab-home.sh" teardown "$parent_home"' EXIT
     tmux -S "$parent_socket" new-session -d -s owned-parent
     TMUX="$parent_socket,0,0" FM_HOME="$HOME_DIR" bash "$setup_suite" --test-setup tmux > "$CASE/tmux-setup"
     grep -qx 'private tmux setup passed' "$CASE/tmux-setup" || fail 'guard did not prove its private server'

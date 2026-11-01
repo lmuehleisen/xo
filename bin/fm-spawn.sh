@@ -3290,7 +3290,7 @@ launch_command_template() { # <harness> <kind> <permission-flags>
   # inherited CLAUDECODE from a claude primary would otherwise outrank them in
   # a process that only reads the environment.
   agy)
-    fm_agy_launch_template
+    fm_agy_launch_template "$permission_flags"
     ;;
   # polytoken (Polytoken CLI): a pane-attached TUI worker whose control verbs
   # ride the daemon REST API (the captain-approved hybrid). The launch runs in

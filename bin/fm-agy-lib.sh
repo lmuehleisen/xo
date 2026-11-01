@@ -34,7 +34,8 @@ fm_agy_readiness_prompt() {
 }
 
 # Own only agy's launch template here; fm-spawn owns common substitutions.
-fm_agy_launch_template() {
+fm_agy_launch_template() { # <permission-flags>
+  local permission_flags=$1
   printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS AGY_CLI_DISABLE_AUTO_UPDATE=1 __AGYBIN__ '
   printf '%s' "$permission_flags"
   printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__'
@@ -42,6 +43,7 @@ fm_agy_launch_template() {
     printf '%s' '--log-file __AGYNATIVELOG__ --prompt-interactive '
     shell_quote "$(fm_agy_readiness_prompt)"
   else
+    # shellcheck disable=SC2016 # Expanded later by the staged launch shell.
     printf '%s' '-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
   fi
 }
