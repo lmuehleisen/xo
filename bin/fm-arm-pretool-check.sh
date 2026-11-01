@@ -56,6 +56,7 @@
 # Grok consumes the stdout decision object.
 # OpenCode and Pi consume exit 2 plus stderr.
 # Cursor consumes the stdout decision object.
+# Antigravity (agy) consumes the stdout decision object; silence abstains.
 set -u
 
 CMD=""
@@ -72,7 +73,8 @@ usage() {
 Usage: fm-arm-pretool-check.sh [--command <cmd>] [--background true|false] [--claude|--cursor|--agy] [--publish-only]
 
 With no --command, reads a PreToolUse-style JSON payload on stdin (Grok
-toolInput.command, or Claude/Codex/Cursor tool_input.command).
+toolInput.command, Antigravity toolCall.args.CommandLine/command, or
+Claude/Codex/Cursor tool_input.command).
 Exits 0 to allow and 2 to deny.
 The deny reason is written to stderr, with a Grok decision object on stdout
 unless --claude is supplied.
@@ -192,7 +194,11 @@ render_deny() {
     exit 0
   fi
   if [ "$AGY_MODE" -eq 1 ]; then
-    printf '{"decision":"deny","reason":"%s"}\n' "$escaped"
+    if command -v jq >/dev/null 2>&1; then
+      jq -cn --arg r "$detail" '{decision:"deny",reason:$r}'
+    else
+      printf '{"decision":"deny","reason":"%s"}\n' "$escaped"
+    fi
     exit 0
   fi
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$escaped" >&2
@@ -217,7 +223,7 @@ if [ "$CMD_SET" -eq 0 ]; then
   # Cursor's own registration passes --cursor. Without it a Cursor-delivered
   # payload is the Claude-settings duplicate Cursor also loads, already
   # evaluated by that registration, so this copy allows without re-classifying.
-  if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
+  if [ "$CURSOR_MODE" -eq 0 ] && [ "$AGY_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
     exit 0
   fi
   if ! CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolCall.args.CommandLine // .toolCall.args.command // .toolInput.command // .tool_input.command // empty)' 2>/dev/null); then

@@ -58,7 +58,7 @@ test_supervision_host_protocol_on_every_arm_owner() {
   home="$TMP_ROOT/host-owners-home"
   config="$TMP_ROOT/host-owners-config"
   mkdir -p "$home/state" "$config"
-  for harness in claude cursor opencode omp grok codex; do
+  for harness in claude cursor opencode omp grok codex agy; do
     : > "$config/supervision-host-off"
     plain=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness "$harness")
     assert_not_contains "$plain" "Supervision host" "$harness: a home opted out by config/supervision-host-off rendered the host protocol"
@@ -83,6 +83,13 @@ test_supervision_host_protocol_on_every_arm_owner() {
     [ "$(printf '%s\n' "$body" | grep -c '^3\. ')" -eq 1 ] || fail "$harness: the protocol must say once how the park boundary arrives: $body"
     [ "$(printf '%s\n' "$body" | grep -c '^6\. ./afk. writes only the record here')" -eq 1 ] \
       || fail "$harness: the protocol must say once what /afk does here: $body"
+    if [ "$harness" = agy ]; then
+      assert_contains "$body" 'The Stop-hook park runs the supervision host' 'agy host startup owner is missing'
+      assert_contains "$body" 'no verified dialog mirror feeds a supervision session' 'agy attended pass-through is missing'
+      assert_contains "$body" "as a \`watcher\` follow-up" 'agy host hand-back path is missing'
+      assert_contains "$body" 'the next park starts at that turn end' 'agy host boundary must leave re-arm to Stop'
+      assert_contains "$body" "\`bin/fm-afk-launch.sh start\` refuses the away daemon" 'agy away-host guidance is missing'
+    fi
   done
   rm -f "$config/supervision-host"
   plain=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness grok)
@@ -273,12 +280,13 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
 
   out=$("$RENDER" --harness agy)
   assert_contains "$out" "primary harness: agy" "agy identity was lost in the protocol router"
-  assert_contains "$out" "Mode: Agy native background-command wake." "agy native protocol missing"
-  assert_contains "$out" "WaitMsBeforeAsync: 1" "agy protocol lost its native background command"
+  assert_contains "$out" "Mode: Antigravity Stop-hook-owned supervision." "agy native protocol missing"
+  assert_contains "$out" "bin/fm-turnend-guard-agy.sh" "agy protocol lost its Stop owner"
+  assert_not_contains "$out" "WaitMsBeforeAsync" "agy protocol retained a second re-arm owner"
   assert_not_contains "$out" "Unknown harness fallback" "a verified agy primary received the fallback"
   out=$("$RENDER" --harness agy --repair-line)
-  assert_contains "$out" "one native run_command" "agy repair line lost its native tool"
-  assert_contains "$out" "WaitMsBeforeAsync: 1" "agy repair line lost its background wait setting"
+  assert_contains "$out" "Stop-hook park" "agy repair line lost its Stop owner"
+  assert_not_contains "$out" "WaitMsBeforeAsync" "agy repair line retained a manual arm"
 
   pass "renderer preserves every harness ordinary-continuation and missing-cycle repair path"
 }

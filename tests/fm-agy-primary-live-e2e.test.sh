@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Credentialed primary guard for agy, Google's Antigravity CLI: native startup
-# nudge, real session ownership, forced Stop continuation, real watcher
-# background completion, and secondmate scope. Uses only a throwaway home and a
+# digest, native-review abstention and deny, real session ownership, Stop park,
+# automatic watcher follow-up and re-park in primary and marked secondmate homes. Uses only a throwaway home and a
 # private tmux server; no fleet or operator settings are changed. The startup
 # digest is a fixture that acquires the real lock; watcher, guard, hook
 # transport, and the agy binary are production.
 set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-fm_live_gate opt-in FM_AGY_PRIMARY_LIVE agy tmux python3 jq
+fm_live_gate opt-in FM_AGY_PRIMARY_LIVE,FM_AGY_PRIMARY_LIVE_E2E agy tmux python3 jq
 LAB=$(fm_test_tmproot fm-agy-primary-live)
 LAB_HOME_HELPER=${LAB_HOME_HELPER:-$ROOT/bin/fm-lab-home.sh}
 LAB_HOME="$LAB/home"

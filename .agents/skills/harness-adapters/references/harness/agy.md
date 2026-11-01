@@ -2,7 +2,7 @@
 
 Google's Antigravity CLI, with native worker Auto verified on agy 1.4.7.
 The verification record below owns dated worker and primary results.
-Verified for interactive primary, secondmate, crewmate, and scout work.
+Supported for primary, secondmate, crewmate, and scout work; interactive verification of the converged supervisor path is pending.
 `../../../../../bin/fm-spawn.sh` owns the concrete launch and grant mechanics, through the fork-only `../../../../../bin/fm-agy-lib.sh` it sources.
 agy updates itself often and without asking, so treat every version-scoped fact here as refreshable rather than settled, and re-run the live guard after an upgrade.
 
@@ -93,19 +93,21 @@ Headless permission denial may still exit 0 and is never accepted as worker-comp
 
 ## Native hooks and primary integration
 
-The working hook schema is a named definition in `.agents/hooks.json`, with direct handlers for PreInvocation and Stop and matcher groups for PreToolUse and PostToolUse.
-Hooks run from the customization directory containing that file, so the tracked primary registration addresses its executable relative to `.agents/`.
+The working hook schema is a named definition in `.agents/hooks.json`, with direct lifecycle handlers and matcher groups for tool events.
+Hooks run from the customization directory containing that file, so the tracked primary commands resolve from either `.agents/` or the checkout root.
 Local hooks in a separately granted directory also execute; `../../../../../bin/fm-agy-hook.sh` uses that capability to keep worker hooks in owned state without modifying project or global configuration.
 The earlier no-hook conclusion is superseded by the positive live guards.
 agy bundles the authoritative hook spec inside the binary itself: `strings -n 4 "$(command -v agy)"` from the `# Lifecycle Hooks` line yields the full `hooks.json` reference, byte-identical across 1.2.4 and 1.2.5 - but matcher names are the observed function names (`write_to_file`, `list_dir`), not the spec's documented step-type derivation.
 `fm-agy-hook.sh install-worker` validates the merged `hooks.json` it writes, because agy does not load hooks from a file it cannot accept.
 Worker hooks additionally carry a log-only observer: every tool call appends one line to `state/agy-permission-log.jsonl`, the request record agy workers otherwise lack for permission-posture review, and `../../../../../bin/fm-agy-hook.sh` owns the schema.
 
-Primary support composes the existing startup nudge, shared pre-tool policies, and turn-end predicate through the native transport.
-`../../../../../docs/sessionstart-nudge.md` owns the nudge tier and unverified compaction boundary.
-`../../../../../docs/turnend-guard.md` owns Stop continuation, its executionNum loop bound, and the manual-interruption gap.
-`../../../../../docs/supervision-protocols/agy.md` owns the verified native background-command wake protocol.
-A completed native command re-enters the model automatically.
+Primary and secondmate supervision follow upstream's SessionStart/Stop-park implementation.
+`../../../../../docs/sessionstart-nudge.md` owns run-tier startup and source routing.
+`../../../../../docs/turnend-guard.md` owns synchronous Stop parking, lock checks, supersession and bounded repair.
+`../../../../../docs/supervision-protocols/agy.md` owns the operating instructions; the Stop hook is the sole routine re-arm owner.
+Use a fresh or restarted supervisor for cutover so an old model-owned background arm cannot compete with the Stop park.
+Shared PreToolUse owners receive `--agy` directly, preserving publication denials and silent abstention to native review on permitted commands.
+Supervisor permission flags remain unchanged; worker native Auto admission does not qualify supervisors.
 The session-lock owner recognizes the exact agy process, including the long-lived language-server process that parents hook and tool commands.
 
 Worker hooks report through the semantic busy owner and emit turn-ended notifications only after an accepted fullyIdle Stop.
@@ -117,7 +119,8 @@ Composer delivery needs the native footer or accept-edits mode cell as well as t
 An unstyled accept-edits hint, a manual-mode row with no identifying footer, and rendered busy-only acknowledgement of a queued Enter remain unproven; the adapter does not manufacture a successful delivery for them.
 Native background-task observation uses the returned log with `view_file`; delegation-shaped native tools retain the shared pre-tool guard.
 
-Unsupported surfaces remain explicit: headless primary supervision, native SessionStart and compaction refresh, and general semantic interrupt completion are not supported by this integration.
+Interactive SessionStart/Stop-park behavior, compaction refresh, headless primary supervision and general semantic interrupt completion have no current live proof for this supervisor transport.
+The opt-in primary guard retains interactive primary and marked-secondmate context, native review, session-lock and automatic re-entry scenarios; a gated skip is not verification.
 Native Auto decision handling retains the per-context verification limits above.
 The optional quota helper now uses Agy's own catalog for the reviewed bucket bindings owned by `../../../../../bin/fm-quota-axi-lib.sh`; the agent-side quota procedure remains authoritative.
 Runtime backend lifecycle guarantees remain those of each backend's capability table; native worker activation is verified on tmux and Herdr, with current evidence in the verification owner.

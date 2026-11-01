@@ -618,36 +618,30 @@ Changed-file lint and the four focused portable suites `fm-agy-admission.test.sh
 
 ### Primary and secondmate supervision
 
-Refreshed on 2026-10-26 with agy 1.4.7 and `gemini-3.8-flash` at low effort using a marked throwaway Firstmate home and helper-owned private tmux socket.
-The startup fixture acquired the real session lock and rendered the production supervision instructions; it omitted fleet bootstrap and external startup checks.
-The native registration, transport, shared guard, watcher, queue drain and acknowledgement were production code.
+The current primary and secondmate transport adopts upstream SessionStart and synchronous Stop parking.
+Interactive live verification of this path is pending; no live agy or supervisor lifecycle run was performed for the convergence.
+The prior agy 1.4.7 PreInvocation/background-command result covered the retired transport and cannot certify this implementation.
+Supervisor permissions remain unchanged, and worker native Auto evidence above does not extend to supervisors.
+
+`tests/fm-agy-primary.test.sh` exercises the production event handlers with disposable Git homes and a compiled fake ancestry process, without invoking agy.
+It covers hook registration from both supported working directories, primary and marked-secondmate startup, large digest serialization, linked-worker stand-down, native deny versus silent abstention, fail-closed publication, malformed/foreign Stop payloads, locks, normal/abnormal Stop, watcher/host routing, deadline derivation from the registration, shorter timeout overrides, supersession, away transition, empty fleet, loop ceiling and bounded repair.
+Shared cross-harness regressions remain in the arm, cd, subagent, turn-end and supervision suites.
 
 ```sh
-FM_AGY_PRIMARY_LIVE=1 bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
+bash bin/fm-test-run.sh tests/fm-agy-primary.test.sh
+FM_AGY_PRIMARY_LIVE=1 bash bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
 ```
 
-```text
-ok - agy primary fixture: interactive shell is ready before launch delivery
-ok - agy primary fixture: native agy process started
-ok - agy primary: native nudge reaches the model and real session lock is acquired
-ok - agy primary: Stop forces a bounded recovery and the real watcher arms
-ok - agy primary: native watcher completion re-enters the model without polling or injected keys
-ok - agy primary: the same guard includes a marked secondmate home
-# all agy primary live checks passed (agy 1.4.7)
-```
-
-The opening invocation receives the session-start nudge, while later invocations can execute pending tools without repeated injection.
-Native `Stop.executionNum` advances on a forced continuation and resets for a fresh execution cycle.
-In confirmed primary scope, native PreToolUse decisions preserve review with `ask` or refuse a disallowed tool with `deny`; no `allow` bypass is installed.
-When native review asks, the fixture allows only its own exact commands and its generation-bound queue acknowledgement.
-It keeps its terminal captures, observer events, and transcripts for a failed check.
-The marked secondmate check verifies the production scope boundary; it does not provision a persistent fleet home.
-Headless primary supervision, compaction refresh, semantic interrupt completion, and runtime backends other than tmux were not verified by this run.
+The opt-in live suite retains `tests/agy-primary-live-probe.py` because the upstream headless bypass suite cannot replace interactive session-lock and automatic re-entry coverage.
+It carries upstream's startup-context, real tool-denial and real-watcher scenarios into interactive primary and marked-secondmate homes with native supervisor review, without global trust writes.
+The updated scenarios also require silent abstention to execute a harmless tool, and automatic Stop re-parking without model-owned arms.
+Its captures, observer events and transcripts are retained on failure.
+Only a future successful live run may add dated binary/model/backend results here; compilation or a gate skip establishes no vendor behavior.
 
 ### Inherited primary hooks in worker worktrees
 
 Verified on 2026-09-10 with agy 1.2.0 in a real linked worktree containing the tracked `.agents/hooks.json` primary registration.
-The production hook exits 0 without stdout for rejected scope or payloads.
+That retired wrapper exited 0 without stdout for rejected scope or payloads; the current primary handlers are covered in [Primary and secondmate supervision](#primary-and-secondmate-supervision).
 The live fixture observes and forwards the production response and exit code, proves the inherited PreToolUse actually ran, and requires the file edit to complete automatically under accept-edits.
 
 ```sh
@@ -663,7 +657,7 @@ ok - agy: a shell command still requests approval under accept-edits
 
 Silence is required here: returning `{}` instead caused the same live worker's file write to be denied by the pre-tool hook.
 The vendor's [PreToolUse response schema](https://antigravity.google/docs/hooks#pretooluse) requires a decision when returning JSON.
-`tests/fm-agy-harness.test.sh` covers silent scope and payload rejection, while allowed calls in a primary or marked linked secondmate retain `ask`.
+`tests/fm-agy-primary.test.sh` now covers linked-worker stand-down and silent abstention on allowed PreToolUse calls; the previous `ask` translation is retired.
 
 ### Model ids, catalog, and --effort conflict
 

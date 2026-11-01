@@ -26,7 +26,7 @@ The tier is a property of the harness surface, not of the home.
 
 | Tier | What the adapter does | Used by |
 | --- | --- | --- |
-| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, Pi / pi-signed, omp, Cursor |
+| Run | Executes `bin/fm-session-start.sh` through the native session-open adapter and gates its ordered digest into model context before the first turn. | Claude, `codex exec`, Pi / pi-signed, omp, Cursor, Antigravity (agy) |
 | Nudge | Asks the agent to run the digest through the native adapter or the tracked session-start instruction. | Grok, OpenCode V1, and run-tier sources routed to the nudge |
 
 Codex's interactive TUI has no tracked session-open, compaction, or re-emit channel and is not covered by either tier.
@@ -40,7 +40,7 @@ Codex's interactive TUI has no tracked session-open, compaction, or re-emit chan
 | Codex interactive TUI | Uncovered | [Codex interactive TUI](#codex-interactive-tui) |
 | Pi / pi-signed | Run | [Pi and pi-signed](#pi-and-pi-signed) |
 | OpenCode V1 | Nudge | [OpenCode](#opencode) |
-| Agy | Nudge | [Agy](#agy) |
+| Agy | Run | [Agy](#agy) |
 | Grok | Nudge | [Grok](#grok) |
 | Cursor | Run | [Cursor](#cursor) |
 | omp | Run | [omp](#omp) |
@@ -329,11 +329,14 @@ The guard lets the watcher coordinator act first, so the plugins do not race for
 
 ### Agy
 
-Agy is a nudge-tier harness.
-`.agents/hooks.json` invokes `bin/fm-agy-hook.sh` on `PreInvocation`.
-Only `invocationNum=0` can inject the shared startup nudge, and only until this session owns the home lock.
-This fork retains the verified PreInvocation nudge rather than upstream's native SessionStart registration.
-Verified interactive first-invocation delivery does not establish a compaction or instruction-refresh channel.
+Antigravity CLI is a run-tier harness.
+`.agents/hooks.json` registers `SessionStart`, anchored to the project root with a 180s timeout, invoking `bin/fm-sessionstart-agy.sh`.
+The wrapper drains stdin for the payload's `source` and delegates to `bin/fm-sessionstart-run.sh`, which owns primary or persistent secondmate home scope, source routing, and the digest.
+In linked crewmate worktrees or foreign checkouts, `bin/fm-sessionstart-run.sh` stands down silently and the wrapper emits `{}`.
+In primary or secondmate homes, the wrapper emits the captured digest as `{injectSteps:[{systemMessage:{systemMessage:$digest}}]}` on stdout with exit 0.
+Native stdout context injection gates the ordered digest into model context before the first agent turn.
+
+Interactive verification of this SessionStart transport and compaction refresh remains pending; the previous PreInvocation result does not certify it.
 
 ### Grok
 

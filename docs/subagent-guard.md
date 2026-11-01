@@ -3,7 +3,8 @@
 This document is the authoritative human-readable contract for the guard that stops a firstmate primary from delegating work outside the fleet.
 
 The shipped mechanism is `bin/fm-subagent-pretool-check.sh`, a PreToolUse guard that denies a delegation-SHAPED tool name in a genuine primary home.
-Agy composes this policy through its native PreToolUse transport in `bin/fm-agy-hook.sh`.
+Agy invokes `bin/fm-subagent-pretool-check.sh --agy` directly from `.agents/hooks.json`, reading `toolCall.name` and returning a native `deny` on refusal or silent abstention otherwise.
+Its observe-only tools `manage_subagents` and `manage_task` remain permitted.
 Claude primaries should also use an untracked per-home local `permissions.deny` list as hardening for known Claude delegation tools, because it removes them from the model's schema entirely.
 That deny list must not ship in tracked `.claude/settings.json` because it is Claude-only rather than harness-agnostic, and because tracked project settings propagate into linked worktrees where they disarm legitimate crewmates.
 

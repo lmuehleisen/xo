@@ -180,7 +180,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: Devin and agy are routine worker runtimes.
 - Class: intended.
-- Seam: fork-only `bin/fm-devin-lib.sh`, `bin/fm-agy-lib.sh`, `bin/fm-agy-hook.sh`, `.agents/hooks.json` (agy primary hooks), `docs/supervision-protocols/agy.md`, `tests/fm-tmux-submit-busy-agy.test.sh`, and `tests/agy-primary-live-probe.py`, plus the shared adapter hunks in `bin/fm-harness.sh`, `bin/fm-dispatch-resolve.sh` (the agy and Devin effort table), `bin/fm-secondmate-liveness-lib.sh` (agy among the verified secondmate harnesses), `bin/fm-composer-lib.sh`, `bin/fm-busy-lib.sh`, `bin/fm-control-lib.sh`, `bin/fm-session-lock-lib.sh`, and `bin/fm-supervision-instructions.sh`, and the launch prefix in `bin/fm-spawn.sh` that unsets the agy identity marker, joined into Polytoken's own env boundary because that launch opens with a shell loop.
+- Seam: fork-only `bin/fm-devin-lib.sh`, `bin/fm-agy-lib.sh`, `bin/fm-agy-hook.sh`, `tests/fm-tmux-submit-busy-agy.test.sh`, and `tests/agy-primary-live-probe.py`, plus the shared worker launch, permission, busy-state, composer, control, model and identity integration named by the adapter references.
 - Guard: `tests/fm-devin-harness.test.sh`; `tests/fm-agy-harness.test.sh`; `tests/fm-composer-agy.test.sh`; `tests/fm-dispatch-resolve.test.sh`; `tests/fm-tmux-submit-busy-agy.test.sh`; the opt-in live guards `tests/fm-agy-primary-live-e2e.test.sh` and `tests/fm-agy-observer-live-e2e.test.sh`.
 - Upstream: ships its own Devin and agy adapters; how much of the fork's mechanics to keep is the open question in the carried entries below.
 
@@ -277,11 +277,12 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### agy-adapter-mechanics
 
-- Intent: agy primary and local secondmate support, native worker lifecycle hooks, the verified primary PreInvocation/background-command transport, physical directory grants, and model-aware effort support.
+- Intent: native worker lifecycle hooks, physical directory grants, and model-aware effort support.
 - Class: carried; these are functional additions to upstream's worker adapter.
-- Seam: fork-only `bin/fm-agy-lib.sh`, and the large fork diff in shared `tests/fm-agy-harness.test.sh`, and the retained primary `.agents/hooks.json`, `docs/supervision-protocols/agy.md`, and native-hook verification.
+- Seam: fork-only `bin/fm-agy-lib.sh`, and the large fork diff in shared `tests/fm-agy-harness.test.sh`, and worker native-hook verification.
 - Guard: `tests/fm-agy-harness.test.sh`.
-- Upstream: ships a adapter with a different primary SessionStart/Stop-park transport, without equivalent worker hook wiring or all the fork's directory and effort mappings; the fork already uses its bounded shared catalog probing.
+- Upstream: the primary PreInvocation/background-command divergence is retired in favor of upstream SessionStart/Stop parking and autoarm routing, retaining supervisor permissions and secondmate-liveness recognition.
+  Worker hooks, directory grants and effort mappings remain carried; primary transport validation is recorded in [runtime verification](verification/runtime-backends-fork.md#primary-and-secondmate-supervision).
   Drop each remaining seam when upstream supports its behavior, keeping the separately intended `agy-permission-posture` entry.
 
 ### worktree-leases

@@ -4,7 +4,7 @@ This document is the authoritative human-readable contract for the watcher arm P
 `bin/fm-arm-command-policy.mjs` is the single semantic owner.
 `bin/fm-arm-pretool-check.sh` is only the stable harness transport and output renderer.
 The tracked harness adapters forward command text without classifying it.
-Agy's native PreToolUse transport is `bin/fm-agy-hook.sh`, which forwards `toolCall.args.CommandLine` and translates a denial into Agy's JSON response while preserving ordinary permission review for allowed command shapes.
+Agy's `.agents/hooks.json` invokes `bin/fm-arm-pretool-check.sh --agy` directly; it extracts `toolCall.args.CommandLine` or `toolCall.args.command`, returns a native `deny` on refusal, and remains silent to abstain to native review on permitted commands.
 `bin/fm-arm-command-policy.mjs` is also the sole owner of firstmate's shell classification: it exports the tokenizer and command-position analysis, which the sibling cd-guard seatbelt (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`) reuses instead of duplicating shell lexing.
 
 ## Publish policy on the same transport

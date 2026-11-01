@@ -6989,8 +6989,8 @@ fi
 # armed: its BeforeAgent / AfterAgent / SessionEnd hooks are a verified
 # open-close pair. A secondmate's hooks update this record and do not touch
 # the parent's turn-ended marker; parent turn-end wiring for grok and kimi
-# stays on the ordinary-task path below. An agy secondmate is not armed: its
-# worker hook is the only agy wiring and it carries the parent turn-end touch.
+# stays on the ordinary-task path below. An agy secondmate uses primary hooks
+# to supervise its own home, never the worker writer of the parent's busy record.
 # A raw launch carries no firstmate wiring: its command runs verbatim with no
 # hooks, extensions, or event writers, so arming a busy record for it would
 # seed state nothing can ever clear - the same reason standalone Kimi below
@@ -8180,7 +8180,7 @@ if [ "$KIND" = secondmate ]; then
   # receive extension to match fm_supervision_model's own table, so their pull
   # guard tolerates the extension hand-off exactly as a Pi primary does.
   case "$HARNESS" in
-  claude | cursor) supervision_model=autoarm ;;
+  claude | cursor | agy) supervision_model=autoarm ;;
   pi | pi-signed | omp) supervision_model=extension ;;
   *) supervision_model=persistent ;;
   esac
