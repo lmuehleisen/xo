@@ -894,7 +894,10 @@ EOF
     || fail "agy secondmates stay outside the worker bypass policy layer"
   ! grep -q '^agy_bypass=' "$home/state/$id.meta" \
     || fail "agy secondmates must not record a worker bypass posture"
-  pass "fm-spawn.sh: agy secondmate launches without worker wiring"
+  grep -q '^supervision_model=autoarm$' "$home/state/$id.meta" || fail 'agy secondmate must record autoarm'
+  [ ! -e "$home/state/$id.busy-gen" ] || fail 'agy secondmate must not arm a parent worker busy record'
+  grep -Fq -- '--mode accept-edits' "$home/launch.log" || fail 'agy secondmate permissions changed'
+  pass "fm-spawn.sh: agy secondmate records autoarm without worker wiring or changing permissions"
 }
 
 # --- start confirmation -----------------------------------------------------
@@ -1367,80 +1370,6 @@ SH
   pass 'install-worker refuses a malformed merged hooks.json loudly and installs nothing'
 }
 
-test_agy_primary_hooks() {
-  local dir="$TMP_ROOT/primary" out payload filter
-  mkdir -p "$dir/bin" "$dir/state" "$dir/projects/project"
-  git -C "$dir" init -q
-  git -C "$dir" config user.name Test
-  git -C "$dir" config user.email test@example.invalid
-  printf '# Firstmate\n' > "$dir/AGENTS.md"
-  primary_call() {
-    FM_ROOT_OVERRIDE="$dir" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" \
-      JETSKI_APP_DATA_DIR=antigravity-cli "$ROOT/bin/fm-agy-hook.sh" primary "$1"
-  }
-  payload=$(jq -n --arg root "$dir" '{conversationId:"primary",workspacePaths:[$root],invocationNum:0,executionNum:0,fullyIdle:true}')
-  out=$(printf '%s' "$payload" | primary_call PreInvocation)
-  printf '%s' "$out" | jq -e '.injectSteps[0].ephemeralMessage | contains("fm-session-start.sh")' >/dev/null \
-    || fail "startup nudge missing: $out"
-  out=$(printf '%s' "$payload" | jq '.invocationNum=1' | primary_call PreInvocation)
-  [ -z "$out" ] || fail 'startup nudge preempted a pending tool on a later invocation'
-  out=$(printf '%s' "$payload" | jq 'del(.invocationNum)' | primary_call PreInvocation)
-  [ -z "$out" ] || fail 'malformed invocation number injected startup'
-  out=$(printf '%s' "$payload" | primary_call Stop)
-  [ -z "$out" ] || fail "empty fleet forced a continuation: $out"
-  touch "$dir/state/worker.meta"
-  out=$(printf '%s' "$payload" | primary_call Stop)
-  printf '%s' "$out" | jq -e '.decision == "continue" and (.reason | contains("run_command"))' >/dev/null \
-    || fail "missing watcher did not force Agy recovery: $out"
-  out=$(printf '%s' "$payload" | jq '.executionNum=1' | primary_call Stop)
-  [ -z "$out" ] || fail 'continuation guard did not bound the follow-up'
-  out=$(printf '%s' "$payload" | jq '.executionNum="0"' | primary_call Stop)
-  [ -z "$out" ] || fail 'malformed execution number forced continuation'
-  out=$(printf '%s' "$payload" | jq '.workspacePaths=["/elsewhere"]' | primary_call Stop)
-  [ -z "$out" ] || fail 'foreign workspace forced continuation'
-  out=$(printf '%s' "$payload" | jq '.toolCall={name:"run_command",args:{CommandLine:"bin/fm-watch-arm.sh &"}}' | primary_call PreToolUse)
-  printf '%s' "$out" | jq -e '.decision == "deny"' >/dev/null || fail "unsafe watcher accepted: $out"
-  out=$(printf '%s' "$payload" | jq '.toolCall={name:"run_command",args:{CommandLine:"date"}}' | primary_call PreToolUse)
-  printf '%s' "$out" | jq -e '.decision == "ask"' >/dev/null || fail 'ordinary command must retain native review'
-  out=$(printf '%s' "$payload" | jq '.toolCall={name:"write_to_file",args:{}}' | primary_call PreToolUse)
-  printf '%s' "$out" | jq -e '.decision == "ask"' >/dev/null || fail 'allowed file tool in a primary must retain native review'
-  for filter in \
-    'del(.conversationId)' '.conversationId=17' '.conversationId="bad/id"' \
-    'del(.workspacePaths)' '.workspacePaths="wrong type"' '.workspacePaths=["/elsewhere"]' \
-    'del(.toolCall)' '.toolCall.name=17' \
-    'del(.toolCall.args.CommandLine)' '.toolCall.args.CommandLine=17'; do
-    out=$(printf '%s' "$payload" | jq '.toolCall={name:"run_command",args:{CommandLine:"date"}}' \
-      | jq "$filter" | primary_call PreToolUse)
-    [ -z "$out" ] || fail "rejected PreToolUse payload must be inert ($filter), got $out"
-  done
-  out=$(printf 'invalid JSON' | primary_call PreToolUse)
-  [ -z "$out" ] || fail 'invalid JSON must return an inert response'
-  out=$(printf '%s' "$payload" | jq '.toolCall={name:"invoke_subagent",args:{}}' | primary_call PreToolUse)
-  printf '%s' "$out" | jq -e '.decision == "deny"' >/dev/null || fail 'untracked delegation accepted'
-  # A linked worker is outside primary scope, even with a primary hook copied
-  # from Firstmate itself; the marker deliberately brings a secondmate back in.
-  local child="$TMP_ROOT/primary-child"
-  git -C "$dir" add AGENTS.md
-  git -C "$dir" commit -qm fixture
-  git -C "$dir" worktree add -qb child "$child" >/dev/null 2>&1 || fail 'make linked scope'
-  mkdir -p "$child/bin" "$child/state"
-  dir=$child
-  payload=$(printf '%s' "$payload" | jq --arg root "$dir" '.workspacePaths=[$root]')
-  touch "$dir/state/worker.meta"
-  out=$(printf '%s' "$payload" | primary_call Stop)
-  [ -z "$out" ] || fail 'primary hook ran in worker worktree'
-  out=$(printf '%s' "$payload" | jq '.toolCall={name:"run_command",args:{CommandLine:"date"}}' | primary_call PreToolUse)
-  [ -z "$out" ] || fail "primary PreToolUse must be inert in a linked worker worktree, got $out"
-  out=$(printf '%s' "$payload" | jq '.toolCall={name:"invoke_subagent",args:{}}' | primary_call PreToolUse)
-  [ -z "$out" ] || fail 'out-of-scope tools must not run primary policies'
-  printf 'secondmate\n' > "$dir/.fm-secondmate-home"
-  out=$(printf '%s' "$payload" | primary_call Stop)
-  printf '%s' "$out" | jq -e '.decision == "continue"' >/dev/null || fail 'secondmate omitted primary guard'
-  out=$(printf '%s' "$payload" | jq '.toolCall={name:"run_command",args:{CommandLine:"date"}}' | primary_call PreToolUse)
-  printf '%s' "$out" | jq -e '.decision == "ask"' >/dev/null || fail 'secondmate primary scope must retain native review'
-  pass 'agy primary startup, guard, loop bound, pre-tool policies, and secondmate scope'
-}
-
 test_agy_session_identity() {
   bash -c '
     . "$1/bin/fm-session-lock-lib.sh"
@@ -1485,7 +1414,6 @@ test_agy_worker_hooks
 test_agy_worker_tool_observer
 test_agy_worker_observer_never_blocks
 test_agy_install_worker_refuses_malformed_merge
-test_agy_primary_hooks
 test_agy_session_identity
 
 test_agy_native_mapping_and_grants || exit 1

@@ -3,13 +3,9 @@
 # Usage: fm-agy-hook.sh install-worker <state> <id> <gen> <worktree> [<policy-file>]
 #        fm-agy-hook.sh retire-worker <state> <id>
 #        fm-agy-hook.sh worker <PreInvocation|PreToolUse|PostToolUse|Stop> <state> <id> <gen> <worktree>
-#        fm-agy-hook.sh primary <PreInvocation|PreToolUse|Stop>
 #
 # Hook calls consume Agy's camelCase JSON on stdin and exit 0, returning one
 # JSON object for an action or no stdout when inert. Invalid payloads are inert.
-# Primary scope, startup nudges,
-# turn-end predicates, and pre-tool decisions remain with their existing owners.
-# Stop executionNum > 0 maps to the shared one-continuation loop guard.
 # Agy's Stop does not fire on manual interruption; neither a key nor a rendered
 # footer manufactures idle. PreInvocation opens busy and fullyIdle Stop closes.
 #
@@ -46,14 +42,11 @@
 set -u
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
-FM_HOME="${FM_HOME:-$FM_ROOT}"
-STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 MODE=${1:-}
 shift || exit 2
 
 usage() {
-  sed -n '3,6s/^# *//p' "$SCRIPT_DIR/fm-agy-hook.sh" >&2
+  sed -n '3,5s/^# *//p' "$SCRIPT_DIR/fm-agy-hook.sh" >&2
   exit 2
 }
 token_valid() {
@@ -165,8 +158,8 @@ case "$MODE" in
     mv -- "$tmp" "$dir/.agents/hooks.json" || { rm -f "$tmp"; exit 1; }
     exit 0
     ;;
-  worker|primary) ;;
-  -h|--help) sed -n '3,6s/^# *//p' "$SCRIPT_DIR/fm-agy-hook.sh"; exit 0 ;;
+  worker) ;;
+  -h|--help) sed -n '3,5s/^# *//p' "$SCRIPT_DIR/fm-agy-hook.sh"; exit 0 ;;
   *) usage ;;
 esac
 
@@ -262,53 +255,4 @@ if [ "$MODE" = worker ]; then
   inert
 fi
 
-[ "$#" -eq 0 ] || usage
-# shellcheck source=bin/fm-primary-scope-lib.sh
-. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
-fm_primary_scope_matches "$FM_ROOT" "$STATE" || inert
-printf '%s' "$payload" | jq -e --arg root "$(cd "$FM_ROOT" && pwd -P)" \
-  '.workspacePaths | type == "array" and index($root) != null' >/dev/null 2>&1 || inert
-
-case "$event" in
-  PreInvocation)
-    # Injecting on later model invocations continually preempts pending tools.
-    # Nudge only the opening invocation of a user/background execution cycle.
-    printf '%s' "$payload" | jq -e '.invocationNum == 0' >/dev/null 2>&1 || inert
-    nudge=$("$SCRIPT_DIR/fm-sessionstart-nudge.sh" 2>/dev/null || true)
-    [ -n "$nudge" ] || inert
-    jq -n --arg text "$nudge" '{injectSteps:[{ephemeralMessage:$text}]}'
-    ;;
-  Stop)
-    mapped=$(printf '%s' "$payload" | jq -ec '
-      select((.executionNum | type) == "number" and .executionNum >= 0
-        and .executionNum == (.executionNum | floor) and (.fullyIdle | type) == "boolean")
-      | {session_id:.conversationId, stop_hook_active:(.executionNum > 0)}' 2>/dev/null) || inert
-    result=$(printf '%s' "$mapped" | "$SCRIPT_DIR/fm-turnend-guard.sh" 2>&1)
-    rc=$?
-    [ "$rc" -eq 2 ] || inert
-    jq -n --arg reason "$result" '{decision:"continue",reason:$reason}'
-    ;;
-  PreToolUse)
-    tool=$(printf '%s' "$payload" | jq -er '.toolCall.name | select(type == "string")' 2>/dev/null) || inert
-    result=$("$SCRIPT_DIR/fm-subagent-pretool-check.sh" --tool "$tool" --claude 2>&1)
-    rc=$?
-    if [ "$rc" -ne 2 ] && [ "$tool" = run_command ]; then
-      cmd=$(printf '%s' "$payload" | jq -er '.toolCall.args.CommandLine | select(type == "string")' 2>/dev/null) || inert
-      result=$("$SCRIPT_DIR/fm-arm-pretool-check.sh" --command "$cmd" --claude 2>&1)
-      rc=$?
-      if [ "$rc" -ne 2 ]; then
-        result=$("$SCRIPT_DIR/fm-cd-pretool-check.sh" --command "$cmd" --claude 2>&1)
-        rc=$?
-      fi
-    fi
-    if [ "$rc" -eq 2 ]; then
-      jq -n --arg reason "$result" '{decision:"deny",reason:$reason}'
-    else
-      # The required ask decision preserves review and existing user grants.
-      # Never emit decision=allow: that would bypass Agy's ordinary review.
-      printf '{"decision":"ask"}\n'
-    fi
-    ;;
-  *) inert ;;
-esac
 exit 0
