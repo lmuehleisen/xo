@@ -82,6 +82,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 ### agy-permission-posture
 
 - Intent: new agy Auto workers use verified native review plus deterministic task constraints; recorded legacy workers retain their existing posture and decisions.
+  Native launch uses upstream's interactive prompt shape for readiness, with the real brief withheld until activation.
+  One bounded native guard qualifies the exact executable/model/effort/backend; observer and accept-edits signals remain explicit upgrade/legacy checks.
 - Class: intended.
 - Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-native-lib.sh`, `bin/fm-agy-native.py`, `bin/fm-agy-admission.sh`, `bin/fm-agy-admission.py`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including executable-bound admission, generation-bound approval evidence and cleanup audit, with fixtures in `tests/agy-admission-helpers.sh` and `tests/agy-live-helpers.sh`, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
 - Guard: `tests/fm-agy-native.test.sh`, `tests/fm-agy-harness.test.sh`, `tests/fm-agy-admission.test.sh`, and the opt-in `tests/fm-agy-native-live-e2e.test.sh`; existing policy/bypass tests retain legacy coverage.

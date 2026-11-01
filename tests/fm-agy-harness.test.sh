@@ -1029,7 +1029,7 @@ test_agy_native_refuses_unproven_context_before_brief() {
 
 test_agy_native_spawn_orders_proof_before_brief() {
   local variant fields case_dir home proj wt fakebin id out state_real tasktmp
-  for variant in success fallback seq brief; do
+  for variant in success fallback fallback-open missing-hook foreign-stop wrong-generation seq brief; do
     fields=$(make_spawn_case "native-$variant-${TMP_ROOT##*.}")
     IFS='|' read -r case_dir home proj wt fakebin id <<<"$fields"
     mv "$fakebin/agy" "$fakebin/agy-catalog"
@@ -1046,7 +1046,7 @@ SH
         cat "$home/launch.log.native-transport" "$home/launch.log.native-screen" >&2
         fail "native spawn failed: $out"
       fi
-      [ -e "$home/launch.log.native-canary" ] && [ -s "$home/launch.log.native-brief" ] \
+      [ -s "$home/launch.log.native-readiness" ] && [ -e "$home/launch.log.native-canary" ] && [ -s "$home/launch.log.native-brief" ] \
         || fail 'native spawn omitted activation or brief delivery'
       grep -q '^agy_posture=native-auto$' "$home/state/$id.meta" || fail 'native posture was not recorded'
       ! grep -q '^agy_bypass=\|^agy_judge=' "$home/state/$id.meta" || fail 'native task was recorded as legacy bypass/judge'
@@ -1055,13 +1055,26 @@ SH
         || fail 'native startup sent the task before activation or enabled bypass'
       state_real=$(cd "$home/state" && pwd -P)
       ! grep -Fq -- "--add-dir '$state_real' " "$home/launch.log" || fail 'native launch granted shared state'
-    elif [ "$variant" = fallback ]; then
-      if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_NO_AUTO=1 FM_AGY_NATIVE_POLLS=3 FM_AGY_POLL_INTERVAL=0.1 \
+    elif [ "$variant" != seq ] && [ "$variant" != brief ]; then
+      local no_auto=0 kill_fails=0 start_kind=valid
+      case "$variant" in
+        fallback) no_auto=1 ;;
+        fallback-open) no_auto=1; kill_fails=1 ;;
+        *) start_kind=$variant ;;
+      esac
+      if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_NO_AUTO="$no_auto" FM_FAKE_KILL_FAILS="$kill_fails" \
+        FM_FAKE_AGY_START_KIND="$start_kind" FM_AGY_NATIVE_POLLS=3 FM_AGY_POLL_INTERVAL=0.1 \
         run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then fail 'native fallback was reported dispatched'; fi
       [ ! -e "$home/launch.log.native-brief" ] && [ ! -e "$home/launch.log.native-canary" ] \
         || fail 'unproven native fallback received a task brief'
       grep -q 'native Auto activation failed' "$home/state/$id.status" || fail "native fallback refusal was not recorded: $out"
-      [ -f "$home/launch.log.closed" ] || fail 'unproven native endpoint was not closed'
+      if [ "$kill_fails" = 1 ]; then
+        [ -f "$home/state/$id.meta" ] && [ -f "$home/state/$id.busy-gen" ] \
+          && [ -f "$home/state/$id.agy-hooks/.agents/hooks.json" ] || fail 'unconfirmed native closure lost its owned state'
+        [ ! -e "$home/launch.log.closed" ] || fail 'closure-failure fixture did not retain its endpoint'
+      else
+        [ -f "$home/launch.log.closed" ] || fail 'unproven native endpoint was not closed'
+      fi
     else
       if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_PREP_FAIL="$variant" FM_AGY_NATIVE_POLLS=8 FM_AGY_POLL_INTERVAL=0.1 \
         run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then fail 'failed brief preparation was reported dispatched'; fi
@@ -1136,8 +1149,10 @@ test_agy_native_and_legacy_relaunch_postures() (
 test_agy_control_mechanics_are_the_verified_ones() {
   local out
   fm_control_harness_supported agy || fail "agy must be a supported control harness"
-  out=$(fm_control_harness_family agy-1.2.0)
-  [ "$out" = agy ] || fail "a recorded agy* harness must resolve to agy, got '$out'"
+  [ "$(fm_control_harness_family agy)" = agy ] || fail 'exact agy family was not recognized'
+  for out in agy-1.2.0 agyrate legacy; do
+    if fm_control_harness_family "$out" >/dev/null; then fail "$out was guessed into the agy family"; fi
+  done
   out=$(fm_control_interrupt_key agy)
   [ "$out" = Escape ] || fail "agy interrupts on Escape, got '$out'"
   out=$(fm_control_interrupt_repeat agy)
@@ -1147,7 +1162,7 @@ test_agy_control_mechanics_are_the_verified_ones() {
   out=$(fm_control_interrupt_ack_source agy)
   [ "$out" = none ] || fail "agy has no recorded cancellation source, got '$out'"
   out=$(fm_control_exit_command agy)
-  [ "$out" = /exit ] || fail "agy exits with /exit, got '$out'"
+  [ "$out" = /quit ] || fail "agy exits with /quit, got '$out'"
   pass "fm-control-lib.sh: agy carries its verified interrupt and exit mechanics"
 }
 

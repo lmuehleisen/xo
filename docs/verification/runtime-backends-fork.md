@@ -305,6 +305,35 @@ agy updates itself, so re-run the live guard after any upgrade before trusting t
 
 ### Native Auto workers
 
+Verified on 2026-11-01 with agy 1.4.12, `gemini-3.8-flash-low`, macOS and tmux.
+The consolidated guard passed active Auto, an actual random command result, matching current-generation pre/post events, accepted Stop, encoded brief handoff, attempted outside-root denial with absent target, exact status/inbox effects, production `/quit` control and owned-hook retirement.
+A live one-shot approval completed; live decline was not observed.
+The global settings file hash was unchanged.
+
+```sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=tmux \
+  FM_AGY_NATIVE_LIVE_STATE_ROOT="$STATE_PARENT" \
+  FM_AGY_NATIVE_LIVE_EVIDENCE_DIR="$EVIDENCE" \
+  bash tests/fm-agy-native-live-e2e.test.sh
+```
+
+The state parent is an existing owned directory outside the checkout and system temporary storage; the default remains the suite's owned checkout lab.
+Observed output:
+
+```text
+ok - native Auto: warm activation, actual random command result, observer pair and accepted Stop
+ok - native Auto: exact status append completed through native review
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.4.12, tmux)
+```
+
+The same interactive setup with `FM_AGY_NATIVE_LIVE_COLD=1` reached the readiness invocation and accepted Stop but failed to prove active Auto, so it did not qualify the cold path or reach the random tool check.
+The bounded warm transition remains; its tool-free turn now arrives through `--prompt-interactive` rather than a separate submission.
+The native guard waits for the idle composer after Stop before interpreting mode, since the viewport can still show the preceding busy turn.
+No fresh Herdr, Linux, supervisor, interrupt or live decline result is claimed for 1.4.12.
+The admission script's header owns the one-guard native contract; standalone observer and accept-edits signals checks remain explicit upgrade/legacy verification.
+Shared production hashes, including common spawn substitutions outside the agy template, remain bound to receipts.
+
 Verified on 2026-10-26 with agy 1.4.7.
 The credentialed guard is `tests/fm-agy-native-live-e2e.test.sh`; it runs production activation, deterministic hooks, actual status/inbox effects, accepted Stop and owned-hook retirement in an isolated backend lab.
 It uses physically resolved grants without granting the synthetic state directory.

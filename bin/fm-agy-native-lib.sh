@@ -2,8 +2,8 @@
 # Native Auto launch and exact native-command approval transport for agy.
 # Sourced by fm-agy-lib.sh and fm-agy-permission-policy.sh, never executed.
 #
-# fm_agy_native_activate <backend> <target> <state> <id> <gen> <scratch>
-#   Completes a tool-free warm-up, selects Auto through a bounded Shift+Tab
+# fm_agy_native_activate <backend> <target> <state> <id> <gen> <scratch> [warm|cold]
+#   Waits for the interactive readiness prompt, selects Auto through a bounded Shift+Tab
 #   cycle, and requires an actual random marker plus generation-bound Stop.
 #   Only tmux and Herdr have live-proven key and viewport primitives. Every
 #   other backend refuses before launch; no default-review/bypass fallback.
@@ -67,19 +67,29 @@ fm_agy_native_activate() {
   local i screen seq nonce marker prompt
   fm_agy_native_supported "$backend" || return 1
   [ "$(cat "$state/$id.busy-gen" 2>/dev/null)" = "$gen" ] || return 1
+  # The launch template submits the tool-free readiness prompt itself.
+  # Require its current-generation invocation and accepted Stop, even when
+  # admission reused a receipt; an idle-looking startup screen is not proof.
+  for ((i=0; i<${FM_AGY_NATIVE_POLLS:-160}; i++)); do
+    seq=$(cat "$state/$id.agy-hooks/$gen.invocation" 2>/dev/null) || seq=0
+    case "$seq" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$seq" -eq 0 ] || break
+    sleep "${FM_AGY_POLL_INTERVAL:-0.5}"
+  done
+  [ "$seq" -gt 0 ] || return 1
+  fm_agy_native_wait_stop "$state" "$id" "$seq" || return 1
+  # Stop can precede the final viewport repaint. Wait for the identified idle
+  # composer before interpreting the mode or sending a mode-cycle key.
   for ((i=0; i<${FM_AGY_NATIVE_POLLS:-160}; i++)); do
     if [ "$(FM_COMPOSER_HARNESS=agy fm_backend_composer_state "$backend" "$target" "fm-$id")" = empty ]; then break; fi
     sleep "${FM_AGY_POLL_INTERVAL:-0.5}"
   done
   [ "$i" -lt "${FM_AGY_NATIVE_POLLS:-160}" ] || return 1
-  seq=$(fm_agy_native_seq "$state" "$id") || return 1
-  fm_agy_native_submit "$backend" "$target" "$id" \
-    'This is a launch readiness check, before your task. Reply exactly WARM_READY. Use no tools and do nothing else.' || return 1
-  fm_agy_native_wait_stop "$state" "$id" "$seq" || return 1
   for ((i=0; i<=4; i++)); do
     screen=$(fm_agy_native_screen "$backend" "$target" "$id") || return 1
     if printf '%s' "$screen" | python3 "$SCRIPT_DIR/fm-agy-native.py" active 2>/dev/null; then break; fi
-    [ "$i" -lt 4 ] || return 1
+    # The live guard can test cold Auto once, without repairing the mode.
+    [ "${7:-warm}" != cold ] && [ "$i" -lt 4 ] || return 1
     fm_backend_send_key "$backend" "$target" BTab "fm-$id" || return 1
     sleep 0.8
   done

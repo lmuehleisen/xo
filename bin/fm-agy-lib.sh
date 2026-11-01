@@ -27,6 +27,25 @@ agy_effort_level() {  # <effort> <model>
   esac
 }
 
+# The synthetic initial turn uses upstream's interactive-prompt launch shape.
+# It carries no task instructions or authority; qualification owns handoff.
+fm_agy_readiness_prompt() {
+  printf '%s' 'This is a launch readiness check, before your task. Reply exactly WARM_READY. Use no tools and do nothing else.'
+}
+
+# Own only agy's launch template here; fm-spawn owns common substitutions.
+fm_agy_launch_template() {
+  printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS AGY_CLI_DISABLE_AUTO_UPDATE=1 __AGYBIN__ '
+  printf '%s' "$permission_flags"
+  printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__'
+  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+    printf '%s' '--log-file __AGYNATIVELOG__ --prompt-interactive '
+    shell_quote "$(fm_agy_readiness_prompt)"
+  else
+    printf '%s' '-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+  fi
+}
+
 # The selected native posture, or the recorded legacy review/bypass flags.
 fm_agy_permission_flags() {  # <crew-permission-mode>
   case "${1-}" in

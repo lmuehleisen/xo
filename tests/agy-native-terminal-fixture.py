@@ -56,9 +56,9 @@ def spawn(args):
         footer = "auto · Gemini" if mode == "auto" else "Gemini"
         screen.write_text(RULE + "\n> " + text + "\n" + RULE + "\n? for shortcuts    " + footer + "\n")
 
-    def event(name, command=None):
+    def event(name, command=None, conversation="spawn-fixture"):
         root = Path(os.environ["FM_NATIVE_ROOT"])
-        payload = {"conversationId": "spawn-fixture", "workspacePaths": [policy["worktree"]],
+        payload = {"conversationId": conversation, "workspacePaths": [policy["worktree"]],
                    "fullyIdle": True, "executionNum": 0, "invocationNum": 0,
                    "stepIdx": 1, "toolCall": {"name": "run_command", "args": {
                        "CommandLine": command, "Cwd": policy["worktree"]}}}
@@ -75,7 +75,18 @@ def spawn(args):
 
     if args[0] == "spawn-start":
         Path(str(log) + ".native-started").touch()
+        words = shlex.split(log.read_text())
+        readiness = words[words.index("--prompt-interactive") + 1]
+        if not readiness.startswith("This is a launch readiness check") or "Use no tools" not in readiness:
+            raise ValueError("initial interactive prompt was not the harmless readiness check")
+        Path(str(log) + ".native-readiness").write_text(readiness)
         mode_path.write_text("default")
+        kind = os.environ.get("FM_FAKE_AGY_START_KIND", "valid")
+        if kind != "missing-hook":
+            event("PreInvocation")
+            event("Stop", conversation="foreign-child" if kind == "foreign-stop" else "spawn-fixture")
+        if kind == "wrong-generation":
+            (hooks.parent / (task + ".busy-gen")).write_text("different-gen\n")
         paint()
     elif args[0] == "capture-pane":
         marker = Path(str(log) + ".native-marker")

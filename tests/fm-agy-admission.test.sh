@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Portable receipt/admission regressions. Synthetic guards exercise the real
 # admission executable, lock and atomic publication, never vendor semantics.
-# Real native semantics remain covered by the three credentialed live guards.
+# Native vendor semantics remain covered by the consolidated live guard;
+# the three-guard path is retained only for recorded legacy bypass tasks.
 set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -206,7 +207,7 @@ pass 'agy admission: missing identity and implicit model fail closed'
 
 new_case native-context 1.4.7
 RECEIPT=$(admit ensure-native)
-[ "$(attempts)" = 3 ] || fail 'native admission omitted a guard'
+[ "$(cat "$CASE/attempts")" = native ] || fail 'native admission ran guards outside its consolidated contract'
 python3 "$CODE/bin/fm-agy-admission.py" assert "$RECEIPT" "$BINARY" fixture-model '' native-tmux '' '' \
   || fail 'complete native evidence did not bind the native context'
 if python3 "$CODE/bin/fm-agy-admission.py" assert "$RECEIPT" "$BINARY" fixture-model '' agy fixture-judge "$BINARY" 2>/dev/null; then
@@ -215,11 +216,32 @@ fi
 if python3 "$CODE/bin/fm-agy-admission.py" assert "$RECEIPT" "$BINARY" fixture-model '' native-herdr '' '' 2>/dev/null; then
   fail 'native receipt certified another backend'
 fi
-[ "$(admit ensure-native)" = "$RECEIPT" ] && [ "$(attempts)" = 3 ] || fail 'matching native receipt did not reuse proof'
+[ "$(admit ensure-native)" = "$RECEIPT" ] && [ "$(attempts)" = 1 ] || fail 'matching native receipt did not reuse proof'
 if FM_HOME="$HOME_DIR" bash "$CODE/bin/fm-agy-admission.sh" ensure-native "$BINARY" fixture-model '' agy fixture-judge "$BINARY" >/dev/null 2>&1; then
   fail 'native admission accepted a legacy judge context'
 fi
-pass 'agy admission: native receipts bind model, effort and backend independently of legacy judge proof'
+jq -e '.proofs | keys == ["native"]' "$RECEIPT" >/dev/null || fail 'native receipt retained legacy proofs'
+# Changing a legacy-only guard or primary hook definition does not invalidate
+# native compatibility. Shared production dependencies still must invalidate.
+for file in tests/fm-agy-bypass-live-e2e.test.sh tests/fm-agy-observer-live-e2e.test.sh tests/fm-agy-signals-live-e2e.test.sh .agents/hooks.json; do
+  printf '\n' >> "$CODE/$file"
+  [ "$(admit ensure-native)" = "$RECEIPT" ] && [ "$(attempts)" = 1 ] || fail "$file invalidated native-only proof"
+done
+for file in bin/fm-agy-hook.sh bin/fm-agy-permission-policy.sh bin/fm-arm-pretool-check.sh bin/fm-subagent-pretool-check.sh bin/fm-agy-lib.sh bin/fm-spawn.sh; do
+  before=$(attempts)
+  printf '\n' >> "$CODE/$file"
+  RECEIPT=$(admit ensure-native)
+  [ "$(attempts)" = "$((before + 1))" ] || fail "$file escaped native integration binding"
+done
+printf '\n# same version replacement\n' >> "$BINARY"
+RECEIPT=$(admit ensure-native)
+[ "$(attempts)" = "$((before + 2))" ] || fail 'native binary replacement inherited a receipt'
+jq 'del(.proofs.native)' "$RECEIPT" > "$CASE/incomplete"
+cat "$CASE/incomplete" > "$RECEIPT"
+before=$(attempts)
+RECEIPT=$(admit ensure-native)
+[ "$(attempts)" = "$((before + 1))" ] || fail 'native incomplete receipt skipped verification'
+pass 'agy admission: one native guard, cheap reuse, bounded invalidation and separate legacy proof'
 
 new_case native-failure 1.4.7
 if FM_ADMISSION_FIXTURE_MODE=fail admit ensure-native >/dev/null; then fail 'failed native guard published approval'; fi

@@ -35,6 +35,7 @@ jq -e '.selected == 1' "$TMP_ROOT/panel.json" >/dev/null || fail 'wrapped panel 
 printf '%s\n' '────────────────────' '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)' \
   '────────────────────' '? for shortcuts' | python3 "$ROOT/bin/fm-agy-native.py" active
 printf '%s\n' '? for shortcuts    auto · Gemini' | python3 "$ROOT/bin/fm-agy-native.py" active
+if printf '%s\n' '? for shortcuts    auto-review-unknown · Gemini' | python3 "$ROOT/bin/fm-agy-native.py" active 2>/dev/null; then fail 'unknown mode shape was credited as Auto'; fi
 if printf '%s\n' '? for shortcuts    accept-edits · Gemini' | python3 "$ROOT/bin/fm-agy-native.py" active 2>/dev/null; then fail 'fallback was credited as Auto'; fi
 if printf '%s\n' 'Auto mode: edits & safe commands auto-approved' '? for shortcuts' \
   | python3 "$ROOT/bin/fm-agy-native.py" active 2>/dev/null; then fail 'transcript text was credited as active Auto'; fi
@@ -46,7 +47,20 @@ for value in null '[]' '{"tool":"run_command","args":[]}'; do
     2> "$TMP_ROOT/bad-candidate.stderr"; then fail 'malformed candidate was matched'; fi
   ! grep -q Traceback "$TMP_ROOT/bad-candidate.stderr" || fail 'malformed candidate crashed the viewport parser'
 done
-pass 'native viewport: independent Auto signals, fallback refusal, active panel and wrapped choices'
+pass 'native viewport: independent Auto signals, unknown/fallback refusal, active panel and wrapped choices'
+
+# A receipt cannot bypass each launch's readiness invocation. Refuse before
+# backend input when the owned hook has not opened this generation.
+if FM_AGY_NATIVE_POLLS=1 FM_AGY_POLL_INTERVAL=0.1 bash -c '
+  SCRIPT_DIR="$1/bin"
+  . "$SCRIPT_DIR/fm-busy-lib.sh"
+  . "$SCRIPT_DIR/fm-agy-native-lib.sh"
+  sentinel="$4/unexpected-submit"
+  fm_backend_send_text_submit() { : > "$sentinel"; }
+  fm_agy_native_activate tmux fixture "$2" t1 "$3" "$4"
+' _ "$ROOT" "$STATE" "$GEN" "$TMP_ROOT/tmp"; then fail 'missing initial invocation reached activation'; fi
+[ ! -e "$TMP_ROOT/tmp/unexpected-submit" ] || fail 'missing readiness hook caused a tool prompt'
+pass 'native activation: missing current-generation readiness refuses before tool submission'
 
 cat > "$TMP_ROOT/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash

@@ -14,9 +14,9 @@ fm_agy_fixture_receipt() {  # <home> <binary> <model> <effective-effort> <tier> 
     > "$proof/binding.json" || return 1
   key=$(python3 "$evidence" key "$proof/binding.json") || return 1
   printf '{"tool":"unit-fixture"}\n' > "$proof/tools.jsonl"
-  local first=bypass
-  case "$tier" in native-tmux|native-herdr) first=native ;; esac
-  for guard in "$first" observer signals; do
+  local guards=(bypass observer signals)
+  case "$tier" in native-tmux|native-herdr) guards=(native) ;; esac
+  for guard in "${guards[@]}"; do
     FM_AGY_ADMISSION_BINDING="$proof/binding.json" python3 "$evidence" complete \
       "$proof" "$guard" 0 "$proof/tools.jsonl" || return 1
   done

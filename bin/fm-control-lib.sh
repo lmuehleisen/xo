@@ -173,7 +173,6 @@ fm_control_harness_family() {  # <recorded-harness>
     kimi*) printf 'kimi' ;;
     cursor*) printf 'cursor' ;;
     gemini*) printf 'gemini' ;;
-    agy*) printf 'agy' ;;
     muse*) printf 'muse' ;;
     rovo*) printf 'rovo' ;;
     *) return 1 ;;
@@ -342,10 +341,11 @@ fm_control_interrupt_ack_source() {  # <harness>
 
 # The command that exits the agent from its own composer. Devin uses `/quit`
 # because `/exit` can select `/revert <step>` in its fuzzy command search.
+# Agy uses the upstream `/quit` spelling, verified by the native live guard.
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
-    claude|opencode|grok|kimi|cursor|muse|rovo|agy) printf '/exit' ;;
-    codex|pi|pi-signed|omp|gemini|kiro|commandcode|polytoken|devin|cortex) printf '/quit' ;;
+    claude|opencode|grok|kimi|cursor|muse|rovo) printf '/exit' ;;
+    codex|pi|pi-signed|omp|gemini|kiro|commandcode|polytoken|devin|cortex|agy) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
