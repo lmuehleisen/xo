@@ -86,9 +86,9 @@ test_supervision_host_protocol_on_every_arm_owner() {
     if [ "$harness" = agy ]; then
       assert_contains "$body" 'The Stop-hook park runs the supervision host' 'agy host startup owner is missing'
       assert_contains "$body" 'no verified dialog mirror feeds a supervision session' 'agy attended pass-through is missing'
-      assert_contains "$body" 'as a `watcher` follow-up' 'agy host hand-back path is missing'
+      assert_contains "$body" "as a \`watcher\` follow-up" 'agy host hand-back path is missing'
       assert_contains "$body" 'the next park starts at that turn end' 'agy host boundary must leave re-arm to Stop'
-      assert_contains "$body" '`bin/fm-afk-launch.sh start` refuses the away daemon' 'agy away-host guidance is missing'
+      assert_contains "$body" "\`bin/fm-afk-launch.sh start\` refuses the away daemon" 'agy away-host guidance is missing'
     fi
   done
   rm -f "$config/supervision-host"
