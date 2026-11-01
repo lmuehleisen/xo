@@ -2218,12 +2218,63 @@ _fm_composer_locate_footer_zone() {  # <plain>
     && [ "$FM_COMPOSER_SCAN_BARE_ROW" -le "$FM_COMPOSER_FOOTER_LAST" ]
 }
 
+# Claude's command menu can sit below the closing rule (2.1.316). Its indented
+# selection marker is not a second composer. Require a nonempty slash draft
+# inside a complete glyph-proven pair, command/description columns below it,
+# and one selected command matching that draft. Unknown trailing activity
+# still invalidates the menu proof; this can never expose an empty composer.
+_fm_composer_select_claude_command_menu() { # <plain-screen>
+  local plain=$1 draft raw tail selected=0 entries=0 ended=0 continuation='' trimmed glyph
+  local entry_re='^  (❯ |  )(/[[:alnum:]_-]+)([[:space:]]{2,})[^[:space:]]'
+  [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" = 1 ] \
+    && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = '❯' ] \
+    && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -eq "$((FM_COMPOSER_SCAN_PI_OPEN + 1))" ] \
+    && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -eq "$((FM_COMPOSER_SCAN_PI_GLYPH_ROW + 1))" ] || return 1
+  draft=$(_fm_composer_screen_row "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" "$plain")
+  fm_composer_normalize_trim_var draft
+  draft=${draft#❯}
+  fm_composer_normalize_trim_var draft
+  [[ $draft =~ ^/[[:alnum:]_-]*$ ]] || return 1
+  tail=$(printf '%s\n' "$plain" | sed -n "$((FM_COMPOSER_SCAN_PI_CLOSE + 2)),\$p")
+  while IFS= read -r raw; do
+    if [ -z "${raw//[[:space:]]/}" ]; then
+      ended=1
+    elif [ "$ended" = 1 ]; then
+      return 1
+    elif [[ $raw =~ $entry_re ]]; then
+      if [ "${BASH_REMATCH[1]}" = '❯ ' ]; then
+        [[ ${BASH_REMATCH[2]} = "$draft"* ]] || return 1
+        selected=$((selected + 1))
+      fi
+      printf -v continuation '%*s' "$((4 + ${#BASH_REMATCH[2]} + ${#BASH_REMATCH[3]}))" ''
+      entries=$((entries + 1))
+    else
+      [ "$entries" -gt 0 ] || return 1
+      case "$raw" in "$continuation"[![:space:]]*) ;; *) return 1 ;; esac
+      trimmed=$raw
+      fm_composer_normalize_trim_var trimmed
+      fm_composer_leading_prompt_glyph_var glyph "$trimmed" && return 1
+      fm_composer_row_has_edge "$trimmed" && return 1
+    fi
+  done <<EOF
+$tail
+EOF
+  [ "$selected" = 1 ] || return 1
+  FM_COMPOSER_SELECTED_KIND=bare
+  FM_COMPOSER_SELECTED_FIRST=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
+  FM_COMPOSER_SELECTED_LAST=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
+  FM_COMPOSER_SELECTED_AMBIG=0
+  FM_COMPOSER_SELECTED_COMMAND_MENU=1
+}
+
 _fm_composer_select_cursorless() {
   local plain=$1 generic=-1 next boundary raw trimmed glyph bare footer=0
   FM_COMPOSER_SELECTED_KIND=
   FM_COMPOSER_SELECTED_FIRST=-1
   FM_COMPOSER_SELECTED_LAST=-1
   FM_COMPOSER_SELECTED_AMBIG=0
+  FM_COMPOSER_SELECTED_COMMAND_MENU=0
+  _fm_composer_select_claude_command_menu "$plain" && return 0
   if _fm_composer_locate_footer_zone "$plain"; then footer=1; fi
   if [ "$FM_COMPOSER_SCAN_BOX_BOTTOM" -ge 0 ]; then
     generic=$FM_COMPOSER_SCAN_BOX_BOTTOM
@@ -2732,6 +2783,12 @@ EOF
   # proves that candidate stale).
   if ! _fm_composer_select_cursorless "$plain"; then
     printf 'unknown'
+    return 0
+  fi
+  # The menu proves a nonempty draft even if a theme dims the slash text.
+  # Selecting that draft must never turn a previously pending menu empty.
+  if [ "$FM_COMPOSER_SELECTED_COMMAND_MENU" = 1 ]; then
+    printf 'pending'
     return 0
   fi
   case "$FM_COMPOSER_SELECTED_KIND" in
