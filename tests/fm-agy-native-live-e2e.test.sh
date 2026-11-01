@@ -7,6 +7,8 @@
 # harmless escalation canary. No probe is submitted by default. A native
 # auto-approval is a measured result, not a failed or fabricated decline.
 # FM_AGY_NATIVE_LIVE_COLD=1 tests the initial Auto request without mode cycling.
+# --test-setup [success|failure|tmux] exercises allocation/cleanup or private
+# tmux shell setup only; it never invokes agy.
 set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -85,9 +87,29 @@ fail() {
   printf 'not ok - agy %s on %s: %s\n' "$AGY_VERSION" "$BACKEND" "$*" >&2
   exit 1
 }
+# Explicit socket selection is required: inherited TMUX otherwise wins over
+# TMUX_TMPDIR and can attach a guard launched from a supervisor to its server.
+native_tmux_setup() {
+  LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$LAB_HOME")
+  SOCKET="$LAB_TMUX_DIR/tmux-$(id -u)/default"
+  mkdir -m 700 "${SOCKET%/*}"
+  export TMUX_TMPDIR="$LAB_TMUX_DIR"
+  tmux -S "$SOCKET" new-session -d -s native -n "fm-$ID" -c "$WORKSPACE" -x 200 -y 50 '/bin/bash --noprofile --norc'
+  export TMUX="$SOCKET,0,0"
+  TARGET="native:fm-$ID"
+}
 if [ "${1:-}" = --test-setup ]; then
   printf '%s\n' "$STATE"
-  [ "${2:-success}" = success ] || exit 1
+  if [ "${2:-success}" = tmux ]; then
+    "$LAB_HOME_HELPER" create "$LAB_HOME" >/dev/null
+    WORKSPACE="$LAB/workspace"
+    mkdir "$WORKSPACE"
+    native_tmux_setup
+    tmux -S "$SOCKET" has-session -t native || fail 'private tmux session missing'
+    printf 'private tmux setup passed\n'
+  else
+    [ "${2:-success}" = success ] || exit 1
+  fi
   exit 0
 fi
 AGY_VERSION=$("$AGY_BIN" --version)
@@ -130,13 +152,7 @@ EOF
   TARGET="$HERDR_LAB_SESSION:$PANE"
 else
   [ "$BACKEND" = tmux ] || fail 'unsupported native test backend'
-  LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$LAB_HOME")
-  SOCKET="$LAB_TMUX_DIR/tmux-$(id -u)/default"
-  export TMUX_TMPDIR="$LAB_TMUX_DIR"
-  tmux new-session -d -s native -n "fm-$ID" -c "$WORKSPACE" -x 200 -y 50 '/bin/bash --noprofile --norc'
-  # All subsequent tmux calls are pinned to the owned socket, never ambient.
-  export TMUX="$SOCKET,0,0"
-  TARGET="native:fm-$ID"
+  native_tmux_setup
 fi
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"

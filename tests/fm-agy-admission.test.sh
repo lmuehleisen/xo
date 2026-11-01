@@ -282,4 +282,30 @@ fi
 rm -f "$CODE"/.agy-native-live-e2e.*
 pass 'agy admission: native setup owns and safely cleans its state lab'
 
+# Exercise the exact live guard setup with a real inherited server, without
+# invoking agy. Both servers are minted here and never touch ambient endpoints.
+if command -v tmux >/dev/null 2>&1; then
+  (
+    parent_home="$CASE/parent-lab"
+    "$ROOT/bin/fm-lab-home.sh" create "$parent_home" >/dev/null
+    parent_tmux_dir=$("$ROOT/bin/fm-lab-home.sh" tmux-dir "$parent_home")
+    parent_socket="$parent_tmux_dir/tmux-$(id -u)/default"
+    mkdir -m 700 "${parent_socket%/*}"
+    export TMUX_TMPDIR="$parent_tmux_dir"
+    parent_cleanup() {
+      tmux -S "$parent_socket" kill-server >/dev/null 2>&1 || true
+      "$ROOT/bin/fm-lab-home.sh" teardown "$parent_home"
+    }
+    trap parent_cleanup EXIT
+    tmux -S "$parent_socket" new-session -d -s owned-parent
+    TMUX="$parent_socket,0,0" FM_HOME="$HOME_DIR" bash "$setup_suite" --test-setup tmux > "$CASE/tmux-setup"
+    grep -qx 'private tmux setup passed' "$CASE/tmux-setup" || fail 'guard did not prove its private server'
+    [ "$(tmux -S "$parent_socket" list-sessions -F '#{session_name}')" = owned-parent ] \
+      || fail 'native guard inherited and changed its caller server'
+  )
+  pass 'agy admission: live setup ignores inherited TMUX and preserves the caller server'
+else
+  printf '# skip native tmux setup regression: tmux unavailable\n'
+fi
+
 printf '# all fm-agy-admission tests passed\n'

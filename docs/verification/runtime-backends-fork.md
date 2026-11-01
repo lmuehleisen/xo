@@ -309,6 +309,8 @@ Verified on 2026-11-01 with agy 1.4.12, `gemini-3.8-flash-low`, macOS and tmux.
 The consolidated guard passed active Auto, an actual random command result, matching current-generation pre/post events, accepted Stop, encoded brief handoff, attempted outside-root denial with absent target, exact status/inbox effects, production `/quit` control and owned-hook retirement.
 A live one-shot approval completed; live decline was not observed.
 The global settings file hash was unchanged.
+The guard selects its owned tmux socket explicitly; a token-free inherited-`TMUX` regression verifies that it preserves the caller's server.
+`TMUX_TMPDIR` alone does not override an inherited `TMUX` socket.
 
 ```sh
 FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=tmux \
