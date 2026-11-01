@@ -870,6 +870,9 @@ test_agy_secondmate_launch_is_supported() {
 $fields
 EOF
   : "$case_dir" "$proj" "$wt"
+  # The generic worker fixture selects manual; exercise the supervisor's
+  # unchanged auto preference explicitly for the accept-edits assertion below.
+  printf 'auto\n' > "$home/config/crew-permissions"
   local sm="$case_dir/secondmate-home"
   mkdir -p "$sm/bin" "$sm/data" "$sm/.agents"
   printf '# Firstmate\n' > "$sm/AGENTS.md"
