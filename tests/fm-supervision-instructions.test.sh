@@ -58,7 +58,7 @@ test_supervision_host_protocol_on_every_arm_owner() {
   home="$TMP_ROOT/host-owners-home"
   config="$TMP_ROOT/host-owners-config"
   mkdir -p "$home/state" "$config"
-  for harness in claude cursor opencode omp grok codex; do
+  for harness in claude cursor opencode omp grok codex agy; do
     : > "$config/supervision-host-off"
     plain=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness "$harness")
     assert_not_contains "$plain" "Supervision host" "$harness: a home opted out by config/supervision-host-off rendered the host protocol"
@@ -83,6 +83,13 @@ test_supervision_host_protocol_on_every_arm_owner() {
     [ "$(printf '%s\n' "$body" | grep -c '^3\. ')" -eq 1 ] || fail "$harness: the protocol must say once how the park boundary arrives: $body"
     [ "$(printf '%s\n' "$body" | grep -c '^6\. ./afk. writes only the record here')" -eq 1 ] \
       || fail "$harness: the protocol must say once what /afk does here: $body"
+    if [ "$harness" = agy ]; then
+      assert_contains "$body" 'The Stop-hook park runs the supervision host' 'agy host startup owner is missing'
+      assert_contains "$body" 'no verified dialog mirror feeds a supervision session' 'agy attended pass-through is missing'
+      assert_contains "$body" 'as a `watcher` follow-up' 'agy host hand-back path is missing'
+      assert_contains "$body" 'the next park starts at that turn end' 'agy host boundary must leave re-arm to Stop'
+      assert_contains "$body" '`bin/fm-afk-launch.sh start` refuses the away daemon' 'agy away-host guidance is missing'
+    fi
   done
   rm -f "$config/supervision-host"
   plain=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness grok)
