@@ -3290,13 +3290,7 @@ launch_command_template() { # <harness> <kind> <permission-flags>
   # inherited CLAUDECODE from a claude primary would otherwise outrank them in
   # a process that only reads the environment.
   agy)
-    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS AGY_CLI_DISABLE_AUTO_UPDATE=1 __AGYBIN__ '
-    printf '%s' "$permission_flags"
-    if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
-      printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__--log-file __AGYNATIVELOG__'
-    else
-      printf '%s' ' __MODELFLAG____EFFORTFLAG____PERMISSIONDIRS__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
-    fi
+    fm_agy_launch_template "$permission_flags"
     ;;
   # polytoken (Polytoken CLI): a pane-attached TUI worker whose control verbs
   # ride the daemon REST API (the captain-approved hybrid). The launch runs in

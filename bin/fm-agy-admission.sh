@@ -13,8 +13,8 @@
 # release outside the candidate family. Neither path certifies version text.
 # Matching exact receipts, including manually verified baselines, are reused.
 # A mutable default model is not a tested context: select --model explicitly.
-# ensure-native admits >=1.4.7,<1.5.0 with native Auto, observer and signals
-# guards bound to the selected backend. Ordinary safe native approvals need
+# ensure-native admits >=1.4.7,<1.5.0 with one native Auto guard
+# bound to the selected backend. Ordinary safe native approvals need
 # not prompt. Receipts explicitly record whether live approval and decline
 # were observed; deterministic native-control fixtures cover the cancellation
 # protocol when harmless live canaries auto-approve. They are not live proof.
@@ -121,7 +121,9 @@ export FM_AGY_LIVE_MODEL="$2" FM_AGY_LIVE_EFFORT="$3"
 export FM_AGY_LIVE_JUDGE_TIER="$4" FM_AGY_LIVE_JUDGE_MODEL="$5" FM_AGY_LIVE_JUDGE_BIN="$6"
 if [ "$first_guard" = native ]; then export FM_AGY_NATIVE_LIVE_BACKEND="${4#native-}"; fi
 export FM_AGY_ADMISSION_PROOF_DIR="$work" FM_AGY_ADMISSION_BINDING="$work/binding.json"
-for guard in "$first_guard" observer signals; do
+guards=(bypass observer signals)
+[ "$first_guard" != native ] || guards=(native)
+for guard in "${guards[@]}"; do
   limit=360
   [ "$guard" != observer ] || limit=150
   if [ "${FM_TEST_SEAM:-0}" = 1 ]; then limit=${FM_TEST_AGY_GUARD_SECONDS:-$limit}; fi

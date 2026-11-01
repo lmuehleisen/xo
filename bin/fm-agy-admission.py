@@ -25,9 +25,9 @@ ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = "fm-agy-compatibility.v2"
 GUARDS = {
     "native": [
-        "verified-startup", "warm-auto", "actual-tool-result", "brief-handoff",
+        "verified-startup", "interactive-readiness-auto", "actual-tool-result", "brief-handoff",
         "native-prompt-or-safe-completion", "deterministic-deny",
-        "status-inbox-roundtrip", "busy-start-stop", "hook-retire",
+        "status-inbox-roundtrip", "busy-start-stop", "observer-pair", "hook-retire",
     ],
     "bypass": [
         "credential-shell", "credential-native", "shell-refusal",
@@ -64,11 +64,23 @@ INTEGRATION = [
 ]
 
 
+# Native workers never load the primary hooks or the standalone legacy/upgrade
+# guards. Keep the shared policy, backend, composer, control and spawn owners:
+# their transitive behavior still affects the guarantee (including common
+# launch substitutions outside the extracted agy template).
+NATIVE_INTEGRATION = [name for name in INTEGRATION if name not in {
+    ".agents/hooks.json",
+    "tests/fm-agy-bypass-live-e2e.test.sh",
+    "tests/fm-agy-observer-live-e2e.test.sh",
+    "tests/fm-agy-signals-live-e2e.test.sh",
+}]
+
+
 def guards_for(binding):
     if not isinstance(binding, dict) or not isinstance(binding.get("context"), dict):
         raise ValueError("compatibility binding requires an object context")
-    first = "native" if binding["context"].get("posture") == "native-auto" else "bypass"
-    return {name: GUARDS[name] for name in (first, "observer", "signals")}
+    names = ("native",) if binding["context"].get("posture") == "native-auto" else ("bypass", "observer", "signals")
+    return {name: GUARDS[name] for name in names}
 
 
 def digest(value):
@@ -176,14 +188,16 @@ def snapshot(args):
     match = re.fullmatch(r"(?:agy )?([0-9]+\.[0-9]+\.[0-9]+)", version)
     if not match or binary != identity(executable):
         raise ValueError("unreadable version or executable replaced during version query")
-    hashes = {name: digest((ROOT / name).read_bytes()) for name in INTEGRATION}
+    selected_context = context(args)
+    integration = NATIVE_INTEGRATION if selected_context.get("posture") == "native-auto" else INTEGRATION
+    hashes = {name: digest((ROOT / name).read_bytes()) for name in integration}
     return {
         "executable": binary, "version": match[1],
         "platform": {
             "system": platform.system(), "machine": platform.machine(),
             "release": platform.release(),
         },
-        "integration": digest(encoded(hashes)), "context": context(args),
+        "integration": digest(encoded(hashes)), "context": selected_context,
     }
 
 

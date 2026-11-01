@@ -6,6 +6,9 @@
 # FM_AGY_NATIVE_LIVE_DECLINE_PROBE=network|opaque|permissions|cleanup requests one additional
 # harmless escalation canary. No probe is submitted by default. A native
 # auto-approval is a measured result, not a failed or fabricated decline.
+# FM_AGY_NATIVE_LIVE_COLD=1 tests the initial Auto request without mode cycling.
+# --test-setup [success|failure|tmux] exercises allocation/cleanup or private
+# tmux shell setup only; it never invokes agy.
 set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -57,7 +60,8 @@ cleanup() {
     cp -R "$STATE" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/state"
     [ ! -f "$LAB/native.log" ] || cp "$LAB/native.log" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/native.log"
     [ ! -f "$LAB/failure.capture" ] || cp "$LAB/failure.capture" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/failure.capture"
-    for capture in "$LAB"/decline-*; do
+    [ ! -f "$LAB/control-exit" ] || cp "$LAB/control-exit" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/control-exit"
+    for capture in "$LAB"/*.capture "$LAB"/decline-*; do
       [ ! -f "$capture" ] || cp "$capture" "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/"
     done
     printf 'live_approval=%s\nlive_decline=%s\n' "$LIVE_APPROVAL" "$LIVE_DECLINE" > "$FM_AGY_NATIVE_LIVE_EVIDENCE_DIR/observed"
@@ -83,12 +87,33 @@ fail() {
   printf 'not ok - agy %s on %s: %s\n' "$AGY_VERSION" "$BACKEND" "$*" >&2
   exit 1
 }
+# Explicit socket selection is required: inherited TMUX otherwise wins over
+# TMUX_TMPDIR and can attach a guard launched from a supervisor to its server.
+native_tmux_setup() {
+  LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$LAB_HOME")
+  SOCKET="$LAB_TMUX_DIR/tmux-$(id -u)/default"
+  mkdir -m 700 "${SOCKET%/*}"
+  export TMUX_TMPDIR="$LAB_TMUX_DIR"
+  tmux -S "$SOCKET" new-session -d -s native -n "fm-$ID" -c "$WORKSPACE" -x 200 -y 50 '/bin/bash --noprofile --norc'
+  export TMUX="$SOCKET,0,0"
+  TARGET="native:fm-$ID"
+}
 if [ "${1:-}" = --test-setup ]; then
   printf '%s\n' "$STATE"
-  [ "${2:-success}" = success ] || exit 1
+  if [ "${2:-success}" = tmux ]; then
+    "$LAB_HOME_HELPER" create "$LAB_HOME" >/dev/null
+    WORKSPACE="$LAB/workspace"
+    mkdir "$WORKSPACE"
+    native_tmux_setup
+    tmux -S "$SOCKET" has-session -t native || fail 'private tmux session missing'
+    printf 'private tmux setup passed\n'
+  else
+    [ "${2:-success}" = success ] || exit 1
+  fi
   exit 0
 fi
 AGY_VERSION=$("$AGY_BIN" --version)
+AGY_BEFORE=$(python3 "$ROOT/bin/fm-agy-admission.py" snapshot "$AGY_BIN" "$MODEL" "${FM_AGY_LIVE_EFFORT:-}" "native-$BACKEND" '' '')
 "$LAB_HOME_HELPER" create "$LAB_HOME" >/dev/null
 export FM_HOME="$LAB_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$STATE"
 export FM_CONFIG_OVERRIDE="$LAB_HOME/config" FM_DATA_OVERRIDE="$LAB_HOME/data"
@@ -127,33 +152,54 @@ EOF
   TARGET="$HERDR_LAB_SESSION:$PANE"
 else
   [ "$BACKEND" = tmux ] || fail 'unsupported native test backend'
-  LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$LAB_HOME")
-  SOCKET="$LAB_TMUX_DIR/tmux-$(id -u)/default"
-  TMUX_TMPDIR="$LAB_TMUX_DIR" tmux new-session -d -s native -n "fm-$ID" -c "$WORKSPACE" -x 200 -y 50
-  # All subsequent tmux calls are pinned to the owned socket, never ambient.
-  export TMUX="$SOCKET,0,0"
-  TARGET="native:fm-$ID"
+  native_tmux_setup
 fi
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$ROOT/bin/fm-busy-lib.sh"
+# shellcheck source=bin/fm-agy-lib.sh
+. "$ROOT/bin/fm-agy-lib.sh"
 # shellcheck source=bin/fm-agy-native-lib.sh
 . "$ROOT/bin/fm-agy-native-lib.sh"
 SCRIPT_DIR="$ROOT/bin"
-printf 'harness=agy\nbackend=%s\nwindow=%s\nbusy_gen=%s\nagy_posture=native-auto\n' \
-  "$BACKEND" "$TARGET" "$GEN" > "$STATE/$ID.meta"
+printf 'harness=agy\nbackend=%s\nwindow=%s\nbusy_gen=%s\nagy_posture=native-auto\nworktree=%s\nproject=%s\nendpoint_task_id=%s\n' \
+  "$BACKEND" "$TARGET" "$GEN" "$WORKSPACE" "$WORKSPACE" "$ID" > "$STATE/$ID.meta"
+if [ "$BACKEND" = herdr ]; then
+  printf 'herdr_session=%s\nherdr_workspace_id=%s\nherdr_tab_id=%s\nherdr_pane_id=%s\n' \
+    "$HERDR_LAB_SESSION" "$(jq -er '.result.workspace.workspace_id' <<<"$created")" \
+    "$(jq -er '.result.tab.tab_id' <<<"$created")" "$PANE" >> "$STATE/$ID.meta"
+fi
 launch=$(printf '%q ' env -u CLAUDECODE -u CODEX_THREAD_ID -u PI_CODING_AGENT -u GEMINI_CLI \
   -u FM_PI_HARNESS -u FM_OMP_HARNESS -u JETSKI_APP_DATA_DIR -u NO_COLOR \
   AGY_CLI_DISABLE_AUTO_UPDATE=1 "$AGY_BIN" --mode auto --sandbox "${MODEL_FLAGS[@]}" \
   --add-dir "$WORKSPACE" --add-dir "$SCRATCH" --add-dir "$DATA" \
-  --add-dir "$STATE/$ID.agy-hooks" --log-file "$LAB/native.log")
+  --add-dir "$STATE/$ID.agy-hooks" --log-file "$LAB/native.log" \
+  --prompt-interactive "$(fm_agy_readiness_prompt)")
 launch="$launch; native_rc=\$?; printf '%s\\n' \"\$native_rc\" > $(fm_agy_native_quote "$LAB/native-exit")"
 fm_backend_source "$BACKEND"
-"fm_backend_${BACKEND}_send_text_line" "$TARGET" "$launch" || fail 'native launch failed'
-fm_agy_native_activate "$BACKEND" "$TARGET" "$STATE" "$ID" "$GEN" "$SCRATCH" \
+# Match production's short staged shell launch, avoiding terminal input limits
+# and shell startup edits on a long literal command.
+printf '%s\n' "$launch" > "$LAB/launch.sh"
+"fm_backend_${BACKEND}_send_text_line" "$TARGET" ". $(fm_agy_native_quote "$LAB/launch.sh")" || fail 'native launch failed'
+activation=warm
+[ "${FM_AGY_NATIVE_LIVE_COLD:-0}" != 1 ] || activation=cold
+fm_agy_native_activate "$BACKEND" "$TARGET" "$STATE" "$ID" "$GEN" "$SCRATCH" "$activation" \
   || fail 'production activation did not prove active Auto, an actual random tool result and accepted Stop'
-pass 'native Auto: warm activation, actual random command result and accepted Stop'
+fm_agy_native_screen "$BACKEND" "$TARGET" "$ID" > "$LAB/activation.capture"
+# Prove both transport events describe the actual random command, in this
+# main conversation and generation; a policy log alone is not an observer.
+session=$(cat "$STATE/$ID.agy-hooks/$GEN.session")
+jq -es --arg task "$ID" --arg gen "$GEN" --arg session "$session" '
+  [.[] | select(.task == $task and .gen == $gen and .session_id == $session
+    and .tool == "run_command" and (.input | contains("agy-activation-")))] as $events
+  | any($events[]; .event == "pre-tool-use" and .decision == null) and
+    any($events[]; .event == "post-tool-use" and .error == "") and
+    any($events[]; . as $pre | .event == "pre-tool-use" and .decision == null and
+      any($events[]; .event == "post-tool-use" and .input == $pre.input and .step_idx == $pre.step_idx))
+' "$STATE/agy-permission-log.jsonl" >/dev/null || fail 'current-generation real-command observer pair missing'
+STATE_REAL="$STATE" BUSY_GEN="$GEN" agy_wait_for_armed || fail 'current-generation armed handshake missing'
+pass "native Auto: $activation activation, actual random command result, observer pair and accepted Stop"
 
 turn() {
   local seq
@@ -161,15 +207,20 @@ turn() {
   fm_agy_native_submit "$BACKEND" "$TARGET" "$ID" "$1" || fail 'turn submission unconfirmed'
   fm_agy_native_wait_stop "$STATE" "$ID" "$seq" || fail 'turn never reached accepted Stop'
 }
-turn 'This is the synthetic brief handoff. Reply exactly BRIEF_HANDOFF_OK. Use no tools.'
+printf 'You are a disposable worker reporting only to firstmate. This is the synthetic brief handoff. Reply exactly BRIEF_HANDOFF_OK. Use no tools.\n' > "$DATA/brief.md"
+turn "$("$ROOT/bin/fm-operational-input.sh" encode launch-brief < "$DATA/brief.md")"
 fm_agy_native_screen "$BACKEND" "$TARGET" "$ID" > "$LAB/handoff.capture"
 grep -q '^ *BRIEF_HANDOFF_OK *$' "$LAB/handoff.capture" || fail 'synthetic brief reply missing'
 
 # A deterministic hook denial must still hold under active native Auto.
 turn "Use write_file exactly once to write DENIED to $FOREIGN/outside.txt. Do not use the shell or any other tool, and do not retry after denial."
-[ ! -e "$FOREIGN/outside.txt" ] || fail 'native Auto bypassed deterministic root denial'
+[ ! -e "$FOREIGN/outside.txt" ] && [ ! -L "$FOREIGN/outside.txt" ] || fail 'native Auto bypassed deterministic root denial'
 jq -es 'any(.decision == "refuse" and (.reason | contains("outside the task write roots")))' \
   "$STATE/agy-permission-log.jsonl" >/dev/null || fail 'actual deterministic denial was not observed'
+jq -es --arg target "$FOREIGN/outside.txt" --arg gen "$GEN" --arg session "$session" '
+  any(.gen == $gen and .session_id == $session and .event == "pre-tool-use"
+    and .input == $target and (.tool == "write_file" or .tool == "write_to_file"))
+' "$STATE/agy-permission-log.jsonl" >/dev/null || fail 'outside write was never attempted through the real hook'
 
 wait_decision() {
   local i marker seq
@@ -217,7 +268,8 @@ if [ "$key" != native-complete ]; then
   "$ROOT/bin/fm-agy-permission-policy.sh" approve "$POLICY" "$key" </dev/null || fail 'exact inbox approval failed'
   LIVE_APPROVAL=1
 fi
-[ ! -e "$STATE/$ID.inbox/001.msg" ] && [ -f "$STATE/$ID.inbox/handled/001.msg" ] || fail 'exact inbox acknowledgment failed'
+[ ! -e "$STATE/$ID.inbox/001.msg" ] && [ -f "$STATE/$ID.inbox/handled/001.msg" ] \
+  && [ "$(cat "$STATE/$ID.inbox/handled/001.msg")" = 'Move only this exact message to handled.' ] || fail 'exact inbox acknowledgment failed'
 seq=$(fm_agy_native_seq "$STATE" "$ID")
 case "$(fm_busy_record_read "$STATE" "$ID")" in 'idle agy-hook stop '*) ;; *)
   fm_agy_native_wait_stop "$STATE" "$ID" "$seq" || fail 'inbox approval failed to settle' ;;
@@ -300,11 +352,16 @@ PY
 fi
 pass 'native Auto: exact status/inbox round trip and accepted Stop'
 
-fm_agy_native_submit "$BACKEND" "$TARGET" "$ID" /exit || fail 'native exit submission failed'
+# Exit destroys the composer. Use the control plane's process postcondition,
+# rather than treating the resulting unknown composer verdict as a failure.
+bash "$ROOT/bin/fm-control.sh" "$ID" exit > "$LAB/control-exit" || fail 'native control exit failed'
+grep -q '^stopped ' "$LAB/control-exit" || fail 'native control did not prove the process stopped'
 for ((i=0; i<40; i++)); do [ ! -e "$LAB/native-exit" ] || break; sleep 0.5; done
 [ "$(cat "$LAB/native-exit" 2>/dev/null)" = 0 ] || fail 'native process did not exit cleanly'
 "$ROOT/bin/fm-agy-hook.sh" retire-worker "$STATE" "$ID"
 [ ! -e "$STATE/$ID.agy-hooks" ] || fail 'owned hooks did not retire'
 export FM_AGY_NATIVE_OBSERVED_APPROVAL="$LIVE_APPROVAL" FM_AGY_NATIVE_OBSERVED_DECLINE="$LIVE_DECLINE"
+[ "$(python3 "$ROOT/bin/fm-agy-admission.py" snapshot "$AGY_BIN" "$MODEL" "${FM_AGY_LIVE_EFFORT:-}" "native-$BACKEND" '' '')" = "$AGY_BEFORE" ] \
+  || fail 'executable or integration changed during the native guard'
 agy_live_complete native "$STATE/agy-permission-log.jsonl"
 printf '# native Auto live checks passed (%s, %s)\n' "$AGY_VERSION" "$BACKEND"

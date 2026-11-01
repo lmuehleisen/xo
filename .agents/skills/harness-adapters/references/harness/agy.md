@@ -11,14 +11,14 @@ agy updates itself often and without asking, so treat every version-scoped fact 
 | Fact | Value |
 |---|---|
 | Binary | Absolute `agy` from `PATH`, resolved once and refused if absent. A single self-updating Go binary; the installed path is the real executable, not a launcher. |
-| Launch | Native Auto starts interactively without the task prompt and verifies activation before delivering it. Manual and recorded legacy launches retain `-i`. Headless `-p` is never a worker route. |
+| Launch | Native Auto uses `--prompt-interactive` for a synthetic readiness turn, then verifies activation before delivering the task brief; manual and recorded legacy launches retain `-i`; headless `-p` is never a worker route. |
 | Directory grants | `--add-dir`, repeatable, and MANDATORY - see "The worktree grant" below. |
 | Approvals | New Auto workers use verified native Auto plus deterministic task constraints. Manual retains native review. See "Approvals" below. |
 | Busy state | `agy-hook`: PreInvocation opens; fullyIdle Stop closes. The worker binds its generation and main conversation; interruption emits no Stop and conservatively leaves busy. |
 | Spawn start | Native Auto must prove activation and a real harmless result before receiving the brief, then prove a later worker invocation accepted the brief. `../../../../../bin/fm-agy-lib.sh` owns the gates and bounds. |
 | Rendered tail | Not a state source, but the running turn's footer is the one ASCII busy token: `esc to cancel` while a turn runs, `? for shortcuts` when idle. The right of the footer names the active mode and model, e.g. `accept-edits · Gemini 3.8 Flash · medium`. |
 | Turn end | Native Stop; see "Native hooks and primary integration" below. |
-| Exit | `/exit` (alias `quit`), one Enter; prints `Resume with -c (or command below): agy --conversation=<uuid>`. |
+| Exit | `/quit`, one Enter; completion is proved from process state after the composer disappears. |
 | Interrupt | Single `Escape`, which prints `Interrupted · What should Antigravity CLI do instead?` and leaves the composer EMPTY, so no clear key is needed. |
 | Resume | `agy -c` / `--continue` for the most recent conversation, or `agy --conversation=<uuid>` from the id printed at exit. |
 | Models | `--model <model>`, checked against `agy models` before launch; effort is also encoded as a model-id suffix - see "Model and effort". |
@@ -54,8 +54,11 @@ Trust is not inherited from a parent directory, so every fresh worktree would ra
 
 The [worker permission setting](../../../../../docs/configuration.md#worker-permission-mode-configcrew-permissions) owns the `auto`/`manual` mapping.
 New Auto workers use native sandboxing and command review with Firstmate's deterministic constraints.
-Cold mode requests may fall back on agy 1.4.7, so neither the requested flag nor headless exit 0 proves activation.
+Cold mode requests did not qualify on agy 1.4.7 or the 1.4.12 cold probe, so neither the requested flag nor headless exit 0 proves activation.
 [`fm-agy-native-lib.sh`](../../../../../bin/fm-agy-native-lib.sh) owns the supported warm transition and real-result launch proof.
+The readiness prompt replaces the separately submitted warm-up; the bounded Shift+Tab transition remains.
+[`fm-agy-admission.sh`](../../../../../bin/fm-agy-admission.sh) owns the single native qualification guard and exact receipt reuse; every launch still proves activation and its armed generation.
+Standalone observer and accept-edits signals guards remain upgrade and legacy verification, outside native admission.
 The verified native route supports tmux and Herdr; other backends refuse it instead of silently selecting prompted review or bypass.
 Manual remains an explicit native-review choice, and secondmates retain their separate primary integration.
 

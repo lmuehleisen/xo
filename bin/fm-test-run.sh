@@ -1802,6 +1802,8 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-spawn-prelaunch-rollback.test.sh
       ;;
     bin/fm-agy-lib.sh)
+      printf '%s\n' __script__:fm-agy-native.test.sh
+      printf '%s\n' __script__:fm-agy-native-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-admission.test.sh
       printf '%s\n' __script__:fm-agy-harness.test.sh
       printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
@@ -1817,12 +1819,16 @@ families_for_changed_path() {
     bin/fm-agy-hook.sh|.agents/hooks.json|tests/agy-primary-live-probe.py|\
     bin/fm-sessionstart-agy.sh)
       printf '%s\n' __script__:fm-agy-primary.test.sh
+      printf '%s\n' __script__:fm-agy-native.test.sh
+      printf '%s\n' __script__:fm-agy-native-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-harness.test.sh
       printf '%s\n' __script__:fm-agy-signals-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-primary-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-observer-live-e2e.test.sh
       ;;
     bin/fm-agy-permission-policy.sh)
+      printf '%s\n' __script__:fm-agy-native.test.sh
+      printf '%s\n' __script__:fm-agy-native-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-permission-policy.test.sh
       printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       ;;
