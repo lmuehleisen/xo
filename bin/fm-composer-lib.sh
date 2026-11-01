@@ -2225,7 +2225,7 @@ _fm_composer_locate_footer_zone() {  # <plain>
 # still invalidates the menu proof; this can never expose an empty composer.
 _fm_composer_select_claude_command_menu() { # <plain-screen>
   local plain=$1 draft raw tail selected=0 entries=0 ended=0 continuation='' trimmed glyph
-  local entry_re='^  (❯ |  )(/[[:alnum:]_-]+)([[:space:]]{2,})[^[:space:]]'
+  local entry_re='^  (❯ |  )(/[[:alnum:]_.:-]+)([[:space:]]{2,})[^[:space:]]'
   [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" = 1 ] \
     && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = '❯' ] \
     && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -eq "$((FM_COMPOSER_SCAN_PI_OPEN + 1))" ] \
@@ -2234,7 +2234,7 @@ _fm_composer_select_claude_command_menu() { # <plain-screen>
   fm_composer_normalize_trim_var draft
   draft=${draft#❯}
   fm_composer_normalize_trim_var draft
-  [[ $draft =~ ^/[[:alnum:]_-]*$ ]] || return 1
+  [[ $draft =~ ^/[[:alnum:]_.:-]*$ ]] || return 1
   tail=$(printf '%s\n' "$plain" | sed -n "$((FM_COMPOSER_SCAN_PI_CLOSE + 2)),\$p")
   while IFS= read -r raw; do
     if [ -z "${raw//[[:space:]]/}" ]; then

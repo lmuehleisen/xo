@@ -1684,12 +1684,16 @@ test_cursor_on_proven_box_bottom_classifies_content() {
 # Claude Code 2.1.316 places its selected command menu BELOW the input's
 # closing rule. The menu's prompt glyph is a selection marker, not a draft.
 test_selected_content_excludes_claude_command_menu() {
-  local screen out caps altered
-  screen=$'────────────────────────────────────────────────────────────\n❯ /exit\n────────────────────────────────────────────────────────────\n  ❯ /exit             Exit the CLI\n    /context          Visualize current context usage\n    /usage-credits    Configure usage credits or request them\n                      from an admin'
+  local screen out caps altered namespaced
+  screen=$'────────────────────────────────────────────────────────────\n❯ /exit\n────────────────────────────────────────────────────────────\n  ❯ /exit             Exit the CLI\n    /context          Visualize current context usage\n    /acme:help        Show available commands\n    /usage-credits    Configure usage credits or request them\n                      from an admin'
   for caps in "$CAPS_STYLED_NOID" "$CAPS_PLAIN"; do
     out=$(fm_composer_extract_selected_content "$caps" "$screen")
     [ "$out" = /exit ] || fail "selected command-menu rows must not enter the payload proof, got '$out'"
     assert_screen 'a command menu never makes typed input empty' pending "$CAPS_STYLED_NOID" "$screen"
+    namespaced=${screen//\/exit/\/acme:help}
+    out=$(fm_composer_extract_selected_content "$caps" "$namespaced")
+    [ "$out" = /acme:help ] || fail "namespaced slash commands must retain their input, got '$out'"
+
     # A menu-shaped lower composer must not hide behind an empty/stale input,
     # or swallow unrelated activity and a later real draft.
     for altered in "${screen/❯ \/exit/❯ }" "${screen/❯ \/exit/❯ \/other}" "$screen"$'\n❯ another draft' "$screen"$'\nWorking on request...' "$screen"$'\n                      ❯ another draft'; do
