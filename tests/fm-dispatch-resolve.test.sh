@@ -194,7 +194,7 @@ cat > "$FAKEBIN/agy" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = models ] || exit 2
 [ "${FAKE_AGY_FAIL:-0}" = 1 ] && exit 1
-printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet\ngpt-5-high\tGPT 5\nfuture-family\tFuture\n'
+printf 'gemini-4-argon-high\tGemini Argon\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet\ngpt-5-high\tGPT 5\nfuture-family\tFuture\n'
 SH
 chmod +x "$FAKEBIN/agy"
 
@@ -2099,6 +2099,15 @@ TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$
 assert_contains "$out" "profile: --harness 'agy' --model 'claude-sonnet-4-6'" "independent catalog-backed Agy bucket wins"
 assert_contains "$out" 'runway exhausted_now at gemini' "Gemini bucket exhaustion is applied"
 assert_contains "$out" 'no applicable quota row for provider agy' "unreviewed model family stays unranked"
+# Argon has its own scope, and absent evidence remains eligible but unranked.
+printf '{"rules":[{"when":"Coding","use":{"harness":"agy","model":"gemini-4-argon-high"}}]}\n' > "$RULES"
+jq '.providers[0].quotaSemantics.effectiveAvailability += [(.providers[0].quotaSemantics.effectiveAvailability[1] | .scope = "gemini_argon")]' "$HARDENED_MUTATION" > "$TMP_ROOT/argon-agy.json"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/argon-agy.json" run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'agy' --model 'gemini-4-argon-high'" "Argon binds its independent healthy bucket"
+assert_contains "$out" 'scope=gemini_argon' "Argon scope is disclosed"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
+assert_contains "$out" 'unranked' "missing Argon scope is disclosed uncertainty"
+assert_contains "$out" 'eligible' "missing Argon scope remains eligible"
 TYPESAFE_API_KEY=$KEY FAKE_AGY_FAIL=1 QUOTA_AXI_FIXTURE="$HARDENED_MUTATION" run code out err "$BRIEF"
 assert_contains "$out" 'status: escalate' "unavailable catalog does not guess Agy family"
 # A healthy generic scope must not hide exhaustion in the capped family bucket.

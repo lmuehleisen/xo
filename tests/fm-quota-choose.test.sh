@@ -65,7 +65,7 @@ cat > "$FAKEBIN/agy" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = models ] || exit 2
 [ "${FAKE_AGY_FAIL:-0}" = 1 ] && exit 1
-printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet\ngpt-5-high\tGPT 5\nfuture-family\tFuture\n'
+printf 'gemini-4-argon-high\tGemini Argon\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet\ngpt-5-high\tGPT 5\nfuture-family\tFuture\n'
 SH
 chmod +x "$FAKEBIN/agy"
 
@@ -827,6 +827,9 @@ jq '.providers = [{provider:"agy",quotaSemantics:{status:"known",effectiveAvaila
 ]}}]' "$FIXTURE" > "$AGY_POSITIVE"
 out=$(call_choose --snapshot "$AGY_POSITIVE" --candidate agy:gemini-3.8-flash-high --candidate agy:claude-sonnet-4-6)
 [ "$out" = "agy claude-sonnet-4-6" ] || fail "Agy independent buckets failed: $out"
+jq '.providers[0].quotaSemantics.effectiveAvailability += [{scope:"gemini_argon",status:"known",effectivePercentRemaining:70,runway:{status:"through_reset"}}]' "$AGY_POSITIVE" > "$LAB/argon-agy.json"
+out=$(call_choose --snapshot "$LAB/argon-agy.json" --candidate agy:gemini-4-argon-high)
+[ "$out" = "agy gemini-4-argon-high" ] || fail "Argon did not bind its independent bucket: $out"
 for model in future-family unlisted-claude agy-claude gpt-5-high; do
   if [ "$model" = gpt-5-high ]; then
     out=$(call_choose --snapshot "$AGY_POSITIVE" --candidate "agy:$model")
