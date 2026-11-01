@@ -228,4 +228,35 @@ if admit ensure-native >/dev/null; then fail 'native route admitted an unproven 
 [ ! -e "$CASE/attempts" ] || fail 'unsupported native candidate reached model prompts'
 pass 'agy admission: native guard failure and unsupported startup versions refuse certification'
 
+# Exercise the real native setup without invoking the vendor executable.
+new_case native-setup
+cp "$ROOT/tests/fm-agy-native-live-e2e.test.sh" "$CODE/tests/"
+setup_suite="$CODE/tests/fm-agy-native-live-e2e.test.sh"
+for home in "$CODE" "$HOME_DIR"; do
+  state=$(FM_HOME="$home" bash "$setup_suite" --test-setup) || fail 'native setup failed'
+  [ ! -e "$state" ] || fail 'successful native setup retained state'
+  case "$state" in "$CODE"/.agy-native-live-e2e.*) ;; *) fail 'state is not the owned checkout lab' ;; esac
+done
+if FM_HOME="$CODE" bash "$setup_suite" --test-setup failure > "$CASE/state" 2> "$CASE/failure"; then
+  fail 'synthetic setup failure succeeded'
+fi
+state=$(cat "$CASE/state")
+[ -d "$state" ] && grep -Fq "$state" "$CASE/failure" || fail 'failure evidence was not retained'
+fm_test_rm_checkout_lab "$state" 2>/dev/null && fail 'foreign checkout lab was removed'
+# The fixture checkout owns its own cleanup guard.
+bash -c '. "$1/tests/lib.sh"; fm_test_rm_checkout_lab "$2"' _ "$CODE" "$state"
+if FM_AGY_NATIVE_LIVE_STATE_ROOT="$CASE/missing" bash "$setup_suite" --test-setup >/dev/null 2>&1; then
+  fail 'missing override accepted'
+fi
+mkdir "$CASE/override"
+state=$(FM_AGY_NATIVE_LIVE_STATE_ROOT="$CASE/override" bash "$setup_suite" --test-setup) || fail 'valid override rejected'
+[ ! -e "$state" ] || fail 'override state was not cleaned'
+mkdir "$CASE/foreign"
+if bash -c 'ln -s "$2" "$1/.agy-native-live-e2e.$$"; exec bash "$1/tests/fm-agy-native-live-e2e.test.sh" --test-setup' _ "$CODE" "$CASE/foreign" >/dev/null 2>&1; then
+  fail 'preexisting symlink lab accepted'
+fi
+[ -d "$CASE/foreign" ] || fail 'foreign symlink target removed'
+rm -f "$CODE"/.agy-native-live-e2e.*
+pass 'agy admission: native setup owns and safely cleans its state lab'
+
 printf '# all fm-agy-admission tests passed\n'
