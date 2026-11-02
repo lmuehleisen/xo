@@ -82,6 +82,7 @@ A model the catalog does not list is concrete contradictory evidence: block that
 Apply quota at the granularity the vendor actually supplies.
 A provider-level or `all_models`/`all_products` scope bounds every model you established in that family within the candidate's matched account, including one with no window of its own.
 A named-model or named-product scope is an additional bound for that model alone.
+A scope the vendor reports outside those names, such as an Antigravity tier, bounds a candidate only when its profile declares that exact scope as `quota_scope` or a verified route rule below maps it; never infer the tier from the model name.
 Match the candidate to its `quota[]` row by that established provider, account membership, and scope.
 For schema 6, bind the candidate lane by membership in published `accountKeys`, or exact `accountKey` on older single-key rows: a Pi lane uses its auth provider id such as `openai-codex-work`, native Codex and Pi `codex-native/` use `codex-home`.
 Only when no row contains the lane may the unique `default` membership row be used; overlapping membership is malformed evidence, never a default fallback.

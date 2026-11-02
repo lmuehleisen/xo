@@ -193,16 +193,16 @@
 #   docs/cmux-backend.md),
 #   then tmux.
 #   Spawn-capable backends are the reference tmux adapter, verified herdr
-#   adapter, and experimental zellij, orca, cmux, paseo, rex, t3code, and tern
-#   adapters. Orca owns both the task worktree and terminal, so ship/scout Orca
-#   spawns do not run treehouse get; cmux, paseo, rex, and tern are session
+#   adapter, and experimental zellij, orca, cmux, paseo, rex, t3code, tern,
+#   and hc adapters. Orca owns both the task worktree and terminal, so ship/scout Orca
+#   spawns do not run treehouse get; cmux, paseo, rex, tern, and hc are session
 #   providers only, exactly like herdr/zellij, so they do. Auto-detected herdr
 #   and rex stay silent like tmux; auto-detected cmux prints a loud stderr
-#   notice; zellij, orca, paseo, t3code, and tern are never auto-detected (the
-#   paseo and tern markers leak into every descendant process).
+#   notice; zellij, orca, paseo, t3code, tern, and hc are never auto-detected
+#   (the paseo, tern, and hc markers leak into every descendant process).
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. Orca, cmux, paseo, and tern do not support
+#   absent backend= means tmux. Orca, cmux, paseo, tern, and hc do not support
 #   --secondmate spawns.
 #   A rex crewmate or scout opens one tab in the Rex session the launching
 #   firstmate runs in when it runs directly inside Rex, otherwise in its home's
@@ -499,7 +499,8 @@
 #   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID CMUX_SOCKET_PATH
 #   ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION TERM_PROGRAM
 #   REX_SESSION REX_BLOCK REX_SERVER REX_BIN_DIR TERN_IDENTITY TERN_PANE
-#   TERN_PANE_SOCKET TERN_WINDOW_KEY TERN_WINDOW_SOCKET, plus the task
+#   TERN_PANE_SOCKET TERN_WINDOW_KEY TERN_WINDOW_SOCKET HC_SESSION
+#   HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE, plus the task
 #   marker FM_TASK_ID that ship and scout panes receive above, plus the
 #   compact-adviser kill switch COMPACT_ADVISER_DISABLE, which the floor also
 #   pins to 1 with a literal assignment so it survives the cleared environment
@@ -2549,6 +2550,10 @@ if [ "$RELAUNCH" -eq 0 ]; then
     echo "error: backend=tern does not support --secondmate spawns yet" >&2
     exit 1
   fi
+  if [ "$BACKEND" = hc ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=hc does not support --secondmate spawns yet" >&2
+    exit 1
+  fi
   fm_backend_runtime_check "$BACKEND" || exit 1
   if [ "$BACKEND" = rex ]; then
     fm_backend_rex_local_server_ensure || exit 1
@@ -3002,8 +3007,9 @@ kiro_model_validate() {  # <kiro-bin> <model>
 }
 
 # kiro's hook commands are single-token absolute paths, so a hook path carrying
-# whitespace cannot be delivered as one token under either interpretation - a
-# shell splits it and an argv split does the same, and no quoting fixes both.
+# whitespace or a shell-special character cannot be delivered as one token under
+# both interpretations - a shell splits or expands it, an argv split does not,
+# and no quoting fixes both.
 # Without working hooks no native turn can be bound either, so the seeded busy record would never clear
 # and the supervisor would read the worker as provably working forever. Refuse
 # alongside the model check, before any worktree or pane exists, and name the
@@ -3014,8 +3020,8 @@ kiro_hook_path_validate() {  # <state-dir> <id>
   real=$(cd "$state" 2>/dev/null && pwd -P) || real=$state
   [ -n "$real" ] || real=$state
   case "$real/$id.kiro-home" in
-    *[[:space:]]*)
-      echo "error: kiro hook scripts would live under '$real/$id.kiro-home', whose path contains whitespace; kiro hook commands must be a single unquoted token, so point FM_HOME or FM_STATE_OVERRIDE at a whitespace-free path" >&2
+    *[[:space:]\'\"\\\$\`\;\&\|\<\>\(\)\*\?\[\]\{\}\!]*)
+      echo "error: kiro hook scripts would live under '$real/$id.kiro-home', whose path contains whitespace or a shell-special character; kiro hook commands must be a single unquoted token, so point FM_HOME or FM_STATE_OVERRIDE at a path free of both" >&2
       return 1 ;;
   esac
   return 0
@@ -5844,6 +5850,11 @@ EOF
     fi
     T="$TERN_SESSION_ID:$TERN_BLOCK_ID"
     ;;
+  hc)
+    HC_SES=$(fm_backend_hc_container_ensure) || exit 1
+    HC_TERMINAL=$(fm_backend_hc_create_task "$HC_SES" "$W" "$PROJ_ABS") || exit 1
+    T="$HC_SES:$HC_TERMINAL"
+    ;;
   orca)
     set +e
     ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
@@ -5961,6 +5972,7 @@ spawn_send_text_line() { # <target> <text>
   rex) fm_backend_rex_send_text_line "$1" "$2" "$W" ;;
   t3code) fm_backend_t3code_send_literal "$1" "$2" ;;
   tern) fm_backend_tern_send_text_line "$1" "$2" "$W" ;;
+  hc) fm_backend_hc_send_text_line "$1" "$2" "$W" ;;
   esac
 }
 spawn_current_path() { # <target>
@@ -5972,6 +5984,7 @@ spawn_current_path() { # <target>
   paseo) fm_backend_paseo_current_path "$1" "$W" ;;
   rex) fm_backend_rex_current_path "$1" "$W" ;;
   tern) fm_backend_tern_current_path "$1" "$W" ;;
+  hc) fm_backend_hc_current_path "$1" "$W" ;;
   esac
 }
 spawn_send_literal() { # <target> <text>
@@ -5985,8 +5998,13 @@ spawn_send_literal() { # <target> <text>
   rex) fm_backend_rex_send_literal "$1" "$2" "$W" ;;
   t3code) fm_backend_t3code_send_literal "$1" "$2" ;;
   tern) fm_backend_tern_send_literal "$1" "$2" "$W" ;;
+  # hc has no paste without submit, and its keys cannot type the launch line's
+  # `+` or `_`, so the line is pasted and submitted here and the Enter that
+  # follows it is consumed below (docs/hc-backend.md "Limits").
+  hc) fm_backend_hc_send_text_line "$1" "$2" "$W" && SPAWN_HC_LINE_SUBMITTED=1 ;;
   esac
 }
+SPAWN_HC_LINE_SUBMITTED=0
 spawn_send_key() { # <target> <key>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_key "$1" "$2" ;;
@@ -5998,6 +6016,13 @@ spawn_send_key() { # <target> <key>
   rex) fm_backend_rex_send_key "$1" "$2" "$W" ;;
   t3code) fm_backend_t3code_send_literal "$1" "$2" ;;
   tern) fm_backend_tern_send_key "$1" "$2" "$W" ;;
+  hc)
+    if [ "$2" = Enter ] && [ "$SPAWN_HC_LINE_SUBMITTED" = 1 ]; then
+      SPAWN_HC_LINE_SUBMITTED=0
+    else
+      fm_backend_hc_send_key "$1" "$2" "$W"
+    fi
+    ;;
   esac
 }
 
@@ -6523,10 +6548,29 @@ EOF
   return 1
 }
 
+# Rewrite <meta> into <out> without the <owned keys>, placing <line>... ahead
+# of the first pr= line so the PR region stays the record's tail that
+# fm_pr_metadata_identity_parse requires.
+spawn_meta_rewrite_before_pr() {  # <meta> <out> <owned keys> <line>...
+  local meta=$1 out=$2 keys=$3
+  shift 3
+  FM_SPAWN_META_LINES=$(printf '%s\n' "$@") awk -F= -v keys="$keys" '
+    BEGIN {
+      n = split(keys, k, " ")
+      for (i = 1; i <= n; i++) owned[k[i]] = 1
+      lines = ENVIRON["FM_SPAWN_META_LINES"]
+    }
+    $1 in owned { next }
+    !placed && $1 == "pr" { print lines; placed = 1 }
+    { print }
+    END { if (!placed) print lines }
+  ' "$meta" >"$out"
+}
+
 # Bind the discovered session into task metadata (the control verbs' durable
 # address), in the same locked-filter-and-publish shape spawn_record_traceparent
 # uses: an idempotent rewrite that drops any prior polytoken_* binding before
-# appending the fresh one.
+# writing the fresh one ahead of any PR region.
 spawn_record_polytoken_session() {
   local meta="$STATE/$ID.meta" status=0 acquired=0
   if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
@@ -6537,12 +6581,9 @@ spawn_record_polytoken_session() {
   fi
   SPAWN_META_TMP="$STATE/.$ID.meta.polytoken.${BASHPID:-$$}"
   if [ ! -f "$meta" ] || [ ! -w "$meta" ] ||
-    ! awk -F= '$1 != "polytoken_session" && $1 != "polytoken_port" && $1 != "polytoken_credential"' "$meta" >"$SPAWN_META_TMP" ||
-    ! {
-      echo "polytoken_session=$POLYTOKEN_SESSION_ID"
-      echo "polytoken_port=$POLYTOKEN_SESSION_PORT"
-      echo "polytoken_credential=$POLYTOKEN_SESSION_CREDENTIAL"
-    } >>"$SPAWN_META_TMP" ||
+    ! spawn_meta_rewrite_before_pr "$meta" "$SPAWN_META_TMP" "polytoken_session polytoken_port polytoken_credential" \
+      "polytoken_session=$POLYTOKEN_SESSION_ID" "polytoken_port=$POLYTOKEN_SESSION_PORT" \
+      "polytoken_credential=$POLYTOKEN_SESSION_CREDENTIAL" ||
     ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$meta" "task record" "$STATE"; then
     status=1
     rm -f "$SPAWN_META_TMP" 2>/dev/null || true
@@ -7303,9 +7344,19 @@ EOF
     # elsewhere loads without a dialog. Lives in state/, cleaned by teardown.
     pi_publish_guard=true
     [ "$KIND" != secondmate ] || pi_publish_guard=false
+    pi_stream_monitoring=false
+    if [ "$(fm_busy_stream_seconds "${FM_STREAM_SILENT_MAX_SECS:-}")" -gt 0 ]; then
+      pi_stream_version=$(fm_run_timed 5 "$PI_BIN" --version 2>/dev/null || true)
+      if fm_busy_pi_stream_version_supported "$pi_stream_version"; then
+        pi_stream_monitoring=true
+      else
+        echo "warning: $HARNESS model-stream observation unavailable for version ${pi_stream_version:-unknown}; verified version: 1.2.0; existing busy bound remains active" >&2
+      fi
+    fi
     cat >"$STATE/$ID.pi-ext.ts" <<EOF
-// Firstmate semantic busy-state events + turn-end notification; written by
-// fm-spawn under the contract owned by bin/fm-busy-lib.sh.
+// Firstmate semantic busy-state events, turn-end notification, and - when this
+// worker was launched with opted-in stream observation - foreground model-stream
+// evidence; written by fm-spawn under the contract owned by bin/fm-busy-lib.sh.
 // Semantic state: "agent_start" -> busy when a low-level agent run begins;
 // "agent_settled" -> idle only when ctx.isIdle() confirms Pi will not
 // continue automatically - auto-retries, auto-compaction retries, tool
@@ -7321,6 +7372,7 @@ import { execFile } from "node:child_process";
 import { appendFileSync } from "node:fs";
 const notifyTurnEnd = $busy_notify_turnend;
 const publishGuard = $pi_publish_guard;
+const streamMonitoring = $pi_stream_monitoring;
 const excludeTools = "$EXCLUDE_TOOLS".split(",").filter(Boolean);
 const excludeFile = $(perl -MJSON::PP -MEncode=decode_utf8 -e 'print encode_json(decode_utf8($ARGV[0]))' -- "$CONFIG/crew-exclude-tools");
 const statusFile = $(perl -MJSON::PP -MEncode=decode_utf8 -e 'print encode_json(decode_utf8($ARGV[0]))' -- "$STATE/$ID.status");
@@ -7355,6 +7407,63 @@ export default function (pi: any) {
     return { block: true, reason: result.stderr.trim() || "denied by the publish policy" };
   });
   let checkedExclusions = false;
+  let request = 0;
+  let activeRequest = 0;
+  let lastStreamProgress = -Infinity;
+  let lastContent = "";
+  let streamWrites: Promise<void> = Promise.resolve();
+  const streamEvent = (operation: string, current: number) => {
+    streamWrites = streamWrites.then(() => new Promise<void>((resolve) => {
+      execFile("bash", [
+        "-c", '. "\$1"; shift; fm_exec_timed 5 1 "\$@"', "fm-stream-observation",
+        "$FM_ROOT/bin/fm-timeout-lib.sh", "$FM_ROOT/bin/fm-busy-event.sh",
+        "stream", "$STATE_REAL", "$ID", operation,
+        "--gen", "$BUSY_GEN", "--request", String(current),
+      ], (error) => {
+        if (error) console.error("Firstmate model-stream observation write failed; inspect worker instrumentation.");
+        resolve();
+      });
+    }));
+    return streamWrites;
+  };
+  const closeStream = () => {
+    const current = activeRequest;
+    activeRequest = 0;
+    return current ? streamEvent("close", current) : streamWrites;
+  };
+  if (streamMonitoring) {
+    // Foreground context excludes Pi's background provider/cache-warming calls.
+    pi.on("context", () => {
+      request = Math.max(request + 1, Date.now());
+      activeRequest = request;
+      lastStreamProgress = -Infinity;
+      lastContent = "";
+      return streamEvent("open", request);
+    });
+    pi.on("message_update", (event: any) => {
+      if (!activeRequest || event.message?.role !== "assistant") return streamWrites;
+      const now = Date.now();
+      if (now - lastStreamProgress < 1000) return streamWrites;
+      const content = (event.message.content || []).map((part: any) => {
+        if (part.type === "text" && part.text) return ["text", part.text];
+        if (part.type === "thinking" && (part.thinking || part.thinkingSignature)) {
+          return ["thinking", part.thinking || "", part.thinkingSignature || ""];
+        }
+        if (part.type === "toolCall" && part.name) return ["toolCall", part.name, part.arguments];
+        return null;
+      }).filter(Boolean);
+      if (!content.length) return streamWrites;
+      const signature = JSON.stringify(content);
+      if (signature === lastContent) return streamWrites;
+      lastContent = signature;
+      lastStreamProgress = now;
+      return streamEvent("progress", activeRequest);
+    });
+    pi.on("message_end", (event: any) => {
+      if (event.message?.role === "assistant") return closeStream();
+    });
+    pi.on("tool_execution_start", closeStream);
+  }
   pi.on("agent_start", async () => {
     await busyEvent("busy", "agent-start");
     // Verify only this worker's registry, never connect servers from Firstmate.
@@ -7370,8 +7479,9 @@ export default function (pi: any) {
       checkedExclusions = true;
     }
   });
-  pi.on("agent_settled", (_event: any, ctx: any) => {
+  pi.on("agent_settled", async (_event: any, ctx: any) => {
     if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+    await closeStream();
     return busyEvent("idle", "agent-settled");
   });
   pi.on("turn_end", () => { if (notifyTurnEnd) execFile("touch", ["$TURNEND"]); });
@@ -7710,7 +7820,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode effective_mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version omp_profile model_family ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id home projects control_relaunch_tx agy_bypass agy_judge agy_posture agy_permission_mode agy_version worker_tmux_dir opencode_launch_failure polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project harness approval_mode kind mode effective_mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version omp_profile model_family ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx agy_bypass agy_judge agy_posture agy_permission_mode agy_version worker_tmux_dir opencode_launch_failure polytoken_session polytoken_port polytoken_credential", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -7816,15 +7926,21 @@ fi
     echo "tern_tab_id=$TERN_TAB_ID"
     echo "tern_block_id=$TERN_BLOCK_ID"
   fi
+  if [ "$BACKEND" = hc ]; then
+    echo "hc_session=$HC_SES"
+    echo "hc_terminal=$HC_TERMINAL"
+  fi
   if [ "$KIND" = secondmate ]; then
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"
   fi
-  if [ "$RELAUNCH" -eq 1 ]; then
-    preserve_relaunch_meta
-  fi
   if [ "$SPAWN_CONTROL_PARENT" = 1 ] && [ -n "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
     echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
+  fi
+  # Preserved lines go last so an armed pr= identity block stays last, as
+  # fm_pr_metadata_identity_parse (bin/fm-pr-lib.sh) requires.
+  if [ "$RELAUNCH" -eq 1 ]; then
+    preserve_relaunch_meta
   fi
 } >"$SPAWN_META_PATH" || {
   echo "error: task record for $ID could not be prepared at $SPAWN_META_PATH" >&2
@@ -8286,8 +8402,8 @@ spawn_record_traceparent() {
   fi
   SPAWN_META_TMP="$STATE/.$ID.meta.trace.${BASHPID:-$$}"
   if [ ! -f "$meta" ] || [ ! -w "$meta" ] ||
-    ! awk -F= '$1 != "traceparent"' "$meta" >"$SPAWN_META_TMP" ||
-    ! printf 'traceparent=%s\n' "$SPAWN_TRACEPARENT" >>"$SPAWN_META_TMP" ||
+    ! spawn_meta_rewrite_before_pr "$meta" "$SPAWN_META_TMP" traceparent \
+      "traceparent=$SPAWN_TRACEPARENT" ||
     ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$meta" "task record" "$STATE"; then
     status=1
     rm -f "$SPAWN_META_TMP" 2>/dev/null || true
@@ -8389,6 +8505,7 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     CMUX_SOCKET_PATH ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION \
     TERM_PROGRAM REX_SESSION REX_BLOCK REX_SERVER REX_BIN_DIR \
     TERN_IDENTITY TERN_PANE TERN_PANE_SOCKET TERN_WINDOW_KEY TERN_WINDOW_SOCKET \
+    HC_SESSION HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE \
     FM_TASK_ID COMPACT_ADVISER_DISABLE LAVISH_AXI_HOST \
     $LAUNCH_ENV_FORWARD_NAMES; do
     if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then

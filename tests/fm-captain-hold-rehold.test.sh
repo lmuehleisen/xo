@@ -375,14 +375,16 @@ EOF
   pass "a failed replacement withdraws its supersession record and the retry records it once"
 }
 
-test_encoded_rehold_origin_failure_keeps_the_original_record() {
-  local home first second show body before_body
+# The origin is published only after the backend hold succeeds, so a refused
+# origin write follows a real replacement: the supersession record is true and
+# stays, the previous association survives, and the retry adds only the origin.
+test_encoded_rehold_origin_failure_keeps_the_previous_association() {
+  local home first second show records
   home=$(make_home encoded-rehold-origin-failure)
   first=$'route (A) remains valid; revisit\nwith the next sample'
   second=$'route (B) now wins\nwith new evidence'
   run_captain "$home" hold sample-encoded --title 'Choose a sample route' \
     --reason "$first" --origin sample-old >/dev/null || fail "the encoded first hold failed"
-  before_body=$(tasks_in "$home" show sample-encoded --full | sed -n 's/^  body: //p')
   cat > "$home/fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 previous=
@@ -397,22 +399,24 @@ SH
   chmod +x "$home/fakebin/tasks-axi"
   if run_captain "$home" hold sample-encoded --reason "$second" --origin sample-new \
     > "$home/refused.out" 2>&1; then
-    fail "a refused origin replacement still re-held the task"
+    fail "a refused origin replacement reported success"
   fi
   rm -f "$home/fakebin/tasks-axi"
   show=$(tasks_in "$home" show sample-encoded --full)
-  body=$(printf '%s\n' "$show" | sed -n 's/^  body: //p')
-  assert_equals "$before_body" "$body" "failed origin replacement left a false supersession"
   assert_contains "$show" 'Captain hold origin: sample-old' "the original origin was lost"
-  assert_contains "$show" 'route (A) remains valid; revisit' "the decoded reason was lost"
-  assert_not_contains "$show" 'route (B)' "the replacement reason leaked through a refused origin"
+  assert_not_contains "$show" 'Captain hold origin: sample-new' "the refused origin was published"
+  assert_contains "$show" 'route (A) remains valid; revisit' "the superseded reason was lost"
+  assert_contains "$show" 'route (B) now wins' "the successful hold lost its replacement reason"
   run_captain "$home" hold sample-encoded --reason "$second" --origin sample-new >/dev/null \
     || fail "the encoded replacement retry failed"
   show=$(tasks_in "$home" show sample-encoded --full)
   assert_contains "$show" 'route (A) remains valid; revisit' "the encoded original was not archived in the body"
   assert_contains "$show" 'route (B) now wins' "the decoded replacement was not readable"
   assert_contains "$show" 'Captain hold origin: sample-new' "the replacement origin was not retained"
-  pass "an encoded re-hold rolls back a refused origin and preserves the original on retry"
+  records=$(printf '%s' "$show" \
+    | grep -oe 'Superseded captain hold reason recorded by fm-captain-hold\.' | wc -l | tr -d ' ')
+  assert_equals 1 "$records" "the origin retry duplicated the supersession record"
+  pass "an encoded re-hold keeps its true record and old origin when the new origin is refused, and the retry adds only the origin"
 }
 
 
@@ -424,4 +428,4 @@ test_failed_preservation_refuses_the_rehold
 test_lapsed_deferral_rehold_preserves_the_reason
 test_rehold_preserves_a_reason_beginning_with_a_dash
 test_failed_replacement_withdraws_the_supersession_record
-test_encoded_rehold_origin_failure_keeps_the_original_record
+test_encoded_rehold_origin_failure_keeps_the_previous_association

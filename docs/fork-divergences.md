@@ -86,7 +86,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
   One bounded native guard qualifies the exact executable/model/effort/backend; observer and accept-edits signals remain explicit upgrade/legacy checks.
 - Class: intended.
 - Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-native-lib.sh`, `bin/fm-agy-native.py`, `bin/fm-agy-admission.sh`, `bin/fm-agy-admission.py`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including executable-bound admission, generation-bound approval evidence and cleanup audit, with fixtures in `tests/agy-admission-helpers.sh` and `tests/agy-live-helpers.sh`, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
-- Guard: `tests/fm-agy-native.test.sh`, `tests/fm-agy-harness.test.sh`, `tests/fm-agy-admission.test.sh`, and the opt-in `tests/fm-agy-native-live-e2e.test.sh`; existing policy/bypass tests retain legacy coverage.
+- Guard: `tests/fm-agy-native.test.sh` with its `tests/agy-native-terminal-fixture.py`, `tests/fm-agy-harness.test.sh`, `tests/fm-agy-admission.test.sh`, and the opt-in `tests/fm-agy-native-live-e2e.test.sh`; existing policy/bypass tests, including the opt-in `tests/fm-agy-bypass-live-e2e.test.sh`, retain legacy coverage.
 - Limit: live No/reconciliation proof covers agy 1.4.7 with Flash High on Herdr; the [verification record](verification/runtime-backends-fork.md#native-auto-workers) owns other model/backend limits and adversarial fixture coverage.
 - Upstream: its own agy adapter has no fork permission layer.
 
@@ -266,7 +266,17 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: carried.
 - Seam: shared `kiro` adapter hunks in `bin/fm-agent-process-lib.sh`, `bin/fm-bootstrap.sh`, `bin/fm-busy-lib.sh`, `bin/fm-composer-lib.sh`, `bin/fm-control-lib.sh`, `bin/fm-control.sh`, `bin/fm-dispatch-resolve.sh`, `bin/fm-harness.sh`, `bin/fm-procevent.sh`, `bin/fm-publish-judge.sh`, `bin/fm-quota-axi-lib.sh`, `bin/fm-send.sh`, `bin/fm-spawn.sh`, `bin/fm-supervision-engine-lib.sh`, `bin/fm-teardown.sh`, `bin/fm-test-run.sh`, and `bin/fm-watch.sh`, the verified-adapter enum in `AGENTS.md`, the harness-adapters router and common control reference, the per-task-home row in the operational-home-layout skill, and their configuration, architecture, tmux, trace, inventory, and runtime-backend documentation; fork-only `.agents/skills/harness-adapters/references/harness/kiro.md` and `docs/verification/kiro.md`.
 - Guard: fork-only `tests/fm-kiro-harness.test.sh` and opt-in `tests/fm-kiro-signals-live-e2e.test.sh`; Kiro cases in `tests/fm-busy-adapter-wiring.test.sh`, `tests/fm-composer-lib.test.sh`, `tests/fm-control.test.sh`, `tests/fm-bootstrap.test.sh`, and `tests/fm-dispatch-resolve.test.sh`.
-- Upstream: the [direct Kiro adapter proposal](https://github.com/kunchenguid/firstmate/pull/6808) is open; this port keeps its V2 launch and hook shape, adding macOS verification, native-marker cancellation recovery, control invalidation, and routing mappings, at the cost of cross-file adapter registration and a localized marker reader; drop the corresponding carried hunks when upstream provides equivalent behavior.
+- Upstream: now ships its own direct Kiro adapter ([upstream #7979](https://github.com/kunchenguid/firstmate/pull/7979)) from the same proposal line, so integrations factor that commit out rather than merge a second adapter.
+  The fork's copy stays because upstream lacks its macOS verification, native-marker cancellation recovery, publish `preToolUse` hook, `kiro-cli-chat` detection, control invalidation, and routing mappings; it took upstream's anchored busy footer, shell-special hook path refusal, live detection for meta-less explicit targets, and gated-off live guard.
+  Converge on upstream's adapter, dropping these hunks, once it provides those behaviors.
+
+### claude-command-menu-composer
+
+- Intent: a Claude selected-command menu rendered below the closing rule is not read as a second composer, so a slash draft is not mistaken for an accepted payload.
+- Class: carried.
+- Seam: `_fm_composer_select_claude_command_menu` and its call in `bin/fm-composer-lib.sh`, and the "Claude selected command menu below the composer" record in `docs/verification/runtime-backends.md` (shared).
+- Guard: `test_selected_content_excludes_claude_command_menu` in `tests/fm-composer-lib.test.sh`; the two selected-command cases in `tests/fm-backend-herdr.test.sh`.
+- Upstream: has open fix candidates but none merged; take upstream's version and drop this patch once one lands and works, keeping only the regression tests that still pass against it.
 
 ### devin-adapter-mechanics
 
@@ -337,6 +347,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: `bin/fm-captain-hold.sh` (shared).
 - Guard: fork-only `tests/fm-captain-hold-rehold.test.sh`.
 - Upstream: encodes hold reasons so punctuation and line breaks survive and validates their origin, but does not archive superseded reasons; the fork keeps archival preservation around those upstream operations.
+  It also publishes an origin only after the backend hold succeeds, so a refused origin write leaves the supersession record in place because the replacement really happened.
 
 ### stow-audit
 
@@ -355,6 +366,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Upstream: delivers every away escalation to a Claude Code primary as a record-backed doorbell (upstream #5664), which the fork takes without an additional digest-pointer file; only typed-envelope carriers retain the fork's 480-character pointer threshold.
   The Claude live guard verifies complete record-backed payload delivery; upstream's separate 8 KiB digest cap (upstream #5554) remains unapplied to typed-envelope carriers.
   The upstream lost-hand-back notice is retained; the fork resets its failure episode only after a rewake commits, so a failed hand-back keeps the once-per-episode notice.
+  The fork takes upstream's second attended-alarm writer and reasoned suppressed continuations, but an actionable close still rewakes after an alarm and ends that episode where upstream suppresses it, so a real wake is never swallowed by a leftover alarm.
 
 ### away-inject-delivery-proof
 

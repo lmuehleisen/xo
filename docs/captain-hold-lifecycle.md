@@ -11,7 +11,8 @@ The command addresses the active home's configured data directory, so the existi
 It never reads report bodies, review artifacts, terminal output, or chat.
 
 The `hold` subcommand is the mandatory captain-hold creation path: it uses an existing task or creates one when nothing exists to hold, records its UTC hold-set timestamp as the leading line of the task body, then invokes the underlying tasks-axi hold operation and verifies both records.
-When `--origin` is supplied, its backend identity is recorded on a `Captain hold origin:` body line before the hold, and a refused hold restores the prior association.
+When `--origin` is supplied, its backend identity is resolved before the stamp and recorded on a `Captain hold origin:` body line only after the backend hold succeeds, so an interrupted or refused hold cannot publish the new association.
+A refused hold attempts to restore the previous body; if the later origin write fails, the command returns nonzero while the successful hold keeps its previous association, and re-running `hold` retries the origin without duplicating the parent decision.
 The reason may contain parentheses and line breaks; `bin/fm-hold-reason-lib.sh` owns storage encoding and `bin/fm-tasks-axi.sh` owns decoded public reads.
 Publishing the stamp first ensures a snapshot cannot observe a newly captain-held task without the timestamp that defines its age.
 Retries of an active hold preserve its hold-set timestamp, while re-holding released work starts a new timestamped lifecycle; a closed task is refused rather than reopened, and `--until` stores the captain's own deferral date through tasks-axi's date gate.
@@ -24,6 +25,7 @@ For a live ship record whose last event is plain `done:` with no open keyed deci
 This does not exit an agent, merge a branch, or close the task; the existing watcher admits the bounded declared-wait cadence only for a confidently stopped ordinary worker, and a later worker event remains actionable.
 
 The `answer` subcommand records the captain's exact words and resolves the call in the same act: it closes a question-shaped call, while `answer --release` frees a captain-gated work item to proceed without completing it.
+`answer --release` is attended-only: while the away-posture record exists it is refused before anything is written, and the keyed-answer intake refuses a `release` line the same way; a quiet record is a present captain and does not refuse.
 It requires a non-empty captain decision file of at most 8192 bytes, durably writes a resolution block carrying the decision digest and a `Resolution mode:` while retaining the leading hold-set stamp until the selected `tasks-axi done` or `tasks-axi unhold` transition succeeds, then removes the stamp, leaving origin metadata ahead of the newest resolution record (the previous body remains preserved below the block and archived through tasks-axi `--archive-body`).
 If the close is interrupted, the still-held task therefore keeps its original age basis.
 A matching retry also completes any stamp removal left unfinished after the close itself succeeded.
@@ -31,7 +33,7 @@ An exact retry is idempotent only when the requested close mode matches the newe
 On a task closed outside the script, `answer` records the missing block only when the captain-hold annotations tasks-axi preserves through a close prove the captain owned it, and it verifies the task stays closed.
 A hold whose `--until` date has passed keeps those annotations while tasks-axi reports it no longer held, so an expired deferral remains answerable.
 
-The `complete` subcommand unions the reviewed captain-held task ids into `decision_keys=` and appends `decisions_reviewed=1` while originating task metadata is live.
+The `complete` subcommand unions the reviewed captain-held task ids into `decision_keys=` and records `decisions_reviewed=1` while originating task metadata is live, replacing any earlier pair and writing it once ahead of any armed `pr=` merge-poll identity lines so those stay last.
 A post-teardown visual review can complete against the surviving report and durable tasks without recreating volatile task metadata.
 The [lifecycle policy](../.agents/skills/captain-hold-lifecycle/SKILL.md#policy) assigns caller authority, including the scout's brief-scoped exception for an empty inventory.
 `tests/fm-brief.test.sh` pins that the scout brief's outside-worktree rule names exactly that `complete --none` command, so the write boundary and the completion step cannot drift apart again.
@@ -39,10 +41,13 @@ The [lifecycle policy](../.agents/skills/captain-hold-lifecycle/SKILL.md#policy)
 `complete` accepts `--none` as an explicit semantic inventory result.
 `--none` is refused while the origin still has a lifecycle-open keyed status decision.
 Before recording completion, `complete` verifies every listed task against tasks-axi.
+A durable entry is an open task with captain-hold annotations (including a date-expired hold), or a task carrying a recorded resolution.
+For an open task without those annotations, a leading hold-set stamp above the resolution is refused: the answer alone cannot establish durability while the hold or release normalization is incomplete.
+A Done task still requires a recorded resolution, but is not subject to that stamp refusal.
 An answered entry that markdown Done retention moved into the configured Done archive still counts, while an archived close with no recorded answer does not.
 An origin cannot inventory itself except for a completed ship's own durable approval hold; a later worker event disallows that exception.
 Other historical self-inventories require a separate held task with `--origin`, replacement of only the invalid entry in the final `decision_keys=` line, and another `complete` call.
-An entry associated with another origin is refused, while legacy entries without an origin are accepted on durability evidence and named in the output.
+An entry associated with another origin is refused, comparing backend identities rather than alias spellings, while legacy entries without an origin are accepted on durability evidence and named in the output.
 With a non-empty inventory it appends a `captain-held [key=<key>]` transfer event naming the reviewed inventory for every still-open keyed status decision, which `bin/fm-classify-lib.sh` recognizes as closing the live status copy without claiming that the captain has answered it.
 
 Scout teardown calls the read-only `verify` subcommand after checking for the report and before removing any source state.
@@ -264,6 +269,7 @@ It also pins the superseded-reason seam: a changed re-hold preserves the exact p
 The same family pins three edge cases of that seam: a call whose deferral date has lapsed is preserved like any live one, a previous reason beginning with a dash is matched as text instead of parsed as an option, and a failed replacement withdraws its supersession record so the retry records that reason once rather than twice.
 The suite does not test the accepted merge-to-cleanup re-hold window or asynchronous queued-forge landing because those events occur after the locally serialized merge command has returned.
 
+`test_hold_origins_follow_backend_holds` exercises lookup, backend-hold, and origin-write failures, `test_interrupted_origin_move_does_not_inherit_the_previous_answer` exercises failed restoration and earlier-answer replay, and `test_release_is_attended_only` exercises the attended-only release.
 Two of its cases pin how a task body is read back rather than any decision behavior, because both paths that read one are otherwise silent when they get it wrong.
 Holding a task that carries a body, and cleanup's retention of a captain-held row, both work where the installed JSON::PP defaults `allow_nonref` off and therefore rejects the JSON-encoded bare string a shown scalar field arrives as; the case forces that older default back off and probes that the simulation really does reject a bare scalar, so it cannot pass vacuously on a lenient library.
 A fleet host does carry such a library, and both failures reproduce on it natively with no shim, so that behavior is observed and not only simulated.

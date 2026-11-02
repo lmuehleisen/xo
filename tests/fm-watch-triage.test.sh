@@ -14,6 +14,13 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
 fi
 
 fm_test_run \
+  test_pi_stream_silence_uses_inspection_timer \
+  test_pi_model_progress_and_legacy_fallback \
+  test_pi_stream_publication_lock_revalidation \
+  test_pi_stream_uninterrupted_publication \
+  test_pi_stream_terminal_publication \
+  test_pi_stream_counter_write_failures \
+  test_pi_stream_resume_restarts_capped_episode \
   test_status_span_actionable_classifier \
   test_status_span_survives_a_later_routine_append \
   test_status_span_respects_decision_closure \

@@ -365,6 +365,16 @@ test_kiro_delivery_footer_matches_and_is_scoped() {
   # a landed kiro submit would read pending or unknown.
   printf '%s\0' $'work\n› Kiro is working · Type to steer' | fm_busy_lines_match \
     || fail "the harness-less delivery union must see a kiro busy footer"
+  # Output that merely names the phrase (a grep or cat of kiro docs in some
+  # other harness's pane) is not the footer row and must never read busy, in the
+  # union or for any harness.
+  local echoed=$'$ grep -rn "Kiro is working" docs\ndocs/kiro.md:87: the › Kiro is working footer is a delivery guard'
+  printf '%s\0' "$echoed" | fm_busy_lines_match \
+    && fail "prose naming the kiro footer must not read busy in the harness-less union" || true
+  printf '%s\0' "$echoed" | fm_busy_lines_match claude \
+    && fail "prose naming the kiro footer must not read busy for claude" || true
+  printf '%s\0' "$echoed" | fm_busy_lines_match kiro \
+    && fail "prose naming the kiro footer must not read busy for kiro" || true
   pass "fm-composer-lib: the kiro delivery footer matches busy, its idle row does not, and the union sees it"
 }
 
@@ -674,23 +684,28 @@ test_kiro_unlisted_model_refuses_before_pane_creation() {
 # Every other spawn case runs under a whitespace-free temporary root, so the
 # single-token assertions above cannot see the one path shape that breaks the
 # hooks under both a shell and an argv split.
-test_kiro_whitespace_hook_path_refuses_before_pane_creation() {
-  local id rec out rc spaced spaced_real
-  id="kiro-space-z10-$$"
-  rec=$(make_kiro_spawn_case spaced "$id")
-  read_kiro_spawn_record "$rec"
-  spaced="$CASE_DIR/spaced state"
-  mkdir -p "$spaced"
-  cp "$HOME_DIR/state/.last-watcher-beat" "$spaced/.last-watcher-beat"
-  spaced_real=$(cd "$spaced" && pwd -P)
-  out=$(FM_TEST_STATE_OVERRIDE="$spaced" \
-    run_kiro_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
-  rc=$?
-  [ "$rc" -ne 0 ] || fail "a kiro hook path containing whitespace must refuse the spawn"
-  assert_contains "$out" "$spaced_real/$id.kiro-home" "the refusal did not name the offending hook path"
-  [ ! -e "$spaced/$id.kiro-home" ] || fail "the refused spawn still armed the per-task home"
-  [ -s "$CASE_DIR/launch.log" ] && fail "a whitespace hook path created a launch command" || true
-  pass "fm-spawn: a kiro hook path containing whitespace refuses before any pane is created"
+test_kiro_unsafe_hook_path_refuses_before_pane_creation() {
+  local label dirname id rec out rc unsafe unsafe_real n=0
+  # shellcheck disable=SC2016  # the dollar and backtick are literal directory-name bytes
+  for dirname in "spaced state" "o'connor" 'cash$home' 'back`tick' 'semi;colon'; do
+    n=$((n + 1))
+    label=$dirname
+    id="kiro-unsafe-z10-$$-$n"
+    rec=$(make_kiro_spawn_case "unsafe$n" "$id")
+    read_kiro_spawn_record "$rec"
+    unsafe="$CASE_DIR/$dirname"
+    mkdir -p "$unsafe"
+    cp "$HOME_DIR/state/.last-watcher-beat" "$unsafe/.last-watcher-beat"
+    unsafe_real=$(cd "$unsafe" && pwd -P)
+    out=$(FM_TEST_STATE_OVERRIDE="$unsafe" \
+      run_kiro_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+    rc=$?
+    [ "$rc" -ne 0 ] || fail "a kiro hook path containing '$label' must refuse the spawn"
+    assert_contains "$out" "$unsafe_real/$id.kiro-home" "the refusal did not name the offending hook path for '$label'"
+    [ ! -e "$unsafe/$id.kiro-home" ] || fail "the refused spawn still armed the per-task home for '$label'"
+    [ -s "$CASE_DIR/launch.log" ] && fail "an unsafe hook path '$label' created a launch command" || true
+  done
+  pass "fm-spawn: a kiro hook path with whitespace or a shell-special character refuses before any pane is created"
 }
 
 # `-f json` is free to pretty-print, so the model check must read ids from a
@@ -807,6 +822,28 @@ test_kiro_teardown_removes_the_per_task_home() {
   pass "fm-teardown: kiro's per-task home is removed on teardown"
 }
 
+test_kiro_live_e2e_does_not_start_kiro_when_gated_off() {
+  local fakebin marker out rc
+  fakebin=$(fm_fakebin "$TMP_ROOT/live-gate")
+  marker="$TMP_ROOT/live-gate/kiro-started"
+  cat >"$fakebin/kiro-cli" <<SH
+#!/usr/bin/env bash
+printf 'started\n' >> "$marker"
+printf 'kiro-cli 0.0.0\n'
+exit 0
+SH
+  chmod +x "$fakebin/kiro-cli"
+  out=$(PATH="$fakebin:$PATH" FM_KIRO_SIGNALS_LIVE=0 FM_LIVE=0 \
+    bash "$ROOT/tests/fm-kiro-signals-live-e2e.test.sh" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "the gated-off live e2e must skip cleanly: $out"
+  assert_contains "$out" "skip: live:" \
+    "the gated-off live e2e must print the shared live-gate skip"
+  [ ! -e "$marker" ] || \
+    fail "the gated-off live e2e started kiro-cli before skipping"$'\n'"$(cat "$marker")"
+  pass "fm-kiro-signals-live-e2e: an opted-out run never starts kiro-cli"
+}
+
 test_kiro_quota_provider
 test_kiro_ancestry_detects_the_native_command_name
 test_kiro_ancestry_rejects_unrelated_mentions
@@ -824,10 +861,11 @@ test_kiro_per_task_hook_config_is_out_of_tree
 test_kiro_workers_enforce_publish_policy
 test_kiro_effort_xhigh_passes_through
 test_kiro_unlisted_model_refuses_before_pane_creation
-test_kiro_whitespace_hook_path_refuses_before_pane_creation
+test_kiro_unsafe_hook_path_refuses_before_pane_creation
 test_kiro_pretty_printed_listing_validates_the_model
 test_kiro_unparseable_listing_launches_unvalidated
 test_kiro_unreachable_listing_launches_unvalidated
 test_kiro_hung_listing_is_cut_off_and_launches
 test_kiro_secondmate_is_refused
 test_kiro_teardown_removes_the_per_task_home
+test_kiro_live_e2e_does_not_start_kiro_when_gated_off
