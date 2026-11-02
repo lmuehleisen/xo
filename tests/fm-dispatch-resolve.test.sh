@@ -1359,10 +1359,10 @@ write_agy_tiers() {  # <path> <gemini row JSON or ""> <claude_gpt row JSON or ""
     providers: [{ provider: "agy", state: { status: "fresh" }, quotaSemantics: { status: "known", effectiveAvailability: ([$g, $c] | map(select(. != null))) } }]
   }' > "$1"
 }
-AGY_GEMINI='{"scope":"gemini","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"},"selection":{"spendPriority":0.5}}'
-AGY_CLAUDE_GPT_OK='{"scope":"claude_gpt","status":"known","effectivePercentRemaining":55,"runway":{"status":"through_reset"},"selection":{"spendPriority":0.2}}'
-AGY_CLAUDE_GPT_ZERO_PCT='{"scope":"claude_gpt","status":"known","effectivePercentRemaining":0,"runway":{"status":"through_reset"},"selection":{"spendPriority":0.2}}'
-AGY_CLAUDE_GPT_ZERO='{"scope":"claude_gpt","status":"known","effectivePercentRemaining":0,"runway":{"status":"exhausted_now"},"selection":{"spendPriority":-1}}'
+AGY_GEMINI='{"scope":"gemini","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":0.5}}'
+AGY_CLAUDE_GPT_OK='{"scope":"claude_gpt","status":"known","effectivePercentRemaining":55,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":0.2}}'
+AGY_CLAUDE_GPT_ZERO_PCT='{"scope":"claude_gpt","status":"known","effectivePercentRemaining":0,"runway":{"status":"through_reset"},"selection":{"status":"known","spendPriority":0.2}}'
+AGY_CLAUDE_GPT_ZERO='{"scope":"claude_gpt","status":"known","effectivePercentRemaining":0,"runway":{"status":"exhausted_now"},"selection":{"status":"known","spendPriority":-1}}'
 QUOTA_SCOPE_RULE='{"rules":[{"when":"Agy work.","use":{"harness":"agy","quota_scope":"claude_gpt"}}]}'
 cp "$QUOTA" "$QUOTA.base"
 
@@ -1370,7 +1370,7 @@ printf '%s\n' '{"rules":[{"when":"Agy work.","use":{"harness":"agy"}}]}' > "$RUL
 write_agy_tiers "$QUOTA" "$AGY_GEMINI" "$AGY_CLAUDE_GPT_ZERO"
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
-assert_contains "$out" 'candidate: agy:-  provider=agy  -> eligible, unranked: no applicable quota row for provider agy: disclosed uncertainty' "without quota_scope an agy tier row stays unbound, even when exhausted"
+assert_contains "$out" 'candidate: agy:-  provider=agy  -> eligible, unranked: no applicable quota row for provider agy; catalog-backed family quota is unmeasured: disclosed uncertainty' "without quota_scope an agy tier row stays unbound, even when exhausted"
 
 printf '%s\n' "$QUOTA_SCOPE_RULE" > "$RULES"
 reset_log

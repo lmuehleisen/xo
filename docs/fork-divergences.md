@@ -347,6 +347,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: `bin/fm-captain-hold.sh` (shared).
 - Guard: fork-only `tests/fm-captain-hold-rehold.test.sh`.
 - Upstream: encodes hold reasons so punctuation and line breaks survive and validates their origin, but does not archive superseded reasons; the fork keeps archival preservation around those upstream operations.
+  It also publishes an origin only after the backend hold succeeds, so a refused origin write leaves the supersession record in place because the replacement really happened.
 
 ### stow-audit
 

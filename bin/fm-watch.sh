@@ -3877,7 +3877,7 @@ resurface_after_downtime() {
       exit 1
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
-    handling_successor_has_queued_row || return 0
+    [ "$FM_RECOVERY_MARKER_QUEUED" = 1 ] || return 0
     wake "check: rearm-resurface"
   fi
   if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
