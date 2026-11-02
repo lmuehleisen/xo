@@ -1317,7 +1317,8 @@ SH
       [ "$out" = 'contributions: invalid durable task id' ] && [ ! -e "$home/calls" ] \
         || fail "settled owner triggered a forge read: $out"
     else
-      [ -e "$home/calls" ] && printf '%s\n' "$out" | grep -Fq 'contributions: observation unavailable for https://github.com/o/r/pull/8 -' \
+      [ -e "$home/calls" ] || fail "escaped owner changed its legacy forge observation: $out"
+      printf '%s\n' "$out" | grep -Fq 'contributions: observation unavailable for https://github.com/o/r/pull/8 -' \
         || fail "escaped owner changed its legacy forge observation: $out"
     fi
     cmp -s "$home/prior.json" "$home/data/$owner/contributions.json" || fail 'invalid owner was rewritten'
