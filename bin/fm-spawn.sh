@@ -3705,13 +3705,9 @@ OMP_PROFILE_PIN=$(fm_omp_profile_select "$HARNESS" "$CONFIG" "$OMP_PROFILE_MATE"
 if [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" "$OMP_PROFILE_PIN" || exit 1
 fi
-if [ "$HARNESS" = kiro ]; then
-  # A raw launch never resolved KIRO_BIN, so tolerate it unset: an empty
-  # binary makes the catalog probe unreachable and the check a no-op.
-  kiro_model_validate "${KIRO_BIN:-}" "$MODEL" || exit 1
-  if [ "$RAW_LAUNCH" -eq 0 ]; then
-    kiro_hook_path_validate "$STATE" "$ID" || exit 1
-  fi
+if [ "$RAW_LAUNCH" -eq 0 ] && [ "$HARNESS" = kiro ]; then
+  kiro_model_validate "$KIRO_BIN" "$MODEL" || exit 1
+  kiro_hook_path_validate "$STATE" "$ID" || exit 1
 fi
 # polytoken's model validation composes firstmate's model and effort axes into
 # the launch model reference (bin/fm-polytoken-lib.sh owns the reasoning): the

@@ -265,7 +265,7 @@ A kiro worker launched in a pane of an isolated Herdr lab session (every call th
 The `pending` rows are the reason the composer scope exists: on the real Herdr read the kiro placeholder reads as typed input unless the caller names the recorded harness, and naming any other harness leaves every other adapter's read untouched.
 
 Commands that refresh this evidence after a kiro upgrade.
-- `FM_KIRO_SIGNALS_LIVE=1 tests/fm-kiro-signals-live-e2e.test.sh` passed on 2026-10-29 against kiro-cli 2.35.1 on Auto: the busy footer matched in flight, the foreground group carried the anchored `kiro-cli` name and read `alive`, the ancestry walk returned `comm kiro`, the launch prompt was answered, both hooks fired per turn, one Escape cancelled a long turn, and `/quit` stopped the process.
+- Upstream's run of its `FM_KIRO_SIGNALS_LIVE=1 tests/fm-kiro-signals-live-e2e.test.sh` guard passed on 2026-10-29 against kiro-cli 2.35.1 on Auto: the busy footer matched in flight, the foreground group carried the anchored `kiro-cli` name and read `alive`, the ancestry walk returned `comm kiro`, the launch prompt was answered, both hooks fired per turn, one Escape cancelled a long turn, and `/quit` stopped the process. That run exercised upstream's guard; this file's extra publish-hook, resource-scope, and native-marker assertions were verified in the macOS 2.24.0 run recorded above, not in that run.
 - `tests/fm-kiro-harness.test.sh` and `tests/fm-composer-lib.test.sh` are the portable regressions CI enforces.
 - `kiro-cli chat --agent-engine v2 --list-models -f json` shows the live model catalog the spawn validates against.
 
