@@ -439,7 +439,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: settled contribution history takes bounded local read passes while live contributions retain their existing observation and signal behavior.
 - Class: carried.
 - Seam: batched owner classification in `poll` in `bin/fm-contributions.sh` (shared).
-- Guard: `tests/fm-contributions.test.sh` `test_settled_history_uses_bounded_local_reads`, `test_settled_invalid_owner_keeps_diagnostic`, terminal settlement and late-owner cases.
+- Guard: `tests/fm-contributions.test.sh` `test_settled_history_uses_bounded_local_reads`, `test_settled_invalid_owner_keeps_diagnostic`, `test_settled_history_keeps_first_matching_record`, terminal settlement and late-owner cases.
 - Upstream: rereads the complete saved history for each settled URL and owner; drop once equivalent batched classification avoids that repeated work.
 
 ### codex-catalog-effort

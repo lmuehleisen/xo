@@ -608,20 +608,21 @@ poll() {
   [ "$ERRORS" -eq 0 ] || printf 'contributions: %s unreadable durable record(s)\n' "$ERRORS"
   clear_unsupported_errors
   # Only supported URLs enter final settlement and the forge-read rotation.
-  # Classify all owners in one pass; settled history needs no record reads.
+  # Classify all owners from one history read; settled rows need no record reads.
   # One line per URL: final/settled/live, the URL, then every owning task.
   jq_lib -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
-    INDEX($saved[0][]; .task) as $by_task
-    | known($input[0];$saved[0]) | map(select(.url | supported_url))
+    known($input[0];$saved[0]) | map(select(.url | supported_url))
     | group_by(.url) | map({url:.[0].url,tasks:(map(.task) | unique)})
-    | .[] | .url as $url
-    | [.tasks[] as $task
-       | ([$by_task[$task].records[]? | select(.url == $url)] | first)] as $records
+    # Preserve the escaped fields and empty-column handling of the shell reader.
+    | .[] | ([.url] + .tasks | @tsv | split("\t") | map(select(length > 0))) as $row
+    | select($row | length >= 2) | $row[0] as $url
+    | [$row[1:][] as $task
+       | ([$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first)] as $records
     | if any($records[]; . != null and (.observation.state | IN("merged","closed"))) then
-        if all($records[]; . != null and .error == null and (.observation.state | IN("merged","closed"))) then ["settled",.url] + .tasks
-        else ["final",.url] + .tasks end
-      else ["live",.url] + .tasks end
-    | @tsv' > "$TMP/known.tsv"
+        if all($records[]; . != null and .error == null and (.observation.state | IN("merged","closed"))) then ["settled"] + $row
+        else ["final"] + $row end
+      else ["live"] + $row end
+    | join("\t")' > "$TMP/known.tsv"
   : > "$TMP/live.tsv"
   while IFS=$'\t' read -r -a row; do
     [ "${#row[@]}" -ge 3 ] || continue
