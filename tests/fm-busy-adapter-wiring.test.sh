@@ -837,6 +837,7 @@ test_raw_kiro_launch_has_no_semantic_wiring() {
   read_case_record "$rec"
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" 'kiro chat --agent-engine v2')
   expect_code 0 $? "raw kiro spawn should succeed: $out"
+  assert_not_contains "$out" 'unbound variable' "raw kiro spawn must not trip a set -u expansion"
   state="$HOME_DIR/state"
   assert_absent "$state/$id.busy-gen" "raw kiro launch must not arm a busy generation"
   assert_absent "$state/$id.kiro-home" "raw kiro launch must not write a per-task hook config"

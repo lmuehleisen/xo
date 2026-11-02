@@ -3835,9 +3835,10 @@ This live proof covers the watcher and queue boundary; it does not establish liv
 `bin/fm-test-run.sh tests/fm-daemon.test.sh` exercises that consumer routing separately with portable regressions for busy escalation and busy-bookkeeping failures in away and quiet mode.
 Repeat the hooked-worker check above before publication if watcher or task-inbox busy code changes; `bin/fm-test-run.sh tests/fm-task-inbox.test.sh` refreshes the portable ladder regressions.
 
-## Kiro CLI macOS worker adapter
+## Kiro CLI worker adapter
 
-Verified on 2026-10-13 with kiro-cli 2.24.0 and tmux: interactive V2 launch, native hooks, anchored process ancestry, scoped idle composer, task-bound turn-marker cancellation fallback, Escape and `/quit` exit.
+Verified on 2026-10-13 with kiro-cli 2.24.0 and tmux on macOS: interactive V2 launch, native hooks, publish policy, resource scope, anchored `kiro-cli`/`kiro-cli-chat` process ancestry, scoped idle composer, task-bound turn-marker cancellation fallback, Escape and `/quit` exit.
+Upstream's 2026-10-29 run on kiro-cli 2.35.1 through tmux and Herdr on WSL2 Linux covers detection, hooks, control, model, and composer on that platform.
 [The Kiro verification record](kiro.md) contains the exact live refresh command, output, platform facts, and supported limits.
 
 ## Pi repeated-read containment

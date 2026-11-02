@@ -55,8 +55,12 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
     # process is comm `polytoken`, the same binary name as its per-session
     # daemon), so a `*polytoken*` glob never claims an unrelated command.
     agy|devin|command-code|polytoken|cortex) printf 'agent' ;;
-    # Kiro's launcher and macOS chat backend have exact native names. A glob
-    # would claim unrelated commands containing kiro; the live guard owns proof.
+    # kiro (Kiro CLI) is anchored for the same reason as muse, omp, and agy: its
+    # live foreground process name is the bare word `kiro-cli` (verified,
+    # kiro-cli 2.21.4: a toolbox/aim-sandbox wrapper whose comm and tmux
+    # #{pane_current_command} both read kiro-cli), with the macOS chat backend
+    # `kiro-cli-chat` anchored beside it. A glob would claim unrelated commands
+    # containing that fragment.
     kiro-cli|kiro-cli-chat) printf 'agent' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
     *)

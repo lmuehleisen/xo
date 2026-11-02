@@ -191,7 +191,7 @@ test_kiro_hook_is_the_trusted_primary_source() {
 # A hook record without a native binding wins over a contradicting
 # pane, and with no record the classifier reports unknown rather than reading
 # the rendered footer.
-test_kiro_records_never_trust_rendered_text() {
+test_kiro_record_is_the_only_state_source() {
   local state id busy_pane verdict
   state="$TMP_ROOT/busy-state"
   mkdir -p "$state"
@@ -222,7 +222,7 @@ test_kiro_records_never_trust_rendered_text() {
   verdict=$(fm_busy_classify tmux fake-target kiro "$id" "$state" "$busy_pane")
   [ "$verdict" = "unknown gen-mismatch" ] \
     || fail "a stale-gen kiro record must be unknown gen-mismatch, got '$verdict'"
-  pass "fm-busy-lib: unbound Kiro records never trust rendered text; no record is unknown"
+  pass "fm-busy-lib: the kiro-hook record is kiro's only state source; no record is unknown"
 }
 
 test_kiro_turn_marker_fallback() {
@@ -852,7 +852,7 @@ test_kiro_liveness_names_the_command_an_agent
 test_kiro_control_mechanics_are_the_verified_ones
 test_kiro_wiring_path_is_the_out_of_tree_hook_config
 test_kiro_hook_is_the_trusted_primary_source
-test_kiro_records_never_trust_rendered_text
+test_kiro_record_is_the_only_state_source
 test_kiro_turn_marker_fallback
 test_kiro_composer_glyph_and_placeholder
 test_kiro_delivery_footer_matches_and_is_scoped

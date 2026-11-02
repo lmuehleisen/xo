@@ -1211,7 +1211,7 @@ crew_dispatch_validate() {
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else
-    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","gemini","agy","muse","rovo","omp","devin","kiro","commandcode","polytoken","cortex"]'
+    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","gemini","agy","muse","rovo","omp","devin","commandcode","polytoken","cortex","kiro"]'
   fi
   # Codex max and ultra follow the installed catalog (bin/fm-codex-catalog-lib.sh).
   codex_max_ok=$({ jq -r '.. | objects | select(.harness == "codex" and .effort == "max") | .model | strings' "$file" 2>/dev/null || true; } | fm_codex_max_allowed_json)

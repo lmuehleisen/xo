@@ -8,10 +8,14 @@
 # because it submits real prompts (no echo provider exists
 # for kiro). v3/KAS is explicitly out of scope and never exercised here.
 #
-# Run deliberately with FM_KIRO_SIGNALS_LIVE=1. FM_KIRO_LIVE_MODEL selects a
-# bare catalog model id (default auto); the guard uses --effort low to keep the
-# synthetic turns small. Portable tests pin the classifier; this guard proves
-# the real vendor-controlled surface after an upgrade.
+# Run this deliberately with FM_KIRO_SIGNALS_LIVE=1, never from inside a
+# validation step: each scenario waits on real model turns, so the runtime is
+# unbounded by construction and a step-capped agent invocation cannot contain
+# it. FM_KIRO_LIVE_MODEL selects a bare catalog model id (default auto); the
+# guard uses --effort low to keep the synthetic turns small. The portable
+# regression tests/fm-kiro-harness.test.sh is what CI enforces; it does not
+# cover the vendor-rendered surface above, so a green suite is not evidence
+# these signals still work.
 #
 # Isolation: the worker runs under a per-guard KIRO_HOME so its agent config,
 # trust setting, and sessions land in the lab store, never the operator's real
