@@ -790,10 +790,12 @@ fm_send_feed_resolved_holds() { # <answer-text>
   fi
 }
 
-# Resolve the target's harness from its meta (recorded by fm-spawn), used only to
-# scope the codex `$<skill>` popup-settle below. A task selector carries
-# meta; an explicit backend-target escape hatch has none, so its harness is
-# unknown and treated as non-codex (the safe default that keeps the fast path).
+# Resolve the target's harness from its meta (recorded by fm-spawn), used to
+# scope the codex `$<skill>` popup-settle below and the kiro composer rules
+# above. A task selector carries meta. An explicit backend-target escape hatch
+# has none, so its harness stays unknown and is treated as non-codex (the safe
+# default that keeps the `$` fast path) unless the live pane's foreground
+# process group is kiro (fm_send_detect_kiro_from_live_target).
 # The target's BACKEND comes from selector meta, from matching an explicit target
 # back to recorded meta, or from strict explicit-target shape validation.
 # Do not add a separate passive liveness preflight here. Active send paths own

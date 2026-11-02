@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|commandcode|polytoken|cortex|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|commandcode|polytoken|cortex|kiro|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate [id]  print the harness the PRIMARY uses to launch
@@ -294,11 +294,6 @@ harness_process_verdict() {  # <pid>
     # markers at its launch boundary as defense in depth.
     polytoken) echo "comm polytoken"; return ;;
     devin) echo "comm devin"; return ;;
-    # Kiro's macOS process chain includes kiro-cli-chat (ACP and host) plus
-    # kiro-cli; the upstream AL2 wrapper uses kiro-cli. Anchor both names rather
-    # than searching argv for kiro. macOS exports KIRO_* variables, but the
-    # markerless AL2 build still needs structural ancestry for identity.
-    kiro-cli|kiro-cli-chat) echo "comm kiro"; return ;;
     # Cortex Code is a Bun-compiled single binary whose process name is exactly
     # `cortex` (verified, cortex 1.1.104: /proc comm=cortex, exe=cortex). It
     # publishes only CORTEX_* variables to its own hooks, never an identity
@@ -310,6 +305,20 @@ harness_process_verdict() {  # <pid>
     # 1.74.1: comm=command-code and the rewritten argv is the same word).
     # Anchored, so an unrelated command containing that fragment never matches.
     command-code) echo "comm commandcode"; return ;;
+    # kiro (Kiro CLI) publishes no harness-identity marker on its verified
+    # markerless upstream Linux build (a live 2.21.4 tool subprocess carries no
+    # KIRO_* identity variable; KIRO_HOME is a firstmate-set config-relocation
+    # path, not an identity), so like muse and agy it is detected by ancestry
+    # alone. The installed command is a toolbox/aim-sandbox wrapper whose
+    # foreground process name is exactly `kiro-cli` (verified, kiro-cli 2.21.4:
+    # `ps -o comm=` and tmux #{pane_current_command} both report kiro-cli; the
+    # aim-sandbox and the compiled bun/node binary run as descendants). macOS
+    # additionally runs kiro-cli-chat (ACP and host) in the same chain and
+    # exports KIRO_* variables there, so both names are anchored rather than
+    # searching argv for kiro. kiro is a crewmate/scout adapter only and is
+    # never a primary or secondmate, so this arm only lets a kiro crewmate
+    # identify its own harness.
+    kiro-cli|kiro-cli-chat) echo "comm kiro"; return ;;
     node*|python*)
       # Bare interpreter: match the harness name in its script path.
       args=$(ps -o args= -p "$pid" 2>/dev/null)
@@ -468,7 +477,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|kiro|commandcode|polytoken|cortex)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|commandcode|polytoken|cortex)
       printf '%s\n' "$pin"
       ;;
     *)

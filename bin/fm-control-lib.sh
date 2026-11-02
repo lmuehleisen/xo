@@ -74,7 +74,7 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin kiro commandcode polytoken cortex
+  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin commandcode polytoken cortex kiro
 }
 
 # fm_control_harness_launch_candidates <harness>
@@ -151,9 +151,8 @@ fm_control_harness_supported() {  # <harness>
 # and friends. This is the one place that prefix rule is stated. `pi` and
 # `pi-signed` are exact because a `pi*` prefix would swallow the signed adapter,
 # `omp` is exact because an `omp*` prefix would claim unrelated commands, `agy`
-# is exact for the same reason on an even shorter name, `kiro` is exact because
-# a `kiro*` prefix has no verified variant to admit, `devin` and `commandcode`
-# are exact as well, and an unrecognized value returns nonzero rather than
+# is exact for the same reason on an even shorter name, `devin` and
+# `commandcode` are exact as well, `kiro` is exact because a `kiro*` prefix has no verified variant to admit, and an unrecognized value returns nonzero rather than
 # being guessed into a family.
 fm_control_harness_family() {  # <recorded-harness>
   case "${1-}" in
@@ -162,10 +161,10 @@ fm_control_harness_family() {  # <recorded-harness>
     omp) printf 'omp' ;;
     agy) printf 'agy' ;;
     devin) printf 'devin' ;;
-    kiro) printf 'kiro' ;;
     commandcode) printf 'commandcode' ;;
     polytoken) printf 'polytoken' ;;
     cortex) printf 'cortex' ;;
+    kiro) printf 'kiro' ;;
     claude*) printf 'claude' ;;
     codex*) printf 'codex' ;;
     opencode*) printf 'opencode' ;;
@@ -180,7 +179,7 @@ fm_control_harness_family() {  # <recorded-harness>
 }
 
 # Which task kinds an adapter is verified to run. opencode, muse, gemini, rovo,
-# devin, kiro, commandcode, and polytoken are crewmate/scout adapters in the
+# devin, commandcode, polytoken, cortex, and kiro are crewmate/scout adapters in the
 # launch owner, which refuses a --secondmate launch on any of them. The control
 # plane asks this BEFORE it stops anything, so an incompatible relaunch target is
 # refused while the current agent is still running rather than after it has
@@ -189,7 +188,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    opencode|muse|gemini|rovo|devin|kiro|commandcode|polytoken|cortex) [ "$kind" != secondmate ] || return 1 ;;
+    opencode|muse|gemini|rovo|devin|commandcode|polytoken|cortex|kiro) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -206,7 +205,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 fm_control_interrupt_transport() {  # <harness>
   case "${1-}" in
     polytoken) printf 'rest' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|devin|kiro|commandcode) printf 'key' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|devin|commandcode|kiro) printf 'key' ;;
     *) return 1 ;;
   esac
 }
@@ -224,7 +223,7 @@ fm_control_interrupt_transport() {  # <harness>
 # row with an idle composer and no repollution (verified live, kiro-cli 2.21.4).
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|rovo|agy|devin|kiro|commandcode|cortex) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|rovo|agy|devin|commandcode|cortex|kiro) printf 'Escape' ;;
     grok) printf 'C-c' ;;
     *) return 1 ;;
   esac
@@ -237,7 +236,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode|devin) printf '2' ;;
-    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro|commandcode|cortex) printf '1' ;;
+    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|commandcode|cortex|kiro) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -256,7 +255,7 @@ fm_control_interrupt_repeat() {  # <harness>
 fm_control_interrupt_arm_signal() {  # <harness>
   case "${1-}" in
     devin) printf '%s' 'esc again to interrupt' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro|commandcode|cortex) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|commandcode|cortex|kiro) ;;
     *) return 1 ;;
   esac
 }
@@ -271,7 +270,7 @@ fm_control_interrupt_arm_signal() {  # <harness>
 fm_control_interrupt_press_gap() {  # <harness>
   case "${1-}" in
     devin|commandcode) printf '0.5' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro|cortex) printf '0.2' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|cortex|kiro) printf '0.2' ;;
     *) return 1 ;;
   esac
 }
@@ -294,7 +293,7 @@ fm_control_interrupt_hazard_signal() {  # <harness>
     # a hazard surface on its path; the /quit exit opens only the slash palette,
     # where Enter accepts the preselected /quit row (verified live).
     polytoken) ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|kiro|cortex) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy|cortex|kiro) ;;
     *) return 1 ;;
   esac
 }
@@ -310,13 +309,16 @@ fm_control_interrupt_hazard_signal() {  # <harness>
 # same way and also does not repollute: after a single Escape it prints
 # `Request cancelled.` and its composer shows only the `Type your message
 # or @path/to/file` placeholder. agy was checked the same way and also leaves
-# an empty composer after its cancellation line; kiro does too after Escape. Prints the key or nothing;
+# an empty composer after its cancellation line; kiro was checked the same way
+# and also does not repollute: after a single Escape it prints a `Cancelled ...`
+# row and its composer shows only the `ask a question or describe a task`
+# placeholder (verified, kiro-cli 2.21.4). Prints the key or nothing;
 # a harness with no verified mechanics returns nonzero, matching the tables
 # above.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|kiro|commandcode) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|commandcode|cortex|kiro) ;;
     *) return 1 ;;
   esac
 }
@@ -334,7 +336,7 @@ fm_control_interrupt_ack_source() {  # <harness>
     # kiro's stop hook fires on normal completion but, like claude's, not on a
     # manual Escape, and its `Cancelled ...` row is likewise rendered rather than
     # recorded, so fm-control invalidates the busy record without claiming cancellation.
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|kiro|commandcode|cortex) printf 'none' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin|commandcode|cortex|kiro) printf 'none' ;;
     *) return 1 ;;
   esac
 }
@@ -345,7 +347,7 @@ fm_control_interrupt_ack_source() {  # <harness>
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
     claude|opencode|grok|kimi|cursor|muse|rovo) printf '/exit' ;;
-    codex|pi|pi-signed|omp|gemini|kiro|commandcode|polytoken|devin|cortex|agy) printf '/quit' ;;
+    codex|pi|pi-signed|omp|gemini|agy|devin|commandcode|polytoken|cortex|kiro) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
@@ -635,24 +637,6 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
       printf '%s\n' "$state/$id.agy-permission.json"
       ;;
     devin) printf '%s\n' "$state/$id.devin-config.json" ;;
-    # kiro's busy-state and turn-end hooks live in a firstmate-owned per-task
-    # agent config the launch reaches through a relocated KIRO_HOME, at
-    # <state>/<id>.kiro-home/agents/firstmate.json, whose hook commands are
-    # generated scripts beside it under hooks/. Retire the config and scripts
-    # together, including the publish policy transport; settings/sessions carry no gen
-    # and are cleared wholesale by teardown's rm -rf of <id>.kiro-home. Nothing
-    # is written into the worktree, whose own .kiro/ belongs to the project, and
-    # nothing in the operator's real ~/.kiro is touched.
-    kiro)
-      printf '%s\n' "$state/$id.kiro-home/agents/firstmate.json"
-      printf '%s\n' "$state/$id.kiro-home/hooks/user-prompt-submit"
-      printf '%s\n' "$state/$id.kiro-home/hooks/stop"
-      printf '%s\n' "$state/$id.kiro-home/hooks/pre-tool-use"
-      gen=
-      [ ! -f "$state/$id.busy-gen" ] || IFS= read -r gen < "$state/$id.busy-gen" || true
-      case "$gen" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
-      printf '%s\n' "$state/$id.kiro-home/turn-marker.$gen.json"
-      ;;
     # cortex's lifecycle hooks live in a firstmate-owned plugin directory the
     # launch reaches through --plugin-dir. Only its two files are retired here
     # (this table's consumer removes files); teardown removes the directory.
@@ -682,6 +666,26 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
         printf '%s\n' "$wt/.polytoken/facets/firstmate-worker.md"
       fi
       printf '%s\n' "$state/$id.polytoken-busy.sh"
+      ;;
+    # kiro's busy-state and turn-end hooks live in a firstmate-owned per-task
+    # agent config the launch reaches through a relocated KIRO_HOME, at
+    # <state>/<id>.kiro-home/agents/firstmate.json, whose hook commands are
+    # generated scripts beside it under hooks/. Retire the config and scripts
+    # together, including the publish policy transport; settings/sessions carry
+    # no gen and are cleared wholesale by teardown's rm -rf of <id>.kiro-home.
+    # The gen-bound turn marker rides the same file, so it is retired only for
+    # a readable gen. Nothing is written into the worktree, whose own .kiro/
+    # belongs to the project, and nothing in the operator's real ~/.kiro is
+    # touched.
+    kiro)
+      printf '%s\n' "$state/$id.kiro-home/agents/firstmate.json"
+      printf '%s\n' "$state/$id.kiro-home/hooks/user-prompt-submit"
+      printf '%s\n' "$state/$id.kiro-home/hooks/stop"
+      printf '%s\n' "$state/$id.kiro-home/hooks/pre-tool-use"
+      gen=
+      [ ! -f "$state/$id.busy-gen" ] || IFS= read -r gen < "$state/$id.busy-gen" || true
+      case "$gen" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+      printf '%s\n' "$state/$id.kiro-home/turn-marker.$gen.json"
       ;;
   esac
 }

@@ -40,14 +40,15 @@
 #                    SessionEnd close)
 #   agy-hook         Agy PreInvocation opens; fullyIdle Stop closes (interrupt
 #                    has no Stop and deliberately leaves the record busy)
-#   kiro-hook        Kiro V2 agent-config hooks (userPromptSubmit opens; stop
-#                    closes); its per-turn stop hook keeps the turn-ended touch
 #   polytoken-hook   Polytoken pre_user_prompt / pre_model_turn open and stop
 #                    closes; a REST turn cancel emits no stop (verified live),
 #                    so the control plane writes the close itself
 #   cortex-hook      Cortex Code per-task plugin hooks (UserPromptSubmit opens;
 #                    Stop, which also fires on an Escape interrupt, and
 #                    SessionEnd close)
+#   kiro-hook        Kiro V2 agent-config hooks (userPromptSubmit opens; stop
+#                    closes) - kiro's only recorded state source; its per-turn
+#                    stop hook also keeps the turn-ended notification touch
 #   codex-hook, codex-appserver  reserved: Codex, gated by
 #                    fm_busy_codex_semantic_source
 #   kimi-wire, kimi-hook  reserved: standalone Kimi, gated by fm_busy_kimi_verified
@@ -115,6 +116,23 @@
 # guards in bin/fm-composer-lib.sh match rendered footers for submit
 # acknowledgement and away-mode supervisor injection only; neither is a
 # recorded worker state source.
+# Kiro is different: its kiro-hook record above is its ONLY recorded state
+# source (a live-verified per-turn userPromptSubmit/stop pair,
+# references/harness/kiro.md), and it has no rendered-tail arm here. Its
+# `Kiro is working` footer is matched only by the delivery guards in
+# bin/fm-composer-lib.sh, never as a recorded worker state. The one reachable
+# consumer today is the harness-less union entry in FM_DELIVERY_BUSY_REGEX_DEFAULT,
+# which the tmux submit core reads for submit acknowledgement;
+# FM_DELIVERY_KIRO_BUSY_REGEX_DEFAULT is registered per the fleet convention
+# that every verified harness declares its own signature, and has no caller
+# today. A bound native turn-marker pull refines a stale busy hook on the
+# process owner it was bound to - fm_busy_kiro_bind_turn scopes the binding to
+# the hook's own process ancestry, busy generation, and sequence, so the
+# fallback settles a turn its owner abandoned without ever manufacturing
+# idle. A kiro task with no record still classifies unknown missing, and an
+# abnormal turn end (no StopFailure/SessionEnd equivalent exists on kiro V2)
+# leaves the record busy until the next userPromptSubmit re-opens it -
+# docs/verification/kiro.md owns that disclosure.
 #
 # The muse pull source is semantic, not rendered: it folds muse's own durable
 # session event log. It has no writer, no arm, and no gen, because
@@ -138,12 +156,6 @@
 # verification, so Codex classifies unknown codex-unverified rather than
 # falling back to idle, and fm-spawn installs no Codex busy wiring.
 # docs/verification/supervision.md owns the evidence for both probes.
-#
-# Kiro uses its hook record, with an optional native turn-marker pull fallback
-# for a positively bound turn. The marker binding is scoped to the hook's own
-# process ancestry, busy generation and sequence; its disappearance settles a
-# stale busy hook only while the same process owner and readable directory remain.
-# Missing bindings keep the hook verdict, and rendered text is delivery-only.
 #
 # Sourcing: set -u and set -e safe; no subshell-unfriendly globals.
 
@@ -338,10 +350,10 @@ fm_busy_sources_for_harness() {  # <harness>
     gemini*) adapter=gemini-hook ;;
     agy) adapter=agy-hook ;;
     devin) adapter=devin-hook ;;
-    kiro) adapter=kiro-hook ;;
     cortex) adapter=cortex-hook ;;
     commandcode) adapter=commandcode-mod ;;
     polytoken) adapter=polytoken-hook ;;
+    kiro) adapter=kiro-hook ;;
     pi|pi-signed) adapter=pi-ext ;;
     omp) adapter=omp-ext ;;
     kimi*)
