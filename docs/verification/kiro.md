@@ -140,6 +140,10 @@ The portable suites cover launch isolation, model refusal and timeout behavior, 
 On Linux, kiro-cli 2.21.4 on Amazon Linux 2 under a toolbox/aim-sandbox wrapper kept native auth at `~/.local/share/kiro-cli/data.sqlite3` and exported no `KIRO_*` identity marker, so anchored process ancestry remains the portable detection mechanism.
 The live refresh above covers macOS; Linux regression and lint are CI-enforced.
 
+Upstream's own adapter record reports a 2026-10-29 re-verification on `kiro-cli 2.35.1` (Linux, tmux and a Herdr lab); the fork took that evidence from upstream and did not run it.
+It reports the busy footer as `› Kiro is working · 1s · Type to steer · Ctrl+S to queue`, which the anchored composer-row match still reads as busy while prose naming the phrase does not; `stop` still not firing on an Escape cancel; and a Herdr idle composer reading `empty` only when the caller names `kiro`.
+The fork's spawn refusal also covers shell-special characters in the per-task hook path, and an opted-out live guard now starts no `kiro-cli` at all; the portable suite pins both.
+
 Unverified boundaries: V3/KAS, primary and secondmate operation, and rendered-surface behavior on backends other than tmux.
 No StopFailure or SessionEnd-equivalent V2 hook is credited; an abnormal end without a usable marker binding remains conservative.
 The guard checks `/quit` process exit; a resume line can be absent from a restored full-screen terminal, so the line itself is conditional rather than an exit requirement.

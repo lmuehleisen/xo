@@ -597,7 +597,7 @@ fm_composer_strip_ghost() {
 # transition must acknowledge the submit so callers do not retry an already
 # accepted command.
 # Kiro's working footer also acknowledges a submit in the harness-less union.
-FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel|esc (twice|again) to interrupt|^[[:space:]]*❭ Guide Devin while it works$|Kiro is working'
+FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel|esc (twice|again) to interrupt|^[[:space:]]*❭ Guide Devin while it works$|^[[:space:]]*›[[:space:]]+Kiro is working'
 FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
 # Devin 3000.11.1: the working composer and interrupt hint are independent
 # delivery signals. Neither is used as semantic worker-state evidence. Devin
@@ -660,7 +660,7 @@ FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT='esc[[:space:]]+to[[:space:]]+cancel'
 # agy, so echoed worker output cannot fake an acknowledgement. Delivery guard
 # only; recorded worker state comes from the kiro-hook record in
 # bin/fm-busy-lib.sh, which never consults this footer.
-FM_DELIVERY_KIRO_BUSY_REGEX_DEFAULT='Kiro is working'
+FM_DELIVERY_KIRO_BUSY_REGEX_DEFAULT='^[[:space:]]*›[[:space:]]+Kiro is working'
 # polytoken renders a live elapsed row above its composer separators while a
 # turn runs - ` Running for 11.12s`, with a leading space and an unanchored
 # tail of border furniture (verified live, 0.8.19; the turn-end rows are

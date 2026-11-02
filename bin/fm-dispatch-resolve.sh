@@ -55,7 +55,7 @@
 #   after that is jq: the confidence floor (0.6 on the answer confidence, or a
 #   rule's declared `min_confidence` on that rule's probability, falling to the
 #   most probable other option that clears its own floor), the rule's declared
-#   `approval` and `floor`, each profile's declared `provider` and `floor`, the
+#   `approval` and `floor`, each profile's declared `provider`, `quota_scope`, and `floor`, the
 #   quota rows from ONE quota-axi --json snapshot (schema 5 or 6; each
 #   candidate binds to one row through quota_row in
 #   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
@@ -552,6 +552,7 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson codex_ultra_o
     "unknown select: " + ([.rules[] | select(has("select") and .select != "quota-balanced") | .select] | unique | join(", "))
   elif has("shared_quota") and (.shared_quota | type) != "boolean" then "shared_quota must be true or false when present"
   elif any((.rules // [])[]; has("floor") and floor_bad(.floor; true)) then "rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\\z"
+  elif any((.rules // [])[] | profiles(.use)[]; type == "object" and has("quota_scope") and ((.quota_scope | type) != "string" or (.quota_scope | length) == 0)) then "each use profile quota_scope must be a non-empty string when present"
   elif any((.rules // [])[] | profiles(.use)[]; profile_bad(.)) then "each use profile needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
   elif any((.rules // [])[]; duplicate_profiles(profiles(.use))) then "each rule use must not contain duplicate harness, model, and effort profiles"
   elif any((.rules // [])[] | profiles(.use)[]; (verified(.harness) | not)) then "each use profile must name a verified harness"
@@ -559,6 +560,7 @@ rules_err=$(jq -r --argjson codex_max_ok "$codex_max_ok" --argjson codex_ultra_o
   elif any(dispatch_class_routes[]; (verified(.harness) | not)) then "each class route must name a verified harness"
   elif any(dispatch_class_routes[]; (effort_ok(.harness; .model; .effort) | not)) then "each class route effort must be supported by its harness and model"
   elif has("default") and (profiles(.default) | length) == 0 then "default must be a profile object or non-empty profile array"
+  elif has("default") and any(profiles(.default)[]; type == "object" and has("quota_scope") and ((.quota_scope | type) != "string" or (.quota_scope | length) == 0)) then "each default profile quota_scope must be a non-empty string when present"
   elif has("default") and any(profiles(.default)[]; profile_bad(.)) then "each default profile needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
   elif has("default") and duplicate_profiles(profiles(.default)) then "default must not contain duplicate harness, model, and effort profiles"
   elif has("default") and any(profiles(.default)[]; (verified(.harness) | not)) then "each default profile must name a verified harness"
@@ -925,7 +927,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def applicable($p; $lane; $c):
     (if $c.harness == "agy" then quota_agy_scope($agy_ids; ($c.model // ""); ($agy_levels[([$c.model // "", $c.effort // ""] | @json)] // "")) else "" end) as $agy_scope |
     (if $c.harness == "devin" then quota_devin_scope($devin_ids; ($c.model // "")) else "" end) as $devin_scope |
-    [rows($p; $lane)[] | select(quota_applicable($p; ($c.model // ""); $agy_scope; $devin_scope))];
+    [rows($p; $lane)[] | select(quota_applicable($p; ($c.model // ""); $agy_scope; $devin_scope) or ($c.quota_scope != null and .scope == $c.quota_scope))];
   def floor_state($f; $p; $lane):
     if $f == null then "none"
     elif prov($p; $lane) == null or (measured($p; $lane) | not) then "unknown"
@@ -977,6 +979,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       elif (measured($p; $lane) | not) then
         ($rows | first) as $row |
         {profile: $c, provider: $p, bounds: $bounds, scope: ($row.scope // null), pct: ($row.effectivePercentRemaining // null), runway: ($row.runway.status // null), eligible: true, unranked: true, unknown: true, reason: "provider \($p) unmeasured (\(prov($p; $lane).quotaSemantics.status))"}
+      elif ($c.quota_scope != null and (any($rows[]; .scope == $c.quota_scope) | not)) then
+        {profile: $c, provider: $p, bounds: $bounds, scope: $c.quota_scope, eligible: true, unranked: true, unknown: true, reason: "declared quota_scope \($c.quota_scope) has no quota row for provider \($p): not rankable"}
       elif ($rows | length) == 0 then
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true, unknown: true,
          reason: ("no applicable quota row for provider \($p)" +

@@ -20,7 +20,7 @@ Primary and secondmate operation are unsupported because there is no Kiro superv
 | Effort | `--effort low\|medium\|high\|xhigh\|max`; the full vocabulary passes through. |
 | Quota | The native harness maps to quota-axi's `kiro` provider; the existing Pi provider route is separate. |
 | Detection | Anchored `kiro-cli` and `kiro-cli-chat` ancestry; the nearer macOS ACP backend outranks foreign inherited harness markers; macOS exports `KIRO_SESSION_ID`, `KIRO_AGENT_ENGINE=v2`, `KIRO_VERSION`, and `KIRO_TURN_MARKER_DIR`, but identity remains structural for compatibility with the markerless upstream Linux build. |
-| Composer | Bare `›` (U+203A); the 2.24.0 idle placeholder uses `38;2;158;158;158`; 256-color panes can use `38;5;247`; the Kiro-only gray ceiling and hinted idle row in `../../../../../bin/fm-composer-lib.sh` classify it empty without widening other harnesses' rules; busy delivery uses `Kiro is working`. |
+| Composer | Bare `›` (U+203A); the 2.24.0 idle placeholder uses `38;2;158;158;158`; 256-color panes can use `38;5;247`; the Kiro-only gray ceiling and hinted idle row in `../../../../../bin/fm-composer-lib.sh` classify it empty without widening other harnesses' rules; busy delivery matches the composer row `› Kiro is working`, which upstream's 2.35.1 evidence shows now also carries an elapsed time. |
 | Skill | No separate skill-command form is verified; use ordinary language through the data plane. |
 
 ## Per-task configuration and credentials
@@ -31,7 +31,7 @@ The same home carries `settings/cli.json` with `chat.disableTrustAllConfirmation
 Explicit resources include root and nested project instructions, steering inclusion rules, and project/per-task skills while omitting inherited `README.md`; an empty resource list alone still inherits it.
 The spawn owner defines the selectors, and the verification record proves the resulting context membership.
 No project `.kiro/` or real `~/.kiro` agent, setting, or session is changed.
-Hook commands are single-token absolute script paths, so spawn refuses a per-task home path containing whitespace.
+Hook commands are single-token absolute script paths, so spawn refuses a per-task home path containing whitespace or a shell-special character.
 
 Relocation preserves native login on both measured platforms: macOS stores auth in `~/Library/Application Support/kiro-cli/data.sqlite3`, and upstream Amazon Linux 2 uses `~/.local/share/kiro-cli/data.sqlite3`.
 These stores are neither copied nor edited by the adapter.
