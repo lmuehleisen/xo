@@ -608,8 +608,8 @@ poll() {
   [ "$ERRORS" -eq 0 ] || printf 'contributions: %s unreadable durable record(s)\n' "$ERRORS"
   clear_unsupported_errors
   # Only supported URLs enter final settlement and the forge-read rotation.
-  # Classify all owners in one pass; already-settled history needs no work.
-  # One line per remaining URL: final/live, the URL, then every owning task.
+  # Classify all owners in one pass; settled history needs no record reads.
+  # One line per URL: final/settled/live, the URL, then every owning task.
   jq_lib -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
     INDEX($saved[0][]; .task) as $by_task
     | known($input[0];$saved[0]) | map(select(.url | supported_url))
@@ -618,7 +618,7 @@ poll() {
     | [.tasks[] as $task
        | ([$by_task[$task].records[]? | select(.url == $url)] | first)] as $records
     | if any($records[]; . != null and (.observation.state | IN("merged","closed"))) then
-        if all($records[]; . != null and .error == null and (.observation.state | IN("merged","closed"))) then empty
+        if all($records[]; . != null and .error == null and (.observation.state | IN("merged","closed"))) then ["settled",.url] + .tasks
         else ["final",.url] + .tasks end
       else ["live",.url] + .tasks end
     | @tsv' > "$TMP/known.tsv"
@@ -631,6 +631,10 @@ poll() {
     # A contribution with a final observation is not re-read for any owner.
     if [ "$kind" = final ]; then
       settle_final "$url" "${row[@]:1}"
+    elif [ "$kind" = settled ]; then
+      for task in "${row[@]:1}"; do
+        fm_pr_task_id_valid "$task" || printf 'contributions: invalid durable task id\n'
+      done
     else
       (IFS=$'\t'; printf '%s\n' "${row[*]}") >> "$TMP/live.tsv"
     fi
