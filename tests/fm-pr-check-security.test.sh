@@ -806,6 +806,160 @@ test_direct_pr_unpushed_commit_refuses_registration() {
   pass "fm-pr-check refuses a direct-PR registration while a later commit is only in the copy"
 }
 
+# A reported pull request is recorded only when its repository is the task
+# project's forge origin or an explicitly declared contribution target.
+# The same commit being reachable from the task's own remote is not enough.
+test_pr_repository_is_bound_to_the_task() {
+  local dir rc out sha
+  local fork_url=https://github.com/fork-owner/sample.git
+  local parent_url=https://github.com/upstream-org/sample.git
+  local fork_pr=https://github.com/fork-owner/sample/pull/9
+  local parent_pr=https://github.com/upstream-org/sample/pull/4183
+  local other_pr=https://github.com/someone/else/pull/3
+
+  dir=$(make_case repo-bind-upstream)
+  git -C "$dir/wt" remote add origin "$fork_url"
+  git -C "$dir/wt" remote add upstream "$parent_url"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  git -C "$dir/wt" update-ref refs/remotes/upstream/main "$sha"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR"
+  cp "$dir/home/state/task-a.meta" "$dir/meta.before"
+  set +e
+  run_check_entry "$dir" task-a "$parent_pr" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a parent-repository pull request was recorded"
+  grep -Fq 'github.com/upstream-org/sample' "$dir/stderr" \
+    || fail "the refusal did not name the reported repository: $(cat "$dir/stderr")"
+  grep -Fq 'github.com/fork-owner/sample' "$dir/stderr" \
+    || fail "the refusal did not name the task repository: $(cat "$dir/stderr")"
+  cmp -s "$dir/meta.before" "$dir/home/state/task-a.meta" \
+    || fail "a mismatched repository changed the task metadata"
+  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "a mismatched repository armed a poll"
+  [ ! -e "$dir/home/state/task-a.pr-poll" ] || fail "a mismatched repository wrote a poll sidecar"
+  [ ! -s "$dir/gh.log" ] || fail "a mismatched repository was read from the forge: $(cat "$dir/gh.log")"
+  git -C "$dir/wt" merge-base --is-ancestor "$sha" refs/remotes/origin/main \
+    || fail "the fixture commit is not reachable from the task remote"
+
+  dir=$(make_case repo-bind-fork)
+  git -C "$dir/wt" remote add origin "https://github.com/Fork-Owner/Sample.git"
+  git -C "$dir/wt" remote add upstream "$parent_url"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR"
+  run_check_entry "$dir" task-a "$fork_pr" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "the task repository was refused: $(cat "$dir/stderr")"
+  grep -qxF "pr=$fork_pr" "$dir/home/state/task-a.meta" \
+    || fail "the task repository's pull request was not recorded"
+  [ -f "$dir/home/state/task-a.check.sh" ] || fail "the task repository's pull request was not armed"
+
+  dir=$(make_case repo-bind-consent)
+  git -C "$dir/wt" remote add origin "$fork_url"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR" \
+    "upstream_consent=github.com/upstream-org/sample"
+  run_check_entry "$dir" task-a "$parent_pr" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a declared contribution target was refused: $(cat "$dir/stderr")"
+  grep -qxF "pr=$parent_pr" "$dir/home/state/task-a.meta" \
+    || fail "the declared contribution target was not recorded"
+  [ -f "$dir/home/state/task-a.check.sh" ] || fail "the declared contribution target was not armed"
+
+  dir=$(make_case repo-bind-consent-other)
+  git -C "$dir/wt" remote add origin "$fork_url"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR" \
+    "upstream_consent=github.com/upstream-org/sample"
+  cp "$dir/home/state/task-a.meta" "$dir/meta.before"
+  set +e
+  run_check_entry "$dir" task-a "$other_pr" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a third repository was accepted beside a contribution target"
+  grep -Fq 'github.com/someone/else' "$dir/stderr" \
+    || fail "the third-repository refusal did not name it: $(cat "$dir/stderr")"
+  grep -Fq 'github.com/upstream-org/sample' "$dir/stderr" \
+    || fail "the third-repository refusal did not name the declared target: $(cat "$dir/stderr")"
+  cmp -s "$dir/meta.before" "$dir/home/state/task-a.meta" \
+    || fail "a third repository changed the task metadata"
+  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "a third repository armed a poll"
+
+  # A standing maintainer scope is a contribution target only for this repository.
+  dir=$(make_case repo-bind-maintainer)
+  rm -rf "$dir/wt"
+  git -C "$dir/root" init -q -b main
+  git -C "$dir/root" add bin/fm-guard.sh
+  git -C "$dir/root" commit -qm 'guard'
+  git -C "$dir/root" worktree add --quiet -b task "$dir/wt"
+  git -C "$dir/root" remote add origin "$fork_url"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  printf 'maintainer github.com/upstream-org/sample\n' > "$dir/home/config/firstmate-role"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/root" "kind=ship" "mode=direct-PR"
+  run_check_entry "$dir" task-a "$parent_pr" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "the maintainer scope was refused for this repository: $(cat "$dir/stderr")"
+  grep -qxF "pr=$parent_pr" "$dir/home/state/task-a.meta" \
+    || fail "the maintainer scope's pull request was not recorded"
+
+  dir=$(make_case repo-bind-maintainer-other-project)
+  git -C "$dir/wt" remote add origin "$fork_url"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  printf 'maintainer github.com/upstream-org/sample\n' > "$dir/home/config/firstmate-role"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR"
+  cp "$dir/home/state/task-a.meta" "$dir/meta.before"
+  set +e
+  run_check_entry "$dir" task-a "$parent_pr" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a maintainer scope authorized a different project"
+  cmp -s "$dir/meta.before" "$dir/home/state/task-a.meta" \
+    || fail "a maintainer scope on another project changed metadata"
+  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "a maintainer scope on another project armed a poll"
+
+  # A local-path origin names no forge repository, so it does not bind.
+  dir=$(make_case repo-bind-local-origin)
+  git -C "$dir/wt" remote add origin "file://$dir/wt"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR"
+  run_check_entry "$dir" task-a "$fork_pr" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a local-path origin refused a pull request: $(cat "$dir/stderr")"
+  grep -qxF "pr=$fork_pr" "$dir/home/state/task-a.meta" \
+    || fail "a local-path origin did not leave registration to the reachability gate"
+
+  dir=$(make_case repo-bind-scan)
+  git -C "$dir/wt" remote add origin "$fork_url"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR"
+  printf 'done [at=2]: PR %s\n' "$parent_pr" > "$dir/home/state/task-a.status"
+  out=$(run_check_entry "$dir" scan 2> "$dir/stderr") || fail "the scan failed: $(cat "$dir/stderr")"
+  case "$out" in
+    "task-a reported $parent_pr in a done line, but it was not recorded: "*'github.com/upstream-org/sample'*) ;;
+    *) fail "the scan did not report the repository mismatch: $out" ;;
+  esac
+  ! grep -q '^pr=' "$dir/home/state/task-a.meta" || fail "the scan recorded the mismatched repository"
+
+  pass "PR registration binds the repository to the task origin and declared contribution targets"
+}
+
 # A PR a task reported in a done line is recorded by the scan whatever the rest
 # of the line says, so its merge monitoring never waits on the supervisor
 # running this command by hand. A URL without the "PR " prefix is prose, a scout
@@ -4567,6 +4721,7 @@ test_draft_pull_request_is_not_armed
 test_secondmate_record_refuses_a_pr_watch
 test_unpushed_named_head_refuses_registration
 test_direct_pr_unpushed_commit_refuses_registration
+test_pr_repository_is_bound_to_the_task
 test_scan_records_a_pr_reported_in_a_done_line
 test_scan_reports_a_refusal_once_and_retries
 test_scan_retries_refused_task_behind_a_hanging_registration

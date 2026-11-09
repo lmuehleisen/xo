@@ -519,6 +519,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-pr-check-security.test.sh`.
 - Upstream: accepts a fixed list of trailing metadata keys and groups mismatched polls with unauthenticated checks; drop once equivalent.
 
+### pr-repository-binding
+
+- Intent: record a reported pull request only when its repository is the task project's forge origin or an explicitly declared contribution target, so a reachable commit on another repository is not armed.
+- Class: carried.
+- Seam: repository binding in `bin/fm-pr-check.sh` (shared); `docs/architecture.md`, `docs/scripts.md`, and `docs/configuration.md` name it.
+- Guard: `tests/fm-pr-check-security.test.sh` `test_pr_repository_is_bound_to_the_task`.
+- Upstream: records any canonical URL whose commit is reachable; drop once upstream refuses a mismatched repository before recording.
+
 ### remote-job-ownership
 
 - Intent: a remote job lane verifies its serving owner before claiming, while running, and before publishing a result, so a superseded worker stops its own work, and the start path reuses a verified live owner that is still initializing.
