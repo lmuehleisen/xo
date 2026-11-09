@@ -59,6 +59,7 @@ test_both_directions_and_a_comment_are_reported() {
   out=$(cd "$repo" && "$SCAN" base upstream HEAD)
   status=$?
   expect_code 1 "$status" "a merged tree that still mentions removed helpers must fail: $out"
+  # shellcheck disable=SC2016  # literal fixture source, expanded by nothing
   assert_contains "$out" 'REF: gone_upstream bin/fork-caller.sh:1: gone_upstream "$id"' \
     'a caller of a helper upstream deleted was not reported'
   assert_contains "$out" 'REF: gone_on_fork bin/upstream-caller.sh:1: gone_on_fork' \
