@@ -1254,6 +1254,105 @@ test_terminal_contribution_settles() {
   pass 'a merged or closed contribution settles once, is not re-read, and never wakes again'
 }
 
+test_settled_history_uses_bounded_local_reads() {
+  local home out i task history_bytes read_bytes
+  home=$(new_home terminal-history)
+  forge_home "$home"
+  wrap_forge "$home"
+  for ((i=1; i<=64; i++)); do
+    task="settled-$i"
+    record "$home" "$task" "$((100 + i))" merged mergeable
+  done
+  cksum "$home"/data/settled-*/contributions.json > "$home/history.before"
+  history_bytes=$(wc -c "$home"/data/*/contributions.json | awk 'END {print $1}')
+  jq -n '[{id:12,user:{login:"maintainer"},author_association:"OWNER",body:"Please clarify",
+    html_url:"https://github.com/o/r/pull/8#issuecomment-12",updated_at:"2026-09-16T08:01:00Z"}]' \
+    > "$home/forge/comments.json"
+  # Measure file-input volume at the tool boundary, without a wall-clock race.
+  cat > "$home/fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+for input in "$@"; do
+  [ ! -f "$input" ] || wc -c < "$input" >> "$FORGE/jq-input-bytes"
+done
+exec "$REAL_JQ" "$@"
+SH
+  chmod +x "$home/fakebin/jq"
+  out=$(with_home "$home" env REAL_JQ="$(command -v jq)" "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'poll with settled history failed'
+  read_bytes=$(awk '{total += $1} END {print total + 0}' "$home/forge/jq-input-bytes")
+  [ "$read_bytes" -lt "$((history_bytes * 16))" ] \
+    || fail "settled history caused repeated full-history reads: $read_bytes bytes for $history_bytes bytes of records"
+  cksum "$home"/data/settled-*/contributions.json > "$home/history.after"
+  cmp -s "$home/history.before" "$home/history.after" || fail 'settled history was rewritten'
+  [ "$(grep -cFx 'api repos/o/r/pulls/8' "$home/forge/calls")" = 1 ] \
+    || fail 'the live contribution was not observed exactly once'
+  ! grep -E 'pulls/1[0-9][0-9]($|/)' "$home/forge/calls" >/dev/null \
+    || fail 'settled history triggered forge reads'
+  printf '%s\n' "$out" | grep -Eq '^contribution-wake: check: contributions delivery [0-9a-f]{64}$' \
+    || fail 'settled history prevented the live contribution wake'
+  jq -e '.records[0].pending | length == 1' "$home/data/delivery/contributions.json" >/dev/null \
+    || fail 'settled history prevented the live contribution signal'
+  pass 'settled history uses bounded local reads and preserves live contribution signals'
+}
+
+test_settled_invalid_owner_keeps_diagnostic() {
+  local home out mode owner
+  for mode in space tab; do
+    home=$(new_home "terminal-invalid-owner-$mode")
+    case "$mode" in space) owner='invalid owner' ;; tab) owner=$'invalid\towner' ;; esac
+    record "$home" "$owner" 8 merged mergeable
+    printf '# Backlog\n\n## Done\n' > "$home/data/backlog.md"
+    cat > "$home/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+: > "$FORGE_CALLS"
+exit 1
+SH
+    chmod +x "$home/fakebin/gh"
+    cp "$home/data/$owner/contributions.json" "$home/prior.json"
+    out=$(with_home "$home" env FORGE_CALLS="$home/calls" "$ROOT/bin/fm-contributions.sh" poll) \
+      || fail 'settled invalid-owner poll failed'
+    printf '%s\n' "$out" | grep -Fxq 'contributions: invalid durable task id' \
+      || fail "settled owner lost its diagnostic: $out"
+    if [ "$mode" = space ]; then
+      [ "$out" = 'contributions: invalid durable task id' ] && [ ! -e "$home/calls" ] \
+        || fail "settled owner triggered a forge read: $out"
+    else
+      [ -e "$home/calls" ] || fail "escaped owner changed its legacy forge observation: $out"
+      printf '%s\n' "$out" | grep -Fq 'contributions: observation unavailable for https://github.com/o/r/pull/8 -' \
+        || fail "escaped owner changed its legacy forge observation: $out"
+    fi
+    cmp -s "$home/prior.json" "$home/data/$owner/contributions.json" || fail 'invalid owner was rewritten'
+  done
+  pass 'settled invalid owners retain their diagnostic without rewriting records'
+}
+
+test_settled_history_keeps_first_matching_record() {
+  local home alias out
+  home=$(new_home terminal-first-match)
+  record "$home" stable 8 merged mergeable
+  mutate_record "$home" stable '.records += [(.records[0] | .url="https://github.com/o/r/pull/10")]'
+  alias="$home/data/stable"$'\n'
+  mkdir -p "$alias"
+  cp "$home/data/stable/contributions.json" "$alias/contributions.json"
+  jq '.records = [.records[0] | .observation.state="open"]
+    | .records += [(.records[0] | .url="https://github.com/o/r/pull/9" | .observation.state="closed")]' \
+    "$alias/contributions.json" > "$home/data/stable/contributions.json"
+  cat > "$home/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+: > "$FORGE_CALLS"
+exit 1
+SH
+  chmod +x "$home/fakebin/gh"
+  cp "$home/data/stable/contributions.json" "$home/prior.json"
+  cp "$alias/contributions.json" "$home/alias.json"
+  out=$(with_home "$home" env LC_ALL=C FORGE_CALLS="$home/calls" "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'poll with duplicate task identities failed'
+  [ -z "$out" ] && [ ! -e "$home/calls" ] || fail "first terminal observations were lost: $out"
+  cmp -s "$home/prior.json" "$home/data/stable/contributions.json" || fail 'first task record was rewritten'
+  cmp -s "$home/alias.json" "$alias/contributions.json" || fail 'aliased task record was rewritten'
+  pass 'settled history preserves the first matching record and every retained URL across task aliases'
+}
+
 test_late_owner_inherits_terminal_observation() {
   local home out later=2026-09-17T08:00:00Z
   home=$(new_home terminal-late-owner)
@@ -2077,7 +2176,7 @@ test_arm_plumbs_the_reply_age_into_the_check_shim() {
 }
 
 failures=0
-for test_name in test_forget_refuses_unobserved_and_unsafe_metadata test_forget_refuses_oversized_complete_record test_active_links_override_forgotten_marker test_forget_retains_audit_and_stops_tracking test_forget_refuses_unknown_and_active_links test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_review_bot_inline_wake test_review_bot_watching_is_opt_in test_review_bot_allowlist_is_configurable test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_verdict_actor_values_are_discoverable test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_unsupported_poll_is_silent_and_clears_legacy_errors test_legacy_cleanup_preserves_supported_failure test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_http_500_once_retries_without_waking test_http_500_twice_records_the_failed_read test_http_404_is_not_retried test_real_gh_errors_drive_retry_and_summary test_next_url_does_not_inherit_a_forge_diagnostic test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_retire_ends_observation_of_a_gone_contribution test_late_owner_of_a_retired_final_contribution_is_not_retired test_retire_is_idempotent_and_refuses_unknown_pairs test_many_reviews_stay_readable test_unanswered_thread_is_raised_again_under_hold test_resolved_thread_is_answered test_reply_rules test_reply_age_is_configurable_and_validated test_closed_pull_request_drops_its_threads test_unanswered_reraise_is_off_unless_configured test_arm_plumbs_the_reply_age_into_the_check_shim; do
+for test_name in test_forget_refuses_unobserved_and_unsafe_metadata test_forget_refuses_oversized_complete_record test_active_links_override_forgotten_marker test_forget_retains_audit_and_stops_tracking test_forget_refuses_unknown_and_active_links test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_review_bot_inline_wake test_review_bot_watching_is_opt_in test_review_bot_allowlist_is_configurable test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_verdict_actor_values_are_discoverable test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_unsupported_poll_is_silent_and_clears_legacy_errors test_legacy_cleanup_preserves_supported_failure test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_http_500_once_retries_without_waking test_http_500_twice_records_the_failed_read test_http_404_is_not_retried test_real_gh_errors_drive_retry_and_summary test_next_url_does_not_inherit_a_forge_diagnostic test_shared_url_observed_once test_terminal_contribution_settles test_settled_history_uses_bounded_local_reads test_settled_invalid_owner_keeps_diagnostic test_settled_history_keeps_first_matching_record test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_retire_ends_observation_of_a_gone_contribution test_late_owner_of_a_retired_final_contribution_is_not_retired test_retire_is_idempotent_and_refuses_unknown_pairs test_many_reviews_stay_readable test_unanswered_thread_is_raised_again_under_hold test_resolved_thread_is_answered test_reply_rules test_reply_age_is_configurable_and_validated test_closed_pull_request_drops_its_threads test_unanswered_reraise_is_off_unless_configured test_arm_plumbs_the_reply_age_into_the_check_shim; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"
