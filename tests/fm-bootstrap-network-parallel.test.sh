@@ -582,7 +582,8 @@ test_inherit_push_sends_one_job_and_replays_in_order() {
   convergence_fixture "$TMP_ROOT/push-batch" sm:host-sm
   out=$(FM_FAKE_ITEM_SLEEP=0.2 run_inherit_push sm 1); rc=$?
   expect_code 0 "$rc" "a clean push should succeed: $out"
-  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh ' "$CF_LOG")" -eq 1 ] \
+  # The read-only generation query precedes it; every write travels in one batch.
+  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh batch ' "$CF_LOG")" -eq 1 ] \
     || fail "the push did not carry every item in one remote job"$'\n'"$(cat "$CF_LOG")"
   order=$(printf '%s\n' "$out" | sed -n 's/^unchanged: //p' | tr '\n' ' ')
   [ "$order" = "config/item-a config/item-b config/item-c config/item-d config/item-e config/item-f data/captain-shared.md " ] \
@@ -614,7 +615,7 @@ test_inherit_push_local_refusal_preserves_only_that_item() {
   assert_contains "$out" "error: config/item-e: primary source failed validation; destination preserved" \
     "the unsafe item must reach the remote only as a preserving error record"
   assert_contains "$out" "unchanged: config/item-a" "safe items still converge beside the refused one"
-  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh ' "$CF_LOG")" -eq 1 ] \
+  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh batch ' "$CF_LOG")" -eq 1 ] \
     || fail "a local refusal must still send one job"$'\n'"$(cat "$CF_LOG")"
   pass "remote inheritance push: a local refusal preserves only that item and still sends the rest"
 }
@@ -765,7 +766,8 @@ exec '$REAL_MKTEMP' "\$@"
 SH
       chmod +x "$CF_FAKEBIN/mktemp"
     else
-      started='^START host-sm fm-remote-inherit[.]sh (put|absent) '
+      # The fork sends every inheritance write in one batch job.
+      started='^START host-sm fm-remote-inherit[.]sh batch '
     fi
     set -m
     PATH="$CF_FAKEBIN:$BASE_PATH" \
@@ -786,7 +788,7 @@ SH
     grep -Eq "$started" "$CF_LOG" \
       || fail "$script never started a remote mutation"$'\n'"$(cat "$CF_LOG")"
     if [ "$script" = fm-config-push.sh ]; then
-      grep -Eq '^START host-sm fm-remote-inherit[.]sh (put|absent) ' "$CF_LOG" \
+      grep -Eq '^START host-sm fm-remote-inherit[.]sh batch ' "$CF_LOG" \
         || fail "config-push kill was triggered by the query before any payload write"$'\n'"$(cat "$CF_LOG")"
     fi
     kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
