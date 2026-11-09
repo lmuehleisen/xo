@@ -24,9 +24,10 @@
 # and the merge-time re-record does not skip that binding.
 # The task project's origin is the expected repository when that origin names a
 # forge repository (host/owner/repo). A local-path origin does not name one and
-# does not bind. An explicitly declared contribution target is also accepted:
-# the task's upstream_consent, and, when the project is this firstmate
-# repository, the home's maintainer scope.
+# does not bind. Only a directory that is itself a repository is read, so a
+# parent repository is not used. An explicitly declared contribution target
+# is also accepted: the task's upstream_consent, and, when the project is
+# this firstmate repository, the home's maintainer scope.
 # A URL on any other repository is refused, including when the same commit is
 # reachable from the task's own remote. bin/fm-role-lib.sh owns identity
 # normalization. A task with no forge origin and no declared contribution
@@ -106,14 +107,14 @@ pr_check_rotate() {  # <last-id>: start the lines on stdin just after the line f
   awk -v last="$1" '{ a[NR] = $0; split($0, f, " "); if (f[1] == last) s = NR } END { for (i = 0; i < NR; i++) print a[(i + s) % NR + 1] }'
 }
 
-# Forge identity of <dir>'s origin, or nothing. A local-path origin, including
-# one hop through a local bare remote, does not name a forge repository.
+# Forge identity of <dir>'s origin, or nothing. A directory that is not itself a
+# repository contributes nothing, and a local-path origin contributes nothing.
 pr_check_origin_forge_identity() {  # <dir>
   local url id
-  [ -n "${1:-}" ] && [ -d "$1" ] || return 0
+  [ -n "${1:-}" ] && [ -d "$1" ] && [ -e "$1/.git" ] || return 0
   url=$(git -C "$1" remote get-url origin 2>/dev/null) || return 0
   [ -n "$url" ] || return 0
-  id=$(fm_role_remote_identity "$url" "$1")
+  id=$(fm_role_remote_identity "$url" "$1" nolocal)
   case "$id" in
     ''|path:*) return 0 ;;
   esac

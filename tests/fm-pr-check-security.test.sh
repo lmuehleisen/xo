@@ -942,6 +942,33 @@ test_pr_repository_is_bound_to_the_task() {
   grep -qxF "pr=$fork_pr" "$dir/home/state/task-a.meta" \
     || fail "a local-path origin did not leave registration to the reachability gate"
 
+  # A directory that is not itself a repository does not inherit a parent origin.
+  dir=$(make_case repo-bind-not-a-repository)
+  git -C "$dir/wt" remote add origin "$fork_url"
+  mkdir -p "$dir/wt/plain"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt/plain" "project=$dir/wt/plain" "kind=ship" "mode=direct-PR"
+  run_check_entry "$dir" task-a "$parent_pr" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a parent repository was used for a directory that is not a repository: $(cat "$dir/stderr")"
+  grep -qxF "pr=$parent_pr" "$dir/home/state/task-a.meta" \
+    || fail "a non-repository directory did not leave registration to the reachability gate"
+
+  # A local-path origin does not bind when that path's own origin is a forge.
+  dir=$(make_case repo-bind-local-hop)
+  git init -q --bare "$dir/cache"
+  git -C "$dir/cache" remote add origin "$parent_url"
+  git -C "$dir/wt" remote add origin "file://$dir/cache"
+  sha=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$sha"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/wt" "project=$dir/wt" "kind=ship" "mode=direct-PR"
+  run_check_entry "$dir" task-a "$fork_pr" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a local path with a forge origin refused the other repository: $(cat "$dir/stderr")"
+  grep -qxF "pr=$fork_pr" "$dir/home/state/task-a.meta" \
+    || fail "a local path with a forge origin did not leave registration to the reachability gate"
+
   dir=$(make_case repo-bind-scan)
   git -C "$dir/wt" remote add origin "$fork_url"
   sha=$(git -C "$dir/wt" rev-parse HEAD)
