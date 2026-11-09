@@ -776,6 +776,91 @@ EOF
   pass "fm-devin-permission-policy: the worker contract's own helpers approve by resolved path, other tasks' ids do not"
 }
 
+test_worker_completion_home_binding() {
+  local policy dir wt cmd id=0 helper
+  local POLICY_SH=$POLICY_SH
+  policy=$(new_case 'completion home binding')
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  # Exercise the public hook from an isolated code root so the exact contract
+  # command's cd target, helper directory, and policy home agree.
+  cp -R "$ROOT/bin" "$dir/bin"
+  POLICY_SH="$dir/bin/fm-devin-permission-policy.sh"
+  mkdir -p "$wt/bin" "$dir/other-home"
+  printf '#!/usr/bin/env bash\n' > "$wt/bin/fm-captain-hold.sh"
+  while IFS= read -r cmd; do
+    id=$((id + 1))
+    hook "$policy" pre-tool-use exec "$cmd" "completion-pre-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "own completion must pass PreToolUse: $OUT"
+    hook "$policy" permission-request exec "$cmd" "completion-ok-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "literal own-home completion must approve without a judge: $cmd: $OUT"
+    jq -e --arg id "completion-ok-$id" \
+      'select(.tool_use_id == $id) | .decision == "approve" and .decider == "policy"' \
+      "$dir/state/devin-permission-log.jsonl" >/dev/null \
+      || fail 'completion must be a static policy approval'
+  done <<EOF
+cd '$dir' && bin/fm-captain-hold.sh complete t1 --none
+cd '$dir' && FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME='$dir' bash '$dir/bin/fm-captain-hold.sh' complete t1 --none
+cd '$dir' && FM_HOME='$dir' /bin/bash ./bin/fm-captain-hold.sh complete t1 --none 2>&1 | tail -10
+EOF
+  helper="'$dir/bin/fm-captain-hold.sh' complete t1 --none"
+  while IFS= read -r cmd; do
+    id=$((id + 1))
+    hook "$policy" permission-request exec "$cmd" "completion-held-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] \
+      && [ -f "$dir/state/t1.devin-permission-pending/completion-held-$id.pending" ] \
+      || fail "a non-contract home binding must stay judged: $cmd: $OUT"
+    jq -e --arg id "completion-held-$id" \
+      'select(.tool_use_id == $id) | .decision == "escalate" and .decider == "judge"' \
+      "$dir/state/devin-permission-log.jsonl" >/dev/null \
+      || fail "a non-contract home binding must reach judgment: $cmd"
+  done <<EOF
+FM_HOME='$dir/other-home' $helper
+FM_HOME='.' $helper
+FM_HOME=\$HOME $helper
+FM_HOME=\$(pwd) $helper
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t2 --none
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 t2
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete --none
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' answer t1 --decision-file /tmp/answer
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none --extra
+FM_HOME='$dir' '$wt/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none
+FM_HOME='$dir' '$dir/bin/fm-approved-publish.sh' run t1
+FM_HOME='$dir' cat README.md
+FM_HOME='$dir'
+FM_HOME='$dir'; $helper
+OTHER=value $helper
+OTHER=value FM_HOME='$dir' $helper
+FM_HOME='$dir' OTHER=value $helper
+FM_HOME='$dir' FM_HOME='$dir' $helper
+PATH=/tmp FM_HOME='$dir' $helper
+FM_HOME='$dir' FM_STATE_OVERRIDE='$dir/other-home/state' $helper
+env FM_HOME='$dir' $helper
+command FM_HOME='$dir' $helper
+FM_HOME='$dir' bash -c "$dir/bin/fm-captain-hold.sh complete t1 --none"
+FM_HOME='$dir' '$wt/bin/bash' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+OTHER=value true && FM_HOME='$dir' $helper
+FM_HOME='$dir' $helper > /outside/task-output
+EOF
+  # The code root may serve a different operational home.
+  POLICY_SH="$ROOT/bin/fm-devin-permission-policy.sh"
+  hook "$policy" permission-request exec \
+    "FM_HOME='$dir' bash '$ROOT/bin/fm-captain-hold.sh' complete t1 --none" completion-separate-home
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail "the trusted policy home must work independently of the code root: $OUT"
+  hook "$policy" permission-request exec \
+    "FM_HOME='$ROOT' '$ROOT/bin/fm-captain-hold.sh' complete t1 --none" completion-code-root
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail "the code root must not authorize a different operational home: $OUT"
+  hook "$policy" pre-tool-use exec "FM_HOME='$dir' $helper && sudo true" completion-refuse
+  [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+    || fail "a home binding must not hide another segment's refusal: $OUT"
+  pass 'fm-devin-permission-policy: exact own-home completion approves; other assignments, tasks, helpers, and effects stay judged'
+}
+
 # The brief scaffold's status command runs this home's ledger helper after the
 # append. While config/fleet-ledger is absent that clause writes nothing, so
 # the whole command is approved. A present flag, another subcommand, or a
@@ -2745,6 +2830,7 @@ CASES
 }
 
 
+test_worker_completion_home_binding
 test_refusal_list
 test_refusal_leaves_safe_commands_alone
 test_recursive_rm_resolves_symlinked_components

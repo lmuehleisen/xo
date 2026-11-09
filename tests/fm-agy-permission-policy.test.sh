@@ -122,6 +122,38 @@ denied() {  # <out> [reason-fragment]
 
 abstained() { [ -z "$1" ]; }
 
+test_worker_completion_home_binding() {
+  local policy dir cmd step=0
+  local POLICY_SH=$POLICY_SH
+  policy=$(new_case completion-home)
+  dir=$(case_dir "$policy")
+  cp -R "$ROOT/bin" "$dir/bin"
+  POLICY_SH="$dir/bin/fm-agy-permission-policy.sh"
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    [ "$RC" = 0 ] && abstained "$OUT" \
+      || fail "exact own-home completion must abstain under bypass: $OUT"
+  done <<EOF
+cd '$dir' && FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none
+FM_HOME='$dir' bash '$dir/bin/fm-captain-hold.sh' complete t1 --none
+EOF
+  [ -z "$(find "$dir/state/t1.agy-permission-pending" -maxdepth 1 -name '*.pending' -print 2>/dev/null)" ] \
+    || fail 'static completion must not leave a held-call marker'
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
+      || fail "non-contract completion must stay held under bypass: $OUT"
+  done <<EOF
+FM_HOME='$dir/another-home' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t2 --none
+FM_HOME='$dir' OTHER=value '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME='$dir' bash -c "$dir/bin/fm-captain-hold.sh complete t1 --none"
+EOF
+  pass 'fm-agy-permission-policy: exact own-home completion abstains; other bindings and command shapes stay held'
+}
+
 test_armed_heartbeat_proves_wiring() {
   local policy dir log
   policy=$(new_case armed)
@@ -2143,6 +2175,7 @@ ROWS
 }
 
 
+test_worker_completion_home_binding
 test_armed_heartbeat_proves_wiring
 test_refusal_list_denies
 test_refusal_leaves_safe_commands_alone

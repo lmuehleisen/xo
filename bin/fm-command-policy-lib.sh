@@ -128,7 +128,8 @@
 # This set supplies routine command approval after that check succeeds.
 # A command is approved only when it has no unquoted-delimiter heredoc, no
 # command or process substitution, no background &, no leading VAR=value
-# assignment, no argument naming credential material (.ssh, .aws, .gnupg,
+# assignment except the completion binding below, no argument naming
+# credential material (.ssh, .aws, .gnupg,
 # .netrc, .env, gh hosts.yml, key files, git credentials, agent config - except
 # a granted credential env file in the one `. <file>` / `source <file>` shape,
 # which is the only way a granted file may be used), only /dev/null, fd-dup, an
@@ -182,6 +183,11 @@
 #   - this home's fm-approved-publish.sh, only as `run <this-task>` with at
 #     most `--approval <captain-task-id>`; the runner itself refuses unless
 #     the captain's recorded decision names that task's procedure
+#   - this home's fm-captain-hold.sh `complete <this-task> --none` may carry
+#     one leading literal absolute FM_HOME binding to the home derived from
+#     the policy's state/<this-task>.status path, directly or through a plain
+#     bash, /bin/bash, or /usr/bin/bash with no options. Other assignments,
+#     wrappers, helpers, subcommands, and task ids keep their ordinary review.
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -1870,7 +1876,7 @@ checkout_discards() {  # <first-arg-index> <args>...
 
 analyze_segment() {
   local -a E=() EV=() EG=() ESRC=()
-  local k=0 w base='' credential_dynamic=false
+  local k=0 w base='' credential_dynamic=false completion_home_binding=0
   local count=${#SW[@]}
   SEG_BASE='' SEG_EMITS_FETCH=0
 
@@ -1879,7 +1885,11 @@ analyze_segment() {
   while [ "$k" -lt "$count" ]; do
     w=${SW[k]}
     if [[ $w =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-      no_approve "environment assignment"
+      if [ "$k" = 0 ] && own_task_completion_home_binding; then
+        completion_home_binding=1
+      else
+        no_approve "environment assignment"
+      fi
       k=$((k + 1)); continue
     fi
     case "$w" in
@@ -2120,6 +2130,10 @@ analyze_segment() {
           && { never_approve "runs a fetched page as code"; break; }
       done ;;
   esac
+
+  # The completion exception has already checked the full literal segment.
+  # Keep the credential, redirect, and fetched-code checks above authoritative.
+  [ "$completion_home_binding" = 1 ] && return 0
 
   # Shells and eval re-parse a string.
   case "$base" in
@@ -2635,6 +2649,30 @@ home_helper() {  # <word> <expansion-flag> <helper-name>
   # symlinks; SCRIPT_DIR is already this home's physical bin/.
   abs=$(physical_target "$1" "$CWD" 0) || return 1
   [ "$abs" = "$(norm_abs "$SCRIPT_DIR/$3")" ]
+}
+
+# The read-and-build completion exception above, checked before stripping the
+# segment's assignment or interpreter. The status path supplies authority;
+# neither the command's cd target nor the hook's ambient FM_HOME does.
+own_task_completion_home_binding() {
+  local i helper=1 expected binding
+  [ -n "$TASK" ] || return 1
+  case "$STATUS" in
+    /*/state/"$TASK".status) expected=${STATUS%/state/"$TASK".status} ;;
+    *) return 1 ;;
+  esac
+  case "${SW[0]}" in FM_HOME=/*) binding=${SW[0]#FM_HOME=} ;; *) return 1 ;; esac
+  for ((i = 0; i < ${#SW[@]}; i++)); do
+    [ "${SWV[i]}" = 0 ] && [ "${SWG[i]}" = 0 ] || return 1
+  done
+  binding=$(physical_target "$binding" '' 1) || return 1
+  expected=$(physical_target "$expected" '' 1) || return 1
+  [ "$binding" = "$expected" ] || return 1
+  case "${SW[1]-}" in bash|/bin/bash|/usr/bin/bash) helper=2 ;; esac
+  [ "${#SW[@]}" -eq $((helper + 4)) ] || return 1
+  home_helper "${SW[helper]}" "${SWV[helper]}" fm-captain-hold.sh || return 1
+  [ "${SW[helper + 1]}" = complete ] && [ "${SW[helper + 2]}" = "$TASK" ] \
+    && [ "${SW[helper + 3]}" = --none ]
 }
 
 # fm-ensure-agents-md.sh is firstmate's project-notes helper; it is
