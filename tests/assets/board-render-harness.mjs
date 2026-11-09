@@ -6,8 +6,9 @@
 // With a card key, the harness picks <value> (empty for none) and types <note>
 // on that card's answer form, submits it, and reports what the page queued.
 // Prints one JSON document:
-//   { stats:[{n,label}], underway:[{title,sub,badges}],
-//     charted:[{title,sub,badges,pickable}], empty, more, error, queued }
+//   { stats:[{n,label}], captains_call:[text], underway:[{title,sub,badges}],
+//     charted:[{title,sub,badges,pickable}], empty, more, calls, callControls,
+//     error, queued }
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -29,10 +30,12 @@ class Node {
     this.classList = {
       add: (c) => { this.className = (this.className + " " + c).trim(); },
       contains: (c) => this.className.split(/\s+/).includes(c),
-      toggle: (c, enabled) => {
-        const names = new Set(this.className.split(/\s+/).filter(Boolean));
-        if (enabled) names.add(c); else names.delete(c);
-        this.className = [...names].join(" ");
+      toggle: (c, force) => {
+        const classes = new Set(this.className.split(/\s+/).filter(Boolean));
+        const enabled = force ?? !classes.has(c);
+        if (enabled) classes.add(c); else classes.delete(c);
+        this.className = [...classes].join(" ");
+        return enabled;
       },
       remove: (c) => {
         this.className = this.className.split(/\s+/).filter((n) => n && n !== c).join(" ");
@@ -145,6 +148,9 @@ const rowsOf = (container) =>
 
 const uw = byId.get("bb-underway") || new Node("div");
 const underway = rowsOf(uw);
+const captains_call = (byId.get("bb-call") || new Node("div")).children
+  .filter((n) => n.className.split(/\s+/).includes("bb-decision"))
+  .map((n) => n.textContent);
 
 const ch = byId.get("bb-charted") || new Node("div");
 const charted = rowsOf(ch);
@@ -177,4 +183,4 @@ if (submitKey !== undefined) {
   form.listeners.submit({ preventDefault() {} });
 }
 process.stdout.write(
-  JSON.stringify({ stats, underway, charted, empty, more, calls, callControls, error: errorText, queued }) + "\n");
+  JSON.stringify({ stats, captains_call, underway, charted, empty, more, calls, callControls, error: errorText, queued }) + "\n");

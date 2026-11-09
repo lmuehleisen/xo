@@ -11,6 +11,12 @@
 # exactly as the local propagation path does. Each safe source is snapshotted
 # before transfer; source failures preserve that item and still transfer the
 # others. The library owns the batch wire format and its aggregate byte bound.
+# The caller holds the sender transaction lock. Before sending, read the
+# receiver's committed high-water mark and durably advance a lost or restored
+# sender counter beyond it. For older receivers, a query usage refusal (exit 2)
+# uses floor zero and leaves write-time generation checks intact; counter
+# recovery requires a receiver that supports the query. Other query failures
+# and malformed replies fail closed.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,11 +24,14 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-secondmate-nudge-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-nudge-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 sha256_file() {
@@ -109,6 +118,22 @@ $ITEMS
 EOF
 BATCH_BYTES=$(LC_ALL=C wc -c < "$BATCH" | tr -d ' ')
 [ "$BATCH_BYTES" -le 1048576 ] || die "inheritance batch exceeds the remote job byte bound"
+
+# Query only after local validation, before any payload can change the receiver.
+query_rc=0
+REMOTE_GENERATION=$("$SCRIPT_DIR/fm-on.sh" "$ID" fm-remote-inherit.sh generation) || query_rc=$?
+case "$query_rc" in
+  0) ;;
+  2) REMOTE_GENERATION=0 ;;
+  *) exit "$query_rc" ;;
+esac
+case "$REMOTE_GENERATION" in ''|*[!0-9]*) die "receiver inheritance generation is malformed" ;; esac
+[ "${#REMOTE_GENERATION}" -le 18 ] || die "receiver inheritance generation is outside the supported range"
+if [ "$REMOTE_GENERATION" -ge "$GENERATION" ]; then
+  GENERATION=$(fm_remote_inherit_generation_next "$STATE" "$ID" "$REMOTE_GENERATION") \
+    || die "cannot recover sender inheritance generation"
+fi
+
 # Preserve locally known validation failures even if the remote reports success;
 # otherwise keep its exact status, especially unknown-completion exit 255.
 if "$SCRIPT_DIR/fm-on.sh" --stdin "$ID" fm-remote-inherit.sh batch "$GENERATION" "$MODE" < "$BATCH"; then

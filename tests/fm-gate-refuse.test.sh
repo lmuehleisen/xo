@@ -243,9 +243,9 @@ test_lab_home_private_tmux_socket_survives_deep_paths() {
   [ "${socket_dir#/tmp/fml.}" != "$socket_dir" ] || fail "socket directory is not under the short /tmp/fml prefix"
 
   cleanup_deep_lab() {
-    # The explicit socket never falls back to another server once the
-    # private directory is gone, as a TMUX_TMPDIR lookup would.
-    "$real_tmux" -S "$socket_path" kill-server >/dev/null 2>&1 || true
+    # The explicit socket, only while it exists: TMUX_TMPDIR alone falls back
+    # to /tmp/tmux-<uid> once the private directory is gone.
+    [ ! -S "$socket_path" ] || "$real_tmux" -S "$socket_path" kill-server >/dev/null 2>&1 || true
     "$LABHOME" teardown "$lab" >/dev/null 2>&1 || true
     fm_test_cleanup
   }

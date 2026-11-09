@@ -125,12 +125,15 @@ case "$command_name" in
     exit 0
     ;;
   fm-remote-inherit.sh)
-    if [ "${FM_FAKE_INHERIT_PARTIAL:-0}" = 1 ]; then
+    # The sender's read-only generation query precedes its batch; only the
+    # inheritance write is partial.
+    if [ "${FM_FAKE_INHERIT_PARTIAL:-0}" = 1 ] && [ "$subcommand" != generation ]; then
       printf 'pushed: config/crew-dispatch.json\n'
       printf 'error: config/crew-harness: synthetic validation refusal\n' >&2
       exit 1
     fi
     case "$subcommand" in
+      generation) printf '0\n' ;;
       put) printf 'unchanged: %s\n' "$item_rel" ;;
     esac
     exit 0
@@ -499,6 +502,12 @@ EOF
     ;;
   fm-remote-secondmate-control.sh:state) printf 'END %s\n' "$host" >> "$log"; printf 'alive\n'; exit 0 ;;
   fm-remote-secondmate-control.sh:route) printf 'END %s\n' "$host" >> "$log"; printf 'backend=herdr\n'; exit 0 ;;
+  fm-remote-inherit.sh:generation)
+    sleep "${FM_FAKE_QUERY_SLEEP:-0}"
+    printf 'END %s %s %s\n' "$host" "$command_name" "$subcommand" >> "$log"
+    printf '0\n'
+    exit 0
+    ;;
   fm-remote-inherit.sh:*)
     if [ "$item_rel" = "${FM_FAKE_ITEM_UNKNOWN:-none}" ]; then
       sleep 0.2
@@ -573,7 +582,8 @@ test_inherit_push_sends_one_job_and_replays_in_order() {
   convergence_fixture "$TMP_ROOT/push-batch" sm:host-sm
   out=$(FM_FAKE_ITEM_SLEEP=0.2 run_inherit_push sm 1); rc=$?
   expect_code 0 "$rc" "a clean push should succeed: $out"
-  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh ' "$CF_LOG")" -eq 1 ] \
+  # The read-only generation query precedes it; every write travels in one batch.
+  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh batch ' "$CF_LOG")" -eq 1 ] \
     || fail "the push did not carry every item in one remote job"$'\n'"$(cat "$CF_LOG")"
   order=$(printf '%s\n' "$out" | sed -n 's/^unchanged: //p' | tr '\n' ' ')
   [ "$order" = "config/item-a config/item-b config/item-c config/item-d config/item-e config/item-f data/captain-shared.md " ] \
@@ -605,7 +615,7 @@ test_inherit_push_local_refusal_preserves_only_that_item() {
   assert_contains "$out" "error: config/item-e: primary source failed validation; destination preserved" \
     "the unsafe item must reach the remote only as a preserving error record"
   assert_contains "$out" "unchanged: config/item-a" "safe items still converge beside the refused one"
-  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh ' "$CF_LOG")" -eq 1 ] \
+  [ "$(grep -c '^START [^ ]* fm-remote-inherit.sh batch ' "$CF_LOG")" -eq 1 ] \
     || fail "a local refusal must still send one job"$'\n'"$(cat "$CF_LOG")"
   pass "remote inheritance push: a local refusal preserves only that item and still sends the rest"
 }
@@ -756,7 +766,8 @@ exec '$REAL_MKTEMP' "\$@"
 SH
       chmod +x "$CF_FAKEBIN/mktemp"
     else
-      started='fm-remote-inherit.sh'
+      # The fork sends every inheritance write in one batch job.
+      started='^START host-sm fm-remote-inherit[.]sh batch '
     fi
     set -m
     PATH="$CF_FAKEBIN:$BASE_PATH" \
@@ -765,17 +776,21 @@ SH
       FM_FAKE_SSH_LOG="$CF_LOG" FM_INHERITABLE_CONFIG='item-a item-b' \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_SEND_SETTLE=0 \
       FM_BOOTSTRAP_VERBOSE_FACTS=1 \
-      FM_FAKE_SYNC_HANG_HOST=host-sm FM_FAKE_ITEM_SLEEP=120 \
+      FM_FAKE_SYNC_HANG_HOST=host-sm FM_FAKE_ITEM_SLEEP=120 FM_FAKE_QUERY_SLEEP=2 \
       "$ROOT/bin/$script" >/dev/null 2>&1 &
     pid=$!
     set +m
     waited=0
-    while ! grep -q "$started" "$CF_LOG" && [ "$waited" -lt 200 ]; do
+    while ! grep -Eq "$started" "$CF_LOG" && [ "$waited" -lt 200 ]; do
       sleep 0.05
       waited=$((waited + 1))
     done
-    grep -q "$started" "$CF_LOG" \
+    grep -Eq "$started" "$CF_LOG" \
       || fail "$script never started a remote mutation"$'\n'"$(cat "$CF_LOG")"
+    if [ "$script" = fm-config-push.sh ]; then
+      grep -Eq '^START host-sm fm-remote-inherit[.]sh batch ' "$CF_LOG" \
+        || fail "config-push kill was triggered by the query before any payload write"$'\n'"$(cat "$CF_LOG")"
+    fi
     kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
     sleep 1
     kill -KILL -- "-$pid" 2>/dev/null || true

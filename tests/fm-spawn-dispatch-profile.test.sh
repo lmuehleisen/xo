@@ -137,6 +137,18 @@ enable_dispatch_profile() {
     > "$home/config/crew-dispatch.json"
 }
 
+# Writes the task record bin/fm-dispatch-resolve.sh leaves in data/<id>/ (its
+# documented shape: task, status, and profile with null for an unset axis).
+record_dispatch() {  # <home> <id> <status> [<harness> <model> <effort>]
+  local home=$1 id=$2 status=$3
+  mkdir -p "$home/data/$id"
+  jq -cn --arg id "$id" --arg status "$status" --arg h "${4:-}" --arg m "${5:-}" --arg e "${6:-}" '
+    def opt: if . == "" then null else . end;
+    {task: $id, status: $status,
+     profile: (if $status == "clear" then {harness: $h, model: ($m | opt), effort: ($e | opt)} else null end)}' \
+    > "$home/data/$id/dispatch-resolution.json"
+}
+
 make_seeded_secondmate_home() {
   local home=$1 id=$2
   mkdir -p "$home/bin" "$home/data"
@@ -245,7 +257,7 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_grep "window_id=@7" "$HOME_DIR/state/$id.meta" \
     "meta missing the immutable tmux window id teardown binds its reap to"
 
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   expected=$(fork_claude_expected_launch "$launch" "$HOME_DIR" "$id")
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   pass "no --model/--effort records defaults and types the claude launch instructions"
@@ -265,7 +277,7 @@ test_claude_launch_brief_publishes_record_doorbell() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude spawn for the doorbell check should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   doorbell=$(claude_launch_brief_arg "$launch")
   case "$doorbell" in
     *'⁣'*) fail "the doorbell carries the U+2063 marker Claude strips: $doorbell" ;;
@@ -300,7 +312,7 @@ test_claude_secondmate_launch_brief_publishes_into_its_own_home() {
     run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
   status=$?
   expect_code 0 "$status" "secondmate claude spawn for the doorbell check should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   doorbell=$(claude_launch_brief_arg "$launch")
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || fail "the secondmate record does not hold a launch-brief envelope: $doorbell"
@@ -343,7 +355,7 @@ test_non_cursor_launch_clears_inherited_cursor_markers() {
     run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude spawn under Cursor markers should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI" \
     "non-cursor launch must clear inherited Cursor and Agy identity markers"
   pass "non-cursor launches clear inherited Cursor and Agy identity markers"
@@ -370,7 +382,7 @@ test_relative_home_overrides_launch_with_absolute_cross_process_paths() {
   )
   status=$?
   expect_code 0 "$status" "spawn with relative home overrides should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "-e '$home_real/state/$id.pi-ext.ts'" \
     "relative FM_STATE_OVERRIDE leaked into Pi's cross-process extension path"
   assert_contains "$launch" "< '$home_real/data/$id/launch-brief.md'" \
@@ -399,7 +411,7 @@ test_home_defaults_preserve_absolute_or_resolve_relative_paths() {
   )
   status=$?
   expect_code 0 "$status" "spawn with relative FM_HOME defaults should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "-e '$home_real/state/$relative_id.pi-ext.ts'" \
     "relative FM_HOME leaked into Pi's default cross-process extension path"
   assert_contains "$launch" "< '$home_real/data/$relative_id/launch-brief.md'" \
@@ -422,7 +434,7 @@ test_home_defaults_preserve_absolute_or_resolve_relative_paths() {
   )
   status=$?
   expect_code 0 "$status" "spawn with absolute symlink-spelled FM_HOME defaults should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "-e '$linked_home/state/$absolute_id.pi-ext.ts'" \
     "absolute FM_HOME spelling changed in Pi's default cross-process extension path"
   assert_contains "$launch" "< '$linked_home/data/$absolute_id/launch-brief.md'" \
@@ -450,7 +462,7 @@ test_absolute_override_spelling_is_preserved_in_launch_paths() {
   )
   status=$?
   expect_code 0 "$status" "spawn with absolute symlink-spelled overrides should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "-e '$linked_home/state/$id.pi-ext.ts'" \
     "absolute FM_STATE_OVERRIDE spelling changed in Pi's cross-process extension path"
   assert_contains "$launch" "< '$linked_home/data/$id/launch-brief.md'" \
@@ -539,6 +551,7 @@ test_active_dispatch_profile_allows_explicit_harness() {
   enable_dispatch_profile "$HOME_DIR"
   jq '.preferred_provider = "claude"' "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/preferred.json"
   mv "$HOME_DIR/config/preferred.json" "$HOME_DIR/config/crew-dispatch.json"
+  record_dispatch "$HOME_DIR" "$id" ambiguous
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
@@ -546,10 +559,143 @@ test_active_dispatch_profile_allows_explicit_harness() {
   expect_code 0 "$status" "explicit harness should satisfy active dispatch-profile requirement"
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --add-dir" \
     "explicit harness launch did not thread model and effort"
-  pass "active crew-dispatch profile allows an explicit resolved harness"
+  pass "a non-clear dispatch record accepts the explicit flags of the manual intake"
+}
+
+test_recorded_dispatch_selection_refuses_conflicting_flags() {
+  local rec id out status
+  id=profile-selected-conflict-z13
+  rec=$(make_spawn_case profile-selected-conflict claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude opus high
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
+  status=$?
+  expect_code 1 "$status" "flags that differ from the recorded selection should be refused"
+  assert_contains "$out" 'launch flags do not match the clear dispatch selection --harness claude --model opus --effort high' "spawn did not name the recorded selection"
+  assert_absent "$HOME_DIR/state/$id.meta" "selection mismatch should refuse before task publication"
+  assert_equals '' "$(cat "$LAUNCH_LOG")" "selection mismatch must not create a worker"
+  pass "a recorded dispatch selection refuses conflicting explicit launch flags"
+}
+
+test_recorded_dispatch_selection_allows_matching_flags() {
+  local rec id out status
+  id=profile-selected-match-z13
+  rec=$(make_spawn_case profile-selected-match claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear codex gpt-5 high
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
+  status=$?
+  expect_code 0 "$status" "flags equal to the recorded selection should launch: $out"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
+  assert_no_grep 'dispatch_override=' "$HOME_DIR/state/$id.meta" "a matching launch should record no override"
+  pass "a recorded dispatch selection allows the matching launch flags"
+}
+
+test_recorded_dispatch_selection_allows_recorded_override() {
+  local rec id out status
+  id=profile-selected-override-z13
+  rec=$(make_spawn_case profile-selected-override claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude opus high
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high \
+    --dispatch-override 'authorized account test')
+  status=$?
+  expect_code 0 "$status" "a recorded task override should permit a different launch: $out"
+  assert_contains "$out" "spawned $id harness=codex" "spawn did not report the overridden Codex launch"
+  assert_grep 'dispatch_override=authorized account test' "$HOME_DIR/state/$id.meta" "task record omitted the override reason"
+  pass "a task override with its reason permits a different launch and is recorded"
+}
+
+test_recorded_dispatch_selection_leaves_unset_effort_unbound() {
+  local rec id out status
+  id=profile-selected-fallback-z13
+  rec=$(make_spawn_case profile-selected-fallback claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear codex gpt-5 ''
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort low)
+  status=$?
+  expect_code 0 "$status" "a fallback effort beside a selection with no effort should launch: $out"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 low
+  assert_no_grep 'dispatch_override=' "$HOME_DIR/state/$id.meta" "the documented effort fallback should need no override"
+  pass "an effort the clear selection leaves unset is not bound"
+}
+
+# A raw command keeps its own options, so matching --harness/--model/--effort
+# beside it proves nothing about what the worker runs.
+test_recorded_dispatch_selection_refuses_raw_launch_without_override() {
+  local rec id out status
+  id=profile-selected-raw-z13
+  rec=$(make_spawn_case profile-selected-raw claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude haiku low
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" "claude --model opus --effort high" --model haiku --effort low)
+  status=$?
+  expect_code 1 "$status" "a raw command under a clear selection should be refused without an override"
+  assert_contains "$out" 'launch flags do not match the clear dispatch selection --harness claude --model haiku --effort low' "spawn did not name the recorded selection"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused raw launch should not publish the task"
+  assert_equals '' "$(cat "$LAUNCH_LOG")" "a refused raw launch must not create a worker"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" "claude --model opus --effort high" --dispatch-override 'captain asked for opus')
+  status=$?
+  expect_code 0 "$status" "a raw command with a recorded task override should launch: $out"
+  assert_grep 'dispatch_override=captain asked for opus' "$HOME_DIR/state/$id.meta" "task record omitted the override reason"
+  pass "a clear dispatch selection refuses a raw launch command unless a task override is recorded"
+}
+
+test_active_dispatch_without_task_record_is_refused() {
+  local rec id out status
+  id=profile-unrecorded-z13
+  rec=$(make_spawn_case profile-unrecorded claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
+  status=$?
+  expect_code 1 "$status" "an active dispatch spawn with no task record should be refused"
+  assert_contains "$out" "has no recorded dispatch resolution; run bin/fm-dispatch-resolve.sh" "refusal did not name the resolver command"
+  assert_absent "$HOME_DIR/state/$id.meta" "an unrecorded dispatch should refuse before task publication"
+  assert_equals '' "$(cat "$LAUNCH_LOG")" "an unrecorded dispatch must not create a worker"
+  pass "active dispatch refuses a spawn whose task has no recorded resolution"
+}
+
+test_batch_checks_each_task_against_its_own_record() {
+  local rec id1 id2 out status
+  id1=profile-batch-own-a-z13
+  id2=profile-batch-own-b-z13
+  rec=$(make_spawn_case profile-batch-own claude "$id1" "$id2")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id1" clear codex gpt-5 high
+  record_dispatch "$HOME_DIR" "$id2" clear claude opus high
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --model gpt-5 --effort high)
+  status=$?
+  expect_code 1 "$status" "a batch with one conflicting task record should report failure"
+  assert_meta_profile "$HOME_DIR/state/$id1.meta" codex gpt-5 high
+  assert_absent "$HOME_DIR/state/$id2.meta" "the task whose record selects claude must not launch codex"
+  assert_contains "$out" "batch: FAILED to spawn $id2" "batch did not name the refused task"
+  pass "batch dispatch checks each task against its own recorded selection"
 }
 
 # A lane route records its class family for a later second opinion, while a
@@ -561,6 +707,7 @@ test_lane_route_records_model_family() {
   rec=$(make_spawn_case lane-family claude "$id")
   read_case_record "$rec"
   printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
+  record_dispatch "$HOME_DIR" "$id" clear codex gpt-5 high
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
   status=$?
@@ -571,6 +718,7 @@ test_lane_route_records_model_family() {
   rec=$(make_spawn_case lane-unlisted claude "$id")
   read_case_record "$rec"
   printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
+  record_dispatch "$HOME_DIR" "$id" clear codex gpt-5.5 high
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5.5 --effort high)
   status=$?
@@ -586,6 +734,7 @@ test_active_dispatch_profile_allows_positional_harness() {
   rec=$(make_spawn_case profile-positional claude "$id")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear codex gpt-5 high
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" codex --model gpt-5 --effort high)
@@ -613,7 +762,7 @@ test_launch_preserves_inherited_git_config() {
     "$id" "$PROJ_DIR" --harness 'echo WORKER-RAN >&2; git config --get-all credential.helper; git config --get core.hooksPath')
   status=$?
   expect_code 0 "$status" "Git configuration probe should spawn: $out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   launch_file="$CASE_DIR/git-config-launch.sh"
   printf '%s\n' "$launch" > "$launch_file"
   expected=$'\n!gh auth git-credential\n'"$(cd "$HOME_DIR/state" && pwd -P)/$id.git-hooks"
@@ -688,6 +837,7 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   rec=$(make_spawn_case profile-raw claude "$id")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" off
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" "custom-agent --flag")
@@ -695,12 +845,97 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   expect_code 0 "$status" "raw launch command should satisfy active dispatch-profile requirement"
   assert_contains "$out" "spawned $id harness=custom-agent" "spawn did not report raw command harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" custom-agent default default
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   # The unverified-adapter escape hatch is still an agent this fleet launched,
   # so it carries the compact-adviser floor, the AI-trailer strip, and the
   # private tmux server; nothing else may rewrite the captain's own command.
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/$id.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" "$id")$(fm_test_launch_git_prefix "$launch")custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/$id.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" "$id")$(fm_test_launch_git_prefix "$launch")export FM_HOME='$HOME_DIR'; custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
   pass "active crew-dispatch profile allows the raw launch-command escape hatch"
+}
+
+# A raw launch may end in a shell separator or a comment. The staged launch
+# must still parse, start the worker, and retire this pane's OSC 7501 reporter
+# after it: the reporter's documented pidfile <state>/.osc7501watch-<tty>,
+# planted by the stand-in agent, must be gone once the launch returns. A
+# mistyped config/osc7501-status must warn on the pane rather than silently.
+test_raw_launch_trailing_separator_or_comment_keeps_disarm() {
+  local rec id out status launch raw n=0 agentbin result
+  for raw in 'custom-agent --flag;' 'custom-agent --flag # captain note'; do
+    n=$((n + 1))
+    id=raw-tail-$n-z15
+    rec=$(make_spawn_case "raw-tail-$n" claude "$id")
+    read_case_record "$rec"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "$raw")
+    status=$?
+    expect_code 0 "$status" "raw launch '$raw' should spawn: $out"
+    launch=$(cat "$LAUNCH_LOG")
+    agentbin="$CASE_DIR/agentbin"
+    mkdir -p "$agentbin"
+    cat > "$agentbin/custom-agent" <<'SH'
+#!/bin/sh
+: > "${FM_TASK_INBOX%/*}/.osc7501watch-no-tty" && echo WORKER-RAN
+SH
+    chmod +x "$agentbin/custom-agent"
+    printf 'onn\n' > "$HOME_DIR/config/osc7501-status"
+    # Config warnings apply only after the writable, known-aware tty gates.
+    : > "$CASE_DIR/no-tty"
+    result=$(cd "$CASE_DIR" && isolated_pane_env REX_BLOCK=b1 PATH="$agentbin:$PATH" FM_OSC7501_TTY=no-tty \
+      /bin/sh -c "$launch" 2>&1)
+    status=$?
+    expect_code 0 "$status" "staged launch for raw '$raw' failed: $result"
+    assert_contains "$result" WORKER-RAN "staged launch for raw '$raw' never started the worker or planted its pidfile"
+    assert_contains "$result" 'osc7501-status: unknown value' "staged launch hid the reporter config warning"
+    [ ! -e "$HOME_DIR/state/.osc7501watch-no-tty" ] \
+      || fail "staged launch for raw '$raw' skipped the reporter disarm"
+  done
+  pass "a raw launch ending in a separator or a comment still runs the worker, its disarm, and config warnings"
+}
+
+# A raw launch's reporter follows the agent it establishes, while PATH holds
+# Claude 1.0.0 below the 2.1.295 native floor. A simple command naming a
+# harness by path is probed as itself: an absolute Claude 1.0.0 keeps its
+# reporter and an absolute Claude Code 2.1.316 reports natively, so it gets
+# none. A wrapper (`env claude`, harness word env), a prefix assignment, and a
+# compound command hide what runs, so they get no reporter either. The
+# stand-in agent reports whether a reporter pidfile <state>/.osc7501watch-*
+# exists while it runs.
+test_raw_launch_reporter_follows_established_agent() {
+  local rec id out status launch raw want n=0 oldbin newbin result
+  for raw in 'old|REPORTER-ARMED' 'new|NO-REPORTER' 'env claude --flag|NO-REPORTER' \
+    'FOO=1 claude --flag|NO-REPORTER' 'compound|NO-REPORTER'; do
+    want=${raw#*|}
+    raw=${raw%|*}
+    n=$((n + 1))
+    id=raw-native-$n-z15
+    rec=$(make_spawn_case "raw-native-$n" claude "$id")
+    read_case_record "$rec"
+    oldbin="$CASE_DIR/oldbin"
+    newbin="$CASE_DIR/newbin"
+    mkdir -p "$oldbin" "$newbin"
+    cat > "$oldbin/claude" <<'SH'
+#!/bin/sh
+[ "$1" = --version ] && { echo "1.0.0 (Claude Code)"; exit 0; }
+if ls "${FM_TASK_INBOX%/*}"/.osc7501watch-* >/dev/null 2>&1; then echo REPORTER-ARMED; else echo NO-REPORTER; fi
+SH
+    sed 's/1\.0\.0/2.1.316/' "$oldbin/claude" > "$newbin/claude"
+    chmod +x "$oldbin/claude" "$newbin/claude"
+    case "$raw" in
+      old) raw="$oldbin/claude --flag" ;;
+      new) raw="$newbin/claude --flag" ;;
+      compound) raw="$oldbin/claude --flag && true" ;;
+    esac
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "$raw")
+    status=$?
+    expect_code 0 "$status" "raw launch '$raw' should spawn: $out"
+    launch=$(cat "$LAUNCH_LOG")
+    : > "$CASE_DIR/tty"
+    result=$(cd "$CASE_DIR" && isolated_pane_env REX_BLOCK=b1 \
+      PATH="$oldbin:$PATH" FM_OSC7501_TTY="$CASE_DIR/tty" /bin/sh -c "$launch" 2>&1)
+    status=$?
+    expect_code 0 "$status" "staged launch for raw '$raw' failed: $result"
+    assert_contains "$result" "$want" "raw '$raw' reporter state: $result"
+  done
+  pass "a raw launch keeps a reporter only for an established agent below its native floor"
 }
 
 test_chained_raw_launch_strips_ai_trailer_in_every_step() {
@@ -713,7 +948,7 @@ test_chained_raw_launch_strips_ai_trailer_in_every_step() {
     "$id" "$PROJ_DIR" "cd . && git commit -q --allow-empty --trailer 'Co-authored-by: Cursor <cursoragent@cursor.com>' -m 'fix: chained raw launch'")
   status=$?
   expect_code 0 "$status" "chained raw launch should spawn: $out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   (
     cd "$WT_DIR" || exit 1
     unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
@@ -755,11 +990,11 @@ SH
   assert_meta_profile "$HOME_DIR/state/raw-agy-z16.meta" agy default default
   grep -qx 'agy_posture=raw' "$HOME_DIR/state/raw-agy-z16.meta" || fail 'raw agy launch was mislabeled as a wired native worker'
   ! grep -q '^agy_bypass=\|^agy_judge=' "$HOME_DIR/state/raw-agy-z16.meta" || fail 'raw agy launch inherited legacy policy state'
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   # Byte-exact like the other raw-launch pins in this file: the generic fleet
   # prefixes (private tmux server, compact-adviser switch, task inbox, AI-
   # trailer hooks, identity-marker scrub) wrap the command but never touch it.
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(fm_test_launch_git_prefix "$launch")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(fm_test_launch_git_prefix "$launch")export FM_HOME='$HOME_DIR'; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
     || fail "raw agy launch command changed"$'\n'"actual: $launch"
 
   # The claude case needs its own pane path: the first spawn's lease holds WT_DIR.
@@ -771,8 +1006,8 @@ SH
   expect_code 0 "$status" "raw launch naming claude should spawn: $out"
   assert_contains "$out" "spawned raw-claude-z17 harness=claude" "raw claude launch did not record the claude harness name"
   assert_meta_profile "$HOME_DIR/state/raw-claude-z17.meta" claude default default
-  launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(fm_test_launch_git_prefix "$launch")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(fm_test_launch_git_prefix "$launch")export FM_HOME='$HOME_DIR'; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
     || fail "raw claude launch command changed"$'\n'"actual: $launch"
 
   [ ! -s "$probe_log" ] || fail "raw launches executed the adapter binaries they name: $(cat "$probe_log")"
@@ -795,6 +1030,7 @@ SH
 # one channel a raw command has to reference the brief or worktree.
 test_raw_launch_leaves_adapter_placeholders_untouched() {
   local rec id out status launch brief_path
+  # shellcheck disable=SC2100 # A literal task id, not arithmetic on the raw variable.
   id=raw-placeholders-z18
   rec=$(make_spawn_case raw-placeholders claude "$id")
   read_case_record "$rec"
@@ -806,7 +1042,7 @@ test_raw_launch_leaves_adapter_placeholders_untouched() {
     "$id" "$PROJ_DIR" 'agy __AGYBIN__ --dirs __PERMISSIONDIRS__ __MODELFLAG__ __EFFORTFLAG__ __CLAUDEATTRIBUTION__ __BRIEFDOORBELL__ __CLAUDEADDDIRS__ --brief __BRIEF__')
   status=$?
   expect_code 0 "$status" "raw launch carrying adapter placeholders should spawn: $out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "agy __AGYBIN__ --dirs __PERMISSIONDIRS__ __MODELFLAG__ __EFFORTFLAG__ __CLAUDEATTRIBUTION__ __BRIEFDOORBELL__ __CLAUDEADDDIRS__" \
     "raw launch rewrote adapter placeholders the operator typed"
   assert_not_contains "$launch" "--add-dir" \
@@ -828,7 +1064,7 @@ test_claude_threads_model_and_effort() {
   status=$?
   expect_code 0 "$status" "claude spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude sonnet high
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --model 'sonnet' --effort 'high'" \
     "claude launch did not thread model and effort flags"
   assert_not_contains "$launch" "--tui-mode" "non-Pi launches must not receive Pi's TUI mode override"
@@ -845,7 +1081,7 @@ test_codex_threads_model_and_effort() {
   status=$?
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --add-dir" \
     "codex launch did not thread model and reasoning effort config"
   pass "codex receives --model and model_reasoning_effort profile flags"
@@ -869,7 +1105,7 @@ test_codex_catalog_max_effort() {
     status=$?
     expect_code 0 "$status" "catalog-supported max spawn should succeed"
     assert_meta_profile "$HOME_DIR/state/$id.meta" codex "$model" max
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     assert_contains "$launch" "model_reasoning_effort=\"max\"" "catalog-supported max missing from launch"
     assert_not_contains "$out" "omitting effort flag" "supported max incorrectly warned"
   done
@@ -895,7 +1131,7 @@ test_codex_unavailable_catalog_max_effort() {
       status=$?
       expect_code 0 "$status" "unavailable catalog should preserve spawn behavior"
       assert_meta_profile "$HOME_DIR/state/$id.meta" codex "$model" max
-      launch=$(cat "$LAUNCH_LOG")
+      launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
       if [ "$model" = gpt-5.6-luna ]; then
         assert_contains "$launch" "model_reasoning_effort=\"max\"" "Luna fallback lost max"
       else
@@ -918,7 +1154,7 @@ test_codex_threads_model_and_max_effort() {
   status=$?
   expect_code 0 "$status" "codex Luna spawn with max effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.6-luna max
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "codex --model 'gpt-5.6-luna' -c 'model_reasoning_effort=\"max\"' --add-dir" \
     "codex launch did not thread Luna's max reasoning effort config"
   pass "codex Luna receives --model and model_reasoning_effort max profile flags"
@@ -935,7 +1171,7 @@ test_codex_omits_max_effort_for_unsupported_model() {
   status=$?
   expect_code 0 "$status" "codex spawn with an unsupported model max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "codex --model 'gpt-5' --add-dir" \
     "codex launch did not preserve the model flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported model max reasoning effort"
@@ -956,7 +1192,7 @@ test_codex_crewmate_launch_disables_the_hook_layer() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "codex crewmate spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "--disable hooks" \
     "codex crewmate launch did not disable the hook layer that blocks it on a trust modal"
   # The opposite posture: this flag RUNS the untrusted hooks instead of
@@ -981,7 +1217,7 @@ test_codex_secondmate_launch_keeps_the_hook_layer() {
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
   status=$?
   expect_code 0 "$status" "codex secondmate spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_not_contains "$launch" "--disable hooks" \
     "codex secondmate launch disabled the project hooks its own primary supervision depends on"
   pass "a codex secondmate keeps the project hook layer its primary session runs on"
@@ -997,7 +1233,7 @@ test_grok_threads_model_and_reasoning_effort() {
   status=$?
   expect_code 0 "$status" "grok spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" grok grok-4 high
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "grok --always-approve --model 'grok-4' --reasoning-effort 'high'" \
     "grok launch did not thread model and reasoning-effort flags"
   assert_not_contains "$launch" "--effort" "grok launch must use --reasoning-effort, not --effort"
@@ -1014,7 +1250,7 @@ test_grok_omits_invalid_max_reasoning_effort() {
   status=$?
   expect_code 0 "$status" "grok spawn with unsupported max reasoning effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" grok grok-4 max
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "grok --always-approve --model 'grok-4' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < " \
     "grok launch did not preserve the model flag and typed brief when max effort was omitted"
   assert_not_contains "$launch" "--reasoning-effort" "grok launch must omit unsupported max reasoning effort"
@@ -1033,7 +1269,7 @@ test_grok_omits_invalid_xhigh_reasoning_effort() {
   status=$?
   expect_code 0 "$status" "grok spawn with unsupported xhigh reasoning effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" grok grok-4 xhigh
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "grok --always-approve --model 'grok-4' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < " \
     "grok launch did not preserve the model flag and typed brief when xhigh effort was omitted"
   assert_not_contains "$launch" "--reasoning-effort" "grok launch must omit unsupported xhigh reasoning effort"
@@ -1052,7 +1288,7 @@ test_cursor_threads_model_workspace_and_omits_effort_axis() {
   status=$?
   expect_code 0 "$status" "cursor spawn with a model-qualified reasoning class should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" cursor cursor-grok-4.5-high high
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "--trust --yolo --model 'cursor-grok-4.5-high' --workspace '$WT_DIR'" \
     "cursor launch did not carry trust, autonomy, model, and exact workspace flags"
   # The executable is RESOLVED, never named: `cursor` is not the CLI, so a
@@ -1104,7 +1340,7 @@ test_cursor_failed_catalog_probe_does_not_block_spawn() {
       --model cursor-catalog-unreachable)
   status=$?
   expect_code 0 "$status" "cursor spawn should fail open when the bounded catalog query fails"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "--model 'cursor-catalog-unreachable'" \
     "failed catalog lookup incorrectly removed the requested model"
   assert_meta_profile "$HOME_DIR/state/$id.meta" cursor cursor-catalog-unreachable default
@@ -1218,7 +1454,7 @@ test_opencode_refuses_pending_startup_composer() {
   status=$?
   expect_code 1 "$status" "OpenCode must refuse an unproven startup composer"
   assert_contains "$out" "composer did not become ready" "readiness refusal must identify the failed gate"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_not_contains "$launch" "Read the brief at" "no brief may be typed into a pending composer"
   pass "OpenCode refuses brief submission into a pending startup composer"
 }
@@ -1238,7 +1474,7 @@ test_opencode_unrecognized_settled_startup_fails_open() {
       FM_OPENCODE_READY_POLLS=1 FM_OPENCODE_POLL_INTERVAL=0.01 \
       run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
     status=$?
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     if [ "$screen" = unrecognized ]; then
       expect_code 0 "$status" "a settled idle composer under an unfamiliar row must fail open: $out"
       assert_contains "$out" "notice: OpenCode V2 screen shape is unrecognized" "fail-open must say why it typed"
@@ -1314,7 +1550,7 @@ test_opencode_exposes_firstmate_skills_in_launch_config() {
     fi
     status=$?
     expect_code 0 "$status" "OpenCode $kind skill-source spawn failed: $out"
-    IFS= read -r launch < "$LAUNCH_LOG"
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     config="$CASE_DIR/opencode-config.json"
     cat > "$FAKEBIN_DIR/opencode" <<'SH'
 #!/usr/bin/env bash
@@ -1348,7 +1584,7 @@ test_opencode_threads_model_and_effort_variant() {
   status=$?
   expect_code 0 "$status" "opencode spawn with model and effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 high
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "\"agents\":{\"build\":{\"model\":\"anthropic/claude-sonnet-4-5#high\"}}}" \
     "OpenCode V2 agent model must carry the effort variant"
   assert_contains "$launch" "opencode --standalone --auto" "OpenCode must use a private server"
@@ -1369,7 +1605,7 @@ test_opencode_without_effort_keeps_launch_config_unchanged() {
   status=$?
   expect_code 0 "$status" "opencode spawn without effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 default
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" \
     "\"model\":\"anthropic/claude-sonnet-4-5\"" \
     "opencode launch without effort must keep the model config byte-identical"
@@ -1387,7 +1623,7 @@ test_opencode_emits_variant_for_openai_family_effort() {
   status=$?
   expect_code 0 "$status" "opencode spawn with an openai model and effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode openai/gpt-5.6-sol xhigh
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" \
     "\"agents\":{\"build\":{\"model\":\"openai/gpt-5.6-sol#xhigh\"}}}" \
     "opencode launch did not write the openai family effort as the build agent's variant"
@@ -1404,7 +1640,7 @@ test_opencode_omits_variant_when_model_family_lacks_effort() {
   status=$?
   expect_code 0 "$status" "opencode spawn with an unsupported family effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 medium
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" \
     "\"model\":\"anthropic/claude-sonnet-4-5\"" \
     "opencode must keep the model config when the model family lacks the effort"
@@ -1435,7 +1671,7 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
         --harness "$harness" --model codex-native/gpt-6-astra --effort ultra --mode "$mode" --yolo off)
       expect_code 0 "$?" "native Ultra spawn failed: $out"
       assert_meta_profile "$HOME_DIR/state/$id.meta" "$harness" codex-native/gpt-6-astra ultra
-      launch=$(cat "$LAUNCH_LOG")
+      launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
       assert_contains "$launch" "--model 'codex-native/gpt-6-astra' --codex-effort 'ultra'" "native Ultra flag missing"
       assert_not_contains "$launch" "--thinking" "native Ultra was converted into Pi thinking"
       assert_not_contains "$launch" "'max'" "native Ultra was aliased to max"
@@ -1499,7 +1735,7 @@ test_codex_ultra_refuses_unproved_support() {
   read_case_record "$rec"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra --effort ultra)
   expect_code 0 "$?" "supported codex ultra should launch: $out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" 'model_reasoning_effort="ultra"' "direct codex ultra config missing"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-6-astra ultra
   assert_task_launch_uses_probed_executable codex "$launch"
@@ -1631,8 +1867,9 @@ test_codex_optins_pin_the_probed_configuration_root() {
     expected=$selected
     [ "$optin" != both ] || expected=$(printf '%s\n%s' "$selected" "$selected")
     assert_equals "$expected" "$(cat "$CASE_DIR/probe-root.log")" "Codex $scenario probed a different configuration root"
+    # The OSC 7501 frame spans lines; run the agent command it wraps.
     env PATH="$FAKEBIN_DIR:$PATH" HOME="$CASE_DIR/pane-home" CODEX_HOME="$CASE_DIR/pane-root" \
-      bash -c "$(head -1 "$LAUNCH_LOG")" || fail "Codex $scenario inherited invalid pane configuration"
+      bash -c "$(fm_test_launch_unframe "$(sed '/fm-osc7501[.]sh.* disarm --state /q' "$LAUNCH_LOG")")" || fail "Codex $scenario inherited invalid pane configuration"
     assert_equals "$selected" "$(cat "$FAKEBIN_DIR/native-worker-config-root")" \
       "Codex $scenario launch substituted a configuration root after validation"
   done
@@ -1660,8 +1897,8 @@ test_claude_ultracode_optin() {
   printf 'claude\n' > "$FAKEBIN_DIR/goal-harness"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model opus --effort low)
   expect_code 0 "$?" "supported ultracode should launch: $out"
-  launch=$(cat "$LAUNCH_LOG")
-  assert_task_launch_uses_probed_executable claude "$(head -1 "$LAUNCH_LOG")"
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
+  assert_task_launch_uses_probed_executable claude "$(fm_test_launch_unframe "$(sed '/fm-osc7501[.]sh.* disarm --state /q' "$LAUNCH_LOG")")"
   assert_contains "$launch" '"ultracode":true' "ultracode setting missing"
   assert_contains "$launch" "--effort 'low'" "ultracode changed the explicit effort"
   assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
@@ -1931,7 +2168,7 @@ test_goal_first_native_input() {
     printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal 'Reply with smoke')
     expect_code 0 "$?" "native $harness goal launch failed: $out"
-    launch=$(head -1 "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(sed '/fm-osc7501[.]sh.* disarm --state /q' "$LAUNCH_LOG")")
     assert_task_launch_uses_probed_executable "$harness" "$launch"
     assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
@@ -2194,12 +2431,14 @@ test_batch_preserves_native_ultra() {
   read_case_record "$rec"
   prepare_batch_slots
   enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id1" clear pi codex-native/gpt-6-astra ultra
+  record_dispatch "$HOME_DIR" "$id2" clear pi codex-native/gpt-6-astra ultra
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness pi --model codex-native/gpt-6-astra --effort ultra)
   expect_code 0 "$?" "native Ultra batch failed: $out"
   assert_meta_profile "$HOME_DIR/state/$id1.meta" pi codex-native/gpt-6-astra ultra
   assert_meta_profile "$HOME_DIR/state/$id2.meta" pi codex-native/gpt-6-astra ultra
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "--codex-effort 'ultra'" "batch dropped native effort"
   assert_not_contains "$launch" "--thinking 'ultra'" "batch passed an invalid Pi level"
   pass "batch dispatch preserves native Ultra in metadata and launch flags"
@@ -2251,7 +2490,7 @@ test_pi_threads_model_and_max_effort() {
   status=$?
   expect_code 0 "$status" "pi spawn with max effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" pi openai-codex/gpt-5.6-sol max
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --tui-mode regular --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
     "pi launch did not force the regular TUI while threading the requested model and max thinking level"
   assert_not_contains "$launch" "FM_FIRSTMATE_PI_LAUNCH_BRIEF=" \
@@ -2273,7 +2512,7 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity() {
   expect_code 0 "$status" "pi-signed spawn with max effort should succeed"
   assert_contains "$out" "spawned $id harness=pi-signed" "pi-signed spawn did not preserve its visible identity"
   assert_meta_profile "$HOME_DIR/state/$id.meta" pi-signed openai-codex/gpt-5.6-sol max
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
     "pi-signed launch did not force the regular TUI with Pi's model, thinking, and extension semantics"
   assert_contains "$launch" "fm-operational-input.sh' encode launch-brief" \
@@ -2298,7 +2537,7 @@ test_pi_tui_mode_probe_is_safe_for_old_and_new_pi() {
         "$id" "$PROJ_DIR")
       status=$?
       expect_code 0 "$status" "$harness $version spawn should succeed"
-      launch=$(cat "$LAUNCH_LOG")
+      launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
       assert_contains "$launch" "'$FAKEBIN_DIR/$harness'" \
         "$harness $version launch must use the executable selected for probing"
       assert_not_contains "$launch" "FM_PI_HARNESS=$harness $harness" \
@@ -2359,7 +2598,7 @@ test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity() {
   cmp -s "$ROOT/AGENTS.md" "$sm/AGENTS.md" || fail "secondmate launch rewrote the supervisor contract"
   cmp -s "$CASE_DIR/charter-before" "$sm/data/charter.md" || fail "secondmate launch rewrote the charter"
   assert_absent "$HOME_DIR/data/$id/launch-brief.md" "secondmate launch received a worker overlay"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "< '$sm/data/charter.md'" "secondmate launch lost its original charter"
   assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --approve -e '$sm/.pi/extensions/fm-primary-turnend-guard.ts' -e '$sm/.pi/extensions/fm-primary-pi-watch.ts'" \
     "pi-signed secondmate did not force the regular TUI with Pi's primary extension launch shape and seeded-home --approve"
@@ -2386,7 +2625,7 @@ test_pi_seeded_secondmate_preapproves_project_trust() {
     out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
     status=$?
     expect_code 0 "$status" "$harness seeded secondmate spawn should succeed"
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     assert_contains "$launch" "'$FAKEBIN_DIR/$harness'" \
       "$harness secondmate must launch the probed executable"
     assert_contains "$launch" "--approve" \
@@ -2406,7 +2645,7 @@ test_pi_worker_launch_omits_seeded_home_approve() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "pi ship spawn should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --tui-mode regular" \
     "pi worker launch lost its regular TUI probe"
   assert_not_contains "$launch" "--approve" \
@@ -2468,7 +2707,7 @@ test_pi_seeded_secondmate_respects_saved_project_trust() {
           ;;
         *)
           expect_code 0 "$status" "$harness $mode must still launch"
-          launch=$(cat "$LAUNCH_LOG")
+          launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
           assert_contains "$launch" '--approve' "allowed seeded home lost --approve"
           assert_contains "$launch" "PI_CODING_AGENT_DIR='$HOME_DIR/pi-agent'" \
             "launch did not retain the checked trust store"
@@ -2495,7 +2734,7 @@ test_pi_approve_probe_omits_unsupported_flag() {
       run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
     status=$?
     expect_code 0 "$status" "$harness without --approve must still spawn"
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     assert_contains "$launch" "'$FAKEBIN_DIR/$harness'" \
       "$harness without --approve must still launch the probed executable"
     assert_not_contains "$launch" "--approve" \
@@ -2529,7 +2768,7 @@ test_pi_exclude_tools_reach_ship_and_scout_launches() {
       fi
       status=$?
       expect_code 0 "$status" "$harness $kindflag spawn with exclusions should succeed"$'\n'"$out"
-      launch=$(cat "$LAUNCH_LOG")
+      launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
       assert_contains "$launch" "--exclude-tools 'mcp__tracker__editIssue,mcp__tracker__createPage,mcp__other-srv__tool.v2' " \
         "$harness $kindflag launch must carry the comma-joined, quoted exclusion list"
     done
@@ -2807,7 +3046,7 @@ test_pi_exclude_tools_do_not_leak_across_homes_or_to_secondmates() {
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id_a" "$sm" --secondmate)
   status=$?
   expect_code 0 "$status" "Pi secondmate spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "fm-primary-turnend-guard.ts" "secondmate launch was not the Pi secondmate shape"
   assert_not_contains "$launch" "--exclude-tools" "a secondmate's own agent must not receive the worker exclusions"
   pass "exclusions stay in the home that configured them and skip secondmate agents"
@@ -2821,6 +3060,8 @@ test_batch_forwards_shared_profile_flags() {
   read_case_record "$rec"
   prepare_batch_slots
   enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id1" clear codex gpt-5 high
+  record_dispatch "$HOME_DIR" "$id2" escalate
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --model gpt-5 --effort high)
@@ -2846,7 +3087,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
     run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
@@ -2861,7 +3102,7 @@ test_lavish_server_address_is_exported_to_worker_launch() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "a configured Lavish server address should allow the worker spawn"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "export LAVISH_AXI_HOST='100.99.161.42';" \
     "worker launch did not export the primary-owned Lavish server address"
   pass "the primary-owned Lavish server address reaches every worker launch"
@@ -2883,7 +3124,7 @@ SH
     run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "an absent Lavish host configuration should allow the worker spawn"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_not_contains "$launch" "LAVISH_AXI_HOST" \
     "an absent configuration changed the host in the worker launch"
   assert_not_contains "$(cat "$pane_log")" "LAVISH_AXI_HOST" \
@@ -2906,7 +3147,7 @@ test_claude_omits_config_dir_prefix_when_unset() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude spawn without CLAUDE_CONFIG_DIR should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_not_contains "$launch" "CLAUDE_CONFIG_DIR=" \
     "claude launch must not add a config-dir prefix when firstmate has no CLAUDE_CONFIG_DIR set"
   pass "claude omits the config-dir prefix when firstmate runs with the single-store default"
@@ -2922,7 +3163,7 @@ test_non_claude_harness_ignores_config_dir() {
     run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "codex spawn with CLAUDE_CONFIG_DIR set should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_not_contains "$launch" "CLAUDE_CONFIG_DIR=" \
     "non-claude harness launch must not receive the claude-specific config-dir prefix"
   pass "non-claude harnesses do not receive the claude CLAUDE_CONFIG_DIR prefix"
@@ -2955,7 +3196,7 @@ test_claude_task_launch_carries_control_channel_authority() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude crewmate spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "--append-system-prompt 'You are a task worker launched by Firstmate" \
     "claude task launch did not establish Firstmate through the system-prompt channel"
   assert_contains "$launch" "launch-brief record named by the initial user message" \
@@ -2981,7 +3222,7 @@ test_claude_secondmate_launch_omits_task_control_channel_authority() {
     run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
   status=$?
   expect_code 0 "$status" "secondmate claude spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_not_contains "$launch" "--append-system-prompt" \
     "persistent secondmate launch received a task-worker control-channel statement"
   pass "a persistent claude secondmate keeps its supervisor contract without a task-worker authority overlay"
@@ -3002,7 +3243,7 @@ test_claude_long_launch_is_delivered_intact() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "long Claude launch should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   expected=$(fork_claude_expected_launch "$launch" "$HOME_DIR" "$id")
   [ "${#expected}" -gt 1024 ] \
     || fail "Claude regression fixture is too short to cover the terminal line limit: ${#expected} bytes"
@@ -3022,7 +3263,7 @@ test_claude_crewmate_launch_carries_the_attribution_policy() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude crewmate spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_attribution_policy "$launch" "claude crewmate"
   [ -d "$HOME_DIR/state/$id.git-hooks" ] || fail "default config did not install the AI trailer hooks"
   pass "a claude crewmate launch carries the attribution-off policy in its own settings"
@@ -3038,7 +3279,7 @@ test_keep_ai_trailers_omits_attribution_settings_keeps_gate_hooks() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude spawn with keep-ai-trailers should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_attribution_policy_absent "$launch" "opted-in claude"
   assert_contains "$launch" "fm-git-strip-ai-trailers.sh' env-file" \
     "opted-in launch dropped the hooksPath that runs the publish gate"
@@ -3068,7 +3309,7 @@ test_keep_ai_trailers_reaches_secondmate_crew_launches() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$crew_id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "secondmate crew spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_attribution_policy_absent "$launch" "secondmate crew claude"
   assert_contains "$launch" "fm-git-strip-ai-trailers.sh' env-file" \
     "secondmate crew launch dropped the hooksPath that runs the publish gate"
@@ -3087,7 +3328,7 @@ test_claude_secondmate_launch_carries_the_attribution_policy() {
     run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
   status=$?
   expect_code 0 "$status" "secondmate claude spawn should succeed"$'\n'"$out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_attribution_policy "$launch" "claude secondmate"
   pass "a claude secondmate launch carries the attribution-off policy too"
 }
@@ -3121,7 +3362,7 @@ test_worker_permission_modes() {
       out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness "$harness")
       status=$?
       expect_code 0 "$status" "$harness $mode spawn failed: $out"
-      launch=$(cat "$LAUNCH_LOG")
+      launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
       assert_not_contains "$launch" 'dangerously' 'worker must not enable bypass'
       assert_not_contains "$launch" '__PERMISSIONDIRS__' 'directory placeholder leaked'
       state_real=$(cd "$HOME_DIR/state" && pwd -P)
@@ -3159,7 +3400,7 @@ test_worker_permission_modes() {
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "$raw_command" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "raw Codex launch with its own manual flags should succeed: $out"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" 'codex --sandbox workspace-write --ask-for-approval on-request' \
     'raw Codex launch did not preserve its own manual permission flags'
   assert_not_contains "$launch" '--approve-for-me' 'raw Codex launch must not receive canonical auto-review flags'
@@ -3183,7 +3424,7 @@ test_codex_secondmate_permission_modes() {
     out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate --harness codex)
     status=$?
     expect_code 0 "$status" "codex secondmate $mode spawn failed: $out"
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     assert_not_contains "$launch" 'dangerously' 'secondmate must not enable bypass'
     assert_not_contains "$launch" '__PERMISSIONDIRS__' 'directory placeholder leaked'
     case "$mode" in
@@ -3264,7 +3505,7 @@ test_worker_permissions_trim_surrounding_whitespace() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
     status=$?
     expect_code 0 "$status" "whitespace around $expected must not refuse: $out"
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     assert_contains "$launch" "--permission-mode $expected" "trimmed $expected mode was not applied"
     assert_not_contains "$launch" 'dangerously' 'worker must not enable bypass'
   done
@@ -3305,7 +3546,7 @@ test_worker_permissions_inherited_by_secondmate() {
   expect_code 0 "$status" "secondmate spawn with a primary permission mode should succeed: $out"
   cmp -s "$HOME_DIR/config/crew-permissions" "$sm/config/crew-permissions" \
     || fail "secondmate did not inherit the primary's worker permission mode over its own"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" '--ask-for-approval on-request' 'secondmate launch did not use the manual mode'
   (
     # shellcheck source=/dev/null
@@ -3352,7 +3593,7 @@ SH
       "$id" "$PROJ_DIR" --harness "/bin/sh '$probe'")
     status=$?
     expect_code 0 "$status" "allowlist=$setting spawn should succeed: $out"
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     for pane_shell in /bin/sh /bin/bash /bin/zsh; do
       [ -x "$pane_shell" ] || continue
       pane_path=$(env -i HOME="$HOME_DIR/user-home" PATH=/usr/bin:/bin TERM=xterm \
@@ -3592,7 +3833,7 @@ SH
     assert_grep 'When a needed command fails with a Codex sandbox permission error' \
       "$HOME_DIR/data/$id/launch-brief.md" \
       "$kind Codex auto brief did not carry reviewed-sandbox retry guidance"
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     envelope="$CASE_DIR/prompt-envelope"
     encoded="$CASE_DIR/encoded-prompt"
     prompt="$CASE_DIR/prompt"
@@ -3685,7 +3926,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flags>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "$(fm_test_worker_tmux_prefix "$2/state/$3.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")export FM_HOME='$2'; env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 # An upstream-only config/claude-permission-mode file is not read in this fork:
@@ -3701,7 +3942,7 @@ test_upstream_claude_permission_mode_file_cannot_select_bypass() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "claude spawn beside an ignored claude-permission-mode file should succeed"
-  launch=$(cat "$LAUNCH_LOG")
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "claude --permission-mode auto" "the reviewed default permission mode was not kept"
   assert_not_contains "$launch" "--dangerously-skip-permissions" "a claude-permission-mode file must not select bypass"
   pass "an upstream config/claude-permission-mode file cannot select a bypass launch"
@@ -3735,7 +3976,7 @@ test_claude_worker_launch_covers_task_channel_dirs() {
       fi
       status=$?
       expect_code 0 "$status" "claude $kind spawn under $mode should succeed"$'\n'"$out"
-      launch=$(cat "$LAUNCH_LOG")
+      launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
 
       eval_out=$(fm_eval_launch "$launch" "$WT_DIR" "$FAKEBIN_DIR" "FM_FAKE_CLAUDE_REQUIREMENTS=$reqs" 2>&1)
       eval_rc=$?
@@ -3763,8 +4004,17 @@ test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
 test_lane_route_records_model_family
+test_recorded_dispatch_selection_refuses_conflicting_flags
+test_recorded_dispatch_selection_allows_matching_flags
+test_recorded_dispatch_selection_allows_recorded_override
+test_recorded_dispatch_selection_leaves_unset_effort_unbound
+test_recorded_dispatch_selection_refuses_raw_launch_without_override
+test_active_dispatch_without_task_record_is_refused
+test_batch_checks_each_task_against_its_own_record
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
+test_raw_launch_trailing_separator_or_comment_keeps_disarm
+test_raw_launch_reporter_follows_established_agent
 test_chained_raw_launch_strips_ai_trailer_in_every_step
 test_raw_launch_naming_a_verified_adapter_runs_verbatim
 test_raw_launch_leaves_adapter_placeholders_untouched

@@ -127,7 +127,9 @@
 # (_fm_composer_row_is_composer_furniture): one unclaimed activity row
 # (`Working on request...`) makes the whole run activity and the envelope above
 # it stale, and a row leading with the SAME glyph the envelope was proven by
-# (`❯ my typed draft`) is a live composer that keeps winning. Where a shape
+# (`❯ my typed draft`) is a live composer that keeps winning. The one exception
+# is the selected row of Claude 2.1.291's slash-command popup, which carries
+# that glyph too (_fm_composer_bare_is_popup_selection). Where a shape
 # cannot demonstrate which it is, the refusal is the answer. The zone is
 # bounded further by a blank row, and an envelope that closed over no glyph row
 # (codex's `permissions: YOLO mode` startup banner) proves nothing and demotes
@@ -691,6 +693,7 @@ fm_busy_lines_match() {  # [harness]
       claude) regex=$FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT ;;
       devin) regex=$FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT ;;
       cortex) regex=$FM_DELIVERY_CORTEX_BUSY_REGEX_DEFAULT ;;
+      hermes) regex='^[[:space:]]*─.*·[[:space:]]*[0-9]+([.][0-9]+)?s[[:space:]]*│|^[[:space:]]*([a-z0-9][a-z0-9_-]*[[:space:]]+)?❯[[:space:]]+Ctrl[+]C to interrupt…' ;;
       commandcode) regex=$FM_DELIVERY_COMMANDCODE_BUSY_REGEX_DEFAULT ;;
       codex) regex=$FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT ;;
       opencode) regex=$FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT ;;
@@ -2226,63 +2229,82 @@ _fm_composer_locate_footer_zone() {  # <plain>
     && [ "$FM_COMPOSER_SCAN_BARE_ROW" -le "$FM_COMPOSER_FOOTER_LAST" ]
 }
 
-# Claude's command menu can sit below the closing rule (2.1.316). Its indented
-# selection marker is not a second composer. Require a nonempty slash draft
-# inside a complete glyph-proven pair, command/description columns below it,
-# and one selected command matching that draft. Unknown trailing activity
-# still invalidates the menu proof; this can never expose an empty composer.
-_fm_composer_select_claude_command_menu() { # <plain-screen>
-  local plain=$1 draft raw tail selected=0 entries=0 ended=0 continuation='' trimmed glyph
-  local entry_re='^  (❯ |  )(/[[:alnum:]_.:-]+)([[:space:]]{2,})[^[:space:]]'
-  [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" = 1 ] \
-    && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = '❯' ] \
-    && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -eq "$((FM_COMPOSER_SCAN_PI_OPEN + 1))" ] \
-    && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -eq "$((FM_COMPOSER_SCAN_PI_GLYPH_ROW + 1))" ] || return 1
-  draft=$(_fm_composer_screen_row "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" "$plain")
-  fm_composer_normalize_trim_var draft
-  draft=${draft#❯}
-  fm_composer_normalize_trim_var draft
-  [[ $draft =~ ^/[[:alnum:]_.:-]*$ ]] || return 1
-  tail=$(printf '%s\n' "$plain" | sed -n "$((FM_COMPOSER_SCAN_PI_CLOSE + 2)),\$p")
-  while IFS= read -r raw; do
-    if [ -z "${raw//[[:space:]]/}" ]; then
-      ended=1
-    elif [ "$ended" = 1 ]; then
-      return 1
-    elif [[ $raw =~ $entry_re ]]; then
-      if [ "${BASH_REMATCH[1]}" = '❯ ' ]; then
-        [ "${BASH_REMATCH[2]}" = "$draft" ] || return 1
-        selected=$((selected + 1))
-      fi
-      printf -v continuation '%*s' "$((4 + ${#BASH_REMATCH[2]} + ${#BASH_REMATCH[3]}))" ''
-      entries=$((entries + 1))
-    else
-      [ "$entries" -gt 0 ] || return 1
-      case "$raw" in "$continuation"[![:space:]]*) ;; *) return 1 ;; esac
-      trimmed=$raw
-      fm_composer_normalize_trim_var trimmed
-      fm_composer_leading_prompt_glyph_var glyph "$trimmed" && return 1
-      fm_composer_row_has_edge "$trimmed" && return 1
-    fi
-  done <<EOF
-$tail
-EOF
-  [ "$selected" = 1 ] || return 1
-  FM_COMPOSER_SELECTED_KIND=bare
-  FM_COMPOSER_SELECTED_FIRST=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
-  FM_COMPOSER_SELECTED_LAST=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
-  FM_COMPOSER_SELECTED_AMBIG=0
-  FM_COMPOSER_SELECTED_COMMAND_MENU=1
+# _fm_composer_bare_is_popup_selection: 0 when bare agent-glyph <row> is the
+# selected row of a slash-command suggestion popup, not a composer of its own.
+# Claude Code 2.1.291 marks the selected suggestion with the same `❯` its
+# composer uses (`  ❯ /exit    Exit the CLI`, where 2.1.289 drew it unmarked),
+# so that row became the bottom-most bare candidate and the whole popup was
+# read as the typed text. It runs after _fm_composer_locate_footer_zone, whose
+# FM_COMPOSER_FOOTER_AFTER and FM_COMPOSER_FOOTER_GLYPH name the envelope the
+# popup sits under. Every condition must hold, so that the demotion can only
+# swap one non-empty read for another and never move a verdict toward `empty`:
+#   - the row lies below the closing row of a glyph-proven envelope;
+#   - that envelope's own glyph row leads with its agent glyph on <plain-screen>,
+#     the borderless row the caller falls back to;
+#   - that glyph row holds typed text opening with `/`, the only input that
+#     opens the popup, so the envelope it falls back to is non-empty. It is read
+#     from <screen> through _fm_composer_row_content, the same ghost-stripped
+#     view the verdict and the extractor read;
+#   - the row opens `/` (or `…`, a name truncated to its column) and carries a
+#     gap of two or more spaces before its description. A numbered-choice
+#     dialog row (`❯ 1. Yes`) has neither, and stays a bare candidate;
+#   - the row names the typed text itself (a `…` name, its tail). Enter runs
+#     the selected suggestion, so an abbreviated draft (`/ex` over a selected
+#     `/exit`) keeps the old reading and its payload proof refuses.
+_fm_composer_bare_is_popup_selection() {  # <plain-screen> <screen> <styled> <row>
+  local plain=$1 screen=$2 styled=$3 row=$4 trimmed glyph='' rest draft name
+  [ "$row" -ge 0 ] && [ "$FM_COMPOSER_FOOTER_GLYPH" -ge 0 ] \
+    && [ "$row" -gt "$FM_COMPOSER_FOOTER_AFTER" ] || return 1
+  trimmed=$(_fm_composer_screen_row "$FM_COMPOSER_FOOTER_GLYPH" "$plain")
+  fm_composer_normalize_trim_var trimmed
+  fm_composer_leading_agent_glyph_var glyph "$trimmed" || return 1
+  rest=$(_fm_composer_screen_row "$FM_COMPOSER_FOOTER_GLYPH" "$screen")
+  rest=$(_fm_composer_row_content "$rest" "$styled")
+  rest=${rest#"$glyph"}
+  fm_composer_normalize_trim_var rest
+  case "$rest" in /*) ;; *) return 1 ;; esac
+  draft=$rest
+  trimmed=$(_fm_composer_screen_row "$row" "$plain")
+  fm_composer_normalize_trim_var trimmed
+  fm_composer_leading_agent_glyph_var glyph "$trimmed" || return 1
+  rest=${trimmed#*"$glyph"}
+  fm_composer_normalize_trim_var rest
+  [[ $rest =~ ^(/|…)[^[:space:]].*[[:space:]]{2,}[^[:space:]] ]] || return 1
+  name=${rest%%[[:space:]]*}
+  case "$name" in
+    …*) [ -n "${name#…}" ] && [ "${draft%"${name#…}"}" != "$draft" ] ;;
+    *) [ "$name" = "$draft" ] ;;
+  esac
 }
 
-_fm_composer_select_cursorless() {
-  local plain=$1 generic=-1 next boundary raw trimmed glyph bare footer=0
+# _fm_composer_bare_rule_sandwich: 0 when bare agent-glyph <row> sits in its
+# own titled composer: a titled rule directly above it and the screen's only
+# unmatched separator directly below it, which is that composer's closing rule.
+#
+# The cursorless staleness rule reads an unmatched separator BELOW a candidate
+# as proof the candidate is scrollback. A titled top rule never opens the
+# separator pair, so the composer's own closing rule becomes that unmatched
+# separator and a genuinely idle composer read `unknown`. Adjacency on BOTH
+# edges keeps the staleness rule intact everywhere else: a glyph stranded in
+# scrollback has transcript rows, not its own rules, around it.
+_fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
+  local plain=$1 row=$2 above below
+  [ "$row" -ge 1 ] || return 1
+  [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -eq "$((row + 1))" ] || return 1
+  below=$(_fm_composer_screen_row "$((row + 1))" "$plain")
+  fm_composer_normalize_trim_var below
+  _fm_composer_pi_separator_row "$below" || return 1
+  above=$(_fm_composer_screen_row "$((row - 1))" "$plain")
+  fm_composer_normalize_trim_var above
+  _fm_composer_titled_rule_row "$above" "${below//─/ }"
+}
+
+_fm_composer_select_cursorless() {  # <plain-screen> <screen> <styled>
+  local plain=$1 screen=$2 styled=$3 generic=-1 next boundary raw trimmed glyph bare footer=0
   FM_COMPOSER_SELECTED_KIND=
   FM_COMPOSER_SELECTED_FIRST=-1
   FM_COMPOSER_SELECTED_LAST=-1
   FM_COMPOSER_SELECTED_AMBIG=0
-  FM_COMPOSER_SELECTED_COMMAND_MENU=0
-  _fm_composer_select_claude_command_menu "$plain" && return 0
   if _fm_composer_locate_footer_zone "$plain"; then footer=1; fi
   if [ "$FM_COMPOSER_SCAN_BOX_BOTTOM" -ge 0 ]; then
     generic=$FM_COMPOSER_SCAN_BOX_BOTTOM
@@ -2295,9 +2317,10 @@ _fm_composer_select_cursorless() {
   # harness's own furniture, never a composer. The envelope it sits under is
   # what the screen actually shows, so when that envelope's proving glyph row
   # is itself borderless, the bare candidate moves UP to it; otherwise the
-  # envelope (box, left bar) stays selected on its own.
+  # envelope (box, left bar) stays selected on its own. The selected row of the
+  # slash-command popup under that envelope is demoted the same way.
   bare=$FM_COMPOSER_SCAN_BARE_ROW
-  if [ "$footer" = 1 ]; then
+  if [ "$footer" = 1 ] || _fm_composer_bare_is_popup_selection "$plain" "$screen" "$styled" "$bare"; then
     trimmed=$(_fm_composer_screen_row "$FM_COMPOSER_FOOTER_GLYPH" "$plain")
     fm_composer_normalize_trim_var trimmed
     if fm_composer_leading_agent_glyph_var glyph "$trimmed"; then
@@ -2510,7 +2533,7 @@ EOF
   _fm_composer_normalize_codex_animation_screen_var screen "$styled"
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   _fm_composer_scan_screen "$plain" '' 1
-  _fm_composer_select_devin "$plain" || _fm_composer_select_agy "$plain" || _fm_composer_select_cursorless "$plain" || return 1
+  _fm_composer_select_devin "$plain" || _fm_composer_select_agy "$plain" || _fm_composer_select_cursorless "$plain" "$screen" "$styled" || return 1
   if [ "$FM_COMPOSER_SELECTED_KIND" = agy ] && [ "$styled" = 1 ]; then
     screen=${screen//"$FM_COMPOSER_AGY_HINT_STYLED"/}
   fi
@@ -2668,6 +2691,32 @@ fm_composer_dialog_sink_release() {
   fi
 }
 
+# Hermes TUI 0.21.7: profile-prefixed ❯ prompt immediately below the status
+# rule; placeholder text is dim, while typed drafts are bright. Identity is
+# required, and dialogs, wrapped drafts, non-ready status and unstyled reads
+# remain unproven. The hook record, never this row, owns semantic busy state.
+_fm_composer_hermes_state() {  # <screen> <styled>
+  local screen=$1 styled=$2 stripped
+  [ "$styled" = 1 ] || { printf 'unknown'; return; }
+  # The busy hint uses xterm orange 178, above the shared dim threshold.
+  # Strip only the captured native synthetic cursor chip plus that exact hint;
+  # the same words typed in the normal bright input color remain a draft.
+  local esc=$'\033' hint
+  hint="${esc}[38;5;231m${esc}[48;5;178mC${esc}[38;5;178m${esc}[49mtrl+C to interrupt…${esc}[39m"
+  screen=${screen//"$hint"/}
+  stripped=$(printf '%s\n' "$screen" | fm_composer_strip_ghost | fm_composer_strip_ansi)
+  printf '%s\n' "$stripped" | awk '
+    { rows[NR]=$0 }
+    END {
+      last=NR; while (last>0 && rows[last] ~ /^[[:space:]]*$/) last--
+      # Never interpret a palette or arbitrary output as the composer.
+      if (last<2 || rows[last] !~ /^[[:space:]]*([a-z0-9][a-z0-9_-]*[[:space:]]+)?❯/) { print "unknown"; exit }
+      if (rows[last-1] !~ /^[[:space:]]*─[[:space:]]+.*│.*│/) { print "unknown"; exit }
+      text=rows[last]; sub(/^[[:space:]]*([a-z0-9][a-z0-9_-]*[[:space:]]+)?❯[[:space:]]*/, "", text)
+      if (text ~ /^[[:space:]]*$/) print "empty"; else print "pending"
+    }'
+}
+
 fm_composer_classify_screen() {  # <caps> <screen> [cursor_row] [identity]
   local caps=$1 screen=$2 cy=${3:-} identity=${4:-}
   local styled=0 cursor=0 has_identity=0 cortex_proven=0 cortex_ask=0 kv plain
@@ -2698,6 +2747,10 @@ EOF
   [ "$cursor" = 1 ] || cy=''
   if [ -n "$cy" ]; then
     case "$cy" in *[!0-9]*) printf 'unknown'; return 0 ;; esac
+  fi
+  if [ "$has_identity" = 1 ] && [ "${identity%%$'\t'*}" = hermes ]; then
+    _fm_composer_hermes_state "$screen" "$styled"
+    return
   fi
   _fm_composer_normalize_codex_animation_screen_var screen "$styled" "$cy"
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
@@ -2789,14 +2842,8 @@ EOF
   # No cursor: the bottom-most shape wins, with the pi-separator staleness
   # rules layered on (a live pi composer pair below the generic candidate
   # proves that candidate stale).
-  if ! _fm_composer_select_cursorless "$plain"; then
+  if ! _fm_composer_select_cursorless "$plain" "$screen" "$styled"; then
     printf 'unknown'
-    return 0
-  fi
-  # The menu proves a nonempty draft even if a theme dims the slash text.
-  # Selecting that draft must never turn a previously pending menu empty.
-  if [ "$FM_COMPOSER_SELECTED_COMMAND_MENU" = 1 ]; then
-    printf 'pending'
     return 0
   fi
   case "$FM_COMPOSER_SELECTED_KIND" in

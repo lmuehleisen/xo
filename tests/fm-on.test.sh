@@ -365,6 +365,8 @@ cat > "$DOCTOR_BIN/uname" <<'SH'
 printf 'Linux\n'
 SH
 chmod +x "$DOCTOR_BIN/uname"
+# These tool-resolution assertions require Herdr specifically; the unqualified
+# doctor accepts either remote backend, covered by fm-remote-doctor.test.sh.
 # The missing-tool case must prove absence even on a host that has the
 # doctor's required tools installed on its base PATH, so the PATH this run
 # sees resolves everything except them.
@@ -372,7 +374,7 @@ DOCTOR_SANS=$(fm_test_base_path_sans "/usr/bin:/bin:/usr/sbin:/sbin" \
   herdr tasks-axi treehouse claude codex opencode pi pi-signed grok kimi) \
   || fail "could not build a base PATH without the required tools"
 set +e
-out=$(HOME="$DOCTOR_HOME" PATH="$DOCTOR_BIN:$DOCTOR_SANS" "$ROOT/bin/fm-remote-doctor.sh" 2>&1)
+out=$(HOME="$DOCTOR_HOME" PATH="$DOCTOR_BIN:$DOCTOR_SANS" "$ROOT/bin/fm-remote-doctor.sh" --backend herdr 2>&1)
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || fail "the remote doctor passed with a missing required tool"
@@ -398,7 +400,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$DOCTOR_BIN/treehouse"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$DOCTOR_BIN/claude"
 chmod +x "$DOCTOR_BIN/jq" "$DOCTOR_BIN/herdr" "$DOCTOR_BIN/tasks-axi" "$DOCTOR_BIN/treehouse" "$DOCTOR_BIN/claude"
 set +e
-out=$(HOME="$DOCTOR_HOME" PATH="$DOCTOR_BIN:/usr/bin:/bin:/usr/sbin:/sbin" "$ROOT/bin/fm-remote-doctor.sh" 2>&1)
+out=$(HOME="$DOCTOR_HOME" PATH="$DOCTOR_BIN:/usr/bin:/bin:/usr/sbin:/sbin" "$ROOT/bin/fm-remote-doctor.sh" --backend herdr 2>&1)
 rc=$?
 set -e
 assert_contains "$out" "required git=$DOCTOR_BIN/git" "the remote doctor did not report where the required tool resolved"

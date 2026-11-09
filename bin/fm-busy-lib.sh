@@ -351,6 +351,7 @@ fm_busy_sources_for_harness() {  # <harness>
     agy) adapter=agy-hook ;;
     devin) adapter=devin-hook ;;
     cortex) adapter=cortex-hook ;;
+    hermes) adapter=hermes-hook ;;
     commandcode) adapter=commandcode-mod ;;
     polytoken) adapter=polytoken-hook ;;
     kiro) adapter=kiro-hook ;;

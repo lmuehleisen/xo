@@ -238,7 +238,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: a pull request is presented as ready only when every check is green, the review settle window has passed, and unresolved bot review threads have been read, and a finished task whose PR was still pending is rechecked; `AGENTS.md` section 9 and the ship-landing skill.
 - Class: intended.
-- Seam: the readiness hunks in `bin/fm-pr-state.sh`, `bin/fm-pr-check.sh` (`--pending`), `bin/fm-pr-poll.sh` (`--validated-readiness`), `bin/fm-pr-lib.sh`, `bin/fm-branch-prompt.sh`, `bin/fm-branch-outcome.sh`, `bin/fm-teardown.sh`, and the watcher, the readiness line in `AGENTS.md`, the ship-landing skill, and the evidence in `docs/verification/supervision.md` (shared).
+- Seam: the readiness hunks in `bin/fm-pr-state.sh`, `bin/fm-pr-check.sh` (`--pending`, which upstream's scan registration also uses), `bin/fm-pr-poll.sh` (`--validated-readiness`), `bin/fm-pr-lib.sh`, `bin/fm-branch-prompt.sh`, `bin/fm-branch-outcome.sh`, `bin/fm-teardown.sh`, and the watcher, the readiness line in `AGENTS.md`, the ship-landing skill, and the evidence in `docs/verification/supervision.md` (shared).
 - Guard: `tests/fm-pr-state.test.sh` `test_bot_threads_and_settle`; `tests/fm-pr-check-security.test.sh` `test_finished_pr_readiness_followup`; `tests/fm-branch-supervision.test.sh`.
 - Upstream: treats green checks as ready without the bot-thread settle window or the pending recheck.
 
@@ -272,11 +272,12 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### claude-command-menu-composer
 
-- Intent: a Claude selected-command menu rendered below the closing rule is not read as a second composer, so a slash draft is not mistaken for an accepted payload.
+- Intent: a slash draft is proven only when the selected command in Claude's menu names that draft, because Enter runs the selected suggestion.
 - Class: carried.
-- Seam: `_fm_composer_select_claude_command_menu` and its call in `bin/fm-composer-lib.sh`, and the "Claude selected command menu below the composer" record in `docs/verification/runtime-backends.md` (shared).
-- Guard: `test_selected_content_excludes_claude_command_menu` in `tests/fm-composer-lib.test.sh`; the two selected-command cases in `tests/fm-backend-herdr.test.sh`.
-- Upstream: has open fix candidates but none merged; take upstream's version and drop this patch once one lands and works, keeping only the regression tests that still pass against it.
+- Seam: the name-match condition at the end of `_fm_composer_bare_is_popup_selection` in `bin/fm-composer-lib.sh`, the bare-`/` case in `test_claude_slash_popup_marked_row_is_not_a_second_composer`, and the fork paragraph of the "Claude selected command menu below the composer" record in `docs/verification/runtime-backends.md` (shared).
+- Guard: `test_selected_content_excludes_claude_command_menu` and `test_claude_slash_popup_marked_row_is_not_a_second_composer` in `tests/fm-composer-lib.test.sh`; the two selected-command cases in `tests/fm-backend-herdr.test.sh`.
+- Upstream: [upstream #6695](https://github.com/kunchenguid/firstmate/pull/6695) demotes the menu's marked row to the slash draft above it, which the fork adopts in place of its own selector; upstream makes no name check, so a bare `/` or an abbreviated draft proves the typed text although Enter would run a different command.
+  Drop the condition once upstream refuses a draft that differs from the selected command.
 
 ### devin-adapter-mechanics
 
@@ -306,6 +307,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Upstream: binds slot-owner claims to process lifetimes, permitting clean slots to be reused after their owner dies; the durable lease instead protects a task's existing checkout until explicit guarded return.
   Upstream #6213 permits records-only retirement when a slot claim names another task; the fork requires independent landed, endpoint, recorded-branch and current-owner proof, and refuses a lease held by another holder.
   Generic prelaunch rollback returns a provably unstarted clean lease; post-launch adapter cleanup otherwise follows upstream and retains unresolved lease receipts for explicit recovery.
+  Upstream's Herdr-only lease that starts the pane's top-level shell in the copy ([upstream #8052](https://github.com/kunchenguid/firstmate/pull/8052)) is not taken: the fork's universal receipt lease and child-shell launch boundary already preserve the copy, while a restored Herdr pane reopens at its original directory rather than inside the copy.
+  Its suite `tests/fm-spawn-herdr-lease.test.sh` pins that top-level-shell entry and is not carried; the slow-entry tolerance and single cd resend in `spawn_assert_agent_worktree` (upstream #8139) are kept.
 
 ### claude-trust-escape
 
@@ -367,6 +370,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
   The Claude live guard verifies complete record-backed payload delivery; upstream's separate 8 KiB digest cap (upstream #5554) remains unapplied to typed-envelope carriers.
   The upstream lost-hand-back notice is retained; the fork resets its failure episode only after a rewake commits, so a failed hand-back keeps the once-per-episode notice.
   The fork takes upstream's second attended-alarm writer and reasoned suppressed continuations, but an actionable close still rewakes after an alarm and ends that episode where upstream suppresses it, so a real wake is never swallowed by a leftover alarm.
+  Upstream now registers the same script under `StopFailure` and paces error-ended continuations ([upstream #8134](https://github.com/kunchenguid/firstmate/pull/8134)); the fork's registration passes `--stop-failure`, whose single recovery turn after the limit reset or a bounded backoff owns that edge, and upstream's pacing covers only a payload delivered without that flag.
 
 ### away-inject-delivery-proof
 
@@ -436,11 +440,11 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### contribution-poll-history
 
-- Intent: settled contribution history takes bounded local read passes while live contributions retain their existing observation and signal behavior.
+- Intent: an invalid owner id on a settled contribution still reports its diagnostic although settled history needs no record read.
 - Class: carried.
-- Seam: batched owner classification in `poll` in `bin/fm-contributions.sh` (shared).
-- Guard: `tests/fm-contributions.test.sh` `test_settled_history_uses_bounded_local_reads`, `test_settled_invalid_owner_keeps_diagnostic`, `test_settled_history_keeps_first_matching_record`, terminal settlement and late-owner cases.
-- Upstream: rereads the complete saved history for each settled URL and owner; drop once equivalent batched classification avoids that repeated work.
+- Seam: the `settled` branch of the owner classification loop in `poll` in `bin/fm-contributions.sh` (shared).
+- Guard: `tests/fm-contributions.test.sh` `test_settled_invalid_owner_keeps_diagnostic`, with `test_settled_history_uses_bounded_local_reads` and `test_settled_history_keeps_first_matching_record` pinning the adopted batching.
+- Upstream: classifies every owner in one history read ([upstream #8023](https://github.com/kunchenguid/firstmate/pull/8023)), which the fork adopts in place of its own batching, but skips settled owners silently; drop once upstream reports an invalid settled owner.
 
 ### codex-catalog-effort
 
