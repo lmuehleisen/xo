@@ -57,8 +57,10 @@ SH
   commit_all "$repo" merged
   # A fixed-string grep would treat the collector's `.` as a literal period.
   # Column numbers would shift the text so definitions no longer match.
+  # Color on grep lines would hide the revision prefix, so every record drops.
   git -C "$repo" config grep.patternType fixed
   git -C "$repo" config grep.column true
+  git -C "$repo" config color.grep always
 }
 
 test_both_directions_and_a_comment_are_reported() {

@@ -56,7 +56,8 @@ collect_lines() {  # <rev> <dest>
   local raw=$work/raw rc
   # -G keeps `.` a basic regexp when grep.patternType is fixed.
   # --no-column keeps the text free of a column field when grep.column is set.
-  git -c color.ui=never grep --no-column -n -I -G -e . "$1" -- bin tests >"$raw" 2>"$work/grep.err"
+  # --no-color wins over color.grep=always, which color.ui=never does not.
+  git -c color.ui=never grep --no-color --no-column -n -I -G -e . "$1" -- bin tests >"$raw" 2>"$work/grep.err"
   rc=$?
   if [ "$rc" -gt 1 ]; then
     echo "error: git grep failed for $1" >&2
