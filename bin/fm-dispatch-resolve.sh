@@ -9,7 +9,8 @@
 #
 # Opt-in gate: FM_DISPATCH_PROVIDER and FM_DISPATCH_MODEL select the provider
 #   and model from the environment or $FM_HOME/.env (environment wins). With no
-#   provider set, retain the original typesafe.ai/jev-latest key gate exactly.
+#   provider set, TypeSafe uses jev-latest. TYPESAFE_BASE selection and validation
+#   follow docs/configuration.md "Typed dispatch resolution".
 #   OpenRouter and OpenAI require both their provider selection and a model.
 #   The generic systemone provider requires a model and FM_DISPATCH_BASE_URL
 #   (http:// or https://) and posts to <base>/v1/systemone; its optional
@@ -156,6 +157,12 @@
 #     preferred_provider: <family and preference or fallback decision, when applied>
 #        (with the shared-quota opt-out: <harness>:<model> provider=.. -> eligible (quota ranking off: home declares a single shared quota))
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
+#   Task record: for <data>/<id>/brief.md, where <data> is FM_DATA_OVERRIDE,
+#   else $FM_HOME/data, every run first removes
+#   <data>/<id>/dispatch-resolution.json, then every outcome except exit 2 writes
+#   {"task", "status" (clear, ambiguous, escalate, error, or off), "profile"}
+#   there; profile holds harness, model, and effort on clear and is null
+#   otherwise. fm-spawn.sh reads it as the task's dispatch decision.
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
 #   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie
@@ -164,8 +171,8 @@
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, missing jq, an unknown
 #   provider, invalid credential sources, a non-typesafe provider without a
-#   model, systemone without a valid base URL, an unknown --lane, or an
-#   undeclared --exclude-family or --data-tag), which is
+#   model, an invalid TYPESAFE_BASE, systemone without a valid base URL, an
+#   unknown --lane, or an undeclared --exclude-family or --data-tag), which is
 #   actionable, never selected around.
 #
 # Private call history: bin/fm-dispatch-history-lib.sh owns the append-only
@@ -208,7 +215,7 @@
 #
 # Environment:
 #   FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, FM_DISPATCH_BASE_URL,
-#   FM_DISPATCH_API_KEY, OPENAI_API_KEY, TYPESAFE_API_KEY, and
+#   FM_DISPATCH_API_KEY, OPENAI_API_KEY, TYPESAFE_API_KEY, TYPESAFE_BASE, and
 #   OPENROUTER_API_KEY are read from the environment or $FM_HOME/.env.
 #   An environment-only OpenRouter key cannot activate the implicit fallback.
 #
@@ -290,8 +297,27 @@ OA_TIMEOUT=10
 DEFAULT_WHEN="No listed rule applies to this task."
 
 die() { HISTORY_REASON='usage or configuration error'; printf 'error: %s\n' "$1" >&2; exit 2; }
+record_task() {
+  [ -n "$TASK_RECORD" ] || return 0
+  if ! { jq -cn --arg task "$TASK_ID" --arg status "$1" --argjson profile "${2:-null}" \
+      '{task: $task, status: $status, profile: $profile}' > "$TASK_RECORD.tmp.$$" \
+      && mv -f -- "$TASK_RECORD.tmp.$$" "$TASK_RECORD"; } 2>/dev/null; then
+    rm -f -- "$TASK_RECORD.tmp.$$"
+    echo "dispatch-resolve: could not write $TASK_RECORD" >&2
+    return 1
+  fi
+}
+# Callers set HISTORY_REASON first when the history needs a narrower reason.
+resolver_off() {
+  HISTORY_STATUS=off
+  [ -n "$HISTORY_REASON" ] || HISTORY_REASON=$1
+  echo "dispatch-resolve: off ($1)" >&2
+  record_task off || true
+  exit 0
+}
 no_rules() {
   HISTORY_STATUS=escalate HISTORY_REASON='no rules to match'
+  record_task escalate || true
   printf 'dispatch-resolve:\n  status: escalate\n  reason: no rules to match\n'
   exit 0
 }
@@ -300,6 +326,7 @@ emit_error() {
   # HTTP diagnostics may include an arbitrary response body; retain only the
   # error category in history so a server cannot echo secrets into the log.
   HISTORY_STATUS=error HISTORY_REASON=${reason%%: *} RESULT='{}'
+  record_task error || true
   echo "dispatch-resolve: error ($reason)" >&2
   printf 'dispatch-resolve:\n  status: error\n  reason: %s\n' "$reason"
   exit 0
@@ -345,6 +372,19 @@ while [ $# -gt 0 ]; do
     *) [ -z "$BRIEF" ] || die "one brief file only"; BRIEF=$1; shift ;;
   esac
 done
+TASK_ID='' TASK_RECORD=''
+# Matched against the same data directory fm-brief.sh and fm-spawn.sh use, so a
+# FM_DATA_OVERRIDE home records where fm-spawn.sh reads.
+task_dir=$(CDPATH='' cd -- "$(dirname -- "$BRIEF")" 2>/dev/null && pwd -P) || task_dir=''
+data_dir=$(CDPATH='' cd -- "${FM_DATA_OVERRIDE:-$FM_HOME/data}" 2>/dev/null && pwd -P) || data_dir=''
+if [ "$(basename -- "$BRIEF")" = brief.md ] && [ -n "$task_dir" ] && [ -n "$data_dir" ] \
+  && [ "$(dirname -- "$task_dir")" = "$data_dir" ]; then
+  TASK_ID=$(basename -- "$task_dir")
+  TASK_RECORD="$task_dir/dispatch-resolution.json"
+  if [ -e "$TASK_RECORD" ] || [ -L "$TASK_RECORD" ]; then
+    rm -f -- "$TASK_RECORD" || die "could not clear the previous dispatch resolution: $TASK_RECORD"
+  fi
+fi
 
 # One cheap local lookup: a harness counts as installed when ANY launch
 # location the single-owner table in bin/fm-control-lib.sh accepts exists - a
@@ -408,10 +448,42 @@ select_key() {
   [ -n "${!var}" ] || printf -v "$var" '%s' "$(fmx_env_get "$name" "$FM_HOME/.env")"
   [ -n "${!var}" ] || declared_key "$provider" "$var"
   if [ -z "${!var}" ]; then
-    HISTORY_STATUS=off HISTORY_REASON='API key absent'
-    echo "dispatch-resolve: off ($name absent from the environment and $FM_HOME/.env)" >&2
-    exit 0
+    HISTORY_REASON='API key absent'
+    resolver_off "$name absent from the environment and $FM_HOME/.env"
   fi
+}
+
+# Select and validate the same optional base for implicit and explicit TypeSafe.
+# Never echo a rejected value: a misconfigured URL may contain credentials.
+select_typesafe_base() {
+  local base=${TYPESAFE_BASE:-}
+  [ -n "$base" ] || base=$(fmx_env_get TYPESAFE_BASE "$FM_HOME/.env")
+  [ -n "$base" ] || return 0
+  command -v jq >/dev/null 2>&1 || die "jq required"
+  jq -en --arg base "$base" '
+    def ipv4:
+      split(".") | length == 4 and all(.[];
+        test("\\A(0|[1-9][0-9]{0,2})\\z") and (tonumber <= 255));
+    def ipv6:
+      # An IPv4 tail occupies two of the eight IPv6 groups.
+      (if contains(".") then
+        split(":") | if (.[-1] | ipv4) then .[-1] = "0:0" | join(":") else "!" end
+       else . end) |
+      split("::") as $sides |
+      if ($sides | length) == 1 then
+        test("\\A[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){7}\\z")
+      elif ($sides | length) == 2 then
+        all($sides[]; test("\\A([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*)?\\z")) and
+        (split(":") | map(select(length > 0)) | length < 8)
+      else false end;
+    $base | capture("\\Ahttps?://(?<host>\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9._-]+)(:(?<port>[0-9]+))?(?<path>/[^?#[:space:]\\\\]*)?\\z"; "i") |
+    ((.path // "") | (contains("[") or contains("]")) | not) and
+    (if .host | startswith("[") then .host[1:-1] | ipv6
+     else true end) and
+    (.port == null or (.port | tonumber | . >= 1 and . <= 65535))
+  ' >/dev/null 2>&1 || die "TYPESAFE_BASE must be an http(s) URL with a host and no userinfo, query, fragment, whitespace, or brackets in its path"
+  while [ "${base%/}" != "$base" ]; do base=${base%/}; done
+  TS_BASE=$base
 }
 
 # A named lane sends no Choice request and needs no provider or credential.
@@ -426,6 +498,7 @@ case "$DISPATCH_PROVIDER" in
   '')
     DISPATCH_PROVIDER=typesafe
     DISPATCH_MODEL=$TS_MODEL
+    select_typesafe_base
     [ -n "$TYPESAFE_API_KEY_PRIVATE" ] || TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
     [ -n "$TYPESAFE_API_KEY_PRIVATE" ] || declared_key typesafe TYPESAFE_API_KEY_PRIVATE
     if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
@@ -434,13 +507,13 @@ case "$DISPATCH_PROVIDER" in
       DISPATCH_MODEL='~typesafe/jev-latest'
     fi
     if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
-      HISTORY_STATUS=off HISTORY_REASON='API key absent'
-      echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback)" >&2
-      exit 0
+      HISTORY_REASON='API key absent'
+      resolver_off "TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback"
     fi
     ;;
   typesafe)
     [ -n "$DISPATCH_MODEL" ] || DISPATCH_MODEL=$TS_MODEL
+    select_typesafe_base
     select_key typesafe TYPESAFE_API_KEY TYPESAFE_API_KEY_PRIVATE
     ;;
   openrouter)
@@ -464,9 +537,8 @@ case "$DISPATCH_PROVIDER" in
     [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openai"
     [ -n "$OPENAI_API_KEY_PRIVATE" ] || OPENAI_API_KEY_PRIVATE=$(fmx_env_get OPENAI_API_KEY "$FM_HOME/.env")
     if [ -z "$OPENAI_API_KEY_PRIVATE" ]; then
-      HISTORY_STATUS=off HISTORY_REASON='API key absent'
-      echo "dispatch-resolve: off (OPENAI_API_KEY absent from the environment and $FM_HOME/.env)" >&2
-      exit 0
+      HISTORY_REASON='API key absent'
+      resolver_off "OPENAI_API_KEY absent from the environment and $FM_HOME/.env"
     fi
     ;;
   *) die "unknown FM_DISPATCH_PROVIDER: $DISPATCH_PROVIDER (expected typesafe, openrouter, systemone, or openai)" ;;
@@ -676,9 +748,8 @@ TASK_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA"; die "mktemp failed"; }
 SEND_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA" "$TASK_TEXT"; die "mktemp failed"; }
 
 never_send_off() {
-  HISTORY_STATUS=off HISTORY_REASON=$1
-  echo "dispatch-resolve: off ($1; nothing sent)" >&2
-  exit 0
+  HISTORY_REASON=$1
+  resolver_off "$1; nothing sent"
 }
 
 # Checks the endpoint and every string the final request body carries,
@@ -776,12 +847,12 @@ else
   HISTORY_MODEL=$DISPATCH_MODEL
   T0=$(fm_timing_now_ms)
   if [ -n "$KEY_PRIVATE" ]; then
-    HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
+    HTTP=$(printf '%s' "$BODY" | curl --globoff -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
       -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
       -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$KEY_PRIVATE") \
       --data-binary @- 2>/dev/null) || HTTP=000
   else
-    HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
+    HTTP=$(printf '%s' "$BODY" | curl --globoff -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
       -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
       --data-binary @- 2>/dev/null) || HTTP=000
   fi
@@ -799,11 +870,11 @@ else
   if [ "$DISPATCH_PROVIDER" = openai ]; then
     jq -e '
       (.answers | type) == "array" and
-      ([.answers[] | select(type == "object" and .name == "rule")]) as $rule |
+      (([.answers[] | select(type == "object" and .name == "rule")]) as $rule |
       ($rule | length) == 1 and $rule[0].type == "choice" and
       ($rule[0].probabilities | type) == "array" and
       all($rule[0].probabilities[]; type == "object" and (.value | type) == "string") and
-      ($rule[0].probabilities | map(.value) | length) == ($rule[0].probabilities | map(.value) | unique | length)' \
+      ($rule[0].probabilities | map(.value) | length) == ($rule[0].probabilities | map(.value) | unique | length))' \
       "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
     if ! jq --arg model "$DISPATCH_MODEL" '
       ([.answers[] | select(type == "object" and .name == "rule")][0]) as $a |
@@ -1278,5 +1349,9 @@ TEXT=$(jq -r '
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
       + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end) else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
+STATUS=$(jq -r '.status' <<<"$RESULT") || emit_error "status rendering failed"
+PROFILE=$(jq -c 'if .chosen then .chosen.profile | {harness, model: (.model // null), effort: (.effort // null)} else null end' <<<"$RESULT") \
+  || emit_error "profile rendering failed"
+record_task "$STATUS" "$PROFILE" || emit_error "could not record the dispatch resolution"
 printf '%s\n' "$TEXT"
 exit 0

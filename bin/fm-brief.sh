@@ -678,7 +678,7 @@ HERDR_SECTION=$(printf '%s\n' \
 'For tmux-based lab primaries, `bin/fm-lab-home.sh` owns the short private socket directory; do not place `TMUX_TMPDIR` under the lab home or worktree.' \
 'Use `LAB_HOME_HELPER='"$(shell_quote "$FM_ROOT/bin/fm-lab-home.sh")"'`, then `LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$FM_HOME")` and launch tmux with `TMUX_TMPDIR="$LAB_TMUX_DIR"`.' \
 'Use `TMUX_TMPDIR` only to launch that server: once its directory is gone, a `TMUX_TMPDIR` lookup falls back to the default server, so address it afterwards only through its explicit socket, `tmux -S "$LAB_TMUX_DIR/tmux-$(id -u)/default"`.' \
-'Your single EXIT cleanup trap must stop only that server with `tmux -S "$LAB_TMUX_DIR/tmux-$(id -u)/default" kill-server`, call `"$LAB_HOME_HELPER" teardown "$FM_HOME"`, and call the lab session teardown below; do not install a second trap that replaces either cleanup.' \
+'Your single EXIT cleanup trap must stop only that server with `tmux -S "$LAB_TMUX_DIR/tmux-$(id -u)/default" kill-server`, and only while that socket exists, call `"$LAB_HOME_HELPER" teardown "$FM_HOME"`, and call the lab session teardown below; do not install a second trap that replaces either cleanup.' \
 '' \
 '1. Set `HERDR_LAB_HELPER='"$HERDR_LAB_HELPER"'` and generate the session name with `HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name '"$ID"')`.' \
 '   Install the combined EXIT cleanup before provisioning, then provision only with `"$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION"`.' \
@@ -688,11 +688,10 @@ HERDR_SECTION=$(printf '%s\n' \
 '   It re-checks refuse-default immediately before stop and again immediately before delete, and fails closed on ambiguity.' \
 '4. If an experiment requires a deliberate mid-run session stop, use only `"$HERDR_LAB_HELPER" stop "$HERDR_LAB_SESSION"`; it performs the same immediate refuse-default check.' \
 '5. Forbidden commands: direct `herdr server stop`, every other server-global operation such as `herdr server live-handoff` or reload/update operations, direct `herdr session stop`, direct `herdr session delete`, and any Herdr call scoped only by ambient or inline `HERDR_SESSION`.' \
-'6. The helper records the live default session before provisioning and verifies the identical fleet state after teardown.' \
-'   A missing, stopped, or changed default session is a hard tripwire failure, never a cleanup warning to ignore.' \
+'6. See the `bin/fm-herdr-lab.sh` header for the fleet-state tripwire and `FM_HERDR_LAB_FLEET_SESSION` rule.' \
+'   A missing, stopped, or changed fleet session is a hard tripwire failure, never a cleanup warning to ignore.' \
 '' \
-'Never bypass the helper, even for a read-only lifecycle probe or cleanup after failure.' \
-'The captain fleet uses the running `default` session.')
+'Never bypass the helper, even for a read-only lifecycle probe or cleanup after failure.')
 else
 IFS= read -r -d '' HERDR_SECTION <<'EOF' || true
 # Herdr lifecycle declaration - NOT ENABLED

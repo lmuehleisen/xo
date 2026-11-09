@@ -154,9 +154,19 @@ else
 fi
 
 # Serialize writers. The lock protects seq advancement and the sidecar/record
-# pair; a holder that died mid-write is broken after FM_BUSY_LOCK_STALE_SECS.
+# pair; a holder that died mid-write is broken once its lock is
+# FM_BUSY_LOCK_STALE_SECS old. A waiter keeps polling until that age can have
+# been reached, so a lock orphaned moments ago by a killed writer (teardown
+# kills a worker whose exit hook may be mid-write) is broken on the first try
+# instead of refused until some later retry. A lock that stays younger than the
+# stale bound for the whole wait - live writers repeatedly re-taking it, or an
+# mtime in the future - still ends in a lock-timeout refusal, about
+# FM_BUSY_LOCK_STALE_SECS + 2 seconds after the wait began.
 lock_acquire() {
-  local tries=0 now mtime age
+  local stale=${FM_BUSY_LOCK_STALE_SECS:-5} start now mtime age
+  case "$stale" in ''|*[!0-9]*) stale=5 ;; esac
+  stale=$((10#$stale))
+  start=$(date +%s)
   # mkdir's exit status is not the arbiter: uutils coreutils before 0.11.0 can
   # report success for a directory a concurrent acquirer created. The noclobber
   # create inside the directory is; a lost race leaves the winner's lock
@@ -169,23 +179,25 @@ lock_acquire() {
       fi
       rmdir "$LOCK" 2>/dev/null || true
     fi
-    tries=$((tries + 1))
-    if [ "$tries" -ge 40 ]; then
-      now=$(date +%s)
-      mtime=$(lock_mtime "$LOCK" || true)
-      # Anything unreadable or non-numeric reads as "just created", so an
-      # unforeseen stat surprise degrades to a lock-timeout refusal instead of
-      # aborting the writer - and its caller, fm-teardown.sh - under `set -u`.
-      case "$mtime" in ''|*[!0-9]*) mtime=$now ;; esac
-      age=$((now - mtime))
-      if [ "$age" -ge "${FM_BUSY_LOCK_STALE_SECS:-5}" ]; then
-        rmdir "$LOCK" 2>/dev/null || rm -rf "$LOCK" 2>/dev/null || true
-        if mkdir "$LOCK" 2>/dev/null \
-          && (set -C; : > "$LOCK/.owner") 2>/dev/null; then
-          return 0
-        fi
-        rmdir "$LOCK" 2>/dev/null || true
+    now=$(date +%s)
+    mtime=$(lock_mtime "$LOCK" || true)
+    # Anything unreadable or non-numeric reads as "just created", so an
+    # unforeseen stat surprise degrades to a lock-timeout refusal instead of
+    # aborting the writer - and its caller, fm-teardown.sh - under `set -u`.
+    case "$mtime" in ''|*[!0-9]*) mtime=$now ;; esac
+    age=$((now - mtime))
+    if [ "$age" -ge "$stale" ]; then
+      rmdir "$LOCK" 2>/dev/null || rm -rf "$LOCK" 2>/dev/null || true
+      if mkdir "$LOCK" 2>/dev/null \
+        && (set -C; : > "$LOCK/.owner") 2>/dev/null; then
+        return 0
       fi
+      rmdir "$LOCK" 2>/dev/null || true
+    fi
+    # Whole-second clocks: once stale + 2 seconds have passed since the wait
+    # began, any lock that already existed then has crossed the stale bound
+    # above, so only a younger, re-taken lock can still be in the way.
+    if [ $((now - start)) -gt $((stale + 1)) ]; then
       echo "error: busy-state lock timeout for $ID" >&2
       return 1
     fi

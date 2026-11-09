@@ -14,6 +14,9 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
 fi
 
 fm_test_run \
+  test_colliding_endpoints_keep_independent_stale_history \
+  test_long_endpoint_keeps_stale_history \
+  test_window_keys_encode_supported_endpoint_bytes \
   test_pi_stream_silence_uses_inspection_timer \
   test_pi_model_progress_and_legacy_fallback \
   test_pi_stream_publication_lock_revalidation \

@@ -31,11 +31,17 @@ Until the new scripts have their own CI measurements, their hints round up the s
 Their combined case inventories remain unchanged: 160 watcher-triage cases and 37 attended-host cases.
 Refresh these conservative case-based estimates from the new scripts' own successful CI markers once available.
 Observed maxima provide packing inputs rather than upper bounds on future runner variance.
+The 2026-11-08 `tests/fm-capacity-auto.test.sh` (36243 ms), `tests/fm-lane-capacity-integration.test.sh` (48000 ms), and `tests/fm-lane-vitals.test.sh` (5077 ms) serial hints are provisional local measurements from one `bin/fm-test-run.sh` run on a loaded macOS host, until the next CI refresh replaces them with Ubuntu timing-artifact maxima.
 The 2026-10-23 Kimi folder-prompt live guard, `tests/fm-kimi-trust-prompt-live-e2e.test.sh`, carries a provisional 60 ms skip measured on the Linux host that recorded its captures, until the next CI refresh replaces it with an Ubuntu measurement.
+The 2026-11-03 `tests/fm-herdr-projected-cd-live-e2e.test.sh` serial hint is provisionally 28000 ms, above a successful 27692 ms local runner sample exercising Herdr 0.9.5 on macOS arm64, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+The 2026-10-27 `tests/fm-claude-account-quota.test.sh` serial hint is a provisional local measurement of 2492 ms, the slowest of five local `bin/fm-test-run.sh` samples (1930-2492 ms) on a Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+The 2026-11-04 `tests/fm-install-herdr.test.sh` serial hint is a provisional local measurement of 1000 ms, above the slowest of five `bin/fm-test-run.sh` samples (155-223 ms) on a Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The 2026-10-26 `tests/fm-test-tap-verify.test.sh` serial hint is a provisional local measurement of 1000 ms, above a 238 ms `bin/fm-test-run.sh` sample on this Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The 2026-10-27 read-repetition suites carry provisional Linux x86_64 local runner maxima: 602 ms for `tests/fm-read-repetition.test.sh` (six successful samples, 528-602 ms) and 1110 ms for `tests/fm-read-repetition-live.test.sh` (five successful samples, 949-1110 ms).
 The live samples exercised installed Pi 1.4.0 RPC without capability skips; they are not CI timing evidence or timings for unavailable harnesses.
 Both suites retain serial placement and full coverage; replace these provisional hints with Ubuntu timing-artifact maxima at the next CI refresh.
+The 2026-10-29 `tests/fm-live-lab-isolation.test.sh` serial hint is a provisional local measurement of 6459 ms, the slowest of six `bin/fm-test-run.sh` samples (4308-6459 ms) taken inside a private `unshare -Urm` /tmp on this Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+The 2026-10-27 `tests/fm-codex-stop-park.test.sh` serial hint is a provisional local measurement of 35000 ms, above the slowest of the `bin/fm-test-run.sh` samples (20170-34700 ms) on a macOS arm64 host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The wedge-cap suite carries the Ubuntu measurements from CI run [39597689178](https://github.com/kunchenguid/firstmate/actions/runs/39597689178) - 374225 ms for `tests/fm-watch-wedge-cap.test.sh` and the 74 ms live-guard skip for `tests/fm-watch-wedge-cap-live.test.sh` - in place of the provisional local measurements the suite first carried (1003000 ms and the 155 ms skip), which overstated the CI cost of both.
 They are not a formality: without a hint the suite is packed on the 45000 ms default, which puts it beside a shard already holding about 17 minutes of measured work, so that shard would really have run for about 23 minutes - past the 20-minute target the guard reserves - while the coverage guard still passed.
 The same run measured the wedge-cap parity suite at 27763 ms, which `bin/fm-test-run.sh` packs in place of the provisional 209000 ms local measurement.
@@ -58,6 +64,8 @@ The CI cap follows the three-tier timeout policy in [Timeouts](#timeouts) below.
 Its scheduling regressions also check stored parallel lane order and preserve serial-weight scheduling for other selections.
 These checks do not detect a script outgrowing an existing hint or establish measured job headroom.
 Refresh `portable_parallel_weight_hints` with the slowest completed `duration_ms` per script from several green CI runs' `fm-test-timing-portable-parallel-*` artifacts whenever the parallel set gains scripts or a member grows materially.
+
+The remote-secondmate lifecycle hint is 1005249 ms, its completed, passing `FM_TEST_END` sample from Ubuntu run [41289019354](https://github.com/kunchenguid/firstmate/actions/runs/41289019354). Rex lifecycle coverage outgrew the previous 345655 ms hint; serial shard 9 then reached the 30-minute job cap while running later tests. Eleven serial shards accommodate the refreshed weight within the unchanged modeled budget and timeout policy. This is a completed-script measurement from a partial run, not a successful whole-shard timing or a guarantee of future headroom.
 
 ## Portable serial remainder
 
