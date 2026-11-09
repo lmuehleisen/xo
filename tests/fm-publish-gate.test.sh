@@ -1688,6 +1688,41 @@ test_ci_commits_and_text() {
   pass "CI checks refuse non-noreply identities, device ids outside tests, and session links in PR text"
 }
 
+# The PR 119 upstream sync landed as a squash, so that one commit's message
+# carries upstream's own co-author trailers. The exemption is keyed to its
+# exact id, never the trailer contents: the same message on any other commit
+# is still refused, and identity and content checks still run beside it.
+test_squash_sync_trailer_exemption_is_exact_sha() {
+  local repo out
+  local exempt=58bfd65550e9fda41b06c06293353c2702b1d26d
+  local parent=4c022935d275c949c686afdf78b44ecf44a81913
+  repo="$TMP_ROOT/exempt-squash-sync"
+  fm_git_init_commit "$repo" >/dev/null
+  git -C "$repo" fetch -q "$ROOT" "$exempt" || fail "this checkout must hold the exempt sync commit"
+  out=$(cd "$repo" && "$GATE" ci-commits --base "$parent" --head "$exempt" 2>&1) \
+    || fail "the exempt squash sync commit must pass ci-commits: $out"
+  git -C "$repo" checkout -q -b copied-trailers "$parent"
+  printf 'x\n' >"$repo/x"
+  git -C "$repo" add x
+  git -C "$repo" show -s --format=%B "$exempt" |
+    pinned git -C "$repo" -c core.hooksPath=/dev/null commit -q -F - || fail "copied-message commit failed"
+  [ "$(git -C "$repo" rev-parse HEAD)" != "$exempt" ] || fail "the copied commit must not share the exempt id"
+  out=$(cd "$repo" && "$GATE" ci-commits --base "$parent" --head HEAD 2>&1) \
+    && fail "the same trailers on a different commit must be refused"
+  assert_contains "$out" "trailer email is not the pinned identity" "copied trailers finding"
+  git -C "$repo" checkout -q -b leaks "$exempt"
+  printf 'see %s\n' "$SESSION_URL" >"$repo/note.md"
+  git -C "$repo" add note.md
+  unpinned git -C "$repo" -c user.name=Leak -c user.email="$LEAK_EMAIL" -c core.hooksPath=/dev/null commit -q -m 'notes' \
+    || fail "leak commit failed"
+  out=$(cd "$repo" && "$GATE" ci-commits --base "$parent" --head HEAD 2>&1) \
+    && fail "a bad identity and a generic-rule hit beside the exemption must be refused"
+  assert_contains "$out" "author email is not the pinned identity" "author check still runs"
+  assert_contains "$out" "generic rule session-link" "content scan still runs"
+  assert_not_contains "$out" "commit 58bfd65550e9" "the exempt commit contributes no findings"
+  pass "only the exact squashed sync commit's upstream trailers are exempt; every other check still runs"
+}
+
 test_policy_text() {
   local out
   out=$("$GATE" policy)
@@ -2708,6 +2743,7 @@ test_integration_pr_body_limits
 test_reply_limits_and_evidence_shapes
 test_git_refusals
 test_ci_commits_and_text
+test_squash_sync_trailer_exemption_is_exact_sha
 test_permission_fixtures_pass_the_secret_scan
 test_policy_text
 test_runtime_stdin_adapter
