@@ -125,7 +125,7 @@ awk -v names="$work/missing" '
     sub(/\t.*/, "", lineno)
     text = substr(rest, length(lineno) + 2)
     scan = text
-    while (match(scan, /[A-Za-z_][A-Za-z0-9_-]*/)) {
+    while (match(scan, /[A-Za-z0-9_-]+/)) {
       tok = substr(scan, RSTART, RLENGTH)
       if (tok in want) {
         key = tok SUBSEP path SUBSEP lineno

@@ -16,9 +16,10 @@ commit_all() {  # <repo> <message>
   git -C "$1" -c user.name=test -c user.email=test@example.invalid commit -qm "$2"
 }
 
-# base defines five helpers. upstream deletes gone_upstream and unreferenced,
-# keeps the rest, and adds upstream_only. merged keeps only kept, and still
-# mentions gone_upstream, gone_on_fork, upstream_only, and stale_marker.
+# base defines six helpers. upstream deletes gone_upstream, unreferenced, and
+# edged, keeps the rest, and adds upstream_only. merged keeps only kept, and
+# still mentions gone_upstream, gone_on_fork, upstream_only, stale_marker, and
+# a whole-word edged. A leading hyphen or digit is part of the word.
 make_history() {  # <repo>
   local repo=$1
   rm -rf "$repo"
@@ -30,6 +31,7 @@ gone_upstream() { :; }
 gone_on_fork() { :; }
 stale_marker() { :; }
 unreferenced() { :; }
+edged() { :; }
 SH
   commit_all "$repo" base
   git -C "$repo" branch -q base
@@ -50,6 +52,7 @@ SH
   # shellcheck disable=SC2016  # literal fixture source, expanded by nothing
   printf '%s\n' 'gone_on_fork' 'upstream_only' 'gone_upstream_longer' > "$repo/bin/upstream-caller.sh"
   printf '%s\n' '# stale_marker was removed' > "$repo/bin/comment.sh"
+  printf '%s\n' '--edged' '1edged' 'edged' > "$repo/bin/edges.sh"
   printf '%s\n' 'gone_upstream is only prose' > "$repo/tests/note.md"
   commit_all "$repo" merged
   # A fixed-string grep would treat the collector's `.` as a literal period.
@@ -71,8 +74,12 @@ test_both_directions_and_a_comment_are_reported() {
     'a helper defined only at the upstream tip was not reported'
   assert_contains "$out" 'REF: stale_marker bin/comment.sh:1: # stale_marker was removed' \
     'a comment mentioning a removed helper was not reported'
-  assert_contains "$out" 'SUMMARY: 4 referenced missing helper(s), 4 reference(s), 1 unreferenced missing helper(s)' \
+  assert_contains "$out" 'REF: edged bin/edges.sh:3: edged' \
+    'a whole-word mention after a hyphenated and a digit-prefixed word was not reported'
+  assert_contains "$out" 'SUMMARY: 5 referenced missing helper(s), 5 reference(s), 1 unreferenced missing helper(s)' \
     'wrong summary'
+  assert_not_contains "$out" '--edged' 'a leading hyphen was treated as a mention'
+  assert_not_contains "$out" '1edged' 'a leading digit was treated as a mention'
   assert_not_contains "$out" 'gone_upstream_longer' 'a longer name was reported'
   assert_not_contains "$out" 'REF: kept' 'a helper the merge kept was reported'
   assert_not_contains "$out" 'REF: unreferenced' 'an unreferenced deletion was listed'
