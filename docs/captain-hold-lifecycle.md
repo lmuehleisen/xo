@@ -38,7 +38,7 @@ A resolution record's preface, the lines after `Resolution mode:` and before the
 A captain answer records `Decision actor: captain` and the exact words under `Captain decision:`.
 A firstmate ruling records `Decision actor: firstmate` and the ruling under `Firstmate decision:`.
 A record written before the actor line existed has no actor line and is read as the captain's answer.
-Unknown preface lines of the form `Token: value` are skipped and are not part of the hashed decision text.
+Unknown preface lines of the form `Token: value`, with a space or tab after the colon, are skipped and are not part of the hashed decision text.
 `decision` prints only the captain's words: a firstmate ruling is not a current captain answer, and an unknown actor does not return the text.
 `complete` and `verify` treat either actor's recorded resolution as closing the inventory.
 `reconciled` keeps `Reconciliation evidence:` and writes no actor line.
@@ -281,6 +281,7 @@ A released call whose decision text is `local main`, closed with no artifact, is
 The recorded-answer guard rejects a bare `tasks-axi done` close until `answer` records the captain's words and prevents an ordinary finished task from masquerading as an answered call.
 The same suite pins answer-time resolution with task-id keys, `release` mode, replay idempotence, refusal of drifted or ineligible keys, the chat channel reaching the shared intake, the owning-home wake for main, local secondmate, and remote secondmate homes with replay, announced-channel, owning-session, and reconcile-request cases, hold-set stamping before visible hold state, timestamp preservation across interruption, due-date deferral, and every legacy identity path.
 It also pins the firstmate actor: a ruling closes the inventory without becoming a captain answer, a legacy record with no actor line still reads as the captain's words, and an unknown preface line does not change either read.
+A line whose colon is not followed by a space or tab is not a preface line.
 It also pins the superseded-reason seam: a changed re-hold preserves the exact previous bytes with their provenance and archives the pristine body before writing the new reason, a first hold archives nothing, an identical re-hold writes neither record nor archive entry, and a refused archive leaves the original reason in place.
 The same family pins three edge cases of that seam: a call whose deferral date has lapsed is preserved like any live one, a previous reason beginning with a dash is matched as text instead of parsed as an option, and a failed replacement withdraws its supersession record so the retry records that reason once rather than twice.
 The suite does not test the accepted merge-to-cleanup re-hold window or asynchronous queued-forge landing because those events occur after the locally serialized merge command has returned.

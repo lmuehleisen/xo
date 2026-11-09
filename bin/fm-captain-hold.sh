@@ -2807,7 +2807,7 @@ command_decision() {  # <task-id>
   # Preface lines sit between the mode and the blank line before the label.
   # `Decision actor` names who resolved the call. Other `Token: value` lines are
   # skipped so later records can add sibling fields without changing this read.
-  # `Captain decision:` has no space after the colon, so it is not a preface line.
+  # `Captain decision:` has no space or tab after the colon, so it is not a preface line.
   while :; do
     case "$rest" in
       ''|$'\n'*) break ;;
@@ -2815,7 +2815,7 @@ command_decision() {  # <task-id>
         line=${rest%%$'\n'*}
         actor=${line#"Decision actor: "}
         ;;
-      *:[[:space:]]*) ;;
+      *:[[:blank:]]*) ;;
       *) break ;;
     esac
     case "$rest" in

@@ -918,6 +918,12 @@ test_firstmate_decision_actor_closes_without_captain_words() {
   run_captain "$home" hold sample-preface-firstmate \
     --title "Choose the firstmate preface" --reason "firstmate preface pending" --repo sample --origin "$origin" >/dev/null \
     || fail "could not hold the firstmate preface"
+  run_captain "$home" hold sample-preface-colon \
+    --title "Choose the colon line" --reason "colon line pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the colon-line call"
+  run_captain "$home" hold sample-preface-tab \
+    --title "Choose the tab preface" --reason "tab preface pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the tab preface"
   run_captain "$home" hold sample-bad-actor \
     --title "Choose the bad actor" --reason "bad actor pending" --repo sample --origin "$origin" >/dev/null \
     || fail "could not hold the bad-actor call"
@@ -927,6 +933,7 @@ test_firstmate_decision_actor_closes_without_captain_words() {
   run_captain "$home" complete "$origin" \
     sample-fm-ruling sample-captain-words sample-fm-keyed sample-fm-actor-skip \
     sample-legacy-actor sample-preface-captain sample-preface-firstmate \
+    sample-preface-colon sample-preface-tab \
     sample-bad-actor sample-fm-send-call >/dev/null \
     || fail "completion failed for the actor inventory"
 
@@ -1044,6 +1051,36 @@ EOF
   decision_out=$(run_captain "$home" decision sample-preface-captain) \
     || fail "an unknown preface line hid the captain's words"
   assert_equals "$text" "$decision_out" "an unknown preface line changed the captain's words"
+
+  cat > "$home/colon-preface.txt" <<EOF
+Resolution recorded by fm-captain-hold.
+Decision digest: $digest
+Resolution mode: answered
+Decision actor: captain
+Note:
+
+Captain decision:
+$text
+EOF
+  tasks_in "$home" update sample-preface-colon --body-file "$home/colon-preface.txt" >/dev/null \
+    || fail "could not plant the colon-ended preface line"
+  tasks_in "$home" done sample-preface-colon >/dev/null \
+    || fail "could not close the planted colon-ended preface"
+  set +e
+  decision_out=$(run_captain "$home" decision sample-preface-colon 2>"$home/colon-preface.err")
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "a colon at the end of a line was skipped as a preface"
+  assert_not_contains "$decision_out" "$text" "a colon-ended line exposed the stored words"
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: answered\nDecision actor: captain\nVerification receipt:\tunchecked\n\nCaptain decision:\n%s\n' \
+    "$digest" "$text" > "$home/tab-preface.txt"
+  tasks_in "$home" update sample-preface-tab --body-file "$home/tab-preface.txt" >/dev/null \
+    || fail "could not plant the tab preface"
+  tasks_in "$home" done sample-preface-tab >/dev/null \
+    || fail "could not close the planted tab preface"
+  decision_out=$(run_captain "$home" decision sample-preface-tab) \
+    || fail "a tab after the colon hid the captain's words"
+  assert_equals "$text" "$decision_out" "a tab after the colon changed the captain's words"
 
   text='Apply the planted sample ruling.'
   digest=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')
