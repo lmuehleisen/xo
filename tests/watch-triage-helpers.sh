@@ -7354,7 +7354,7 @@ test_paused_bg_job_until_timeout_rechecks_after_the_job_ends() {
   [ "$(bg_job_stale_wakes "$state")" -eq 1 ] || fail "the passed timeout queued the wrong number of rechecks"
   awk -F '\t' '$3 == "stale" && $5 == "stale: test:fm-parked" { found = 1 } END { exit !found }' \
     "$state/.wake-queue" || fail "the recheck carried an unexpected reason: $(cat "$state/.wake-queue")"
-  case "$(cat "$state/.paused-resurfaced-test_fm-parked" 2>/dev/null)" in
+  case "$(cat "$state/.paused-resurfaced-$(watch_window_key test:fm-parked)" 2>/dev/null)" in
     *:due) ;;
     *) fail "the recheck was not recorded as the passed declared time" ;;
   esac

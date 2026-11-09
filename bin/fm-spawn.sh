@@ -6308,9 +6308,9 @@ spawn_assert_agent_worktree() {
   [ "$KIND" = secondmate ] && return 0
   case "$BACKEND" in orca|t3code) return 0 ;; esac
   expected=$(real_path_or_raw "$WT")
-  # The out-of-pane Herdr lease no longer waits for the new shell to process
-  # treehouse get. Allow its former minute of startup tolerance here, and
-  # repeat the idempotent cd once in case input arrived before shell readiness.
+  # A Herdr shell can be slow to accept input. Allow about a minute of startup
+  # tolerance here, and repeat the idempotent cd once in case input arrived
+  # before shell readiness.
   [ "$BACKEND" != herdr ] || last_poll=120
   for i in $(seq 0 "$last_poll"); do
     [ "$i" -eq 0 ] || sleep 0.5

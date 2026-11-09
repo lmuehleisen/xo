@@ -159,11 +159,13 @@ command_fields=$(perl -MMIME::Base64=decode_base64 -e '
 IFS=$'\t' read -r command_name _command_action command_rel <<EOF
 $command_fields
 EOF
-if [ "$command_name" = fm-remote-inherit.sh ]; then
+# The sender's read-only generation query precedes its one batch job; the log
+# and the failure modes below count and intercept only inheritance writes.
+if [ "$command_name" = fm-remote-inherit.sh ] && [ "$_command_action" != generation ]; then
   printf '%s\n' "$_command_action" >> "$FM_FAKE_INHERIT_CALL_LOG"
 fi
-case "${FM_FAKE_SSH_MODE:-normal}:$command_name" in
-  inherit-partial:fm-remote-inherit.sh)
+case "${FM_FAKE_SSH_MODE:-normal}:$command_name:$_command_action" in
+  inherit-partial:fm-remote-inherit.sh:batch)
     # Fail one committed item inside the one-job batch, then simulate transport
     # loss after the remote has applied its other items. Completion remains
     # unknown to the parent, which must retain its reread/reconciliation intent.
@@ -173,7 +175,7 @@ case "${FM_FAKE_SSH_MODE:-normal}:$command_name" in
     "$FM_FAKE_REMOTE_ENTRYPOINT" "$@" < "$FM_FAKE_INHERIT_PAYLOAD"
     exit 255
     ;;
-  inherit-block:fm-remote-inherit.sh)
+  inherit-block:fm-remote-inherit.sh:batch)
     cat > "$FM_FAKE_INHERIT_PAYLOAD"
     touch "$FM_FAKE_INHERIT_ENTERED"
     while [ ! -f "$FM_FAKE_INHERIT_RELEASE" ]; do sleep 0.02; done

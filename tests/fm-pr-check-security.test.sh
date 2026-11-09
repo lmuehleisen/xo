@@ -4080,14 +4080,16 @@ SH
     [ "$(fm_pr_sha256 "$state/task-a.pr-poll-registration")" = "$registration_hash" ] \
       || fail "$scenario rewrote trust for a forged check"
   done
-  for scenario in unknown-field duplicate-pr; do
+  # Well-formed unrelated keys after pr= stay accepted (docs/fork-divergences.md
+  # pr-poll-metadata), so the forged line here is one that is not key=value.
+  for scenario in malformed-line duplicate-pr; do
     dir=$(make_case "registered-poll-$scenario")
     state="$dir/home/state"
     write_poll_meta "$state" task-a https://github.com/o/r/pull/1
     seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
     printf 'control_relaunch_tx=114614.20261024T230110Z.26328\n' >> "$state/task-a.meta"
     case "$scenario" in
-      unknown-field) printf 'injected=value\n' >> "$state/task-a.meta" ;;
+      malformed-line) printf 'injected value\n' >> "$state/task-a.meta" ;;
       duplicate-pr) printf 'pr=https://github.com/o/r/pull/2\n' >> "$state/task-a.meta" ;;
     esac
     ! fm_pr_poll_snapshot_capture "$state" task-a "$POLL" \

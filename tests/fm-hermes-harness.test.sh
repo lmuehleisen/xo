@@ -217,9 +217,11 @@ assert_contains "$out" 'crewmate/scout adapter only' 'secondmate diagnostic'
 pass 'scout spawn carries native profile, interactive brief, hook overlay and metadata'
 
 fm_test_spawn_brief "$home" hermes-stalled
+# Each live task leases its own slot (docs/fork-divergences.md worktree-leases).
+git -C "$proj" worktree add --quiet -b hermes-stalled "$case_dir/wt-stalled"
 if out=$(FM_FAKE_HERMES_STALL_META="$home/state/hermes-stalled.meta" FM_FAKE_HERMES_KILL_LOG="$case_dir/kill" \
   FM_HERMES_READY_POLLS=2 FM_HERMES_POLL_INTERVAL=0 \
-  fm_test_run_spawn "$home" "$wt" "$fakebin" hermes-stalled "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
+  fm_test_run_spawn "$home" "$case_dir/wt-stalled" "$fakebin" hermes-stalled "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
   fail 'stalled Hermes launch accepted'
 fi
 assert_contains "$out" 'Hermes did not reach its TUI' 'stalled launch diagnostic'
@@ -228,9 +230,10 @@ assert_contains "$(cat "$case_dir/kill" 2>/dev/null)" 'kill-window record=presen
 pass 'stalled Hermes launch stops its pane before the task record is removed'
 
 fm_test_spawn_brief "$home" hermes-unclosed
+git -C "$proj" worktree add --quiet -b hermes-unclosed "$case_dir/wt-unclosed"
 if out=$(FM_FAKE_HERMES_STALL_META="$home/state/hermes-unclosed.meta" FM_FAKE_HERMES_KILL_LOG="$case_dir/kill-unclosed" \
   FM_FAKE_HERMES_KILL_FAIL=1 FM_HERMES_READY_POLLS=2 FM_HERMES_POLL_INTERVAL=0 \
-  fm_test_run_spawn "$home" "$wt" "$fakebin" hermes-unclosed "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
+  fm_test_run_spawn "$home" "$case_dir/wt-unclosed" "$fakebin" hermes-unclosed "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
   fail 'unclosed stalled Hermes launch accepted'
 fi
 assert_contains "$out" 'Hermes did not reach its TUI' 'unclosed stalled launch diagnostic'

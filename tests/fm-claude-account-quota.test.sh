@@ -44,10 +44,10 @@ account() {
         effectiveAvailability: ([
           {scope: "all_models", status: "known", effectivePercentRemaining: $pct,
            runway: ({status: $runway} + (if $seconds == "" then {} else {usableRunwaySeconds: ($seconds | tonumber), projectionConfidence: "established"} end)),
-           selection: {spendPriority: $sp}}
+           selection: {status: "known", spendPriority: $sp}}
         ] + (if $model_sp == "" then [] else [
           {scope: "model:opus", status: "known", effectivePercentRemaining: 50,
-           runway: {status: "through_reset"}, selection: {spendPriority: ($model_sp | tonumber)}}
+           runway: {status: "through_reset"}, selection: {status: "known", spendPriority: ($model_sp | tonumber)}}
         ] end))
       }
     }]

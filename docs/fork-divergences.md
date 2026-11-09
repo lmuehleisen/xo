@@ -308,6 +308,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
   Upstream #6213 permits records-only retirement when a slot claim names another task; the fork requires independent landed, endpoint, recorded-branch and current-owner proof, and refuses a lease held by another holder.
   Generic prelaunch rollback returns a provably unstarted clean lease; post-launch adapter cleanup otherwise follows upstream and retains unresolved lease receipts for explicit recovery.
   Upstream's Herdr-only lease that starts the pane's top-level shell in the copy ([upstream #8052](https://github.com/kunchenguid/firstmate/pull/8052)) is not taken: the fork's universal receipt lease and child-shell launch boundary already preserve the copy, while a restored Herdr pane reopens at its original directory rather than inside the copy.
+  Its suite `tests/fm-spawn-herdr-lease.test.sh` pins that top-level-shell entry and is not carried; the slow-entry tolerance and single cd resend in `spawn_assert_agent_worktree` (upstream #8139) are kept.
 
 ### claude-trust-escape
 

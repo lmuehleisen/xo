@@ -125,7 +125,9 @@ case "$command_name" in
     exit 0
     ;;
   fm-remote-inherit.sh)
-    if [ "${FM_FAKE_INHERIT_PARTIAL:-0}" = 1 ]; then
+    # The sender's read-only generation query precedes its batch; only the
+    # inheritance write is partial.
+    if [ "${FM_FAKE_INHERIT_PARTIAL:-0}" = 1 ] && [ "$subcommand" != generation ]; then
       printf 'pushed: config/crew-dispatch.json\n'
       printf 'error: config/crew-harness: synthetic validation refusal\n' >&2
       exit 1

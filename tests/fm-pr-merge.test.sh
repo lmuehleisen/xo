@@ -3150,7 +3150,7 @@ test_expected_head_keeps_existing_refusals() {
   case_dir=$(make_case expected-head-away)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  write_away_record "$case_dir" --words 'merge task-x1 when green' --grant task-x1
   set +e
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/215 \
     --expected-head "$head" --allow-red lint \
@@ -3846,7 +3846,7 @@ test_github_behind_update_requires_opt_in_and_passing_guards() {
       unreadable-authority) chmod 000 "$case_dir/home/data/backlog.md" ;;
       away-queue)
         printf 'merge_method=MERGE\n' > "$case_dir/github-rules"
-        write_away_record "$case_dir" --words 'merge task-x1 when green'
+        write_away_record "$case_dir" --words 'merge task-x1 when green' --grant task-x1
         ;;
     esac
     set +e

@@ -550,36 +550,32 @@ t_rovo_reports_through_unknown() {
   pass "rovo: the busy marker drives working; unknown activity still retires it and reports decisions and done"
 }
 
-# Antigravity is the same shape as Rovo - its `esc to cancel` status row is
-# the only activity source and only proves busy - so the signal fold carries
-# it through idle, blocked, and done once the marker leaves the pane.
+# This fork's Antigravity workers report activity through their native hooks'
+# busy-state record (fm_busy_sources_for_harness: agy-hook), not upstream's
+# rendered status-row fallback, so the record drives working, and once it is
+# gone the signal fold carries the worker through idle and done.
 t_agy_reports_through_unknown() {
   local d=$TMP_ROOT/agy
   mkhome "$d"
-  mkdir -p "$d/bin"
   : >"$d/cap"
-  : >"$d/pane"
-  # shellcheck disable=SC2016
-  printf '#!/usr/bin/env bash\n[ "$1" = capture-pane ] && cat %q\n' "$d/pane" >"$d/bin/tmux"
-  chmod +x "$d/bin/tmux"
   sleep 300 &
   local holder=$!
-  printf 'working\n  esc to cancel\n' >"$d/pane"
-  env "${CLEAN_UNSET[@]}" FM_OSC7501_TTY="$d/cap" FM_OSC7501_INTERVAL=1 PATH="$d/bin:$PATH" \
+  busy_rec "$d/state" t33 busy
+  env "${CLEAN_UNSET[@]}" FM_OSC7501_TTY="$d/cap" FM_OSC7501_INTERVAL=1 \
     bash "$SCRIPT" watch --task t33 --kind ship --state "$d/state" --harness agy \
     --backend tmux --target '%9' --parent "$holder" &
   local wpid=$!
   wait_cap 'state=working:app=firstmate-agy' "$d/cap" 60 \
-    || fail "agy: the busy status row did not read as working"
-  : >"$d/pane"
-  wait_cap 'state=idle' "$d/cap" 60 || fail "agy: working outlived the status row while activity read unknown"
+    || fail "agy: the busy hook record did not read as working"
+  rm -f "$d/state/t33.busy-state" "$d/state/t33.busy-gen"
+  wait_cap 'state=idle' "$d/cap" 60 || fail "agy: working outlived the busy record while activity read unknown"
   printf 'done [at=%s]: PR https://example.test/pr/33\n' "$(date +%s)" >"$d/state/t33.status"
   wait_cap 'state=done' "$d/cap" 60 || fail "agy: a done stamped after the last busy read did not report while unknown"
   kill "$wpid" 2>/dev/null
   wait_gone "$wpid" || fail "agy: the watcher did not exit on TERM"
   wait "$wpid" 2>/dev/null || true
   kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
-  pass "agy: the busy status row drives working; unknown activity still retires it and reports done"
+  pass "agy: the busy hook record drives working; unknown activity still retires it and reports done"
 }
 
 # A watcher killed without its final write leaves its last record on the

@@ -4113,7 +4113,7 @@ if [ "$TEARDOWN_RECORD_ONLY" != 1 ]; then
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
-if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
+if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
 fi
 
@@ -4207,16 +4207,14 @@ if [ "$BACKEND" = herdr ]; then
   fi
 fi
 
-if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
+if [ "$KIND" != secondmate ]; then
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
-elif [ "$KIND" != secondmate ]; then
-  reap_task_worktree_processes tasktmp "$TASK_TMP"
 fi
 
 # A worker can write after the first proof, including while its run is concluded
 # or its processes exit. Inspect the stopped copy before dropping its branch or
 # returning it on either backend path.
-if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   validate_worktree_teardown_safety || exit 1
 fi
 fi
@@ -4291,7 +4289,7 @@ else
 fi
 
 if [ "$TEARDOWN_RECORD_ONLY" != 1 ]; then
-if [ "$KIND" = ship ] && teardown_owns_worktree && [ -e "$CONFIG/pipeline-spend" ]; then
+if [ "$KIND" = ship ] && [ -e "$CONFIG/pipeline-spend" ]; then
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-pipeline-spend.sh" record "$ID" >/dev/null \
     || echo "warning: could not record $ID's no-mistakes pipeline spend; cleanup continues" >&2

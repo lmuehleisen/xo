@@ -90,7 +90,7 @@ test_completed_ship_owner_enters_bounded_wait() {
   local dir state fakebin capture_file out statusf window key pid show
   dir=$(make_case completed-ship-owner); state="$dir/state"; fakebin="$dir/fakebin"
   capture_file="$dir/pane.txt"; out="$dir/watch.out"; statusf="$state/held.status"
-  window='test:fm-held'; key='test_fm-held'
+  window='test:fm-held'; key=$(watch_window_key "$window")
   mkdir -p "$dir/data" "$dir/config"
   cp "$ROOT/.tasks.toml" "$dir/.tasks.toml"
   (cd "$dir" && tasks-axi add held 'Completed branch awaiting approval' --kind ship --repo sample --start >/dev/null) \

@@ -707,6 +707,7 @@ test_lane_route_records_model_family() {
   rec=$(make_spawn_case lane-family claude "$id")
   read_case_record "$rec"
   printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
+  record_dispatch "$HOME_DIR" "$id" clear codex gpt-5 high
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
   status=$?
@@ -717,6 +718,7 @@ test_lane_route_records_model_family() {
   rec=$(make_spawn_case lane-unlisted claude "$id")
   read_case_record "$rec"
   printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
+  record_dispatch "$HOME_DIR" "$id" clear codex gpt-5.5 high
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5.5 --effort high)
   status=$?
@@ -866,7 +868,7 @@ test_raw_launch_trailing_separator_or_comment_keeps_disarm() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "$raw")
     status=$?
     expect_code 0 "$status" "raw launch '$raw' should spawn: $out"
-    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
+    launch=$(cat "$LAUNCH_LOG")
     agentbin="$CASE_DIR/agentbin"
     mkdir -p "$agentbin"
     cat > "$agentbin/custom-agent" <<'SH'
@@ -925,7 +927,7 @@ SH
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "$raw")
     status=$?
     expect_code 0 "$status" "raw launch '$raw' should spawn: $out"
-    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
+    launch=$(cat "$LAUNCH_LOG")
     : > "$CASE_DIR/tty"
     result=$(cd "$CASE_DIR" && isolated_pane_env REX_BLOCK=b1 \
       PATH="$oldbin:$PATH" FM_OSC7501_TTY="$CASE_DIR/tty" /bin/sh -c "$launch" 2>&1)
@@ -992,7 +994,7 @@ SH
   # Byte-exact like the other raw-launch pins in this file: the generic fleet
   # prefixes (private tmux server, compact-adviser switch, task inbox, AI-
   # trailer hooks, identity-marker scrub) wrap the command but never touch it.
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(fm_test_launch_git_prefix "$launch")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-agy-z16.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-agy-z16)$(fm_test_launch_git_prefix "$launch")export FM_HOME='$HOME_DIR'; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI agy --dangerously-skip-permissions --sandbox workspace-write" ] \
     || fail "raw agy launch command changed"$'\n'"actual: $launch"
 
   # The claude case needs its own pane path: the first spawn's lease holds WT_DIR.
@@ -1005,7 +1007,7 @@ SH
   assert_contains "$out" "spawned raw-claude-z17 harness=claude" "raw claude launch did not record the claude harness name"
   assert_meta_profile "$HOME_DIR/state/raw-claude-z17.meta" claude default default
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(fm_test_launch_git_prefix "$launch")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
+  [ "$launch" = "$(fm_test_worker_tmux_prefix "$HOME_DIR/state/raw-claude-z17.meta")export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$HOME_DIR" raw-claude-z17)$(fm_test_launch_git_prefix "$launch")export FM_HOME='$HOME_DIR'; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions" ] \
     || fail "raw claude launch command changed"$'\n'"actual: $launch"
 
   [ ! -s "$probe_log" ] || fail "raw launches executed the adapter binaries they name: $(cat "$probe_log")"
@@ -1028,6 +1030,7 @@ SH
 # one channel a raw command has to reference the brief or worktree.
 test_raw_launch_leaves_adapter_placeholders_untouched() {
   local rec id out status launch brief_path
+  # shellcheck disable=SC2100 # A literal task id, not arithmetic on the raw variable.
   id=raw-placeholders-z18
   rec=$(make_spawn_case raw-placeholders claude "$id")
   read_case_record "$rec"

@@ -1590,7 +1590,8 @@ This token-free guard provisions only a named non-default Herdr lab session, dri
 On a supported Herdr below the presentation floor, where `fm_backend_herdr_presentation_release_supported` keeps spawns flat, it prints a skip naming the release and exits 0 instead of running the projected cases.
 Its delayed case holds the first real cd behind a 15-second shell command and verifies exactly one resend; its ordinary case verifies no redundant cd.
 The lease fixture returns a disposable clone without accessing a shared Treehouse pool.
-The portable delayed, dropped, and never-moving entry regressions are in `tests/fm-spawn-herdr-lease.test.sh`.
+That evidence was recorded upstream against its top-level-shell lease entry, which this fork does not take; the fork's child-shell entry has not re-run this guard.
+Upstream's portable delayed, dropped, and never-moving entry regressions pin that top-level-shell entry and are not carried (`docs/fork-divergences.md` `worktree-leases`).
 
 Core read-only probes:
 

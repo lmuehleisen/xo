@@ -623,7 +623,10 @@ root=$(printf '%s' "$4" | base64 --decode)
 home=$(printf '%s' "$5" | base64 --decode)
 args=()
 while IFS= read -r -d '' arg; do args+=("$arg"); done < <(printf '%s' "$6" | base64 --decode)
-[ "${args[0]}" = fm-remote-inherit.sh ] && [ "${args[1]}" = batch ] || exit 92
+[ "${args[0]}" = fm-remote-inherit.sh ] || exit 92
+# The sender reads the receiver's committed generation before its one batch.
+[ "${args[1]}" != generation ] || FM_HOME="$home" exec "$root/bin/fm-remote-inherit.sh" generation
+[ "${args[1]}" = batch ] || exit 92
 printf 'batch\n' >> "$FM_BATCH_CALLS"
 cat > "$FM_BATCH_WIRE"
 FM_HOME="$home" exec "$root/bin/fm-remote-inherit.sh" "${args[@]:1}" < "$FM_BATCH_WIRE"
