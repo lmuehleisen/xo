@@ -21,6 +21,7 @@ commit_all() {  # <repo> <message>
 # mentions gone_upstream, gone_on_fork, upstream_only, and stale_marker.
 make_history() {  # <repo>
   local repo=$1
+  rm -rf "$repo"
   mkdir -p "$repo/bin" "$repo/tests"
   git -C "$repo" init -q
   cat > "$repo/bin/lib.sh" <<'SH'
@@ -51,6 +52,8 @@ SH
   printf '%s\n' '# stale_marker was removed' > "$repo/bin/comment.sh"
   printf '%s\n' 'gone_upstream is only prose' > "$repo/tests/note.md"
   commit_all "$repo" merged
+  # A fixed-string grep would treat the collector's `.` as a literal period.
+  git -C "$repo" config grep.patternType fixed
 }
 
 test_both_directions_and_a_comment_are_reported() {
@@ -82,6 +85,7 @@ test_both_directions_and_a_comment_are_reported() {
 
 test_clean_merge_passes() {
   local repo="$TMP_ROOT/history" out status
+  make_history "$repo"
   out=$(cd "$repo" && "$SCAN" base upstream base)
   status=$?
   expect_code 0 "$status" "a tree that still defines every base helper must pass: $out"
@@ -93,6 +97,7 @@ test_clean_merge_passes() {
 
 test_invalid_refs_refuse() {
   local repo="$TMP_ROOT/history" out status
+  make_history "$repo"
   out=$(cd "$repo" && "$SCAN" base upstream no-such-ref 2>&1)
   status=$?
   expect_code 2 "$status" "an unknown ref must refuse: $out"
@@ -101,6 +106,7 @@ test_invalid_refs_refuse() {
   status=$?
   expect_code 2 "$status" "a missing argument must print usage: $out"
   assert_contains "$out" 'Usage: fm-upstream-removed-helper-scan.sh' 'the refusal did not print usage'
+  assert_contains "$out" '<merged>' 'usage did not describe the merged commit'
   pass 'fm-upstream-removed-helper-scan: unknown refs and missing arguments refuse without a verdict'
 }
 

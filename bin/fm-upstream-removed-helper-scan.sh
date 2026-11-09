@@ -31,7 +31,7 @@
 set -u
 
 usage() {
-  sed -n '3,6s/^# \{0,1\}//p' "${BASH_SOURCE[0]}" >&2
+  sed -n '4,7s/^# \{0,1\}//p' "${BASH_SOURCE[0]}" >&2
   exit 2
 }
 
@@ -54,7 +54,8 @@ trap 'rm -rf "$work"' EXIT
 # Raw `git grep` lines for <rev>, rewritten as path<TAB>lineno<TAB>text.
 collect_lines() {  # <rev> <dest>
   local raw=$work/raw rc
-  git -c color.ui=never grep -n -I -e . "$1" -- bin tests >"$raw" 2>"$work/grep.err"
+  # -G keeps `.` a basic regexp when grep.patternType is fixed.
+  git -c color.ui=never grep -n -I -G -e . "$1" -- bin tests >"$raw" 2>"$work/grep.err"
   rc=$?
   if [ "$rc" -gt 1 ]; then
     echo "error: git grep failed for $1" >&2
@@ -103,7 +104,11 @@ collect_lines "$merged" "$work/merged.lines"
 { defined_names "$work/base.lines"; defined_names "$work/upstream.lines"; } \
   | LC_ALL=C sort -u >"$work/either"
 defined_names "$work/merged.lines" >"$work/defined"
-comm -23 "$work/either" "$work/defined" >"$work/missing"
+# Names were sorted in the C locale. comm must use that same order.
+LC_ALL=C comm -23 "$work/either" "$work/defined" >"$work/missing" || {
+  echo "error: could not compare helper names" >&2
+  exit 2
+}
 missing_count=$(grep -c . "$work/missing" || true)
 
 : >"$work/hits"
