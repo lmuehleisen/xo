@@ -650,7 +650,8 @@ Changed-file lint and the four focused portable suites `fm-agy-admission.test.sh
 ### Primary and secondmate supervision
 
 The current primary and secondmate transport adopts upstream SessionStart and synchronous Stop parking.
-Interactive live verification of this path is pending; no live agy or supervisor lifecycle run was performed for the convergence.
+Verified on 2026-11-09 with agy 1.5.3, `gemini-3.8-flash` at low effort, and a private tmux backend in disposable primary and marked-secondmate homes.
+Both roles passed startup-context delivery, real session-lock ownership, native tool denial and silent review abstention, synchronous Stop parking, automatic watcher follow-up, and automatic re-parking without model-owned arms.
 The prior agy 1.4.7 PreInvocation/background-command result covered the retired transport and cannot certify this implementation.
 Supervisor permissions remain unchanged, and worker native Auto evidence above does not extend to supervisors.
 
@@ -660,14 +661,21 @@ Shared cross-harness regressions remain in the arm, cd, subagent, turn-end and s
 
 ```sh
 bash bin/fm-test-run.sh tests/fm-agy-primary.test.sh
-FM_AGY_PRIMARY_LIVE=1 bash bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
+FM_AGY_PRIMARY_LIVE=1 bash bin/fm-test-run.sh --per-script-timeout-secs 1800 tests/fm-agy-primary-live-e2e.test.sh
+```
+
+```text
+ok - agy primary: real Stop park, automatic wake and re-park without model arming
+ok - agy secondmate: real Stop park, automatic wake and re-park without model arming
+# all agy interactive primary live checks passed (agy 1.5.3)
 ```
 
 The opt-in live suite retains `tests/agy-primary-live-probe.py` because the upstream headless bypass suite cannot replace interactive session-lock and automatic re-entry coverage.
 It carries upstream's startup-context, real tool-denial and real-watcher scenarios into interactive primary and marked-secondmate homes with native supervisor review, without global trust writes.
 The updated scenarios also require silent abstention to execute a harmless tool, and automatic Stop re-parking without model-owned arms.
 Its captures, observer events and transcripts are retained on failure.
-Only a future successful live run may add dated binary/model/backend results here; compilation or a gate skip establishes no vendor behavior.
+The portable suite passed 21/21, including ordered observation before a delegated park or deny, and fixture park withdrawal before empty-fleet settlement.
+These live results cover the named binary/model/backend; compilation or a gate skip establishes no vendor behavior.
 
 ### Inherited primary hooks in worker worktrees
 

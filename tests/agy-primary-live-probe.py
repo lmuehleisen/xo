@@ -57,20 +57,26 @@ def probe(role):
         + "printf '%s\\n' " + shlex.quote(marker) + "\n")
     startup.chmod(0o755)
     recorder = home / ".agents" / "observe.py"
-    recorder.write_text('''import json, os, sys, time
-from pathlib import Path
-p=json.load(sys.stdin)
-with (Path(os.environ['FM_HOME'])/'state/events.jsonl').open('a') as f:
-    f.write(json.dumps({'event':sys.argv[1], 'time':time.time(), 'cwd':os.getcwd(), 'payload':p})+'\\n')
-# Silence abstains to native review, including for permitted PreToolUse calls.
-''')
+    shutil.copyfile(root / "tests/agy-primary-live-observer.py", recorder)
     hooks = json.loads((root / ".agents" / "hooks.json").read_text())
+    # Hook namespaces have no execution-order guarantee. Record Stop in the
+    # same command that enters the synchronous park, before it can block.
+    stop_hooks = [hook for namespace in hooks.values() for hook in namespace.get("Stop", [])
+                  if "fm-turnend-guard-agy.sh" in hook.get("command", "")]
+    assert len(stop_hooks) == 1, "expected one production agy Stop handler"
+    stop_hooks[0]["command"] = shlex.join([sys.executable, str(recorder), "Stop",
+                                            stop_hooks[0]["command"]])
+    # A deny can short-circuit other namespaces, so each matched production
+    # handler must record the attempt before evaluating its policy.
+    pretool_hooks = [hook for namespace in hooks.values()
+                     for group in namespace.get("PreToolUse", []) for hook in group["hooks"]]
+    assert pretool_hooks, "expected production agy PreToolUse handlers"
+    for hook in pretool_hooks:
+        hook["command"] = shlex.join([sys.executable, str(recorder), "PreToolUse", hook["command"]])
     handler = lambda event: {"type": "command", "command": shlex.join([sys.executable, str(recorder), event]), "timeout": 10}
     hooks["firstmate-live-observer"] = {
         "SessionStart": [handler("SessionStart")],
         "PreInvocation": [handler("PreInvocation")],
-        "Stop": [handler("Stop")],
-        "PreToolUse": [{"matcher": ".*", "hooks": [handler("PreToolUse")]}],
         "PostToolUse": [{"matcher": ".*", "hooks": [handler("PostToolUse")]}],
     }
     observer = hooks.pop("firstmate-live-observer")
@@ -183,10 +189,19 @@ with (Path(os.environ['FM_HOME'])/'state/events.jsonl').open('a') as f:
         wait_until(lambda out: any(row["event"] == "PreInvocation" and row["time"] > signal_time for row in events()), "automatic watcher follow-up")
         wait_until(lambda out: (home / "state/.agy-park-owner").read_text() != owner, "automatic Stop re-park")
         (home / "state/child.meta").unlink()
+        # The synchronous Stop hook is deliberately still parked. Withdraw the
+        # fixture's claim so its ownership check releases the arm before input;
+        # removing child metadata alone does not interrupt an existing park.
+        (home / "state/.agy-park-owner").unlink()
+        wait_until(idle, "fixture park release")
         send("Reply SETTLED and end this turn without tools.")
         wait_until(idle, "settled empty fleet")
         print("ok - agy " + role + ": real Stop park, automatic wake and re-park without model arming", flush=True)
-        send("/exit")
+        # Slash completion is asynchronous; Enter sent in the same burst can
+        # leave the command selected in the menu instead of executing it.
+        call("send-keys", "-t", target, "-l", "/exit")
+        wait_until(lambda out: "> /exit  Exit the CLI" in out, "exit menu", seconds=20)
+        call("send-keys", "-t", target, "Enter")
         wait_until(lambda out: call("display-message", "-p", "-t", target, "#{pane_current_command}").strip() != "agy", "exit", seconds=20)
     except Exception:
         if events():
