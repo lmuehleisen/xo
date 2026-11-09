@@ -27,12 +27,12 @@ export NODE_NO_WARNINGS=1
 PI_STOCK_RENDER_FLOOR=0.84.4
 
 # Semantic-version floor for a version string this file already holds (Pi's
-# package.json field). bin/fm-bootstrap.sh's tool_version_at_least is the same
-# rule for a tool it invokes itself; this is the string-shaped form, kept here
-# rather than in tests/lib.sh because this is its only consumer and every test
-# sources that library. It is deliberately as strict: a version that is not
-# exactly one major.minor.patch triple never satisfies a floor it was not
-# checked against.
+# package.json field). bin/fm-bootstrap.sh's tool_version_parts and
+# version_parts_at_least are the same rule for a tool it invokes itself; this
+# is the string-shaped form, kept here rather than in tests/lib.sh because this
+# is its only consumer and every test sources that library. It is deliberately
+# as strict: a version that is not exactly one major.minor.patch triple never
+# satisfies a floor it was not checked against.
 pi_version_at_least() {  # <version> <min-version>
   local version=$1 min=$2 parts major minor patch extra
   local min_major min_minor min_patch min_extra
