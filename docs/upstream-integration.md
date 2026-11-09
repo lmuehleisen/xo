@@ -8,6 +8,7 @@ This page is the maintainer checklist for one integration run; the fork's invari
 - Integrate on a disposable branch based on the fork's published `origin/main`, never in an operational installation.
 - Merge `upstream/main` with a real merge that preserves upstream ancestry, and record the full upstream source commit.
 - Land the pull request with a merge commit, never squash or rebase: a squashed integration leaves the installation's commits outside remote ancestry, and the updater then refuses to fast-forward.
+  A squash also drops upstream ancestry from main and strands upstream's co-author trailers on the squash commit, which the publish gate's identity check refuses, so land syncs with `bin/fm-pr-merge.sh --merge` (its default is squash).
 - Resolve conflicts by preserving every fork invariant first, taking upstream fixes and tests that do not depend on a dropped dependency second, and preferring the fork's native design where upstream built an alternative, porting only what upstream does better.
 - Merge approval stays with the fork owner, and an installation is reconciled only after the merge lands.
 

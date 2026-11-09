@@ -49,6 +49,8 @@
 #       identity email (or, when none is given, any *@users.noreply.github.com
 #       address) and noreply@github.com, then scan added lines, paths, and
 #       messages with the generic patterns and, when installed, gitleaks.
+#       Trailer emails on the exact commits TRAILER_EXEMPT_COMMITS names are
+#       accepted as upstream's own.
 #   fm-publish-gate.sh ci-text [--dest <owner/repo> --pr <number> --pr-upstream <owner/repo>] <text>...
 #       The public CI check for PR text: generic patterns, emails, and the
 #       shape limits, with the same kind prefixes as check-text. CI can also
@@ -166,7 +168,8 @@
 #     remote-tracking refs, of any remote name, are never trusted, and a read
 #     that fails or exits nonzero excludes nothing): author and committer
 #     emails must be the identity email or noreply@github.com, and any
-#     Co-authored-by or Signed-off-by trailer email must be one of those too;
+#     Co-authored-by or Signed-off-by trailer email must be one of those too,
+#     outside the exact commits TRAILER_EXEMPT_COMMITS names;
 #   - every outgoing commit's added lines, every added or changed path
 #     (binary and empty files and submodules included), and its message, one
 #     commit at a time so content added and then deleted inside one push is
@@ -1101,6 +1104,14 @@ add_texts() {
   done
 }
 
+# Co-authored-by and Signed-off-by trailer emails on exactly these commits are
+# upstream's own and pass the identity check: 58bfd655 is the PR 119 upstream
+# sync that landed as a squash instead of a merge, so its message carries
+# upstream's co-author trailers (docs/fork-divergences.md). Exact full commit
+# ids only, never a pattern; author, committer, message, content, and secret
+# scans still run on each exempt commit.
+TRAILER_EXEMPT_COMMITS="58bfd65550e9fda41b06c06293353c2702b1d26d"
+
 # Identity of each outgoing commit (and trailer emails).
 check_identities() { # <file of shas>
   local c ae ce short line email
@@ -1111,6 +1122,9 @@ check_identities() { # <file of shas>
     ce=$(git show -s --format=%ce "$c")
     email_allowed "$ae" || finding "author email is not the pinned identity" "commit $short"
     email_allowed "$ce" || finding "committer email is not the pinned identity" "commit $short"
+    case " $TRAILER_EXEMPT_COMMITS " in
+    *" $c "*) continue ;; # an exempt commit's trailers are upstream's own
+    esac
     while IFS= read -r line; do
       email=$(printf '%s' "$line" | sed -nE 's/.*<([^>]*)>.*/\1/p')
       [ -n "$email" ] || continue
