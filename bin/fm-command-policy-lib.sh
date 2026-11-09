@@ -184,10 +184,12 @@
 #     most `--approval <captain-task-id>`; the runner itself refuses unless
 #     the captain's recorded decision names that task's procedure
 #   - this home's fm-captain-hold.sh `complete <this-task> --none` may carry
-#     one leading literal absolute FM_HOME binding to the home derived from
+#     one leading literal absolute FM_HOME binding, with its name and equals
+#     sign unquoted and unescaped, to the home derived from
 #     the policy's state/<this-task>.status path, directly or through a plain
 #     bash, /bin/bash, or /usr/bin/bash with no options. Other assignments,
-#     wrappers, helpers, subcommands, and task ids keep their ordinary review.
+#     wrappers, ANSI-C quoting, helpers, subcommands, and task ids keep their
+#     ordinary review.
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -1513,14 +1515,15 @@ resolve_maybe_tilde() {  # <word> <expansion-flag> <cwd>
 # --- tokenizer -----------------------------------------------------------------
 
 # tokenize <string>: fills T_TXT / T_KIND (w word, o operator, r redirect) /
-# T_VAR (word holds an expansion) / T_GLOB (unquoted glob) / T_SUBS (how many
+# T_VAR (word holds an expansion) / T_GLOB (unquoted glob) / T_ASSIGN (word
+# has an unquoted, unescaped assignment prefix and no ANSI-C quoting) / T_SUBS (how many
 # substitution bodies the word contributes to P_INNER), and sets P_SUBST
 # (command or process substitution), P_HEREDOC_EXPANDING (a heredoc with an
 # unquoted delimiter), and P_INNER (substitution bodies to re-check).
 tokenize() {
-  local s=$1 n=${#1} i=0 c nx word='' have=0 var=0 glob=0 quoted=0 word_subs=0
+  local s=$1 n=${#1} i=0 c nx word='' have=0 var=0 glob=0 quoted=0 word_subs=0 assignment=0
   local j q hd_delim='' hd_strip=0 hd_next=0 line start
-  T_TXT=() T_KIND=() T_VAR=() T_GLOB=() T_SUBS=()
+  T_TXT=() T_KIND=() T_VAR=() T_GLOB=() T_ASSIGN=() T_SUBS=()
   P_SUBST=0 P_HEREDOC_EXPANDING=0
 
   _emit_word() {
@@ -1530,13 +1533,13 @@ tokenize() {
         [ "$quoted" -eq 1 ] || P_HEREDOC_EXPANDING=1
       fi
       local k=${#T_TXT[@]}
-      T_TXT[k]=$word T_KIND[k]=w T_VAR[k]=$var T_GLOB[k]=$glob T_SUBS[k]=$word_subs
+      T_TXT[k]=$word T_KIND[k]=w T_VAR[k]=$var T_GLOB[k]=$glob T_ASSIGN[k]=$assignment T_SUBS[k]=$word_subs
     fi
-    word='' have=0 var=0 glob=0 quoted=0 word_subs=0
+    word='' have=0 var=0 glob=0 quoted=0 word_subs=0 assignment=0
   }
   _emit() {  # <kind> <text>
     local k=${#T_TXT[@]}
-    T_TXT[k]=$2 T_KIND[k]=$1 T_VAR[k]=0 T_GLOB[k]=0 T_SUBS[k]=0
+    T_TXT[k]=$2 T_KIND[k]=$1 T_VAR[k]=0 T_GLOB[k]=0 T_ASSIGN[k]=0 T_SUBS[k]=0
   }
   # Scan a $( ... ) / <( ... ) body starting at index $1 (just past the open
   # paren); sets _SUB_END to the index of the matching close paren.
@@ -1736,6 +1739,8 @@ tokenize() {
           i=$_SUB_END
         elif [ "$nx" = "'" ]; then
           # ANSI-C quoting: a literal string with backslash escapes.
+          # Its escapes are approximated here, so it cannot prove a binding.
+          assignment=0
           var=0 quoted=1
           i=$((i + 2))
           while [ "$i" -lt "$n" ]; do
@@ -1757,6 +1762,12 @@ tokenize() {
         ;;
       '*'|'?'|'[')
         glob=1
+        word="$word$c"
+        ;;
+      '=')
+        if [ "$quoted" = 0 ] && [ "$var" = 0 ] && [[ $word =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+          assignment=1
+        fi
         word="$word$c"
         ;;
       *) word="$word$c" ;;
@@ -2656,6 +2667,7 @@ home_helper() {  # <word> <expansion-flag> <helper-name>
 # neither the command's cd target nor the hook's ambient FM_HOME does.
 own_task_completion_home_binding() {
   local i helper=1 expected binding
+  [ "${SWA[0]-0}" = 1 ] || return 1
   [ -n "$TASK" ] || return 1
   case "$STATUS" in
     /*/state/"$TASK".status) expected=${STATUS%/state/"$TASK".status} ;;
@@ -3168,7 +3180,7 @@ analyze_command() {
   [ "$P_SUBST" -eq 1 ] && no_approve "command or process substitution"
   [ "$P_HEREDOC_EXPANDING" -eq 1 ] && no_approve "heredoc with expansions"
   credential_trace_context
-  SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
+  SW=() SWV=() SWG=() SWA=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
   local pending_redir=
   for ((idx = 0; idx < ${#T_TXT[@]}; idx++)); do
     case "${T_KIND[idx]}" in
@@ -3183,6 +3195,7 @@ analyze_command() {
           SW[${#SW[@]}]=${T_TXT[idx]}
           SWV[${#SWV[@]}]=${T_VAR[idx]}
           SWG[${#SWG[@]}]=${T_GLOB[idx]}
+          SWA[${#SWA[@]}]=${T_ASSIGN[idx]}
           SWINNER[${#SWINNER[@]}]=$subst_pos
           SWSUBS[${#SWSUBS[@]}]=${T_SUBS[idx]-0}
         fi
@@ -3200,7 +3213,7 @@ analyze_command() {
         else
           PIPE_FROM_FETCH=0
         fi
-        SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
+        SW=() SWV=() SWG=() SWA=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
         pending_redir=
         ;;
     esac

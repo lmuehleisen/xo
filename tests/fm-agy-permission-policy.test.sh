@@ -150,6 +150,8 @@ FM_HOME='$dir/another-home' '$dir/bin/fm-captain-hold.sh' complete t1 --none
 FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t2 --none
 FM_HOME='$dir' OTHER=value '$dir/bin/fm-captain-hold.sh' complete t1 --none
 FM_HOME='$dir' bash -c "$dir/bin/fm-captain-hold.sh complete t1 --none"
+'FM_HOME=$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME\\='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
 EOF
   pass 'fm-agy-permission-policy: exact own-home completion abstains; other bindings and command shapes stay held'
 }

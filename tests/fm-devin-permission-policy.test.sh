@@ -802,6 +802,7 @@ test_worker_completion_home_binding() {
 cd '$dir' && bin/fm-captain-hold.sh complete t1 --none
 cd '$dir' && FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none
 FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME="$dir" '$dir/bin/fm-captain-hold.sh' complete t1 --none
 FM_HOME='$dir' bash '$dir/bin/fm-captain-hold.sh' complete t1 --none
 cd '$dir' && FM_HOME='$dir' /bin/bash ./bin/fm-captain-hold.sh complete t1 --none 2>&1 | tail -10
 EOF
@@ -821,6 +822,8 @@ FM_HOME='$dir/other-home' $helper
 FM_HOME='.' $helper
 FM_HOME=\$HOME $helper
 FM_HOME=\$(pwd) $helper
+FM_HOME=\$'$dir' $helper
+FM_HOME=\$'${dir%binding}\\binding' $helper
 FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t2 --none
 FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 t2
 FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete --none
@@ -859,6 +862,49 @@ EOF
   [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
     || fail "a home binding must not hide another segment's refusal: $OUT"
   pass 'fm-devin-permission-policy: exact own-home completion approves; other assignments, tasks, helpers, and effects stay judged'
+}
+
+test_quoted_completion_bindings_are_not_assignments() {
+  local policy dir wt planted cmd actual id=0
+  local POLICY_SH=$POLICY_SH
+  policy=$(new_case quoted-completion)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  cp -R "$ROOT/bin" "$dir/bin"
+  POLICY_SH="$dir/bin/fm-devin-permission-policy.sh"
+  # Bash executes this relative pathname when the assignment name or equals
+  # sign is quoted/escaped. It never reaches the helper passed as an argument.
+  planted="$wt/FM_HOME=$dir"
+  mkdir -p "$(dirname "$planted")"
+  printf '#!/usr/bin/env bash\nprintf "QUOTED_BINDING_EXECUTED\\n"\n' > "$planted"
+  chmod +x "$planted"
+  while IFS= read -r cmd; do
+    id=$((id + 1))
+    actual=$(cd "$wt" && bash -c "$cmd") \
+      || fail "quoted binding fixture must execute its planted command: $cmd"
+    [ "$actual" = QUOTED_BINDING_EXECUTED ] \
+      || fail "Bash must treat the quoted binding as a command, not an assignment: $cmd"
+    hook "$policy" permission-request exec "$cmd" "completion-quoted-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] \
+      && [ -f "$dir/state/t1.devin-permission-pending/completion-quoted-$id.pending" ] \
+      || fail "quoted/escaped binding syntax must not receive static approval: $cmd: $OUT"
+  done <<EOF
+'FM_HOME=$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+"FM_HOME=$dir" '$dir/bin/fm-captain-hold.sh' complete t1 --none
+'FM_HOME'='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_'HOME'='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME'='$dir '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME\\='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+F\\M_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME""='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+\$'FM_HOME=$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+EOF
+  # Assignment metadata must reset at segment boundaries too.
+  hook "$policy" permission-request exec \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none && 'FM_HOME=$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" \
+    completion-quoted-after-assignment
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    || fail 'a valid earlier assignment must not authorize a later quoted command'
+  pass 'fm-devin-permission-policy: Bash executes quoted/escaped bindings as commands, and the hook keeps them reviewed'
 }
 
 # The brief scaffold's status command runs this home's ledger helper after the
@@ -2831,6 +2877,7 @@ CASES
 
 
 test_worker_completion_home_binding
+test_quoted_completion_bindings_are_not_assignments
 test_refusal_list
 test_refusal_leaves_safe_commands_alone
 test_recursive_rm_resolves_symlinked_components
