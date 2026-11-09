@@ -56,7 +56,9 @@ SH
   printf '%s\n' 'gone_upstream is only prose' > "$repo/tests/note.md"
   commit_all "$repo" merged
   # A fixed-string grep would treat the collector's `.` as a literal period.
+  # Column numbers would shift the text so definitions no longer match.
   git -C "$repo" config grep.patternType fixed
+  git -C "$repo" config grep.column true
 }
 
 test_both_directions_and_a_comment_are_reported() {
