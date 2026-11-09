@@ -26,7 +26,9 @@
 #   4. A single Escape cancels a running turn and leaves an empty composer, so
 #      no clear key is needed after it.
 #   5. /exit exits on one Enter.
-#   6. Native hooks in a separately granted state directory publish semantic
+#   6. Accept-edits, Auto and Plan placeholders classify empty, while
+#      unsubmitted input in each mode stays pending.
+#   7. Native hooks in a separately granted state directory publish semantic
 #      busy and turn-end, and retire without changing project or global hooks.
 #
 # --add-dir is not re-proven here because the portable suite pins that the flag
@@ -245,12 +247,20 @@ wait_for_text 'Accept-edits mode' \
   || fail "agy did not reach an accept-edits composer"
 wait_for_turn || fail "agy did not complete its opening turn"
 assert_delivery_busy idle
-[ "$(composer_state)" = empty ] || fail 'shared composer classifier did not prove the idle Agy input empty'
-"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l 'AGY_PENDING_GUARD'
-sleep 0.3
-[ "$(composer_state)" = pending ] || fail 'shared composer classifier did not preserve unsubmitted Agy input'
-"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" C-u
-pass 'agy: shared composer classifier distinguishes idle placeholder from pending input'
+for mode in Accept-edits Auto Plan; do
+  wait_for_text "$mode mode:" || fail "agy did not reach the $mode placeholder"
+  [ "$(composer_state)" = empty ] || fail "$mode composer did not classify empty"
+  "$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" -l 'AGY_PENDING_GUARD'
+  sleep 0.3
+  [ "$(composer_state)" = pending ] || fail "$mode composer lost unsubmitted input"
+  "$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" C-u
+  wait_for_text "$mode mode:" || fail "$mode composer did not clear"
+  pass "agy $AGY_VERSION: $mode composer distinguishes idle placeholder from pending input"
+  "$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" BTab
+done
+# Plan cycles through manual mode before the retained accept-edits posture.
+"$REAL_TMUX" -S "$SOCKET" send-keys -t "$TARGET" BTab
+wait_for_text 'Accept-edits mode:' || fail 'agy did not restore accept-edits after composer checks'
 capture=$(tmux_capture)
 case "$capture" in
   *'Do you trust the contents of this project?'*)

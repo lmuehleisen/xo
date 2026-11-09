@@ -474,6 +474,28 @@ Its accept-edits placeholder uses SGR 90; the shared classifier removes only tha
 Without styling, a placeholder-looking row stays unknown.
 Typing hides the shortcuts hint while the accept-edits mode cell remains; a manual-mode row without that footer proof stays unknown.
 Ordinary typed input, wrapped text, and a shell below a stale composer remain protected by the portable composer regressions.
+
+Agy 1.5.3 / tmux 3.8 compatibility (2026-11-09): Accept-edits, Auto and Plan render their exact placeholders as `ESC[90m` + hint + `ESC[39m`; typed input hides the shortcuts hint and retains the corresponding `accept-edits ·`, `auto ·` or `plan ·` cell.
+Best-of-N was absent from the reachable mode cycle and has no placeholder exemption.
+Composer-only Auto and Plan captures, both styled and plain, are pinned in `tests/fixtures/agy-composer/`; CRLF regression replays cover the same bytes with Herdr row endings without claiming a live Herdr capture.
+Capture commands, with the private server and pane supplied as variables:
+
+```sh
+tmux -S "$SOCKET" send-keys -t "$TARGET" BTab
+tmux -S "$SOCKET" capture-pane -p -e -t "$TARGET"
+tmux -S "$SOCKET" capture-pane -p -t "$TARGET"
+tmux -S "$SOCKET" send-keys -t "$TARGET" -l 'pending command'
+tmux -S "$SOCKET" send-keys -t "$TARGET" C-u
+bash bin/fm-test-run.sh tests/fm-composer-agy.test.sh
+```
+
+Observed regression output:
+
+```text
+ok - agy Auto and Plan captures preserve idle ambiguity and typed input across capture capabilities
+```
+
+The opt-in signals guard above refreshes all three real mode checks; plain placeholder rows stay `unknown`, while styled idle rows read `empty` and ordinary typed rows read `pending` with every capture capability profile.
 [Google's hook reference](https://antigravity.google/docs/hooks) owns the vendor payload and response schema.
 
 ### Log-only tool observer
