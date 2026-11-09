@@ -14,11 +14,13 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # bin/fm-harness.sh checks verified ENV markers before ancestry. Muse is
-# markerless, so an inherited Cursor/Claude/Pi/Grok marker would outrank the
-# versioned muse-bin ancestor these detection cases launch. Drop the ambient
-# markers so the asserted verdict does not depend on which harness launched
-# the suite.
-unset CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT CURSOR_AGENT CURSOR_INVOKED_AS JETSKI_APP_DATA_DIR GEMINI_CLI
+# markerless, so an inherited foreign harness marker would decide these
+# detection cases wherever the staged fixture has no nearer harness ancestor.
+# Drop the ambient markers so the asserted verdict does not depend on which
+# harness launched the suite.
+unset CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT CURSOR_AGENT \
+  CURSOR_INVOKED_AS JETSKI_APP_DATA_DIR GEMINI_CLI ATLASSIAN_AGENT_TYPE \
+  ROVODEV_CLI
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
@@ -257,7 +259,8 @@ test_detects_versioned_process_ancestor() {
   for bin in muse-bin-0.1.0-R708.1 muse-bin-9.9.9-RZZZ.9 muse; do
     ln -sf "$(command -v bash)" "$dir/$bin"
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI -u JETSKI_APP_DATA_DIR \
+      -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI \
       "$dir/$bin" -c "r=\$(\"$HARNESS\"); printf '%s' \"\$r\"")
     [ "$out" = muse ] || fail "fm-harness.sh under process '$bin' reported '$out', expected muse"
   done
@@ -275,11 +278,51 @@ test_detection_is_anchored() {
   for bin in musescore amuse notmuse-bin muse-binary muse-bind; do
     ln -sf "$(command -v bash)" "$dir/$bin"
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI -u JETSKI_APP_DATA_DIR \
+      -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI \
       "$dir/$bin" -c "r=\$(\"$HARNESS\"); printf '%s' \"\$r\"")
     [ "$out" != muse ] || fail "fm-harness.sh misdetected unrelated process '$bin' as muse"
   done
   pass "muse detection does not claim unrelated muse-containing commands"
+}
+
+# A suite launched from inside rovo - or behind a tmux-retained marker - inherits
+# ATLASSIAN_AGENT_TYPE=rovo and ROVODEV_CLI=1, both of which harness_marker
+# answers before ancestry. comm-strength ancestry arbitration is what keeps each
+# from renaming this fixture; pin both markers so a precedence regression fails
+# here instead of silently relabeling the suite's verdict.
+test_retained_rovo_markers_do_not_relabel_muse_ancestry() {
+  local dir blind out marker
+  dir="$TMP_ROOT/detect-rovo"
+  mkdir -p "$dir"
+  ln -sf "$(command -v bash)" "$dir/muse-bin-0.1.0-R708.1"
+  # A fake ps reporting only bash ancestors up to pid 1 blinds the ancestry
+  # layer, proving each marker alone resolves rovo so the fixture assertion
+  # below can never pass vacuously.
+  blind=$(fm_fakebin "$dir/blind")
+  cat > "$blind/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *'ppid='*) printf '%s\n' 1 ;;
+  *) printf '%s\n' bash ;;
+esac
+SH
+  chmod +x "$blind/ps"
+  for marker in ATLASSIAN_AGENT_TYPE=rovo ROVODEV_CLI=1; do
+    out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI -u JETSKI_APP_DATA_DIR \
+      -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI "$marker" \
+      PATH="$blind:$PATH" "$HARNESS")
+    [ "$out" = rovo ] \
+      || fail "with ancestry blind, retained $marker resolved '$out' instead of rovo"
+    out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI -u JETSKI_APP_DATA_DIR \
+      -u ATLASSIAN_AGENT_TYPE -u ROVODEV_CLI "$marker" \
+      "$dir/muse-bin-0.1.0-R708.1" -c "r=\$(\"$HARNESS\"); printf '%s' \"\$r\"")
+    [ "$out" = muse ] \
+      || fail "a retained $marker relabeled the muse ancestry fixture as '$out'"
+  done
+  pass "a retained Rovo marker cannot relabel the muse ancestry fixture"
 }
 
 test_spawn_clears_inherited_foreign_harness_markers() {
@@ -1114,6 +1157,7 @@ EOF
 test_spawn_environment_allowlist_credential_preflight
 test_detects_versioned_process_ancestor
 test_detection_is_anchored
+test_retained_rovo_markers_do_not_relabel_muse_ancestry
 test_spawn_clears_inherited_foreign_harness_markers
 test_spawn_launch_shape
 test_spawn_maps_effort_and_model
