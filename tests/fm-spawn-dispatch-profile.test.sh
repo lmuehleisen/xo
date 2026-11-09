@@ -1867,8 +1867,9 @@ test_codex_optins_pin_the_probed_configuration_root() {
     expected=$selected
     [ "$optin" != both ] || expected=$(printf '%s\n%s' "$selected" "$selected")
     assert_equals "$expected" "$(cat "$CASE_DIR/probe-root.log")" "Codex $scenario probed a different configuration root"
+    # The OSC 7501 frame spans lines; run the agent command it wraps.
     env PATH="$FAKEBIN_DIR:$PATH" HOME="$CASE_DIR/pane-home" CODEX_HOME="$CASE_DIR/pane-root" \
-      bash -c "$(head -1 "$LAUNCH_LOG")" || fail "Codex $scenario inherited invalid pane configuration"
+      bash -c "$(fm_test_launch_unframe "$(sed '/fm-osc7501[.]sh.* disarm --state /q' "$LAUNCH_LOG")")" || fail "Codex $scenario inherited invalid pane configuration"
     assert_equals "$selected" "$(cat "$FAKEBIN_DIR/native-worker-config-root")" \
       "Codex $scenario launch substituted a configuration root after validation"
   done
@@ -1897,7 +1898,7 @@ test_claude_ultracode_optin() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --ultracode --model opus --effort low)
   expect_code 0 "$?" "supported ultracode should launch: $out"
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-  assert_task_launch_uses_probed_executable claude "$(head -1 "$LAUNCH_LOG")"
+  assert_task_launch_uses_probed_executable claude "$(fm_test_launch_unframe "$(sed '/fm-osc7501[.]sh.* disarm --state /q' "$LAUNCH_LOG")")"
   assert_contains "$launch" '"ultracode":true' "ultracode setting missing"
   assert_contains "$launch" "--effort 'low'" "ultracode changed the explicit effort"
   assert_grep 'ultracode=on' "$HOME_DIR/state/$id.meta" "ultracode metadata missing"
@@ -2167,7 +2168,7 @@ test_goal_first_native_input() {
     printf '%s\n' "$harness" > "$FAKEBIN_DIR/goal-harness"
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --goal 'Reply with smoke')
     expect_code 0 "$?" "native $harness goal launch failed: $out"
-    launch=$(head -1 "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(sed '/fm-osc7501[.]sh.* disarm --state /q' "$LAUNCH_LOG")")
     assert_task_launch_uses_probed_executable "$harness" "$launch"
     assert_not_contains "$launch" 'encode launch-brief' "goal launch sent an ordinary initial brief prompt"
     assert_not_contains "$launch" 'FIRSTMATE_OP: v1 operational-input' "Claude goal launch sent the brief before /goal"
