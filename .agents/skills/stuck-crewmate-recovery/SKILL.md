@@ -78,6 +78,14 @@ A retry or delivery failure is actionable recovery evidence; an unchanged limit 
 Do not register a limit pause over an unrelated open decision, failed task, or finished delivery.
 Devin's existing hook-driven rate-limit retry remains its owner; do not add this schedule alongside it.
 
+## Supervisor park
+
+When a worker is already stopped and cannot append its own bounded pause, record that wait with `FM_HOME=<this-firstmate-home> bin/fm-park.sh <task-id> --until <UTC ISO-8601> --reason <text>`.
+Pass `--retire <NNN.msg>` once for each pending steering record that wait supersedes.
+The script header owns the pause line, the retirement record, and the refusal rules.
+Records you do not name stay pending, and this command does not stop the agent or discard its work.
+A remotely placed secondmate is refused; park that mate on its own host.
+
 ## Live-endpoint escalation
 
 Escalate in order:

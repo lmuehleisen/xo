@@ -95,7 +95,7 @@
 #     branch-side containment only; main's tasks-axi path has no executable
 #     backlog lease guard in this scope.
 #
-# Sourced by bin/fm-send.sh, bin/fm-control.sh, bin/fm-teardown.sh,
+# Sourced by bin/fm-send.sh, bin/fm-control.sh, bin/fm-park.sh, bin/fm-teardown.sh,
 # bin/fm-pr-merge.sh, bin/fm-merge-local.sh, bin/fm-spawn.sh, bin/fm-lock.sh,
 # bin/fm-supervision-host.sh, and bin/fm-lease.sh. Callers must have $STATE
 # resolved before calling. No side effects on source. set -u / set -e safe.

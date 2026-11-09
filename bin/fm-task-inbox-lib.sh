@@ -25,6 +25,9 @@
 # Layout under <state-dir>:
 #   <task>.inbox/NNN.msg       one durable steer, numeric sequence, atomic rename
 #   <task>.inbox/handled/      the worker's `mv` here IS the acknowledgement
+#   <task>.inbox/retired/      a supervisor park (bin/fm-park.sh) moved a named
+#                              record here. Not a worker acknowledgement: the
+#                              worker did not read it, and nothing re-rings it.
 #   <task>.inbox/.seq.lock     serializes sequence allocation across writers
 #                              (the session and the away daemon)
 #   <task>.inbox/.ring-state   watcher re-ring ladder: "<msg>\t<count>\t<epoch>"
@@ -46,9 +49,9 @@
 #   <exact message text; newlines are legal; a marked secondmate request keeps
 #    its from-firstmate marker and corr token verbatim in this body>
 #
-# Sequence numbers are never reused within a task: allocation scans both the
-# inbox root and handled/, so a message is processed at most once per worker
-# lifetime even if every doorbell is duplicated. Concurrent writers serialize
+# Sequence numbers are never reused within a task: allocation scans the
+# inbox root, handled/, and retired/, so a message is processed at most once
+# per worker lifetime even if every doorbell is duplicated. Concurrent writers serialize
 # on .seq.lock; the worst racing outcome is ordering, never loss.
 #
 # Re-ring ladder (fm_task_inbox_due_action): an unhandled message older than
@@ -171,6 +174,12 @@ fm_task_inbox_handled_dir() {  # <state-dir> <task-id>
   printf '%s/%s.inbox/handled' "$1" "$2"
 }
 
+# Supervisor park (bin/fm-park.sh) moves named records here. Distinct from
+# handled/: a retired record was not read by the worker.
+fm_task_inbox_retired_dir() {  # <state-dir> <task-id>
+  printf '%s/%s.inbox/retired' "$1" "$2"
+}
+
 # Numeric sequence of one record basename, or fail for a non-record name.
 fm_task_inbox_seq_of() {  # <basename>
   local n=${1%.msg}
@@ -183,7 +192,7 @@ fm_task_inbox_seq_of() {  # <basename>
 # acknowledged sequence is never reissued. Caller must hold .seq.lock.
 fm_task_inbox_next_seq() {  # <inbox-dir>
   local dir=$1 max=0 d f n
-  for d in "$dir" "$dir/handled"; do
+  for d in "$dir" "$dir/handled" "$dir/retired"; do
     for f in "$d"/*.msg; do
       [ -e "$f" ] || continue
       n=$(fm_task_inbox_seq_of "${f##*/}") || continue
@@ -249,8 +258,9 @@ fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode]
 }
 
 # Durably enqueue one steer at most once: when a record with the exact same
-# body and delivery mode already exists, unhandled or acknowledged in handled/,
-# no new record is written and the existing record's path is printed instead.
+# body and delivery mode already exists, unhandled, acknowledged in handled/,
+# or retired by a supervisor park, no new record is written and the existing
+# record's path is printed instead.
 # This is the enqueue primitive for a transport that can fail with completion
 # unknown (the remote steer leg over ssh): the caller's safe recovery is to run
 # the same enqueue again, and this dedup is what makes the re-run land on the
@@ -277,6 +287,9 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
           case "$f" in
             "$dir"/*.msg)
               f="$dir/handled/${f##*/}"
+              if [ ! -e "$f" ]; then
+                f="$dir/retired/${f##*/}"
+              fi
               [ -e "$f" ] || continue
               ;;
             *) continue ;;
@@ -291,19 +304,28 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
           case "$f" in
             "$dir"/*.msg)
               f="$dir/handled/${f##*/}"
-              fm_task_inbox_body "$f" > "$have" 2>/dev/null || continue
+              if ! fm_task_inbox_body "$f" > "$have" 2>/dev/null; then
+                f="$dir/retired/${f##*/}"
+                fm_task_inbox_body "$f" > "$have" 2>/dev/null || continue
+              fi
               ;;
             *) continue ;;
           esac
         fi
         cmp -s "$want" "$have" || continue
-        [ ! -e "$dir/handled/${f##*/}" ] || f="$dir/handled/${f##*/}"
+        if [ -e "$dir/handled/${f##*/}" ]; then
+          f="$dir/handled/${f##*/}"
+        elif [ -e "$dir/retired/${f##*/}" ]; then
+          f="$dir/retired/${f##*/}"
+        fi
         rec=$f
         break
       done < <(
-        # Expand handled/ only AFTER scanning pending records: an acknowledgement
-        # racing grep must remain visible even if its original path disappeared.
-        for scan_dir in "$dir" "$dir/handled"; do
+        # Expand handled/ and retired/ only AFTER scanning pending records: an
+        # acknowledgement or park racing grep must remain visible even if its
+        # original path disappeared.
+        for scan_dir in "$dir" "$dir/handled" "$dir/retired"; do
+          [ -d "$scan_dir" ] || continue
           # A read/argument-limit error must not turn an exact retry into a new
           # request. Fall back to the original scan only on error, not no-match.
           LC_ALL=C grep -lFx --null -- "$first_line" "$scan_dir"/*.msg 2>/dev/null || {
@@ -367,6 +389,7 @@ fm_task_inbox_doorbell_line() {  # <record-path>
   local dir=${1%/*} abs name quoted LC_ALL=C
   abs=$(cd "$dir" 2>/dev/null && pwd) || abs=$dir
   abs=${abs%/handled}
+  abs=${abs%/retired}
   name=${abs##*/}
   case "$name" in
     ''|*[![:print:]]*) return 1 ;;
@@ -492,8 +515,8 @@ _fm_task_inbox_submit_stranded() {  # <backend> <target> <record-path> [expected
 # missing (nothing typed; recovery owns the record), 4 the doorbell sits typed
 # but unsubmitted in the composer (the next ring presses Enter alone), 5 a
 # previously stranded doorbell was submitted with Enter alone and the composer
-# proven empty. No return value is delivery proof; the acknowledgement move is
-# the only delivery signal.
+# proven empty, 6 the record is in retired/ so nothing is typed. No return
+# value is delivery proof; the acknowledgement move is the only delivery signal.
 # The skip is deliberately narrow: only an exact `pending` verdict defers,
 # because there our Enter could submit someone's real half-typed content.
 # The one exception is a doorbell this inbox stranded: the typing ring that
@@ -508,6 +531,11 @@ _fm_task_inbox_submit_stranded() {  # <backend> <target> <record-path> [expected
 # positively identify (that classifier is advisory here by design).
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict stranded=${3%/*}/.stranded
+  # A supervisor park is not a delivery. Refuse before any endpoint read so a
+  # retired record cannot be rung back into the worker's inbox.
+  case "$rec" in
+    */retired/*.msg) return 6 ;;
+  esac
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
@@ -547,9 +575,13 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
 }
 
 fm_task_inbox_is_fire_and_forget() {  # <record-path>
-  local rec=$1
+  local rec=$1 base
   if [ ! -f "$rec" ]; then
-    rec="${rec%/*}/handled/${rec##*/}"
+    base=${rec##*/}
+    rec="${rec%/*}/handled/$base"
+    if [ ! -f "$rec" ]; then
+      rec="${1%/*}/retired/$base"
+    fi
     [ -f "$rec" ] || return 1
   fi
   awk '
