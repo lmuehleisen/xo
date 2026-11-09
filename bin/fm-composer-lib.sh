@@ -756,8 +756,11 @@ FM_COMPOSER_AGY_HINTS=(
   'Auto mode: edits & safe commands auto-approved (shift+tab to cycle)'
   'Plan mode: research & plan only (shift+tab to cycle)'
 )
-FM_COMPOSER_AGY_HINTS_STYLED=("${FM_COMPOSER_AGY_HINTS[@]/#/$'\033[90m'}")
-FM_COMPOSER_AGY_HINTS_STYLED=("${FM_COMPOSER_AGY_HINTS_STYLED[@]/%/$'\033[39m'}")
+FM_COMPOSER_AGY_HINTS_STYLED=(
+  $'\033[90m'"${FM_COMPOSER_AGY_HINTS[0]}"$'\033[39m'
+  $'\033[90m'"${FM_COMPOSER_AGY_HINTS[1]}"$'\033[39m'
+  $'\033[90m'"${FM_COMPOSER_AGY_HINTS[2]}"$'\033[39m'
+)
 
 # KIRO ONLY (fm_composer_kiro_scope): idle placeholders that carry a submit hint
 # typed input never renders, so the whole anchored row proves an empty composer
