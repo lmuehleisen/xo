@@ -614,7 +614,7 @@ Each relocated script keeps its own gate, enforcing exactly what a script can ch
 | --- | --- |
 | `bin/fm-pr-merge.sh` | Merges only a task whose yolo posture is on or whose id the record's merge-grant list names (granted with `--grant` at `/afk`, never read from the words), green at its live head, synchronously, under the record lock, and refuses `--allow-red`, `--allow-missing`, and `--allow-no-pipeline` while away, so the green gate is absolute in this posture and any other merge the words call for holds for the return. |
 | `bin/fm-spawn.sh` | Dispatches only queued work whose blockers cleared - already queued, or filed by the branch because the words explicitly call for it; refuses a fresh ordinary spawn for either actor once the home holds as many ordinary task records as the record's spend cap (relaunches and secondmates exempt). |
-| `bin/fm-send.sh --resolve-key` | Answers a decision the words pre-answer, or one `ask-user-authority`'s judgment (carried verbatim in the branch prompt) lets firstmate decide. |
+| `bin/fm-send.sh --resolve-key` | Answers a pre-stated decision with the captain's own words, or an ask-user-authority ruling recorded with `--actor firstmate` so it is not stored as the captain's words. |
 | `bin/fm-merge-local.sh` | Never relocated. |
 
 The merge-authority record and the outcome row's summary are the audit trail.

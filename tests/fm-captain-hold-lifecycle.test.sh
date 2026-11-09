@@ -882,6 +882,327 @@ test_answer_records_and_closes() {
   pass "answer records the captain's words, closes idempotently, and releases routed work"
 }
 
+# A firstmate ruling closes the same inventory without becoming the captain's words.
+# Legacy records with no actor line stay captain answers. Unknown preface lines
+# are skipped. A different actor is not an idempotent retry.
+test_firstmate_decision_actor_closes_without_captain_words() {
+  local home origin show out rc decision_out parent mate channel line digest text
+  local fb resend_err unkeyed
+  home=$(make_home decision-actor)
+  origin=sample-actor-origin
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review the sample actor cases" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the actor-origin"
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  printf '# Actor review\n\nSynthetic choices remain.\n' > "$home/data/$origin/report.md"
+
+  run_captain "$home" hold sample-fm-ruling \
+    --title "Choose the sample ruling" --reason "sample ruling pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the firstmate ruling"
+  run_captain "$home" hold sample-captain-words \
+    --title "Choose the sample words" --reason "sample words pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the captain answer"
+  run_captain "$home" hold sample-fm-keyed \
+    --title "Choose the keyed ruling" --reason "keyed ruling pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the keyed ruling"
+  run_captain "$home" hold sample-fm-actor-skip \
+    --title "Choose the actor skip" --reason "actor skip pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the actor-skip call"
+  run_captain "$home" hold sample-legacy-actor \
+    --title "Choose the legacy record" --reason "legacy record pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the legacy record"
+  run_captain "$home" hold sample-preface-captain \
+    --title "Choose the captain preface" --reason "captain preface pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the captain preface"
+  run_captain "$home" hold sample-preface-firstmate \
+    --title "Choose the firstmate preface" --reason "firstmate preface pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the firstmate preface"
+  run_captain "$home" hold sample-bad-actor \
+    --title "Choose the bad actor" --reason "bad actor pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the bad-actor call"
+  run_captain "$home" hold sample-fm-send-call \
+    --title "Choose the send ruling" --reason "send ruling pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the send call"
+  run_captain "$home" complete "$origin" \
+    sample-fm-ruling sample-captain-words sample-fm-keyed sample-fm-actor-skip \
+    sample-legacy-actor sample-preface-captain sample-preface-firstmate \
+    sample-bad-actor sample-fm-send-call >/dev/null \
+    || fail "completion failed for the actor inventory"
+
+  printf 'Apply the delegated sample ruling.\n' > "$home/ruling.txt"
+  run_captain "$home" answer sample-fm-ruling --actor firstmate --decision-file "$home/ruling.txt" >/dev/null \
+    || fail "a firstmate ruling could not close the held call"
+  show=$(tasks_in "$home" show sample-fm-ruling --full)
+  assert_contains "$show" "state: done" "a firstmate ruling did not close the call"
+  assert_contains "$show" "Decision actor: firstmate" "the ruling did not record its actor"
+  assert_contains "$show" "Firstmate decision:" "the ruling did not use the firstmate label"
+  assert_contains "$show" "Apply the delegated sample ruling." "the ruling lost its text"
+  assert_not_contains "$show" "Captain decision:" "a firstmate ruling was labeled as the captain's words"
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "a firstmate ruling did not satisfy the completion gate"
+  set +e
+  decision_out=$(run_captain "$home" decision sample-fm-ruling 2>"$home/fm-ruling-decision.err")
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "a firstmate ruling must not read as a captain answer"
+  assert_not_contains "$decision_out" "Apply the delegated sample ruling." \
+    "decision printed a firstmate ruling"
+  assert_grep "firstmate ruling" "$home/fm-ruling-decision.err" \
+    "decision did not say the record is a firstmate ruling"
+  run_captain "$home" answer sample-fm-ruling --actor firstmate --decision-file "$home/ruling.txt" >/dev/null \
+    || fail "an identical firstmate ruling was not idempotent"
+  [ "$(grep -c 'Resolution recorded by fm-captain-hold' "$home/data/backlog.md")" = 1 ] \
+    || fail "an identical firstmate ruling wrote a second record"
+  if run_captain "$home" answer sample-fm-ruling --decision-file "$home/ruling.txt" \
+    > "$home/relabel.out" 2> "$home/relabel.err"; then
+    fail "the default actor relabeled a firstmate ruling as a captain answer"
+  fi
+  assert_grep "actor firstmate" "$home/relabel.err" "the actor mismatch did not name the recorded actor"
+  show=$(tasks_in "$home" show sample-fm-ruling --full)
+  assert_contains "$show" "Firstmate decision:" "the refused relabel changed the ruling label"
+  assert_not_contains "$show" "Captain decision:" "the refused relabel wrote a captain label"
+  assert_grep "Firstmate decision recorded for held call sample-fm-ruling (answered)" \
+    "$home/state/.wake-queue" "a firstmate ruling did not wake its owner as a firstmate decision"
+  assert_no_grep "Captain answer recorded for held call sample-fm-ruling" \
+    "$home/state/.wake-queue" "a firstmate ruling woke its owner as a captain answer"
+
+  printf 'Captain chose the sample option.\n' > "$home/captain-words.txt"
+  run_captain "$home" answer sample-captain-words --decision-file "$home/captain-words.txt" >/dev/null \
+    || fail "a captain answer could not close its call"
+  show=$(tasks_in "$home" show sample-captain-words --full)
+  assert_contains "$show" "Decision actor: captain" "a new captain answer omitted its actor"
+  assert_contains "$show" "Captain decision:" "a captain answer lost its label"
+  assert_contains "$show" "Captain chose the sample option." "a captain answer lost its exact words"
+  decision_out=$(run_captain "$home" decision sample-captain-words) \
+    || fail "decision did not return the captain's words"
+  assert_equals "Captain chose the sample option." "$decision_out" \
+    "decision did not return the captain's words byte for byte"
+
+  out=$(printf 'sample-fm-keyed\tapply the keyed sample ruling\t\n' \
+    | run_captain "$home" answers --actor firstmate --source "delegated sample ruling") \
+    || fail "a keyed firstmate ruling was refused: $out"
+  assert_contains "$out" "closed: sample-fm-keyed" "a keyed firstmate ruling did not close"
+  show=$(tasks_in "$home" show sample-fm-keyed --full)
+  assert_contains "$show" "Firstmate resolved this call through delegated sample ruling." \
+    "the keyed ruling lost its firstmate wrapper"
+  assert_contains "$show" "Ruling: apply the keyed sample ruling" "the keyed ruling lost its ruling line"
+  assert_contains "$show" "Decision actor: firstmate" "the keyed ruling lost its actor"
+  assert_not_contains "$show" "Captain answered" "the keyed ruling claimed the captain answered"
+
+  printf 'Firstmate resolved this call through delegated sample ruling.\nTask: sample-fm-actor-skip\nRuling: take the delegated option\n' \
+    > "$home/actor-skip.txt"
+  run_captain "$home" answer sample-fm-actor-skip --decision-file "$home/actor-skip.txt" >/dev/null \
+    || fail "could not record the actor-skip fixture"
+  set +e
+  out=$(printf 'sample-fm-actor-skip\ttake the delegated option\t\n' \
+    | run_captain "$home" answers --actor firstmate --source "delegated sample ruling" 2>"$home/actor-skip.err")
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a cross-actor keyed replay was treated as closed: $out"
+  assert_contains "$out" "skipped: sample-fm-actor-skip (recorded actor is captain)" \
+    "a cross-actor keyed replay did not name the recorded actor: $out"
+  show=$(tasks_in "$home" show sample-fm-actor-skip --full)
+  assert_contains "$show" "Decision actor: captain" "the skipped replay changed the recorded actor"
+  assert_not_contains "$show" "Firstmate decision:" "the skipped replay relabeled the record"
+
+  text='Use the recorded sample option.'
+  digest=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')
+  cat > "$home/legacy-body.txt" <<EOF
+Resolution recorded by fm-captain-hold.
+Decision digest: $digest
+Resolution mode: answered
+
+Captain decision:
+$text
+EOF
+  tasks_in "$home" update sample-legacy-actor --body-file "$home/legacy-body.txt" >/dev/null \
+    || fail "could not plant the legacy resolution"
+  tasks_in "$home" done sample-legacy-actor >/dev/null \
+    || fail "could not close the planted legacy resolution"
+  decision_out=$(run_captain "$home" decision sample-legacy-actor) \
+    || fail "a legacy record with no actor line did not return the captain's words"
+  assert_equals "$text" "$decision_out" "a legacy record did not return its stored text"
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "a legacy captain record no longer satisfies the completion gate"
+
+  cat > "$home/captain-preface.txt" <<EOF
+Resolution recorded by fm-captain-hold.
+Decision digest: $digest
+Resolution mode: answered
+Decision actor: captain
+Verification receipt: unchecked
+Answer link: sample-later-work
+
+Captain decision:
+$text
+EOF
+  tasks_in "$home" update sample-preface-captain --body-file "$home/captain-preface.txt" >/dev/null \
+    || fail "could not plant the captain preface"
+  tasks_in "$home" done sample-preface-captain >/dev/null \
+    || fail "could not close the planted captain preface"
+  decision_out=$(run_captain "$home" decision sample-preface-captain) \
+    || fail "an unknown preface line hid the captain's words"
+  assert_equals "$text" "$decision_out" "an unknown preface line changed the captain's words"
+
+  text='Apply the planted sample ruling.'
+  digest=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')
+  cat > "$home/firstmate-preface.txt" <<EOF
+Resolution recorded by fm-captain-hold.
+Decision digest: $digest
+Resolution mode: answered
+Decision actor: firstmate
+Verification receipt: unchecked
+
+Firstmate decision:
+$text
+EOF
+  tasks_in "$home" update sample-preface-firstmate --body-file "$home/firstmate-preface.txt" >/dev/null \
+    || fail "could not plant the firstmate preface"
+  tasks_in "$home" done sample-preface-firstmate >/dev/null \
+    || fail "could not close the planted firstmate preface"
+  set +e
+  decision_out=$(run_captain "$home" decision sample-preface-firstmate 2>"$home/preface-fm.err")
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "a firstmate preface record must not read as a captain answer"
+  assert_not_contains "$decision_out" "$text" "decision printed a prefaced firstmate ruling"
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "an unknown preface line dropped a recorded resolution"
+
+  printf 'Robot is not an actor.\n' > "$home/bad-actor.txt"
+  if run_captain "$home" answer sample-bad-actor --actor robot --decision-file "$home/bad-actor.txt" \
+    > "$home/bad-actor.out" 2> "$home/bad-actor.err"; then
+    fail "answer accepted an unknown actor"
+  fi
+  assert_grep "captain or firstmate" "$home/bad-actor.err" "the unknown actor refusal did not name the allowed actors"
+  show=$(tasks_in "$home" show sample-bad-actor --full)
+  assert_contains "$show" "held: yes" "an unknown actor closed the call"
+  assert_not_contains "$show" "Resolution recorded by fm-captain-hold" \
+    "an unknown actor wrote a resolution"
+
+  tasks_in "$home" add sample-fm-ship "Ship the sample send target" --kind ship --repo sample --start >/dev/null \
+    || fail "could not create the send target"
+  write_origin_meta "$home" sample-fm-ship ship
+  printf 'working: sample send target\n' > "$home/state/sample-fm-ship.status"
+  fb="$home/fakebin"
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  send-keys)
+    shift
+    literal=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    if [ "$literal" = 1 ]; then
+      printf '%s' "${1:-}" >> "$FM_SEND_LOG"
+    fi
+    exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
+    printf 'fakepane\n'; exit 0 ;;
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  list-windows) exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/tmux"
+  : > "$home/send.log"
+  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_SEND_LOG="$home/send.log" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-send.sh" sample-fm-ship --resolve-key sample-fm-send-call --actor firstmate \
+    "apply the delegated sample ruling" >/dev/null 2>"$home/send-ruling.err" \
+    || fail "fm-send refused a firstmate ruling: $(cat "$home/send-ruling.err")"
+  show=$(tasks_in "$home" show sample-fm-send-call --full)
+  assert_contains "$show" "state: done" "a firstmate send left the held call open"
+  assert_contains "$show" "Decision actor: firstmate" "a firstmate send did not record the actor"
+  assert_contains "$show" "Ruling: apply the delegated sample ruling" "a firstmate send lost the ruling"
+  assert_contains "$show" "Firstmate resolved" "a firstmate send used the captain wrapper"
+  assert_not_contains "$show" "Captain answered" "a firstmate send claimed the captain answered"
+
+  if env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_SEND_LOG="$home/send.log" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-send.sh" sample-fm-ship --actor robot "should not send" \
+    > "$home/send-robot.out" 2> "$home/send-robot.err"; then
+    fail "fm-send accepted an unknown actor"
+  fi
+  assert_grep "captain or firstmate" "$home/send-robot.err" "fm-send did not refuse the unknown actor"
+  if env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_SEND_LOG="$home/send.log" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-send.sh" sample-fm-ship --actor firstmate "should not send either" \
+    > "$home/send-bare-actor.out" 2> "$home/send-bare-actor.err"; then
+    fail "fm-send accepted --actor without --resolve-key"
+  fi
+  assert_grep "requires --resolve-key" "$home/send-bare-actor.err" \
+    "fm-send did not require --resolve-key for --actor"
+  if env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_SEND_LOG="$home/send.log" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-send.sh" sample-fm-ship --resolve-key missing-sample-key --actor firstmate \
+    "preserved ruling" > "$home/send-resend.out" 2> "$home/send-resend.err"; then
+    fail "fm-send accepted a key nothing owns"
+  fi
+  assert_grep "--actor firstmate" "$home/send-resend.err" "the keyed resend dropped the firstmate actor"
+  unkeyed=$(grep -F '# deliver without closing anything' "$home/send-resend.err")
+  assert_not_contains "$unkeyed" "--actor" "the unkeyed resend kept an actor flag"
+  if find "$home/state/sample-fm-ship.inbox" -name '*.msg' -print 2>/dev/null | grep -q .; then
+    if grep -qF 'should not send' "$home/state/sample-fm-ship.inbox"/*.msg \
+      "$home/state/sample-fm-ship.inbox"/handled/*.msg 2>/dev/null; then
+      fail "a refused actor send still delivered its message"
+    fi
+  fi
+
+  parent=$(make_home actor-parent)
+  mate="$TMP_ROOT/actor-mate-home"
+  mkdir -p "$mate/data" "$mate/state" "$mate/config" "$mate/projects"
+  fm_test_tasks_toml "$mate/.tasks.toml"
+  printf '# Synthetic secondmate home\n' > "$mate/AGENTS.md"
+  printf 'actor-mate\n' > "$mate/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$mate/.fm-secondmate-parent"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  fm_fake_exit0 "$(fm_fakebin "$mate")" tmux treehouse no-mistakes gh gh-axi
+  channel="$parent/state/actor-mate.status"
+  run_captain "$mate" hold sample-mate-ruling --title "Choose the mate ruling" \
+    --reason "mate ruling pending" --repo sample >/dev/null \
+    || fail "could not hold the mate ruling"
+  printf 'Ship the sample under the delegated ruling.\n' > "$mate/ruling.txt"
+  run_captain "$mate" answer sample-mate-ruling --actor firstmate --decision-file "$mate/ruling.txt" >/dev/null \
+    || fail "the mate's firstmate ruling failed"
+  line=$(grep -F 'captain-hold-sample-mate-ruling-1' "$channel" | tail -n 1 | sed -E 's/ \[at=[0-9]+\]//')
+  assert_equals 'resolved [key=captain-hold-sample-mate-ruling-1]: captain hold sample-mate-ruling: firstmate resolved' \
+    "$line" "a firstmate ruling told the parent the captain answered"
+  run_captain "$mate" hold sample-mate-release --title "Release the mate work" \
+    --reason "mate release pending" --repo sample >/dev/null \
+    || fail "could not hold the mate release"
+  printf 'Resume the sample work.\n' > "$mate/release.txt"
+  run_captain "$mate" answer sample-mate-release --actor firstmate --release \
+    --decision-file "$mate/release.txt" >/dev/null \
+    || fail "the mate's firstmate release failed"
+  line=$(grep -F 'captain-hold-sample-mate-release-1' "$channel" | tail -n 1 | sed -E 's/ \[at=[0-9]+\]//')
+  assert_equals 'resolved [key=captain-hold-sample-mate-release-1]: captain hold sample-mate-release: firstmate released' \
+    "$line" "a firstmate release told the parent the captain released the hold"
+
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "the actor inventory did not stay satisfied"
+  pass "a firstmate ruling closes the inventory without becoming the captain's words"
+}
+
 # --release lifts the hold instead of closing, preserving the work item's own
 # body under the record; a re-held task later accepts a new answer.
 test_release_frees_held_work() {
@@ -5404,6 +5725,7 @@ test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
+test_firstmate_decision_actor_closes_without_captain_words
 test_release_frees_held_work
 test_release_is_attended_only
 test_release_rechecks_away_after_waiting_on_task_lock

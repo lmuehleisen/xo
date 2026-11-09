@@ -22,8 +22,8 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
-#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
-#   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
+#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release] [--actor captain|firstmate]
+#   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance> [--actor captain|firstmate]   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
 #   fm-captain-hold.sh bind <source-id> [<legacy-origin> | --any-origin]
 #   fm-captain-hold.sh unbind <source-id>
@@ -73,22 +73,24 @@
 # Neither command exits an agent, merges work, or suppresses a new worker event;
 # the watcher admits a quiet ordinary-worker wait only after verified agent exit.
 #
-# `answer` records the captain's exact words and resolves the call in the same
-# act. It requires a non-empty captain decision file of at most 8192 bytes and
-# writes a resolution block while preserving the leading hold-set stamp until
-# the close succeeds (the previous body is preserved and archived through
-# tasks-axi --archive-body). It closes a question with `tasks-axi done` - or,
-# with `--release`, lifts the hold with `tasks-axi unhold` so a captain-gated
-# WORK item resumes without closing - and restores resolution-first body
-# ordering. `--release` is attended-only: while the away-posture record exists
-# (state/.afk-contract, or the daemon flag state/.afk, read as away; a quiet
-# record is a present captain) it is refused before anything is written, so an
-# unattended supervisor cannot free held work with its own words and then steer
-# it; the captain releases the hold in an attended session. A closing answer
-# without `--release` is not gated by posture. An exact retry also completes
-# unfinished ordering normalization and
-# is idempotent only when its requested close mode
-# matches the newest record; a changed decision or a mode mismatch is rejected.
+# `answer` records a resolution and resolves the call in the same act. The
+# default actor, `captain`, stores the captain's exact words. `--actor firstmate`
+# stores a firstmate ruling and must not be used for those words. It requires a
+# non-empty decision file of at most 8192 bytes and writes a resolution block
+# while preserving the leading hold-set stamp until the close succeeds (the
+# previous body is preserved and archived through tasks-axi --archive-body). It
+# closes a question with `tasks-axi done` - or, with `--release`, lifts the hold
+# with `tasks-axi unhold` so a captain-gated WORK item resumes without closing -
+# and restores resolution-first body ordering. `--release` is attended-only:
+# while the away-posture record exists (state/.afk-contract, or the daemon flag
+# state/.afk, read as away; a quiet record is a present captain) it is refused
+# before anything is written, so an unattended supervisor cannot free held work
+# with its own words and then steer it; the captain releases the hold in an
+# attended session. A closing answer without `--release` is not gated by
+# posture. An exact retry also completes unfinished ordering normalization and
+# is idempotent only when its requested close mode and actor both match the
+# newest record; a changed decision, a different actor, or a mode mismatch is
+# rejected. A record with no actor line is a captain answer.
 # Every answer path then wakes the home that owns the call once the backlog
 # record is durable, and a replay never wakes it twice (wake_answer_owner beside
 # the reconcile section owns the details).
@@ -113,9 +115,12 @@
 # `answer --release` and feeds nothing. A key that names no task, a task that is
 # not held for the captain, or a task already closed is reported as `skipped:`
 # and feeds nothing. A replayed delivery whose answer digest and requested
-# close mode both match the newest record is reported `closed:` and is a no-op;
-# a mode mismatch is skipped. The command exits nonzero when any key was
-# skipped. `--source` is provenance text recorded in the
+# close mode, and actor all match the newest record is reported `closed:` and
+# is a no-op; a mode or actor mismatch is skipped. `--actor` selects the
+# decision text and the record actor. The default is `captain`, and that
+# wrapper stays the historical captain text. `firstmate` records a ruling
+# instead of claiming the captain answered. The command exits nonzero when any
+# key was skipped. `--source` is provenance text recorded in the
 # durable decision, never a behavior switch: this command has no per-channel
 # branch and no knowledge of chat, review decks, or any transport.
 # Legacy input: an optional positional origin (or a stored concrete-origin
@@ -215,7 +220,8 @@
 # backlog close and, on 0, returns the row to Queued with its deliverable
 # recorded instead (bin/fm-backlog-transition-lib.sh owns that transition), so
 # holding the very work item a question gates is safe; only `answer` with the
-# captain's words or evidence-backed `reconcile close` closes the call.
+# captain's words, `answer --actor firstmate` for a ruling ask-user-authority
+# lets firstmate make, or evidence-backed `reconcile close` closes the call.
 # bin/fm-watch.sh asks it when an ordinary
 # crew task reaches a due stale alarm - its open backlog hold need not appear in
 # the task's last status line - and on a 0 bounds repeated alarms from new pane
@@ -224,22 +230,33 @@
 # `decision` is the read-only lookup for a consumer that acts on what the
 # captain answered, such as bin/fm-approved-publish.sh. It prints the decision
 # text of the task's newest resolution record, byte for byte, only after that
-# text hashes to the record's own decision digest. Exit 0 prints it; 1 means
-# there is no current captain answer to act on - no such task, no record, a
-# newest record that is reconciliation evidence rather than the captain's
-# words, or a call held for the captain again after it was answered; 2 means
-# the record could not be read or did not verify. It never interprets the
-# text.
+# text hashes to the record's own decision digest, and only when that record is
+# the captain's answer. A firstmate ruling is not a current captain answer.
+# Exit 0 prints the captain's words; 1 means there is no current captain answer
+# to act on - no such task, no record, a newest record that is reconciliation
+# evidence or a firstmate ruling rather than the captain's words, or a call
+# held for the captain again after it was answered; 2 means the record could
+# not be read, did not verify, or names an unknown actor. Preface lines between
+# the mode and the blank line before the label are skipped, so a later record
+# can add sibling lines there without changing this read. It never interprets
+# the text and never prints a firstmate ruling.
 #
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
 #
 # Resolution records: the block written into the body names this script, the
 # decision digest, and a `Resolution mode:` of answered, released, repaired, or
-# reconciled. Records written by the retired fm-decision-hold.sh (routed,
-# declined, answered, repaired) are recognized everywhere a record is read, so
-# nothing already closed needs rewriting. A superseded hold reason carries its
-# own leader and a `Record kind: re-hold` instead, so it is never counted as a
+# reconciled. Lines after the mode and before the blank line that introduces
+# the label are the preface. `Decision actor:` is that preface's actor line.
+# Later records may add other `Token: value` preface lines; they are not part
+# of the hashed decision text. The default actor is `captain`, with the exact
+# words under `Captain decision:`. `firstmate` records the ruling under
+# `Firstmate decision:`. A record with no actor line remains a captain answer.
+# `reconciled` keeps `Reconciliation evidence:` and writes no actor line.
+# Records written by the retired fm-decision-hold.sh (routed, declined,
+# answered, repaired) are recognized everywhere a record is read, so nothing
+# already closed needs rewriting. A superseded hold reason carries its own
+# leader and a `Record kind: re-hold` instead, so it is never counted as a
 # recorded answer nor read as the captain's words.
 #
 # Parent channel: inside a secondmate home a task held for the captain, and its
@@ -247,6 +264,9 @@
 # publishes `needs-decision [key=captain-hold-<task>-<n>]` and `answer` (and
 # `answers`) the matching `resolved` line on the parent channel through
 # bin/fm-parent-channel-lib.sh, whether or not the mate model appends anything.
+# A firstmate actor publishes `firstmate resolved`, `firstmate released`, or
+# `firstmate resolved (repaired)` so that channel does not say the captain
+# answered. The wake still classifies the original answered or released note.
 # <n> is the count of resolution records the body already carries plus one, so
 # a released and re-held task opens and closes a distinct parent decision with
 # no new persisted state, and an exact retry republishes the same line, which
@@ -387,6 +407,14 @@ BINDING_ANY='(any)'
 
 DECISION_TEXT=''
 DECISION_DIGEST=''
+DECISION_ACTOR=captain
+
+validate_decision_actor() {  # <actor>
+  case "$1" in
+    captain|firstmate) return 0 ;;
+  esac
+  fail "decision actor must be captain or firstmate: ${1:-<empty>}"
+}
 
 load_decision() {  # <path>; sets DECISION_TEXT and DECISION_DIGEST
   local path=$1 decision
@@ -518,10 +546,12 @@ meta_value() {  # <meta> <key>
 }
 
 # A resolution record written by this script or by the retired
-# fm-decision-hold.sh. Both carry the same leader-then-captain-decision shape.
+# fm-decision-hold.sh. Captain answers, firstmate rulings, and reconciliation
+# evidence all close the inventory. A legacy captain record has no actor line.
 body_has_resolution_record() {  # <task-body>
   case "$1" in
     *"Resolution recorded by fm-captain-hold."*"Captain decision:"*) return 0 ;;
+    *"Resolution recorded by fm-captain-hold."*"Firstmate decision:"*) return 0 ;;
     *"Resolution recorded by fm-decision-hold."*"Captain decision:"*) return 0 ;;
     *"Resolution recorded by fm-captain-hold."*"Reconciliation evidence:"*) return 0 ;;
   esac
@@ -569,14 +599,72 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
   return 1
 }
 
-# The record's label is what keeps an evidence-backed reconciliation from
-# reading as the captain's own words. `reconciled` closes a call that went moot
-# and carries verified evidence; every other mode carries what the captain said.
+# Newest record's Decision actor, or empty when that record has no actor line.
+# Empty means a legacy captain answer. Preface lines are `Token: value` between
+# the record leader and the blank line before the label. The decision text is
+# below that blank line and is not searched. Unknown preface lines are skipped.
+recorded_decision_actor() {  # <shown-or-raw body>
+  local body
+  body=$(decode_shown_value "$1") || return 1
+  printf '%s\n' "$body" | awk '
+    BEGIN { inrec = 0; actor = "" }
+    $0 == "Resolution recorded by fm-captain-hold." || $0 == "Resolution recorded by fm-decision-hold." {
+      if (inrec) exit
+      inrec = 1
+      next
+    }
+    !inrec { next }
+    $0 == "" { exit }
+    $0 ~ /^Decision actor: / { actor = substr($0, 17); next }
+    $0 ~ /^[^:]+: / { next }
+    { exit }
+    END { printf "%s", actor }
+  '
+}
+
+# Legacy records omit the actor line and remain captain answers.
+effective_recorded_actor() {  # <shown-or-raw body>
+  local actor
+  actor=$(recorded_decision_actor "$1") || return 1
+  [ -n "$actor" ] || actor=captain
+  printf '%s' "$actor"
+}
+
+# A digest match is a retry only when it names the same actor. Refuse before
+# any write so a firstmate ruling cannot be relabeled as the captain's words.
+refuse_replay_actor() {  # <task-id> <shown-body>
+  local recorded
+  recorded=$(effective_recorded_actor "$2") \
+    || fail "could not read the recorded decision actor on $1"
+  [ "$recorded" = "$DECISION_ACTOR" ] \
+    || fail "task $1 records this resolution for actor $recorded; retry with --actor $recorded"
+}
+
+resolution_label() {  # <mode> <actor>
+  if [ "$1" = reconciled ]; then
+    printf 'Reconciliation evidence:'
+    return 0
+  fi
+  case "$2" in
+    firstmate) printf 'Firstmate decision:' ;;
+    *) printf 'Captain decision:' ;;
+  esac
+}
+
+# Preface lines before the blank line are the extensible record header.
+# `Decision actor` is the actor line. Later records may add sibling lines there.
+# The decision digest hashes only the decision text, never the preface.
+# `reconciled` writes no actor line, so its evidence cannot read as either actor.
 resolution_block() {  # <mode>
-  local label='Captain decision:'
-  [ "$1" != reconciled ] || label='Reconciliation evidence:'
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\n%s\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
+  local label actor_line=''
+  label=$(resolution_label "$1" "$DECISION_ACTOR")
+  # Keep the actor line's newline outside a command substitution: $(...) would
+  # strip it and collapse the blank line that separates the preface from the label.
+  if [ "$1" != reconciled ]; then
+    actor_line="Decision actor: ${DECISION_ACTOR}"$'\n'
+  fi
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n%s\n%s\n%s\n' \
+    "$DECISION_DIGEST" "$1" "$actor_line" "$label" "$DECISION_TEXT"
 }
 
 # A superseded captain-hold reason. `tasks-axi hold` overwrites the reason in
@@ -668,7 +756,7 @@ declare_completed_ship_hold() {  # <task-id>
 }
 
 # Durable state of one captain call: an active captain hold (annotations
-# surviving even when a date gate has expired) or a recorded captain answer.
+# surviving even when a date gate has expired) or a recorded resolution.
 # Without captain annotations, an open task's leading stamp can signal an
 # incomplete re-hold or unfinished release normalization; the old record alone
 # cannot vouch for that state. Done tasks retain their recorded resolution as
@@ -697,7 +785,7 @@ verify_hold_durable() {  # <task-id>
     fi
     return 0
   fi
-  fail "captain-held task $id is neither held for the captain nor closed with a recorded captain answer"
+  fail "captain-held task $id is neither held for the captain nor closed with a recorded resolution"
 }
 
 # --- migrated legacy-id resolution on the Beads backend ---------------------
@@ -1453,7 +1541,7 @@ write_resolution_record() {  # <task-id> <mode> <shown-body>
   fi
   if ! tasks_axi update "$id" --body-file "$tmp" --archive-body >/dev/null; then
     rm -f -- "$tmp"
-    fail "could not record the captain decision on $id"
+    fail "could not record the resolution on $id"
   fi
   rm -f -- "$tmp"
 }
@@ -1533,16 +1621,24 @@ remove_interrupted_answer_stamp() {  # <task-id>
 
 command_answer() {
   local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
+  DECISION_ACTOR=captain
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --decision-file) shift; decision_file=${1:-} ;;
       --release) release=1 ;;
+      --actor)
+        shift
+        [ "$#" -gt 0 ] || fail "--actor requires a value"
+        DECISION_ACTOR=$1
+        ;;
+      --actor=*) DECISION_ACTOR=${1#--actor=} ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
   done
+  validate_decision_actor "$DECISION_ACTOR"
   validate_slug task-id "$id"
   if [ "$release" = 1 ] && ! release_attended; then
     fail "task $id stays held: $RELEASE_AWAY_REASON"
@@ -1567,8 +1663,13 @@ command_answer() {
   if [ "$state" = "done" ]; then
     if body_has_resolution_record "$body"; then
       # An exact compatible retry is an idempotent no-op; drift is rejected.
-      [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ] \
-        || fail "captain-held task $id records a different captain decision"
+      if [ "$(recorded_decision_digest "$body" || true)" != "$DECISION_DIGEST" ]; then
+        if [ "$DECISION_ACTOR" = firstmate ]; then
+          fail "captain-held task $id records a different decision"
+        fi
+        fail "captain-held task $id records a different captain decision"
+      fi
+      refuse_replay_actor "$id" "$body"
       recorded_mode=$(recorded_resolution_mode "$body" || true)
       closed_answer_replay_mode_compatible "$recorded_mode" "$body" \
         || fail "task $id records this resolution with mode ${recorded_mode:-unknown}; it is not a captain-answer replay"
@@ -1610,6 +1711,7 @@ command_answer() {
     # silently flip a release into a close.
     if body_has_resolution_record "$body" \
       && [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ]; then
+      refuse_replay_actor "$id" "$body"
       recorded_mode=$(recorded_resolution_mode "$body" || true)
       case "$recorded_mode" in
         released) [ "$release" = 1 ] || fail "task $id records this answer as a release; retry with --release" ;;
@@ -1641,8 +1743,13 @@ command_answer() {
   # Not held and not closed: only an already-recorded release replays cleanly.
   if body_has_resolution_record "$body"; then
     recorded_mode=$(recorded_resolution_mode "$body" || true)
-    [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ] \
-      || fail "task $id records a different captain decision with mode ${recorded_mode:-unknown}"
+    if [ "$(recorded_decision_digest "$body" || true)" != "$DECISION_DIGEST" ]; then
+      if [ "$DECISION_ACTOR" = firstmate ]; then
+        fail "task $id records a different decision with mode ${recorded_mode:-unknown}"
+      fi
+      fail "task $id records a different captain decision with mode ${recorded_mode:-unknown}"
+    fi
+    refuse_replay_actor "$id" "$body"
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
     remove_interrupted_answer_stamp "$id"
@@ -1723,10 +1830,18 @@ command_binding() {
   printf '%s\n' "$origin"
 }
 
-# The durable captain decision one keyed answer records. Pure function of its
-# inputs, so the same answer delivered twice is idempotent rather than a
-# conflicting decision.
+# The durable decision one keyed answer records. Pure function of its inputs
+# and the selected actor, so the same answer delivered twice is idempotent
+# rather than a conflicting decision. The captain wrapper stays byte-identical.
+# A firstmate ruling must not say the captain answered.
 keyed_decision_text() {  # <source> <task-id> <answer> <label>
+  if [ "$DECISION_ACTOR" = firstmate ]; then
+    printf 'Firstmate resolved this call through %s.\n' "$1"
+    printf 'Task: %s\n' "$2"
+    printf 'Ruling: %s\n' "$3"
+    [ -z "$4" ] || printf 'Context: %s\n' "$4"
+    return 0
+  fi
   printf 'Captain answered this call through %s.\n' "$1"
   printf 'Task: %s\n' "$2"
   printf 'Answer: %s\n' "$3"
@@ -1750,11 +1865,18 @@ sanitize_reconcile_provenance() {
 
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
-  local recorded_digest recorded_mode occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
-  local resolve_rc
+  local recorded_digest recorded_mode recorded_actor occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
+  local resolve_rc actor_readable=0 current_match=0 legacy_match=0
+  DECISION_ACTOR=captain
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) shift; source=${1:-} ;;
+      --actor)
+        shift
+        [ "$#" -gt 0 ] || fail "--actor requires a value"
+        DECISION_ACTOR=$1
+        ;;
+      --actor=*) DECISION_ACTOR=${1#--actor=} ;;
       --any-origin) origin=$BINDING_ANY ;;
       --*) usage >&2; exit 2 ;;
       *)
@@ -1768,6 +1890,7 @@ command_answers() {
     validate_slug legacy-origin "$origin"
   fi
   [ -n "$source" ] || fail "--source provenance is required so the durable decision records where the answer came from"
+  validate_decision_actor "$DECISION_ACTOR"
   source=$(sanitize_field "$source")
   require_tasks_axi
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-keyed-decision.XXXXXX") || fail "cannot stage the captain decision"
@@ -1839,7 +1962,8 @@ command_answers() {
     else
       legacy_key=''
     fi
-    if [ -n "$legacy_key" ]; then
+    # Legacy digests belong to captain records. A firstmate ruling never matches them.
+    if [ "$DECISION_ACTOR" = captain ] && [ -n "$legacy_key" ]; then
       legacy_digest=$(sha256_text "$(legacy_keyed_decision_text "$source" "$legacy_key" "$answer" "$label")")
     fi
     task_show "$id" || { printf 'skipped: %s (absent)\n' "$id"; skipped=$((skipped + 1)); continue; }
@@ -1849,10 +1973,33 @@ command_answers() {
     body=$(show_field "$show" body)
     recorded_digest=$(recorded_decision_digest "$body" || true)
     recorded_mode=$(recorded_resolution_mode "$body" || true)
+    recorded_actor=''
+    actor_readable=0
     if body_has_resolution_record "$body" \
-      && { [ "$recorded_digest" = "$digest" ] \
-        || { case "$body" in *"Resolution recorded by fm-decision-hold."*) true ;; *) false ;; esac \
-          && [ -n "$legacy_digest" ] && [ "$recorded_digest" = "$legacy_digest" ]; }; }; then
+      && recorded_actor=$(effective_recorded_actor "$body"); then
+      actor_readable=1
+    fi
+    current_match=0
+    legacy_match=0
+    [ "$recorded_digest" = "$digest" ] && current_match=1
+    if [ "$DECISION_ACTOR" = captain ] && [ -n "$legacy_digest" ] \
+      && [ "$recorded_digest" = "$legacy_digest" ] \
+      && case "$body" in *"Resolution recorded by fm-decision-hold."*) true ;; *) false ;; esac; then
+      legacy_match=1
+    fi
+    if body_has_resolution_record "$body" \
+      && { [ "$current_match" = 1 ] || [ "$legacy_match" = 1 ]; }; then
+      # Same decision text under a different actor is not a retry.
+      if [ "$current_match" = 1 ] \
+        && { [ "$actor_readable" != 1 ] || [ "$recorded_actor" != "$DECISION_ACTOR" ]; }; then
+        if [ "$actor_readable" != 1 ]; then
+          printf 'skipped: %s (recorded actor is unreadable)\n' "$id"
+        else
+          printf 'skipped: %s (recorded actor is %s)\n' "$id" "$recorded_actor"
+        fi
+        skipped=$((skipped + 1))
+        continue
+      fi
       if { [ -z "$release_flag" ] && [ "$state" = "done" ] \
           && closed_answer_replay_mode_compatible "$recorded_mode" "$body"; } \
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \
@@ -1887,7 +2034,7 @@ command_answers() {
       continue
     fi
     # shellcheck disable=SC2086  # release_flag is empty or a single literal flag.
-    if "$0" answer "$id" --decision-file "$tmp" $release_flag </dev/null >/dev/null 2>"$err"; then
+    if "$0" answer "$id" --actor "$DECISION_ACTOR" --decision-file "$tmp" $release_flag </dev/null >/dev/null 2>"$err"; then
       # A parent-channel delivery problem is reported on stderr by the answer
       # path even when the close succeeded; keep it visible.
       [ ! -s "$err" ] || cat "$err" >&2
@@ -1957,9 +2104,19 @@ reconcile_request_retire() {  # <task-id>
 }
 
 publish_parent_resolution_then_retire() {  # <task-id> <occurrence> <note>
-  local id=$1 occurrence=$2 note=$3 request
+  local id=$1 occurrence=$2 note=$3 request published=$3
+  # The parent channel is captain-facing. A firstmate close must not read as
+  # the captain answering. The wake still receives the original note so a
+  # release stays a release.
+  if [ "$DECISION_ACTOR" = firstmate ]; then
+    case "$note" in
+      answered) published='firstmate resolved' ;;
+      released) published='firstmate released' ;;
+      "answered (repaired)") published='firstmate resolved (repaired)' ;;
+    esac
+  fi
   request=$(reconcile_request_path "$id")
-  publish_parent_hold "$id" "$occurrence" resolved "$note"
+  publish_parent_hold "$id" "$occurrence" resolved "$published"
   if [ -e "$request" ] && [ "$PARENT_HOLD_PUBLISHED" != 1 ]; then
     fail "could not publish the answered captain-held task $id to its parent"
   fi
@@ -1972,6 +2129,16 @@ answer_wake_text() {  # <task-id> <note>
   if [ "$2" = released ]; then
     outcome=released
     effect='The hold is released, so resume the work it gated.'
+  fi
+  if [ "$DECISION_ACTOR" = firstmate ]; then
+    if [ "$outcome" = released ]; then
+      effect='The hold is released on firstmate'"'"'s ruling, so resume the work it gated.'
+    else
+      effect='The call is closed on firstmate'"'"'s ruling, so carry out that ruling.'
+    fi
+    printf 'Firstmate decision recorded for held call %s (%s): act on it now. %s The ruling is already recorded on that task in this home'"'"'s backlog, so do not record it again.\n\nRecorded decision:\n%s\n' \
+      "$id" "$outcome" "$effect" "$DECISION_TEXT"
+    return 0
   fi
   printf 'Captain answer recorded for held call %s (%s): act on it now. %s The answer is already recorded on that task in this home'"'"'s backlog, so do not record it again.\n\nRecorded decision:\n%s\n' \
     "$id" "$outcome" "$effect" "$DECISION_TEXT"
@@ -2586,7 +2753,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 # The newest recorded captain decision on one task, verified against its own
 # digest; the header's `decision` paragraph owns the exit contract.
 command_decision() {  # <task-id>
-  local id=${1-} rc=0 body record digest mode='' rest text
+  local id=${1-} rc=0 body record digest mode='' rest text actor='' line
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   case "$id" in
     ''|*[!A-Za-z0-9._-]*)
@@ -2637,9 +2804,44 @@ command_decision() {  # <task-id>
       exit 1
       ;;
   esac
-  case "$rest" in
-    $'\nCaptain decision:\n'*) rest=${rest#$'\nCaptain decision:\n'} ;;
-    *) printf 'fm-captain-hold: the newest record on %s has no captain decision\n' "$id" >&2; exit 2 ;;
+  # Preface lines sit between the mode and the blank line before the label.
+  # `Decision actor` names who resolved the call. Other `Token: value` lines are
+  # skipped so later records can add sibling fields without changing this read.
+  # `Captain decision:` has no space after the colon, so it is not a preface line.
+  while :; do
+    case "$rest" in
+      ''|$'\n'*) break ;;
+      "Decision actor: "*)
+        line=${rest%%$'\n'*}
+        actor=${line#"Decision actor: "}
+        ;;
+      *:[[:space:]]*) ;;
+      *) break ;;
+    esac
+    case "$rest" in
+      *$'\n'*) rest=${rest#*$'\n'} ;;
+      *) rest='' ;;
+    esac
+  done
+  case "$actor" in
+    ''|captain)
+      case "$rest" in
+        $'\nCaptain decision:\n'*) rest=${rest#$'\nCaptain decision:\n'} ;;
+        *) printf 'fm-captain-hold: the newest record on %s has no captain decision\n' "$id" >&2; exit 2 ;;
+      esac
+      ;;
+    firstmate)
+      case "$rest" in
+        $'\nFirstmate decision:\n'*) ;;
+        *) printf 'fm-captain-hold: the newest record on %s has no firstmate decision\n' "$id" >&2; exit 2 ;;
+      esac
+      printf 'fm-captain-hold: %s records a firstmate ruling, not the captain'\''s answer\n' "$id" >&2
+      exit 1
+      ;;
+    *)
+      printf 'fm-captain-hold: the newest record on %s names an unknown decision actor\n' "$id" >&2
+      exit 2
+      ;;
   esac
   # The text ends where its line prefix hashes to the recorded digest, which
   # also proves the stored bytes are the bytes `answer` recorded.

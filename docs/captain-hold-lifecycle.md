@@ -24,14 +24,24 @@ For a live ship record whose last event is plain `done:` with no open keyed deci
 `complete <id> <id>` repairs the same transition for an explicitly inventoried, still-completed ship whose hold was recorded directly in the backlog.
 This does not exit an agent, merge a branch, or close the task; the existing watcher admits the bounded declared-wait cadence only for a confidently stopped ordinary worker, and a later worker event remains actionable.
 
-The `answer` subcommand records the captain's exact words and resolves the call in the same act: it closes a question-shaped call, while `answer --release` frees a captain-gated work item to proceed without completing it.
+The `answer` subcommand records a resolution and resolves the call in the same act: the default actor stores the captain's exact words, while `--actor firstmate` stores a firstmate ruling that must not be written as those words.
+It closes a question-shaped call, while `answer --release` frees a captain-gated work item to proceed without completing it.
 `answer --release` is attended-only: while the away-posture record exists it is refused before anything is written, and the keyed-answer intake refuses a `release` line the same way; a quiet record is a present captain and does not refuse.
 It requires a non-empty captain decision file of at most 8192 bytes, durably writes a resolution block carrying the decision digest and a `Resolution mode:` while retaining the leading hold-set stamp until the selected `tasks-axi done` or `tasks-axi unhold` transition succeeds, then removes the stamp, leaving origin metadata ahead of the newest resolution record (the previous body remains preserved below the block and archived through tasks-axi `--archive-body`).
 If the close is interrupted, the still-held task therefore keeps its original age basis.
 A matching retry also completes any stamp removal left unfinished after the close itself succeeded.
-An exact retry is idempotent only when the requested close mode matches the newest record; a drifted answer or mode mismatch is rejected, while a re-held task accepts a new answer as a new record on top.
+An exact retry is idempotent only when the requested close mode and actor match the newest record; a drifted answer, a different actor, or a mode mismatch is rejected, while a re-held task accepts a new answer as a new record on top.
 On a task closed outside the script, `answer` records the missing block only when the captain-hold annotations tasks-axi preserves through a close prove the captain owned it, and it verifies the task stays closed.
 A hold whose `--until` date has passed keeps those annotations while tasks-axi reports it no longer held, so an expired deferral remains answerable.
+A resolution record's preface, the lines after `Resolution mode:` and before the blank line that introduces the label, is the extensible header.
+`Decision actor:` is that header's actor line.
+A captain answer records `Decision actor: captain` and the exact words under `Captain decision:`.
+A firstmate ruling records `Decision actor: firstmate` and the ruling under `Firstmate decision:`.
+A record written before the actor line existed has no actor line and is read as the captain's answer.
+Unknown preface lines of the form `Token: value` are skipped and are not part of the hashed decision text.
+`decision` prints only the captain's words: a firstmate ruling is not a current captain answer, and an unknown actor does not return the text.
+`complete` and `verify` treat either actor's recorded resolution as closing the inventory.
+`reconciled` keeps `Reconciliation evidence:` and writes no actor line.
 
 The `complete` subcommand unions the reviewed captain-held task ids into `decision_keys=` and records `decisions_reviewed=1` while originating task metadata is live, replacing any earlier pair and writing it once ahead of any armed `pr=` merge-poll identity lines, because the metadata identity parse refuses these keys after `pr=`.
 A post-teardown visual review can complete against the surviving report and durable tasks without recreating volatile task metadata.
@@ -110,7 +120,7 @@ The refusal names the record and the validation reason, so the captain can repai
 ### What `--force` does not lift
 
 `--force` does not lift the deferral, because it authorizes discarding unlanded work, never the captain's question.
-Only `answer` with the captain's words or evidence-backed `reconcile close` resolves the call, by either closing the question or releasing the gated work.
+Only `answer` with the captain's words, `answer --actor firstmate` for a firstmate ruling, or evidence-backed `reconcile close` resolves the call, by either closing the question or releasing the gated work.
 `bin/fm-backlog-transition-lib.sh` owns the transition and its record, and `bin/fm-captain-hold.sh --help` owns the predicate's contract.
 
 ## Answer-time resolution through chat
@@ -118,11 +128,12 @@ Only `answer` with the captain's words or evidence-backed `reconcile close` reso
 "A keyed answer resolves its matching captain-held task" is one capability with one owner.
 `answers` is its internal entry point: it reads `<task-id>\t<answer>\t<label>[\t<mode>]` lines and resolves each named task through the same `answer` path, so every guard applies identically.
 The optional mode column carries a caller-declared resolution: `done` (default) completes the task and `release` lifts the hold so held work resumes; any other value is skipped.
-A key that names no task, names a task that is not captain-held, or names a task already closed is reported as `skipped:` and feeds nothing; a replay whose answer and requested close mode match the newest record is an idempotent `closed:`, while a mode mismatch is skipped; and the command exits nonzero when any key was skipped.
+A key that names no task, names a task that is not captain-held, or names a task already closed is reported as `skipped:` and feeds nothing; a replay whose answer, actor, and requested close mode match the newest record is an idempotent `closed:`, while a mode or actor mismatch is skipped; and the command exits nonzero when any key was skipped.
 `--source` is provenance text recorded in the durable decision, never a behavior switch.
 
 The active captain-answer channel in this fork is chat.
 `bin/fm-send.sh --resolve-key` is the chat channel: its status-log close for a key the status log still owns is owned by that script's header, and a key the status log no longer owns is resolved to a still-open captain-held task - the key as a task id, then the legacy derived identity - and fed as one keyed line.
+`--actor firstmate` on that send records the ruling as a firstmate decision; the default actor remains the captain's own words, and the actor is never inferred from the message.
 An Ops board below the `answers` Lavish mode does not feed this intake, and any answer it prompts returns through chat; an `answers` board feeds it as the bound captured source described below.
 
 ### Waking the home that owns the call
@@ -154,7 +165,7 @@ Both outcomes require a pre-existing durable request and the operator input that
 `reconcile list` is the read-only enumeration of pending requests.
 A successful normal answer also retires any pending request, because an answered call has no remaining re-check obligation.
 Every retirement is checked: if request removal fails after an answer, close, or note is already durable, the durable outcome stands but the command fails and leaves the pending request visible for retry.
-No path here closes a captain call without either the captain's words through `answer` or the evidence through `reconcile close`.
+No path here closes a captain call without the captain's words through `answer`, a firstmate ruling through `answer --actor firstmate`, or the evidence through `reconcile close`.
 An Ops board below `answers` creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation; an `answers` board offers the reconcile choice on decision cards, and a selection files the same captured-source request above.
 
 ## Card hygiene: a landed subject is not a live call
@@ -269,6 +280,7 @@ The reconstructed silent-divergence case is signalled under both collapsed and l
 A released call whose decision text is `local main`, closed with no artifact, is not published as a local-only landing; report-only unresolved calls refuse `--none` completion before teardown can erase the source; and non-forced scout teardown always requires durable inventory verification.
 The recorded-answer guard rejects a bare `tasks-axi done` close until `answer` records the captain's words and prevents an ordinary finished task from masquerading as an answered call.
 The same suite pins answer-time resolution with task-id keys, `release` mode, replay idempotence, refusal of drifted or ineligible keys, the chat channel reaching the shared intake, the owning-home wake for main, local secondmate, and remote secondmate homes with replay, announced-channel, owning-session, and reconcile-request cases, hold-set stamping before visible hold state, timestamp preservation across interruption, due-date deferral, and every legacy identity path.
+It also pins the firstmate actor: a ruling closes the inventory without becoming a captain answer, a legacy record with no actor line still reads as the captain's words, and an unknown preface line does not change either read.
 It also pins the superseded-reason seam: a changed re-hold preserves the exact previous bytes with their provenance and archives the pristine body before writing the new reason, a first hold archives nothing, an identical re-hold writes neither record nor archive entry, and a refused archive leaves the original reason in place.
 The same family pins three edge cases of that seam: a call whose deferral date has lapsed is preserved like any live one, a previous reason beginning with a dash is matched as text instead of parsed as an option, and a failed replacement withdraws its supersession record so the retry records that reason once rather than twice.
 The suite does not test the accepted merge-to-cleanup re-hold window or asynchronous queued-forge landing because those events occur after the locally serialized merge command has returned.
