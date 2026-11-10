@@ -379,6 +379,69 @@ test_board_foreign_call_marks_unknown() {
   pass "a call owned by another home carries an explicit unknown receipt naming its owner"
 }
 
+test_board_charted_receipt_marks_captain() {
+  local home data board payload
+  home=$(make_home board-captainless)
+  tasks_in "$home" add call-11 'Receipt without marker' --kind scout --repo sample >/dev/null
+  run_captain "$home" hold call-11 --reason 'captain must decide' >/dev/null
+  tasks_in "$home" add call-12 'Charted call' --kind scout --repo sample >/dev/null
+  run_captain "$home" hold call-12 --reason 'captain must decide' >/dev/null
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_board_payload "$data" call-11
+  # A charted row that copied only the gate's receipt is still a captain call:
+  # build must recheck it (the stale revision expires) and restore the marker
+  # the template badges on. The charted id differs from the card's so the
+  # recheck dedup does not merge the two.
+  jq '.charted[0].id = "call-12"
+      | .charted[0].receipt = {schema:"fm-presentation-receipt.v1",task:"call-12",
+          checked_at:"2026-01-01T00:00:00Z",source:"backlog",revision:"stale",
+          verdict:"verified",
+          checks:{call:"verified",deferral:"none",blockers:"none",
+                  reconcile:"clear",linked_work:"self"},
+          detail:"composed earlier"}
+      | del(.charted[0].captain)' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  run_board "$home" build "$data" >/dev/null || fail "captain-markerless board build failed"
+  payload=$(extract_payload "$board")
+  printf '%s' "$payload" | jq -e '
+    (.charted[0].captain == true)
+    and (.charted[0].receipt.verdict == "changed")
+    and (.charted[0].receipt.task == "call-12")
+  ' >/dev/null || fail "a receipt-only charted row was not rechecked and marked: $payload"
+  pass "a charted row carrying a receipt is rechecked and marked captain even without the field"
+}
+
+test_board_owner_falls_back_to_receipt_source() {
+  local home data board payload
+  home=$(make_home board-ownerless)
+  # A local call under the same id would falsely verify if build assumed
+  # (main) instead of reading the owner the receipt recorded at composition.
+  tasks_in "$home" add mate-call-2 'Same-id local call' --kind scout --repo sample >/dev/null
+  run_captain "$home" hold mate-call-2 --reason 'captain must decide' >/dev/null
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_board_payload "$data" mate-call-2
+  jq 'def foreign_receipt: {schema:"fm-presentation-receipt.v1",task:"mate-call-2",
+        checked_at:"2026-01-01T00:00:00Z",source:"secondmate-a",revision:null,
+        verdict:"unknown",
+        checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
+                reconcile:"unknown",linked_work:"unknown"},
+        detail:"this call is owned by secondmate-a and is verified only in that home"};
+      .captains_call[0].receipt = foreign_receipt
+      | .charted[0].receipt = foreign_receipt
+      | del(.captains_call[0].owner, .charted[0].owner)' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  run_board "$home" build "$data" >/dev/null || fail "ownerless board build failed"
+  payload=$(extract_payload "$board")
+  printf '%s' "$payload" | jq -e '
+    (.captains_call[0].receipt.verdict == "unknown"
+      and .captains_call[0].receipt.source == "secondmate-a")
+    and (.charted[0].receipt.verdict == "unknown"
+      and .charted[0].receipt.source == "secondmate-a")
+  ' >/dev/null || fail "an ownerless foreign call was verified against the local task: $payload"
+  pass "an omitted owner falls back on the receipt's source, not this home"
+}
+
 test_board_refuses_malformed_receipt() {
   local home data rc
   home=$(make_home board-bad)
@@ -405,4 +468,6 @@ fm_test_run \
   test_snapshot_no_decisions_runs_no_recheck \
   test_board_publish_rechecks_and_marks \
   test_board_foreign_call_marks_unknown \
+  test_board_charted_receipt_marks_captain \
+  test_board_owner_falls_back_to_receipt_source \
   test_board_refuses_malformed_receipt

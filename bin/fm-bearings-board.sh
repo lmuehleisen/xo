@@ -87,7 +87,10 @@
 #
 # PRESENTATION RECEIPTS. Every surviving decision card and every Charted Next
 # row whose `captain` is true is re-verified at build time through
-# `bin/fm-captain-hold.sh recheck` against the owning home. A card or row that
+# `bin/fm-captain-hold.sh recheck` against the owning home; a charted row
+# carrying a receipt object counts too, because only a captain gate produces
+# one, and a missing `owner` falls back on the receipt's recorded source
+# before this home is assumed. A card or row that
 # already carries a composer receipt hands its `revision` back as `--expect`,
 # so movement between composition and publication reports `changed`. A receipt
 # is marked, never hidden: a `changed` verdict and an `unknown` verdict -
@@ -503,12 +506,20 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
   # build with no decision card and no captain gate runs no recheck at all.
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   recheck_rows=$(jq -r --argjson dropped "$tmp" '
+    # A receipt on a row is itself evidence the composer saw a captain call, so
+    # it selects a charted row even when the captain marker was not copied. An
+    # omitted owner falls back on the receipt source (which the snapshot set
+    # from the true owner) rather than assuming this home, so a foreign gate
+    # cannot be verified against a same-id local task.
+    def row_owner:
+      (.owner // .receipt.source // "(main)")
+      | if . == "backlog" then "(main)" else . end;
     ([ .captains_call[]? | select(.type == "decision")
        | . as $card | select(($dropped | index($card.key)) == null)
-       | {key:((.owner // "(main)") + "/" + .key), owner:(.owner // "(main)"),
+       | {key:(row_owner + "/" + .key), owner:row_owner,
           id:.key, expect:(.receipt.revision // "")} ]
-     + [ .charted[]? | select(.captain == true)
-         | {key:((.owner // "(main)") + "/" + .id), owner:(.owner // "(main)"),
+     + [ .charted[]? | select(.captain == true or (.receipt | type == "object"))
+         | {key:(row_owner + "/" + .id), owner:row_owner,
             id, expect:(.receipt.revision // "")} ])
     | unique_by(.key)[]
     | [.owner, .id, .expect] | @tsv' "$data") || return 1
@@ -548,7 +559,10 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
   jq --argjson dropped "$tmp" --argjson here "$here_json" --arg mode "$mode" \
     --arg now "$now" --slurpfile rs "$receipts_file" '
     ($rs | INDEX(.[]; .key)) as $r
-    | def receipt_for($owner; $id): $r[$owner + "/" + $id].receipt // null;
+    | def row_owner:
+      (.owner // .receipt.source // "(main)")
+      | if . == "backlog" then "(main)" else . end;
+    def receipt_for($owner; $id): $r[$owner + "/" + $id].receipt // null;
     def fallback_receipt($owner; $id):
       {schema:"fm-presentation-receipt.v1",task:$id,checked_at:$now,source:$owner,
        revision:null,verdict:"unknown",
@@ -562,8 +576,8 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
       | select($card.type != "decision" or (($dropped | index($card.key)) == null))
       | del(.answerable)
       | (if .type == "decision"
-         then .receipt = (receipt_for((.owner // "(main)"); .key)
-                          // fallback_receipt((.owner // "(main)"); .key))
+         then .receipt = (receipt_for(row_owner; .key)
+                          // fallback_receipt(row_owner; .key))
          else . end)
       | if $mode == "answers" and .type == "decision" and .owner? == "(main)"
           and (($here | index($card.key)) != null)
@@ -577,9 +591,13 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
     ]
     | .charted = [
       .charted[]
-      | (if .captain == true
-         then .receipt = (receipt_for((.owner // "(main)"); .id)
-                          // fallback_receipt((.owner // "(main)"); .id))
+      # A charted row carrying a receipt object was composed from a captain
+      # gate even when the captain field was not copied; normalizing the
+      # marker here keeps the publish-time recheck and the receipt badge.
+      | (if .captain == true or (.receipt | type == "object")
+         then (.captain = true)
+           | .receipt = (receipt_for(row_owner; .id)
+                         // fallback_receipt(row_owner; .id))
          else . end)
     ]' "$data" > "$dest" || { rm -f "$receipts_file"; return 1; }
   rm -f "$receipts_file"
