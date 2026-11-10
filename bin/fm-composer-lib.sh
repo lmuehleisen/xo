@@ -94,7 +94,7 @@
 #   agy        - a `>` row between solid rules, followed immediately by its
 #                shortcuts/cancel footer and model cell. The full structure,
 #                never a bare shell glyph, proves this input region. Agy's
-#                accept-edits hint needs styling to distinguish it from text;
+#                mode hints need styling to distinguish them from typed text;
 #                without that evidence a matching hint remains unknown.
 #   devin      - a `❭` row between a top mode rule and a solid bottom rule,
 #                followed immediately by its model/context footer. The full
@@ -748,11 +748,19 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # FM_COMPOSER_HINTED_IDLE_RE_DEFAULT below. FM_COMPOSER_IDLE_RE overrides for an unverified harness;
 # matching is case-insensitive.
 FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$|^Guide Devin while it works$|^Ask your question\.\.\.$|^Type your message\.\.\.$|^Type to queue message\.\.\.$'
-FM_COMPOSER_AGY_HINT='Accept-edits mode: file edits auto-approved (shift+tab to cycle)'
-# Agy 1.2.0 renders this one hint in SGR 90, not dim/truecolor. Remove only
-# this exact styled hint within the proven Agy shape; palette colours in any
-# other text or harness retain the generic stripper's conservative handling.
-FM_COMPOSER_AGY_HINT_STYLED=$(printf '\033[90m%s\033[39m' "$FM_COMPOSER_AGY_HINT")
+# Agy 1.5.3 renders these exact mode hints in SGR 90, not dim/truecolor.
+# Only remove their styled forms within a proven Agy shape; palette colours
+# in other text or harnesses retain the generic stripper's conservative handling.
+FM_COMPOSER_AGY_HINTS=(
+  'Accept-edits mode: file edits auto-approved (shift+tab to cycle)'
+  'Auto mode: edits & safe commands auto-approved (shift+tab to cycle)'
+  'Plan mode: research & plan only (shift+tab to cycle)'
+)
+FM_COMPOSER_AGY_HINTS_STYLED=(
+  $'\033[90m'"${FM_COMPOSER_AGY_HINTS[0]}"$'\033[39m'
+  $'\033[90m'"${FM_COMPOSER_AGY_HINTS[1]}"$'\033[39m'
+  $'\033[90m'"${FM_COMPOSER_AGY_HINTS[2]}"$'\033[39m'
+)
 
 # KIRO ONLY (fm_composer_kiro_scope): idle placeholders that carry a submit hint
 # typed input never renders, so the whole anchored row proves an empty composer
@@ -2463,9 +2471,9 @@ _fm_composer_select_agy() {  # <plain-screen>
   text=${text%$'\r'}
   case "$text" in '>'|'>'\ *) ;; *) return 1 ;; esac
   footer=$(_fm_composer_screen_row "$((last + 2))" "$plain")
-  # Typing hides the shortcut hint; accept-edits keeps its right-aligned mode
+  # Typing hides the shortcut hint; these modes keep their right-aligned mode
   # cell. A model name alone cannot prove the manual-mode input container.
-  printf '%s\n' "$footer" | LC_ALL=C grep -qE '^(\? for shortcuts|esc to cancel)[[:space:]]{2,}[^[:space:]]|^[[:space:]]{8,}accept-edits[[:space:]]+·[[:space:]]+' || return 1
+  printf '%s\n' "$footer" | LC_ALL=C grep -qE '^(\? for shortcuts|esc to cancel)[[:space:]]{2,}[^[:space:]]|^[[:space:]]{8,}(accept-edits|auto|plan)[[:space:]]+·[[:space:]]+' || return 1
   # No later input or popup may hide behind the recognized footer.
   row=$((last + 3))
   text=$(printf '%s\n' "$plain" | tail -n "+$((row + 1))")
@@ -2476,19 +2484,29 @@ _fm_composer_select_agy() {  # <plain-screen>
   FM_COMPOSER_SELECTED_LAST=$last
 }
 
+_fm_composer_agy_strip_hints_var() {  # <varname>
+  local __fmca_name=$1 __fmca_screen=${!1} __fmca_hint
+  for __fmca_hint in "${FM_COMPOSER_AGY_HINTS_STYLED[@]}"; do
+    __fmca_screen=${__fmca_screen//"$__fmca_hint"/}
+  done
+  printf -v "$__fmca_name" '%s' "$__fmca_screen"
+}
+
 _fm_composer_agy_verdict() {  # <screen> <styled>
-  local screen=$1 styled=$2 row raw content plain body
-  if [ "$styled" = 1 ]; then screen=${screen//"$FM_COMPOSER_AGY_HINT_STYLED"/}; fi
+  local screen=$1 styled=$2 row raw content plain body hint
+  if [ "$styled" = 1 ]; then _fm_composer_agy_strip_hints_var screen; fi
   row=$FM_COMPOSER_SELECTED_FIRST
   raw=$(_fm_composer_screen_row "$row" "$screen")
   plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
   body=${plain#>}
   fm_composer_normalize_trim_var body
   content=$(_fm_composer_row_content "$raw" "$styled")
-  if [ "$body" = "$FM_COMPOSER_AGY_HINT" ] && [ "$content" = "$plain" ]; then
-    printf 'unknown'
-    return 0
-  fi
+  for hint in "${FM_COMPOSER_AGY_HINTS[@]}"; do
+    if [ "$body" = "$hint" ] && [ "$content" = "$plain" ]; then
+      printf 'unknown'
+      return 0
+    fi
+  done
   _fm_composer_classify_rows "$screen" "$styled" 0 \
     "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST"
 }
@@ -2535,7 +2553,7 @@ EOF
   _fm_composer_scan_screen "$plain" '' 1
   _fm_composer_select_devin "$plain" || _fm_composer_select_agy "$plain" || _fm_composer_select_cursorless "$plain" "$screen" "$styled" || return 1
   if [ "$FM_COMPOSER_SELECTED_KIND" = agy ] && [ "$styled" = 1 ]; then
-    screen=${screen//"$FM_COMPOSER_AGY_HINT_STYLED"/}
+    _fm_composer_agy_strip_hints_var screen
   fi
   row=$FM_COMPOSER_SELECTED_FIRST
   cwd_start=-1

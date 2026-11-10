@@ -291,10 +291,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### agy-adapter-mechanics
 
-- Intent: native worker lifecycle hooks, physical directory grants, and model-aware effort support.
+- Intent: native worker lifecycle hooks, physical directory grants, model-aware effort support, and exact styled Accept-edits, Auto and Plan composer placeholders with conservative unstyled ambiguity.
 - Class: carried; these are functional additions to upstream's worker adapter.
-- Seam: fork-only `bin/fm-agy-lib.sh`, and the large fork diff in shared `tests/fm-agy-harness.test.sh`, and worker native-hook verification.
-- Guard: `tests/fm-agy-harness.test.sh`.
+- Seam: fork-only `bin/fm-agy-lib.sh`, the agy hint set and mode-cell footer in shared `bin/fm-composer-lib.sh`, the large fork diff in shared `tests/fm-agy-harness.test.sh`, and worker native-hook verification.
+- Guard: `tests/fm-agy-harness.test.sh`; `tests/fm-composer-agy.test.sh` with `tests/fixtures/agy-composer/`; the opt-in `tests/fm-agy-signals-live-e2e.test.sh`.
 - Upstream: the primary PreInvocation/background-command divergence is retired in favor of upstream SessionStart/Stop parking and autoarm routing, retaining supervisor permissions and secondmate-liveness recognition.
   Worker hooks, directory grants and effort mappings remain carried; primary transport validation is recorded in [runtime verification](verification/runtime-backends-fork.md#primary-and-secondmate-supervision).
   Drop each remaining seam when upstream supports its behavior, keeping the separately intended `agy-permission-posture` entry.
