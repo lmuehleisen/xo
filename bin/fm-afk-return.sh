@@ -936,9 +936,12 @@ main() {
   case "$mode" in
     begin|check)
       # Capture retention runs before catch-up, so a pane snapshot ages out
-      # even when the return gate stays closed. prune-submit-failures owns
-      # the policy. guard and catchup-summary stay read-only.
-      if [ -x "$SCRIPT_DIR/fm-supervise-daemon.sh" ]; then
+      # even when the return gate stays closed. A stand-in daemon records
+      # clear-owned-input only, so retention runs when the executable
+      # advertises prune-submit-failures. guard and catchup-summary stay
+      # read-only.
+      if [ -x "$SCRIPT_DIR/fm-supervise-daemon.sh" ] \
+        && grep -q -F prune-submit-failures "$SCRIPT_DIR/fm-supervise-daemon.sh" 2>/dev/null; then
         FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-supervise-daemon.sh" prune-submit-failures >/dev/null 2>&1 || true
       fi
       ;;

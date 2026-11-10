@@ -79,8 +79,10 @@ fm_afk_clear_stale_artifacts() {  # <state-dir>
   fi
   # Aged pane captures are not session delivery artifacts. Retention is
   # prune-submit-failures on the supervise daemon; a fresh away entry runs it
-  # so a capture from an earlier session cannot outlive that policy.
-  if [ -x "$FM_AFK_DAEMON" ]; then
+  # so a capture from an earlier session cannot outlive that policy. A
+  # stand-in executable does not advertise the subcommand and is left alone.
+  if [ -x "$FM_AFK_DAEMON" ] \
+    && grep -q -F prune-submit-failures "$FM_AFK_DAEMON" 2>/dev/null; then
     FM_STATE_OVERRIDE="$state" "$FM_AFK_DAEMON" prune-submit-failures >/dev/null 2>&1 || true
   fi
   rm -f "$state/.subsuper-escalations" \
