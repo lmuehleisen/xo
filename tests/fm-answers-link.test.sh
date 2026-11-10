@@ -225,6 +225,42 @@ test_answers_flag_refusals_before_any_backlog_read() {
   pass "empty, secondmate, and batch --answers are refused before any backlog read"
 }
 
+# Shadow tasks-axi so `block` fails with <exit-code>; every other verb is real.
+# A dispatch whose edge write fails trips over it at the commit point.
+break_tasks_axi_block() {  # <fakebin> [exit-code]
+  local fb=$1 failure_code=${2:-1} real
+  real=$(command -v tasks-axi)
+  cat > "$fb/tasks-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = block ]; then
+  echo 'error: "block refused"' >&2
+  exit "$failure_code"
+fi
+exec "$real" "\$@"
+SH
+  chmod +x "$fb/tasks-axi"
+}
+
+test_edge_failure_returns_the_row_to_queued() {
+  local name=edge-fail home id=ship-a6 call=call-a6 fb out status
+  home=$(make_spawn_home "$name" "$id")
+  hold_call "$home" "$call"
+  fb=$(make_orca_fakebin "$TMP_ROOT/$name")
+  break_tasks_axi_block "$fb" 70
+
+  out=$(run_orca_spawn "$name" "$id" --mode local-only --yolo off --answers "$call")
+  status=$?
+  [ "$status" -ne 0 ] || fail "a refused answers edge did not fail the dispatch"$'\n'"$out"
+  assert_contains "$out" 'dispatch commit could not finish' \
+    "the edge failure did not report as a partial commit"$'\n'"$out"
+  [ ! -e "$home/state/$id.meta" ] || fail "the provisional record survived rollback"
+  # The record removal must not leave an in-flight row without a record: that
+  # orphan_in_flight shape makes the home's fleet inventory invalid.
+  [ "$(show_field "$home/data/backlog.md" "$id" state)" = queued ] \
+    || fail "the row was not returned to Queued after the failed edge write"
+  pass "a failed answers edge removes the record and returns the row to Queued"
+}
+
 test_answers_refuses_a_home_with_no_recorded_backlog() {
   local name=manual home id=ship-a5 fb out status
   home="$TMP_ROOT/$name/home"
@@ -425,6 +461,7 @@ test_dispatch_records_the_link
 test_dispatch_without_the_flag_writes_no_link
 test_dispatch_refuses_an_id_that_is_not_an_open_captain_call
 test_answers_flag_refusals_before_any_backlog_read
+test_edge_failure_returns_the_row_to_queued
 test_answers_refuses_a_home_with_no_recorded_backlog
 test_teardown_names_the_still_open_call
 test_teardown_stays_silent_when_the_call_is_closed

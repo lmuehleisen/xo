@@ -8328,7 +8328,29 @@ spawn_commit_backlog_transition() {
   [ "$BACKLOG_TRANSITION" = 1 ] || return 0
   SPAWN_ANSWERS_EDGE_FAILED=
   fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE" || return
-  [ -z "$ANSWERS" ] || fm_backlog_block "$DATA" "$ANSWERS" "$ID" || {
+  [ -n "$ANSWERS" ] || return 0
+  if [ "$ANSWERS_SET" -eq 0 ]; then
+    # An inherited link is re-read, never blindly re-blocked: the call may
+    # have been answered or pruned while the task ran - that resolution is
+    # exactly what the link exists to notice, so only a still-open call has
+    # its edge re-run. A row that cannot be read still fails, because a
+    # transient read error must not quietly drop the obligation; the record
+    # keeps answers= either way so teardown's reminder check is unchanged.
+    if ! fm_backlog_row_probe "$DATA" "$ANSWERS"; then
+      if [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
+        echo "notice: relaunch of $ID: the recorded --answers call $ANSWERS is gone from the backlog, so its edge is not refreshed" >&2
+        return 0
+      fi
+      SPAWN_ANSWERS_EDGE_FAILED=1
+      FM_BACKLOG_TRANSITION_ERROR="task $ID moved to In flight, but whether the recorded --answers call $ANSWERS is still open could not be read ($FM_BACKLOG_ROW_ERROR)"
+      return 1
+    fi
+    if [ "${FM_BACKLOG_ROW_STATE%% *}" = "done" ] || [ "$FM_BACKLOG_ROW_HOLD_KIND" != captain ]; then
+      echo "notice: relaunch of $ID: the recorded --answers call $ANSWERS is no longer an open captain call, so its edge is not refreshed" >&2
+      return 0
+    fi
+  fi
+  fm_backlog_block "$DATA" "$ANSWERS" "$ID" || {
     SPAWN_ANSWERS_EDGE_FAILED=1
     FM_BACKLOG_TRANSITION_ERROR="task $ID moved to In flight, but the --answers edge ${ANSWERS} blocked-by $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR)"
     return 1
@@ -9294,9 +9316,21 @@ else
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   if [ "$RELAUNCH" -eq 0 ]; then
+    SPAWN_ANSWERS_ROW_QUEUED=
+    if [ -n "$SPAWN_ANSWERS_EDGE_FAILED" ]; then
+      # The dispatch transition already moved the row, so return it to Queued
+      # before the record removal below: an in-flight row with no record is
+      # the orphan_in_flight shape fm-fleet-snapshot reports as invalid
+      # inventory. A failed reopen keeps the same residue and message as
+      # before this pairing existed.
+      fm_backlog_mutate "$DATA" reopen "$ID" >/dev/null 2>&1 \
+        && SPAWN_ANSWERS_ROW_QUEUED=1
+    fi
     if spawn_fresh_commit_rollback; then
       if [ -n "$SPAWN_ANSWERS_EDGE_FAILED" ]; then
-        echo "error: task $ID's dispatch commit could not finish ($FM_BACKLOG_TRANSITION_ERROR); its record was removed and its backlog item remains In flight for the re-run, so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
+        SPAWN_ANSWERS_ROW_OUTCOME='remains In flight'
+        [ -z "$SPAWN_ANSWERS_ROW_QUEUED" ] || SPAWN_ANSWERS_ROW_OUTCOME='was returned to Queued'
+        echo "error: task $ID's dispatch commit could not finish ($FM_BACKLOG_TRANSITION_ERROR); its record was removed and its backlog item $SPAWN_ANSWERS_ROW_OUTCOME for the re-run, so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
       else
         echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its record was removed so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
       fi
