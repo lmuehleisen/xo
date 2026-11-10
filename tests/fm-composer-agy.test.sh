@@ -33,12 +33,12 @@ assert_screen() {
 # Agy 1.2.0's actual shape is two rules plus a shell glyph and its footer.
 # Neither a rule pair nor a shell glyph alone is safe input-container evidence.
 test_agy_separated_composer() {
-  local rule='────────────────────' hint=$FM_COMPOSER_AGY_HINT screen
+  local rule='────────────────────' hint='Accept-edits mode: file edits auto-approved (shift+tab to cycle)' screen
   screen=$(printf '%s\n> %s[2m%s%s[0m\n%s\n? for shortcuts     accept-edits · Gemini 3.8 Flash · low\n' "$rule" "$ESC" "$hint" "$ESC" "$rule")
   assert_screen 'agy styled idle' empty "$CAPS_TMUX" "$screen" 1
   assert_screen 'agy cursorless styled idle' empty "$CAPS_STYLED" "$screen"
   assert_screen 'agy unstyled hint is ambiguous' unknown "$CAPS_PLAIN" "$screen"
-  screen=$(printf '%s\n> %s\n%s\n? for shortcuts     accept-edits · Gemini 3.8 Flash · low\n' "$rule" "$FM_COMPOSER_AGY_HINT_STYLED" "$rule")
+  screen=$(printf '%s\n> %s\n%s\n? for shortcuts     accept-edits · Gemini 3.8 Flash · low\n' "$rule" "${ESC}[90m${hint}${ESC}[39m" "$rule")
   assert_screen 'agy actual SGR 90 hint' empty "$CAPS_TMUX" "$screen" 1
   [ -z "$(fm_composer_extract_selected_content "$CAPS_TMUX" "$screen")" ] || fail 'agy styled hint leaked into input extraction'
   assert_screen 'agy cursor on rule is unsafe' unknown "$CAPS_TMUX" "$screen" 0
@@ -83,3 +83,49 @@ test_agy_herdr_crlf_rows() {
   pass 'agy composer proof survives herdr CRLF rows without proving a queued or unfootered pane'
 }
 test_agy_herdr_crlf_rows
+
+# Composer-only bytes from agy 1.5.3, captured idle and with unsubmitted input.
+# The plain captures really omit styling; CRLF replays model Herdr's row endings.
+test_agy_mode_captures() {
+  local mode styled plain crlf caps hint modified out
+  for mode in auto plan; do
+    styled=$(cat "$ROOT/tests/fixtures/agy-composer/$mode-idle.styled")
+    plain=$(cat "$ROOT/tests/fixtures/agy-composer/$mode-idle.plain")
+    crlf=${styled//$'\n'/$'\r\n'}$'\r'
+    assert_screen "$mode tmux idle" empty "$CAPS_TMUX" "$styled" 1
+    assert_screen "$mode cursorless idle" empty "$CAPS_STYLED" "$styled"
+    assert_screen "$mode CRLF idle" empty "$CAPS_STYLED" "$crlf"
+    assert_screen "$mode plain hint is ambiguous" unknown "$CAPS_PLAIN" "$plain"
+    # Styling capability alone cannot prove a row whose hint has no SGR.
+    assert_screen "$mode unstyled hint on styled capture" unknown "$CAPS_STYLED" "$plain"
+    for caps in "$CAPS_TMUX" "$CAPS_STYLED"; do
+      [ -z "$(fm_composer_extract_selected_content "$caps" "$styled")" ] \
+        || fail "$mode styled hint leaked into input extraction"
+      [ -z "$(fm_composer_extract_selected_content "$caps" "$crlf")" ] \
+        || fail "$mode CRLF hint leaked into input extraction"
+    done
+    hint=${plain#*$'\n> '}
+    hint=${hint%%$'\n'*}
+    modified=${plain/"$hint"/"${ESC}[90m${hint}!${ESC}[39m"}
+    assert_screen "$mode similar styled text is pending" pending "$CAPS_TMUX" "$modified" 1
+    modified=${plain/"$hint"/"${ESC}[2m${hint}${ESC}[0m"}
+    assert_screen "$mode dim idle hint" empty "$CAPS_TMUX" "$modified" 1
+    styled=$(cat "$ROOT/tests/fixtures/agy-composer/$mode-typed.styled")
+    plain=$(cat "$ROOT/tests/fixtures/agy-composer/$mode-typed.plain")
+    crlf=${styled//$'\n'/$'\r\n'}$'\r'
+    assert_screen "$mode tmux typed" pending "$CAPS_TMUX" "$styled" 1
+    assert_screen "$mode cursorless typed" pending "$CAPS_STYLED" "$styled"
+    assert_screen "$mode CRLF typed" pending "$CAPS_STYLED" "$crlf"
+    assert_screen "$mode plain typed" pending "$CAPS_PLAIN" "$plain"
+    for caps in "$CAPS_TMUX" "$CAPS_STYLED"; do
+      out=$(fm_composer_extract_selected_content "$caps" "$crlf")
+      [ "$out" = 'pending command' ] || fail "$mode extraction lost typed input: '$out'"
+    done
+    out=$(fm_composer_extract_selected_content "$CAPS_PLAIN" "$plain")
+    [ "$out" = 'pending command' ] || fail "$mode plain extraction lost typed input"
+    modified=${plain/"$mode ·"/'manual ·'}
+    assert_screen "$mode unknown mode cell stays unproven" unknown "$CAPS_PLAIN" "$modified"
+  done
+  pass 'agy Auto and Plan captures preserve idle ambiguity and typed input across capture capabilities'
+}
+test_agy_mode_captures

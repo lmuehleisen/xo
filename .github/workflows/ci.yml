@@ -590,6 +590,11 @@ jobs:
           FM_TEST_STOCK_BASH=1 FM_TEST_BASH=/bin/bash \
             /bin/bash bin/fm-test-tap-verify.sh tests/fm-backend.test.sh
 
+          # Empty argv must miss under stock Bash 3.2 set -u. Newer Bash
+          # expands an empty array to no words, so the portable suite does
+          # not catch a return to the unguarded expansion.
+          /bin/bash -uc '. bin/fm-hermes-process-lib.sh && ! fm_hermes_process_matches ""'
+
   # Publish identity and leak check; bin/fm-publish-gate.sh ci-commits owns it.
   # Every commit not in upstream main must carry only the owner's noreply
   # identity (repository variable FM_PUBLISH_IDENTITY_EMAIL, or any
