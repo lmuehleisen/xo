@@ -6,7 +6,7 @@
 #
 # Legacy ensure/manual-baseline admission is retired and never reuses old
 # judge receipts. Historical task records require explicit recovery.
-# ensure-native admits >=1.4.7,<1.5.0 with one native Auto guard
+# ensure-native admits >=1.4.7,<1.6.0 with one native Auto guard
 # bound to the selected backend. Ordinary safe native approvals need
 # not prompt. Receipts explicitly record whether live approval and decline
 # were observed; deterministic native-control fixtures cover the cancellation
@@ -69,8 +69,8 @@ if python3 "$EVIDENCE" match "$receipt" "$work/binding.json" 2>/dev/null; then
   exit 0
 fi
 version=$(jq -r .version "$work/binding.json")
-case "$version" in 1.4.[7-9]|1.4.[1-9][0-9]*) ;; *)
-  echo "agy compatibility: native Auto candidate $version is outside >=1.4.7,<1.5.0" >&2
+case "$version" in 1.4.[7-9]|1.4.[1-9][0-9]*|1.5.*) ;; *)
+  echo "agy compatibility: native Auto candidate $version is outside >=1.4.7,<1.6.0" >&2
   exit 1 ;;
 esac
 

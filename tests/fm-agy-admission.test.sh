@@ -142,7 +142,7 @@ for version in 1.4.7 1.4.8 1.4.99; do
   admit >/dev/null || fail "$version candidate was rejected before verification"
   [ "$(attempts)" = 1 ] || fail "$version was admitted without behavioral verification"
 done
-for version in 1.4.3 1.5.0 2.0.0; do
+for version in 1.4.3 1.6.0 2.0.0; do
   new_case "outside-$version" "$version"
   if admit >/dev/null; then fail "$version escaped the candidate-family bound"; fi
   [ ! -e "$CASE/attempts" ] || fail 'outside-family executable reached synthetic prompts'
@@ -245,6 +245,14 @@ new_case native-too-old 1.4.6
 if admit ensure-native >/dev/null; then fail 'native route admitted an unproven pre-1.4.7 release'; fi
 [ ! -e "$CASE/attempts" ] || fail 'unsupported native candidate reached model prompts'
 pass 'agy admission: native guard failure and unsupported startup versions refuse certification'
+
+new_case native-1.5 1.5.3
+admit ensure-native >/dev/null || fail 'in-range 1.5.x release was refused before verification'
+[ "$(cat "$CASE/attempts")" = native ] || fail '1.5.x native admission ran guards outside its consolidated contract'
+new_case native-too-new 1.6.0
+if admit ensure-native >/dev/null; then fail 'native route admitted an unproven 1.6.x release'; fi
+[ ! -e "$CASE/attempts" ] || fail 'out-of-range native candidate reached model prompts'
+pass 'agy admission: the native bound admits a 1.5.x candidate and refuses 1.6.x before any prompt'
 
 # Exercise the real native setup without invoking the vendor executable.
 new_case native-setup
