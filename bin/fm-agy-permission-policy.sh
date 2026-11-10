@@ -40,8 +40,9 @@
 # exact staged brief and explicitly directed skills have read-scope exceptions
 # after credential checks. Literal worktree directory listings, exact agy
 # version queries and the bound own-task completion attestation read no source.
-# Tracked-file reads can also prove scope against complete, simple exclusions
-# of the form "Do not read `<path>`."; ambiguous restrictions still hold.
+# Regular tracked-file reads can also prove scope against complete, simple
+# exclusions of the form "Do not read `<path>`."; ambiguous restrictions,
+# final symlinks and multiline paths still hold.
 # fm-command-policy-lib.sh owns command analysis and grant
 # pinning; fm-credential-access.mjs owns credential metadata and use grants.
 #
@@ -482,6 +483,7 @@ literal_command() {
   local i
   for ((i = 0; i < ${#T_TXT[@]}; i++)); do
     [ "${T_KIND[i]}" = w ] && [ "${T_VAR[i]}${T_GLOB[i]}${T_SUBS[i]}" = 000 ] || return 1
+    case "${T_TXT[i]}" in *$'\n'*|*$'\r'*) return 1 ;; esac
   done
 }
 
@@ -491,7 +493,6 @@ source_free_command() {
   # borrow the exemption of its first command.
   [ -z "$NOT_APPROVABLE" ] && literal_command || return 1
   local i dir root operands=0 options=1
-  root=$(norm_abs "$WORKTREE")
   case "${T_TXT[0]}" in
     agy)
       [ "${#T_TXT[@]}" = 2 ] && { [ "${T_TXT[1]}" = --version ] || [ "${T_TXT[1]}" = -v ]; }
@@ -500,6 +501,8 @@ source_free_command() {
     ls|/bin/ls|/usr/bin/ls) ;;
     *) return 1 ;;
   esac
+  case "$WORKTREE${AGY_CWD:-}" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  root=$(norm_abs "$WORKTREE")
   for ((i = 1; i < ${#T_TXT[@]}; i++)); do
     dir=${T_TXT[i]}
     if [ "$options" = 1 ]; then
@@ -522,7 +525,7 @@ unexcluded_tracked_read() {
   # Positive limits, global prohibitions, lists and unrecognized prose retain
   # the held-call path rather than guessing their meaning.
   [ -z "$NOT_APPROVABLE" ] || return 1
-  local path abs target root rel line excluded seen=0
+  local path abs root rel line excluded seen=0
   local rule='^[[:space:]]*[Dd][Oo][[:space:]]+[Nn][Oo][Tt][[:space:]]+[Rr][Ee][Aa][Dd][[:space:]]+`([[:alnum:]_./-]+)`[.]?[[:space:]]*$'
   case "$TOOL" in
     read_file|view_file)
@@ -538,19 +541,21 @@ unexcluded_tracked_read() {
     *) return 1 ;;
   esac
   case "$path" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  case "$WORKTREE${AGY_CWD:-}" in *$'\n'*|*$'\r'*) return 1 ;; esac
   abs=$(physical_target "$path" "${AGY_CWD:-$WORKTREE}" 0) || return 1
-  target=$(resolve_symlink_chain "$abs") || return 1
+  # Do not lexically normalize a final symlink's contents: an intermediate
+  # directory symlink followed by .. can select a different physical file.
+  [ ! -L "$abs" ] || return 1
   root=$(norm_abs "$WORKTREE")
-  strictly_inside "$target" "$root" && [ -f "$target" ] || return 1
-  rel=${target#"$root"/}
+  strictly_inside "$abs" "$root" && [ -f "$abs" ] || return 1
+  rel=${abs#"$root"/}
   git -C "$WORKTREE" --literal-pathspecs ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 || return 1
   while IFS= read -r line; do
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     [[ $line =~ $rule ]] || return 1
     excluded=$(physical_target "${BASH_REMATCH[1]}" "$WORKTREE" 0) || return 1
+    [ ! -L "$excluded" ] || return 1
     [ "$abs" != "$excluded" ] && ! strictly_inside "$abs" "$excluded" || return 1
-    excluded=$(resolve_symlink_chain "$excluded") || return 1
-    [ "$target" != "$excluded" ] && ! strictly_inside "$target" "$excluded" || return 1
     seen=1
   done <<<"$READ_CONSTRAINTS"
   [ "$seen" = 1 ]

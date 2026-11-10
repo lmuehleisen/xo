@@ -309,6 +309,59 @@ test_tracked_reads_respect_path_exclusions() {
   pass 'fm-agy-permission-policy: exact path exclusions hold their targets and allow unrelated tracked reads'
 }
 
+test_tracked_read_symlink_dotdot_stays_held() {
+  local policy dir wt tool step=0
+  policy=$(new_case tracked-symlink-dotdot)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/other/nested"
+  printf 'allowed\n' > "$wt/privatefile"
+  printf 'excluded\n' > "$wt/other/privatefile"
+  ln -s other/nested "$wt/pivot"
+  ln -s pivot/../privatefile "$wt/read"
+  git -C "$wt" init -q
+  git -C "$wt" add privatefile other/privatefile pivot read
+  # The kernel follows pivot before ..; lexical normalization would instead
+  # select the tracked, permitted file at the root and approve the wrong read.
+  [ "$(cat "$wt/read")" = excluded ] || fail 'the fixture must actually read the excluded physical destination'
+  printf '# Task\n## Firstmate spec\nDo not read `other/privatefile`.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use read_file "$wt/privatefile" 0
+  statically_approved "$OUT" "$policy" || fail "an unrelated regular tracked file must retain its exemption: $OUT"
+  for tool in read_file view_file; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use "$tool" "$wt/read" "$step"
+    denied "$OUT" || fail "a final symlink must not exempt the wrong physical read: $OUT"
+  done
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "cat '$wt/read'" "$step"
+  denied "$OUT" || fail "a shell read must retain the same final-symlink boundary: $OUT"
+  printf '# Task\n## Firstmate spec\nDo not read `read`.\n# Setup\n' > "$dir/data/t1/brief.md"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use read_file "$wt/other/privatefile" "$step"
+  denied "$OUT" || fail "a final-symlink exclusion must not be normalized to a different file: $OUT"
+  pass 'fm-agy-permission-policy: final symlinks in read targets or exclusions retain scope review'
+}
+
+test_listing_multiline_paths_stay_held() {
+  local policy dir wt operand extra
+  policy=$(new_case listing-multiline)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/"$'\n' "$dir/outside"
+  touch "$dir/outside/outside-marker"
+  operand="$wt/"$'\n'"/../../outside"
+  [ "$(ls "$operand")" = outside-marker ] || fail 'the complete newline operand must actually list the sibling directory'
+  printf '# Task\n## Firstmate spec\nDo not read file contents.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use run_command "ls '$wt'" 0
+  statically_approved "$OUT" "$policy" || fail "an ordinary worktree listing must retain its exemption: $OUT"
+  hook "$policy" pre-tool-use run_command "ls '$operand'" 1
+  denied "$OUT" || fail "a multiline operand must not validate only its first line: $OUT"
+  extra=$(jq -nc --arg cwd "$operand" '{Cwd:$cwd}')
+  hook "$policy" pre-tool-use run_command ls 2 "$extra"
+  denied "$OUT" || fail "a multiline working directory must not validate only its first line: $OUT"
+  pass 'fm-agy-permission-policy: multiline listing operands and working directories retain scope review'
+}
+
 test_armed_heartbeat_proves_wiring() {
   local policy dir log
   policy=$(new_case armed)
@@ -1551,6 +1604,8 @@ test_retired_policies_preserve_exact_decisions() {
   pass 'retired and unknown policies refuse execution, retain decisions on failure and retire exact keys'
 }
 
+test_tracked_read_symlink_dotdot_stays_held
+test_listing_multiline_paths_stay_held
 test_names_only_worktree_listing
 test_own_tool_version_queries
 test_tracked_reads_respect_path_exclusions
