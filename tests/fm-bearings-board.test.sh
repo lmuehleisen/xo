@@ -349,11 +349,13 @@ test_build_injects_effective_payload_locally() {
   assert_not_contains "$out" "armed: " "build still armed a Lavish process-event source: $out"
   assert_present "$board" "build reported success without a board"
 
-  # With no stale cards, the effective payload is the input payload exactly.
+  # With no stale cards, the effective payload is the input payload plus the
+  # rechecked presentation receipts injected beside each presented call.
   # The escaped </script> string can no longer terminate the data block.
-  extract_payload "$board" | jq -S . > "$home/extracted.json" \
+  extract_payload "$board" \
+    | jq -S 'del(.captains_call[]?.receipt, .charted[]?.receipt)' > "$home/extracted.json" \
     || fail "the built board does not carry parseable payload JSON"
-  jq -S . "$data" > "$home/expected.json"
+  jq -S 'del(.captains_call[]?.receipt, .charted[]?.receipt)' "$data" > "$home/expected.json"
   diff -u "$home/expected.json" "$home/extracted.json" >/dev/null \
     || fail "the injected payload does not round-trip to the input document"
   grep -qF '</script><b>' "$board" \
@@ -490,9 +492,11 @@ test_build_drops_decision_cards_whose_subject_already_landed() {
     "the build did not report dropping the merged timeout/reattach card: $out"
   assert_contains "$out" "dropped-landed-card: quota-version" \
     "the build did not report dropping the superseded quota-axi version card: $out"
-  extract_payload "$board" | jq -S . > "$home/extracted.json" \
+  extract_payload "$board" \
+    | jq -S 'del(.captains_call[]?.receipt, .charted[]?.receipt)' > "$home/extracted.json" \
     || fail "the stale-filtered board does not carry parseable payload JSON"
-  jq -S '.captains_call = [.captains_call[] | select(.key == "still-open")]' \
+  jq -S 'del(.captains_call[]?.receipt, .charted[]?.receipt)
+      | .captains_call = [.captains_call[] | select(.key == "still-open")]' \
     "$data" > "$home/expected.json"
   diff -u "$home/expected.json" "$home/extracted.json" >/dev/null \
     || fail "the embedded effective payload changed more than the stale cards"

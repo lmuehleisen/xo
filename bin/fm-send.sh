@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell through its backend endpoint, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--actor captain|firstmate] [--fire-and-forget <delivery-id>] <text...>
 #   --fire-and-forget accepts recorded ships, scouts, and secondmates; its
 #   delivery token travels in the body so exact retries deduplicate. Explicit
 #   endpoint targets are refused for this option. Ordinary steers are unchanged.
@@ -53,6 +53,9 @@
 # outcome on this plane: "did the doorbell land" is no longer the question -
 # "was the message acted on" is, and that is answered asynchronously for an
 # ordinary record by the worker's acknowledgement move into handled/.
+# A supervisor park moves a named record to retired/ instead, which is not
+# that acknowledgement; an idempotent retry that lands on it is not rung
+# (bin/fm-park.sh, bin/fm-task-inbox-lib.sh).
 # bin/fm-task-inbox-lib.sh owns the record format, doorbell line, and retry and
 # escalation policy for ordinary and fire-and-forget records.
 # On pane backends, the composer pre-check before the ring is ADVISORY only: when
@@ -211,6 +214,11 @@
 # the legacy `<task>-decision-<key>` identity for pre-collapse rows. fm-send
 # closes nothing itself; it hands the intake `<task-id>\t<answer>\t<label>`
 # exactly as every other channel does, and the intake owns what that means.
+# `--actor` belongs with `--resolve-key` and is forwarded only to that intake.
+# The default actor is `captain`, so an existing answer stays the captain's
+# words. `--actor firstmate` records a firstmate ruling and must not be inferred
+# from the message text. `--actor` without `--resolve-key` is refused. A printed
+# keyed resend keeps a non-default actor; the unkeyed resend does not.
 # This is what lets an answer reach a decision that has already been
 # transferred from the live status log to its durable captain-held task, which
 # the status ledger alone can no longer close.
@@ -519,6 +527,7 @@ fi
 # must precede --key or the message text; everything after the last flag is the
 # message exactly as before, so ordinary sends are byte-identical.
 RESOLVE_KEYS=
+RESOLVE_ACTOR=captain
 FIRE_AND_FORGET_ID=
 fm_send_add_resolve_key() { # <key>
   local k=$1
@@ -550,6 +559,18 @@ while :; do
     fm_send_add_resolve_key "${1#--resolve-key=}" || exit 1
     shift
     ;;
+  --actor)
+    [ $# -ge 2 ] || {
+      echo "error: --actor requires a value" >&2
+      exit 1
+    }
+    RESOLVE_ACTOR=$2
+    shift 2
+    ;;
+  --actor=*)
+    RESOLVE_ACTOR=${1#--actor=}
+    shift
+    ;;
   --fire-and-forget)
     [ $# -ge 2 ] || {
       echo "error: --fire-and-forget requires a delivery id" >&2
@@ -573,6 +594,18 @@ while :; do
   *) break ;;
   esac
 done
+
+case "$RESOLVE_ACTOR" in
+  captain|firstmate) ;;
+  *)
+    echo "error: --actor must be captain or firstmate: $RESOLVE_ACTOR" >&2
+    exit 1
+    ;;
+esac
+if [ "$RESOLVE_ACTOR" != captain ] && [ -z "$RESOLVE_KEYS" ]; then
+  echo "error: --actor requires --resolve-key" >&2
+  exit 1
+fi
 
 if [ "$TARGET_BACKEND" != remote ]; then
   fm_backend_validate "$TARGET_BACKEND" || exit 1
@@ -775,6 +808,9 @@ if [ -n "$RESOLVE_KEYS" ]; then
       # a resend that resolves to another home, or to no script at all, delivers
       # the preserved message nowhere.
       resolve_resend_prefix="$(fm_send_resend_env)$(fm_send_resend_exe)"
+      if [ "$RESOLVE_ACTOR" != captain ]; then
+        resolve_resend_args="$resolve_resend_args --actor $RESOLVE_ACTOR"
+      fi
       printf '  resend, your message preserved:\n'
       printf '    %s %s%s %s\n' \
         "$resolve_resend_prefix" "$RESOLVE_TASK_ID" "$resolve_resend_args" "$resolve_quoted_message"
@@ -870,17 +906,29 @@ fm_send_close_resolved_keys() { # <answer-text>
 # it does not build a decision record or choose a close path; the keys were
 # already resolved to task ids above, so the intake needs no legacy origin.
 fm_send_feed_resolved_holds() { # <answer-text>
-  local note=$1 k lines=''
+  local note=$1 k lines='' close_hint='fm-captain-hold.sh answer'
   [ -n "$RESOLVE_HOLD_KEYS" ] || return 0
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_HOLD_KEYS; do
     lines="${lines}${k}"$'\t'"${note}"$'\t'$'\n'
   done
-  if ! printf '%s' "$lines" | "$SCRIPT_DIR/fm-captain-hold.sh" answers \
-    --source "a firstmate answer sent to $RESOLVE_TASK_ID" >/dev/null 2>&1; then
-    echo "error: the answer was delivered to $T, but this captain-held task could not be closed: ${RESOLVE_HOLD_KEYS}. Close it with fm-captain-hold.sh answer - do not resend the answer." >&2
-    return 1
+  if [ "$RESOLVE_ACTOR" = captain ]; then
+    printf '%s' "$lines" | "$SCRIPT_DIR/fm-captain-hold.sh" answers \
+      --source "a firstmate answer sent to $RESOLVE_TASK_ID" >/dev/null 2>&1 \
+      || {
+        echo "error: the answer was delivered to $T, but this captain-held task could not be closed: ${RESOLVE_HOLD_KEYS}. Close it with $close_hint - do not resend the answer." >&2
+        return 1
+      }
+    return 0
   fi
+  close_hint='fm-captain-hold.sh answer --actor firstmate'
+  printf '%s' "$lines" | "$SCRIPT_DIR/fm-captain-hold.sh" answers \
+    --actor "$RESOLVE_ACTOR" \
+    --source "a firstmate answer sent to $RESOLVE_TASK_ID" >/dev/null 2>&1 \
+    || {
+      echo "error: the answer was delivered to $T, but this captain-held task could not be closed: ${RESOLVE_HOLD_KEYS}. Close it with $close_hint - do not resend the answer." >&2
+      return 1
+    }
 }
 
 # Resolve the target's harness from its meta (recorded by fm-spawn), used to
@@ -1244,6 +1292,9 @@ else
     4)
       [ "$ring_retry" != "the watcher will re-ring" ] || ring_retry="the watcher will press Enter on its next attempt"
       echo "fm-send: doorbell typed into $T but its Enter did not submit it, so it is not delivered yet; the steer is durably recorded at $INBOX_RECORD and $ring_retry (do not resend)" >&2
+      ;;
+    6)
+      echo "fm-send: doorbell not rung; a supervisor park already retired this steer at $INBOX_RECORD" >&2
       ;;
     esac
     exit 0

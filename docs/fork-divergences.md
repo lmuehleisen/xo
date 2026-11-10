@@ -62,6 +62,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-brief.test.sh` `test_no_mistakes_*` and `test_workers_wait_without_spending_turns`; `tests/fm-task-delivery.test.sh` `test_no_mistakes_*`; `tests/fm-bootstrap.test.sh` `test_no_mistakes_opt_in_reports_unavailable_cli`.
 - Upstream: requires the no-mistakes pipeline for every ship and enforces its minimum version at bootstrap.
 
+### presentation-receipts
+
+- Intent: every captain-facing call is re-verified at presentation time, and anything that cannot be verified is visibly marked rather than silently shown as true.
+- Class: intended.
+- Seam: the `recheck` subcommand and `fm-presentation-receipt.v1` contract in `bin/fm-captain-hold.sh`, the `captain` marker and `receipt` attachment in `bin/fm-bearings-snapshot.sh`, the receipt validation and publish-time recheck pass in `bin/fm-bearings-board.sh`, and the receipt rendering in `.agents/skills/bearings/assets/board-template.html` (shared); the matching contract lines in the captain-hold-lifecycle and bearings skills, `docs/captain-hold-lifecycle.md`, and `tests/fm-captain-hold-recheck.test.sh` (fork-owned hunks).
+- Guard: `tests/fm-captain-hold-recheck.test.sh` covers the receipt producer, snapshot attachment and captain-gate marking, board publish-time recheck and expiry, foreign-owner unknowns, and malformed-receipt refusal.
+- Upstream: presents captain calls as composed without a publish-time re-verification receipt; an upstreamable shape would keep the receipt producer as one appended `recheck` subcommand and the snapshot/board passes as additive fields, but the schema, verdict vocabulary, and per-check rules are fork-authored and upstream has no equivalent to merge with.
+
 ### reviewed-worker-permissions
 
 - Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so pane-backed Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
@@ -426,6 +434,15 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-devin-rate-limit-retry.test.sh`; fork-only `tests/fm-rate-limit-retry.test.sh`; the retry cases in `tests/fm-send-inbox.test.sh`; `tests/fm-devin-rate-limit-retry-live-e2e.test.sh`.
 - Upstream: no equivalent retry owner; drop when the same bounded recovery is available.
 
+### supervisor-park
+
+- Intent: a stopped worker that cannot declare its own bounded wait gets one supervisor operation that writes the pause and retires only the named steering records, without treating that retirement as the worker having read them.
+- Class: carried.
+- Seam: fork-only `bin/fm-park.sh`, the `retired/` inbox disposition in `bin/fm-task-inbox-lib.sh`, the no-ring notices in `bin/fm-send.sh` and `bin/fm-remote-secondmate-control.sh`, the retired snapshot in `bin/fm-procevent.sh`, the bounded-pause hold in `bin/fm-secondmate-liveness-lib.sh`, the supervisor-park step in the stuck-crewmate-recovery skill, and the rows in `docs/scripts.md` and `docs/agent-control.md` (shared).
+- Guard: `tests/fm-park.test.sh`; the bounded-pause cases in `tests/fm-secondmate-liveness.test.sh`.
+- Upstream: no supervisor park; a pause is only the worker's own status line, and moving a steering record into `handled/` is only the worker's acknowledgement.
+  Drop when upstream records the same bounded park and named retirement.
+
 ### quota-provider-scope
 
 - Intent: each home can restrict quota and authentication discovery to its configured providers; `docs/configuration.md` "Quota provider scope".
@@ -586,18 +603,30 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-composer-ghost.test.sh`; `tests/fm-composer-lib.test.sh` animation and painted-braille cases.
 - Upstream: replaced #4297 with #4532; retire these extraction seams only when its reader preserves draft characters and excludes decoration in the same cases.
 
+### ci-normal-tier-timeout
+
+- Intent: the shared normal CI tier is 35 minutes so portable behavior jobs finish when several pull requests run CI at once.
+- Class: carried.
+- Seam: normal-tier `timeout-minutes` in `.github/workflows/ci.yml`, the normal-tier assertion in `tests/fm-ci-workflow.test.sh`, the Timeouts section in `docs/fm-test-portable-shards.md`, and the changed-path per-script bound comment in `bin/fm-test-run.sh` (shared).
+- Guard: `tests/fm-ci-workflow.test.sh` `test_normal_tier_shares_one_budget`.
+- Upstream: keeps the shared normal tier at 30 minutes.
+  A hung lint, behavior, macOS, or publish-identity job runs five minutes longer before the tripwire fires.
+  Completed behavior jobs have reached about 30 minutes, and the 30-minute tripwire cancels the ones that run longer; 35 restores five minutes above that completion.
+  Drop this once upstream's normal tier is at least 35 minutes.
+
 ### ci-shard-split
 
 - Intent: portable serial CI runs as fourteen shards, using upstream's supervision-host and watch-triage suite boundaries plus focused fork regression suites, so each shard stays inside the CI job limit; canonical lint supports `NofM` partitions and CI uses three.
 - Class: carried.
 - Seam: the shard and lint matrices in `.github/workflows/ci.yml`, partition parsing and balancing in `bin/fm-lint.sh`, measured shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, and `CONTRIBUTING.md`; upstream split suites share `tests/supervision-host-helpers.sh` and `tests/watch-triage-helpers.sh`, with fork-only regressions in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`.
 - Guard: `tests/fm-test-run.test.sh` shard cases; `tests/fm-lint.test.sh`; `tests/fm-ci-workflow.test.sh`; every integration ports upstream's new supervision-host tests into the split suites.
-- Upstream: runs ten serial shards and split supervision-host and watcher-triage suites; retain the fork shard count until it fits that layout with headroom.
+- Upstream: runs eleven serial shards and split supervision-host and watcher-triage suites; retain the fork shard count until it fits that layout with headroom.
   Successful suite durations in green runs [40214527890](https://github.com/lmuehleisen/xo/actions/runs/40214527890) and [40116342702](https://github.com/lmuehleisen/xo/actions/runs/40116342702) sum to 258.03 and 264.77 minutes respectively when shard sums are rounded to hundredths, implying a nine-shard minimum of 28.67 and 29.42 minutes even with perfect balance and no job setup.
   Their measured shard sums in numerical order were 19.41, 19.25, 20.91, 24.44, 11.33, 14.92, 19.81, 16.15, 18.62, 17.48, 19.11, 19.12, 16.56, 20.92 minutes and 19.89, 19.09, 18.39, 25.92, 10.24, 14.55, 20.03, 21.63, 19.60, 19.53, 20.45, 19.25, 19.13, 17.07 minutes.
   The post-merge candidate run [40419989504](https://github.com/lmuehleisen/xo/actions/runs/40419989504) measured 20.90, 19.58, 21.24, 19.98, 10.13, 20.04, 19.99, 22.70, 17.68, 20.64, 18.32, 17.97, 16.29, 16.15 minutes; two shards contained failures, so its 261.61-minute total (summing the rounded shard values) is not a complete successful baseline.
   A 25-minute suite budget leaves five minutes of the 30-minute job limit for setup and runner variance; both green-run lower bounds exceed that budget before combining suites or accounting for imbalance.
   The candidate run's successful watch-triage and declared-wait suites alone took 13.61 and 17.24 minutes, so their combined 30.85 minutes also exceeds the job limit before setup.
+  The 30-minute tripwire those runs were measured against is now `ci-normal-tier-timeout`.
 
 ### pi-saved-trust-denial
 

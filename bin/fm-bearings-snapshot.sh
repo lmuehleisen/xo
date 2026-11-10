@@ -47,6 +47,15 @@
 # and drops its gate, so a hold is never in both Captain's Call and Charted Next.
 # Aging is a projection safety net only; the durable
 # deferral remains re-holding with --until.
+# Every presented captain call then carries a `receipt` produced by the hold
+# owner (bin/fm-captain-hold.sh recheck owns the fm-presentation-receipt.v1
+# contract): verified, changed, or unknown, with what was checked against which
+# source and revision and when. Only selected rows are rechecked - a turn that
+# presents no decision runs none - and a call owned by a secondmate home is
+# verified only there, so it carries an explicit unknown receipt naming its
+# owner instead of a verdict this home cannot stand behind. Charted Next gate
+# rows also carry `captain`, marking which gates are deferred captain calls and
+# therefore which gate rows carry a receipt.
 #
 # Ordinary Charted Next gates are ordered by durable filed date, newest first,
 # before the FM_BEARINGS_GATES bound is applied. Gates without a comparable filed
@@ -435,7 +444,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
     {id, title:(.title | trunc(60)),
      blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
      reason:(hold_gate_reason | trunc(40)), owner:$owner,
-     filed:((.since // null) | trunc(40))};
+     filed:((.since // null) | trunc(40)),
+     captain:(.hold_bucket != null)};
   def round_robin_landed($n):
     . as $groups
     | [range(0; (($groups | map(length) | max) // 0)) as $i
@@ -569,7 +579,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          blocked_by:"-",
          reason:"away-return catch-up",
          owner:"(main)",
-         filed:null}]
+         filed:null,
+         captain:false}]
      else [] end) as $return_catchup_gate
   | ((if (.main_inventory.valid == false) then
         [{id:"(main-inventory)",
@@ -577,7 +588,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
           blocked_by:"-",
           reason:"main inventory",
           owner:"(main)",
-          filed:null}]
+          filed:null,
+          captain:false}]
       else [] end)
      + [ .backlog.records[]
          | . as $record
@@ -702,6 +714,74 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $include_prs == 1 and $pr_rows_capped > 0 then {surface:("candidate_prs showing \($candidate_prs | length) of at least \($pr_rows_min_total); capped in \($pr_rows_capped) repo(s)"), reveal:"raise FM_BEARINGS_PR_LIMIT"} else empty end),
         (if $include_prs == 1 then empty else {surface:"live PR discovery + checks", reveal:"--include-prs"} end) ]) }
 ') || { echo "fm-bearings-snapshot: projection failed" >&2; exit 1; }
+
+# --- presentation receipts ---------------------------------------------------
+# Every captain call this model is about to present carries a receipt produced
+# by the hold owner (bin/fm-captain-hold.sh recheck owns the contract). Only the
+# SELECTED rows pay: decisions_open and captain gates arrive already bounded,
+# so a turn presenting no decision runs no recheck at all. A call owned by a
+# secondmate home is verified only in that home; it gets an explicit unknown
+# receipt naming its owner rather than a verdict this home cannot stand behind.
+RECHECK_ROWS=$(printf '%s' "$MODEL" | jq -r '
+  ([ .decisions_open[]? | {key:(.owner + "/" + .id), owner, id} ]
+   + [ .gates[]? | select(.captain == true)
+        | {key:(.owner + "/" + .id), owner, id} ])
+  | unique_by(.key)[]
+  | .owner + "\t" + .id') \
+  || { echo "fm-bearings-snapshot: receipt selection failed" >&2; exit 1; }
+
+receipt_unknown() {  # <id> <source> <detail>
+  jq -cn --arg task "$1" --arg now "$NOW" --arg source "$2" --arg detail "$3" '
+    {schema:"fm-presentation-receipt.v1",task:$task,checked_at:$now,
+     source:$source,revision:null,verdict:"unknown",
+     checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
+             reconcile:"unknown",linked_work:"unknown"},
+     detail:$detail}'
+}
+
+if [ -n "$RECHECK_ROWS" ]; then
+  RECEIPTS_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-bearings-receipts.XXXXXX") \
+    || { echo "fm-bearings-snapshot: cannot stage receipts" >&2; exit 1; }
+  printf '%s\n' "$RECHECK_ROWS" | while IFS="$(printf '\t')" read -r owner rid; do
+    [ -n "$rid" ] || continue
+    if [ "$owner" = "(main)" ]; then
+      receipt=$("$SCRIPT_DIR/fm-captain-hold.sh" recheck "$rid" 2>/dev/null) || receipt=''
+      printf '%s' "$receipt" \
+        | jq -e 'type == "object" and .schema == "fm-presentation-receipt.v1"' >/dev/null 2>&1 \
+        || receipt=$(receipt_unknown "$rid" backlog \
+             "the hold owner produced no receipt for this call")
+    else
+      receipt=$(receipt_unknown "$rid" "$owner" \
+        "this call is owned by $owner and is verified only in that home")
+    fi
+    jq -cn --arg key "$owner/$rid" --argjson r "$receipt" '{key:$key,receipt:$r}' \
+      >> "$RECEIPTS_FILE" || exit 1
+  done || { rm -f "$RECEIPTS_FILE"; echo "fm-bearings-snapshot: receipt collection failed" >&2; exit 1; }
+
+  MODEL=$(printf '%s' "$MODEL" | jq --arg now "$NOW" --slurpfile rs "$RECEIPTS_FILE" '
+    ($rs | INDEX(.[]; .key)) as $r
+    | def receipt_for($owner; $id): $r[$owner + "/" + $id].receipt // null;
+      .decisions_open |= map(. + {receipt:(receipt_for(.owner; .id)
+        // {schema:"fm-presentation-receipt.v1",task:.id,checked_at:$now,source:.owner,
+            revision:null,verdict:"unknown",
+            checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
+                    reconcile:"unknown",linked_work:"unknown"},
+            detail:"no presentation receipt was produced for this call"})})
+    | .gates |= map(if (.captain // false) == true
+        then . + {receipt:(receipt_for(.owner; .id)
+          // {schema:"fm-presentation-receipt.v1",task:.id,checked_at:$now,source:.owner,
+              revision:null,verdict:"unknown",
+              checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
+                      reconcile:"unknown",linked_work:"unknown"},
+              detail:"no presentation receipt was produced for this call"})}
+        # The TOON table derives its columns from the first gate row alone, so
+        # a receipt present only on captain gates would vanish when an ordinary
+        # gate leads the array. Every gate carries the field; null on a
+        # non-captain row means no verification applies.
+        else . + {receipt:null} end)') \
+    || { rm -f "$RECEIPTS_FILE"; echo "fm-bearings-snapshot: receipt merge failed" >&2; exit 1; }
+  rm -f "$RECEIPTS_FILE"
+fi
 
 if [ "$FORMAT" = json ]; then
   printf '%s\n' "$MODEL"

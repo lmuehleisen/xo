@@ -85,6 +85,21 @@
 # hidden is worse than a card wrongly shown. Cleanup is therefore a normal
 # rebuild effect rather than a committed migration or direct state mutation.
 #
+# PRESENTATION RECEIPTS. Every surviving decision card and every Charted Next
+# row whose `captain` is true is re-verified at build time through
+# `bin/fm-captain-hold.sh recheck` against the owning home; a charted row
+# carrying a receipt object counts too, because only a captain gate produces
+# one, and a missing `owner` falls back on the receipt's recorded source
+# before this home is assumed. A card or row that
+# already carries a composer receipt hands its `revision` back as `--expect`,
+# so movement between composition and publication reports `changed`. A receipt
+# is marked, never hidden: a `changed` verdict and an `unknown` verdict -
+# including every call owned by another home, which only that home can
+# verify - are rendered by the template rather than suppressed, and a local
+# recheck that fails to produce a valid receipt leaves an explicit unknown
+# receipt rather than a bare card. Cost stays bounded to the presented rows:
+# a payload with no decision cards and no captain charted rows runs nothing.
+#
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
 # the fm-bearings-board.v1 types and item invariants below. Every fleet row and
@@ -168,6 +183,25 @@ validate_payload() {  # <data.json>
           and (keys | sort) == ["artifact", "version"]
           and (.artifact | slug(128))
           and (.version | version));
+    # bin/fm-captain-hold.sh recheck owns the receipt contract and its values;
+    # the board checks only the shape a renderer may rely on.
+    def presentation_receipt:
+      type == "object"
+      and (.schema == "fm-presentation-receipt.v1")
+      and (.task | nonempty_string)
+      and (.checked_at | nonempty_string)
+      and (.source | nonempty_string)
+      and ((.revision == null) or (.revision | nonempty_string))
+      and (.verdict == "verified" or .verdict == "changed" or .verdict == "unknown")
+      and (.checks | type == "object")
+      and ([.checks.call, .checks.deferral, .checks.blockers,
+            .checks.reconcile, .checks.linked_work] | all(nonempty_string))
+      and (.detail | type == "string");
+    # null marks a non-captain gate row where no verification applies; the
+    # build replaces or keeps it untouched.
+    def optional_receipt:
+      (has("receipt") | not) or (.receipt == null)
+      or (.receipt | presentation_receipt);
     def call_item:
       type == "object"
       and (.key | slug(128))
@@ -196,7 +230,8 @@ validate_payload() {  # <data.json>
           and (.recommend_value as $recommend
             | ([.options[].value] | index($recommend) != null))))
       and ([.options[].value] | index("reconcile") == null)
-      and (if .type == "merge" then (.risk | nonempty_string) else true end);
+      and (if .type == "merge" then (.risk | nonempty_string) else true end)
+      and optional_receipt;
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
       and (.state | nonempty_string) and (.doing | nonempty_string) and (.kind | nonempty_string);
@@ -210,7 +245,10 @@ validate_payload() {  # <data.json>
       and (.title | nonempty_string) and (.reason | type == "string")
       and (.dispatchable | type == "boolean")
       and ((has("kind") | not) or (.kind == "queued" or .kind == "warning"))
+      and ((has("owner") | not) or (.owner | nonempty_string))
+      and ((has("captain") | not) or (.captain | type == "boolean"))
       and optional_filed
+      and optional_receipt
       and (if .kind == "warning" then .dispatchable == false else true end);
     type == "object"
     and (.schema == $schema)
@@ -417,6 +455,7 @@ decision_card_is_stale() {  # <task-id> <landed-0-or-1>
 # docs/captain-hold-lifecycle.md owns what it means.
 effective_payload() {  # <data.json> <dest.json> <lavish-mode>
   local data=$1 dest=$2 mode=$3 landed_keys key reason drop='' tmp landed=0 here='' here_json
+  local recheck_rows='' receipts_file owner rid expect receipt now
   landed_keys=$(jq -c '
     def version_parts: split(".") | map(tonumber);
     . as $payload
@@ -456,13 +495,90 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
   done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$data")
   tmp=$(printf '%s' "$drop" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
   here_json=$(printf '%s' "$here" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
-  jq --argjson dropped "$tmp" --argjson here "$here_json" --arg mode "$mode" '
+
+  # Presentation receipts. Every captain call the page is about to show -
+  # each surviving decision card and each charted gate marked captain - is
+  # rechecked by the hold owner at build time, never trusted to the record a
+  # composer captured earlier. A carried receipt's revision rides --expect so
+  # movement between compose and build reports changed; a call owned by
+  # another home can be verified only there, so it keeps an explicit unknown
+  # receipt naming its owner. Cost stays bounded to the presented rows: a
+  # build with no decision card and no captain gate runs no recheck at all.
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  recheck_rows=$(jq -r --argjson dropped "$tmp" '
+    # A receipt on a row is itself evidence the composer saw a captain call, so
+    # it selects a charted row even when the captain marker was not copied. An
+    # omitted owner falls back on the receipt source (which the snapshot set
+    # from the true owner) rather than assuming this home, so a foreign gate
+    # cannot be verified against a same-id local task.
+    def row_owner:
+      (.owner // .receipt.source // "(main)")
+      | if . == "backlog" then "(main)" else . end;
+    ([ .captains_call[]? | select(.type == "decision")
+       | . as $card | select(($dropped | index($card.key)) == null)
+       | {key:(row_owner + "/" + .key), owner:row_owner,
+          id:.key, expect:(.receipt.revision // "")} ]
+     + [ .charted[]? | select(.captain == true or (.receipt | type == "object"))
+         | {key:(row_owner + "/" + .id), owner:row_owner,
+            id, expect:(.receipt.revision // "")} ])
+    | unique_by(.key)[]
+    | [.owner, .id, .expect] | @tsv' "$data") || return 1
+  receipts_file=$(mktemp "${TMPDIR:-/tmp}/fm-bearings-board-receipts.XXXXXX") \
+    || { printf 'fm-bearings-board: cannot stage receipts\n' >&2; return 1; }
+  if [ -n "$recheck_rows" ]; then
+    printf '%s\n' "$recheck_rows" | while IFS="$(printf '\t')" read -r owner rid expect; do
+      [ -n "$rid" ] || continue
+      if [ "$owner" = "(main)" ]; then
+        if [ -n "$expect" ]; then
+          receipt=$("$SCRIPT_DIR/fm-captain-hold.sh" recheck "$rid" --expect "$expect" 2>/dev/null) \
+            || receipt=''
+        else
+          receipt=$("$SCRIPT_DIR/fm-captain-hold.sh" recheck "$rid" 2>/dev/null) || receipt=''
+        fi
+        printf '%s' "$receipt" \
+          | jq -e 'type == "object" and .schema == "fm-presentation-receipt.v1"' >/dev/null 2>&1 \
+          || receipt=$(jq -cn --arg task "$rid" --arg now "$now" '
+              {schema:"fm-presentation-receipt.v1",task:$task,checked_at:$now,
+               source:"backlog",revision:null,verdict:"unknown",
+               checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
+                       reconcile:"unknown",linked_work:"unknown"},
+               detail:"the hold owner produced no receipt for this call"}')
+      else
+        receipt=$(jq -cn --arg task "$rid" --arg now "$now" --arg owner "$owner" '
+          {schema:"fm-presentation-receipt.v1",task:$task,checked_at:$now,
+           source:$owner,revision:null,verdict:"unknown",
+           checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
+                   reconcile:"unknown",linked_work:"unknown"},
+           detail:("this call is owned by " + $owner + " and is verified only in that home")}')
+      fi
+      jq -cn --arg key "$owner/$rid" --argjson r "$receipt" '{key:$key,receipt:$r}' \
+        >> "$receipts_file" || exit 1
+    done || { rm -f "$receipts_file"; return 1; }
+  fi
+
+  jq --argjson dropped "$tmp" --argjson here "$here_json" --arg mode "$mode" \
+    --arg now "$now" --slurpfile rs "$receipts_file" '
+    ($rs | INDEX(.[]; .key)) as $r
+    | def row_owner:
+      (.owner // .receipt.source // "(main)")
+      | if . == "backlog" then "(main)" else . end;
+    def receipt_for($owner; $id): $r[$owner + "/" + $id].receipt // null;
+    def fallback_receipt($owner; $id):
+      {schema:"fm-presentation-receipt.v1",task:$id,checked_at:$now,source:$owner,
+       revision:null,verdict:"unknown",
+       checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
+               reconcile:"unknown",linked_work:"unknown"},
+       detail:"no presentation receipt was produced for this call"};
     (if $mode == "answers" then .interactive = true else del(.interactive) end)
     | .captains_call = [
       .captains_call[]
       | . as $card
       | select($card.type != "decision" or (($dropped | index($card.key)) == null))
       | del(.answerable)
+      | (if .type == "decision"
+         then .receipt = (receipt_for(row_owner; .key)
+                          // fallback_receipt(row_owner; .key))
+         else . end)
       | if $mode == "answers" and .type == "decision" and .owner? == "(main)"
           and (($here | index($card.key)) != null)
         then .answerable = true
@@ -472,7 +588,19 @@ effective_payload() {  # <data.json> <dest.json> <lavish-mode>
             hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
           }]
         else . end
-    ]' "$data" > "$dest" || return 1
+    ]
+    | .charted = [
+      .charted[]
+      # A charted row carrying a receipt object was composed from a captain
+      # gate even when the captain field was not copied; normalizing the
+      # marker here keeps the publish-time recheck and the receipt badge.
+      | (if .captain == true or (.receipt | type == "object")
+         then (.captain = true)
+           | .receipt = (receipt_for(row_owner; .id)
+                         // fallback_receipt(row_owner; .id))
+         else . end)
+    ]' "$data" > "$dest" || { rm -f "$receipts_file"; return 1; }
+  rm -f "$receipts_file"
 }
 
 command_build() {

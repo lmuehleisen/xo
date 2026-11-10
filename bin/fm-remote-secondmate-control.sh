@@ -390,6 +390,12 @@ cmd_send_body() {
       printf 'notice: this steer was already delivered and acknowledged at %s; nothing re-rung\n' "$rec" >&2
       return 0
       ;;
+    */retired/*)
+      # A supervisor park retired this body. Re-ringing it would announce an
+      # instruction the park removed, so the retry stops here.
+      printf 'notice: this steer was already retired by a supervisor park at %s; nothing re-rung\n' "$rec" >&2
+      return 0
+      ;;
   esac
   fm_task_inbox_ring "$REMOTE_ENDPOINT_BACKEND" "$REMOTE_ENDPOINT_TARGET" "$rec" "fm-$id" || ring_rc=$?
   case "$ring_rc" in
