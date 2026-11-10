@@ -3617,8 +3617,8 @@ test_herdr_rebind_stays_in_the_recorded_session() {
   pass "reclaim: a herdr rebind is created in the session the record names, never the ambient one"
 }
 
-test_herdr_presentation_recovery_preserves_recorded_agy_opt_out() {
-  local dir id token out rc=0 launch
+test_herdr_presentation_recovery_refuses_retired_agy_opt_out() {
+  local dir id token out rc=0
   herdr_case_or_skip herdr-agy-opt-out herdr-agy-opt-out || {
     echo "skip - herdr presentation recovery needs jq"
     return 0
@@ -3652,16 +3652,14 @@ SH
   out=$(FM_AGY_READY_POLLS=0 run_spawn "$dir" "$id" "$dir/proj" \
     --mode no-mistakes --yolo off --backend herdr --harness agy) || rc=$?
   [ "$rc" -eq 1 ] || fail "the fake agy worker should fail its intentionally unfulfilled start canary: $out"
-  launch=$(cat "$dir/fake/launched-command")
-  assert_contains "$launch" '--mode accept-edits' \
-    "Herdr presentation recovery must restore the recorded agy opt-out before delivering the launch"
-  assert_not_contains "$launch" '--dangerously-skip-permissions' \
-    "Herdr presentation recovery must not replace an opted-out record with Auto's default"
+  assert_contains "$out" 'explicit recovery before relaunch' \
+    "Herdr presentation recovery must diagnose a retired agy record"
+  [ ! -s "$dir/fake/launched-command" ] || fail "retired agy record launched a replacement worker"
   grep -q '^agy_bypass=off$' "$dir/home/state/$id.meta" \
-    || fail "Herdr presentation recovery did not keep agy_bypass=off in metadata"
+    || fail "recovery refusal changed the legacy metadata"
   [ ! -e "$dir/home/state/$id.agy-permission.json" ] \
-    || fail "an opted-out Herdr recovery installed the bypass policy file"
-  pass "Herdr presentation recovery preserves the recorded agy opt-out"
+    || fail "recovery refusal installed a new permission policy"
+  pass "Herdr presentation recovery preserves retired agy records for explicit recovery"
 }
 
 test_herdr_reclaim_refuses_an_agent_that_came_back() {
@@ -4009,7 +4007,7 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
 test_herdr_rebind_stays_in_the_recorded_session
-test_herdr_presentation_recovery_preserves_recorded_agy_opt_out
+test_herdr_presentation_recovery_refuses_retired_agy_opt_out
 test_herdr_reclaim_refuses_an_agent_that_came_back
 test_herdr_reclaim_keeps_the_task_whole
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner
