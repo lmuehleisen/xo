@@ -35,6 +35,8 @@
 # The pause line is appended only after every named retirement succeeds. A
 # failure puts back any record this command already moved. bin/fm-control.sh
 # exit does not retire inbox records and does not call this command.
+# A local secondmate is not relaunched while this pause still holds
+# (bin/fm-secondmate-liveness-lib.sh).
 #
 # Refuses a missing task record, a remotely placed secondmate, a last status
 # of done, failed, or captain-held, an until time that is malformed or not in

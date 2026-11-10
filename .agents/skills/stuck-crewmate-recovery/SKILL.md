@@ -85,6 +85,7 @@ Pass `--retire <NNN.msg>` once for each pending steering record that wait supers
 The script header owns the pause line, the retirement record, and the refusal rules.
 Records you do not name stay pending, and this command does not stop the agent or discard its work.
 A remotely placed secondmate is refused; park that mate on its own host.
+A local secondmate is not relaunched while that pause still holds.
 
 ## Live-endpoint escalation
 

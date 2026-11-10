@@ -427,8 +427,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: a stopped worker that cannot declare its own bounded wait gets one supervisor operation that writes the pause and retires only the named steering records, without treating that retirement as the worker having read them.
 - Class: carried.
-- Seam: fork-only `bin/fm-park.sh`, the `retired/` inbox disposition in `bin/fm-task-inbox-lib.sh`, the no-ring notices in `bin/fm-send.sh` and `bin/fm-remote-secondmate-control.sh`, the retired snapshot in `bin/fm-procevent.sh`, the supervisor-park step in the stuck-crewmate-recovery skill, and the rows in `docs/scripts.md` and `docs/agent-control.md` (shared).
-- Guard: `tests/fm-park.test.sh`.
+- Seam: fork-only `bin/fm-park.sh`, the `retired/` inbox disposition in `bin/fm-task-inbox-lib.sh`, the no-ring notices in `bin/fm-send.sh` and `bin/fm-remote-secondmate-control.sh`, the retired snapshot in `bin/fm-procevent.sh`, the bounded-pause hold in `bin/fm-secondmate-liveness-lib.sh`, the supervisor-park step in the stuck-crewmate-recovery skill, and the rows in `docs/scripts.md` and `docs/agent-control.md` (shared).
+- Guard: `tests/fm-park.test.sh`; the bounded-pause cases in `tests/fm-secondmate-liveness.test.sh`.
 - Upstream: no supervisor park; a pause is only the worker's own status line, and moving a steering record into `handled/` is only the worker's acknowledgement. Drop when upstream records the same bounded park and named retirement.
 
 ### quota-provider-scope
