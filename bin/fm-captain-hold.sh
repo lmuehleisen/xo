@@ -3013,9 +3013,9 @@ command_recheck() {  # <task-id> [--expect <revision>]
       "$blocked" "$blocked_by" "$kind" "$repo" "$links")")
     revision="${hold_set}#$(resolution_record_count "$shown_body")#${face_digest:0:12}"
 
-    if [ "$state" != done ] && [ "$hold_kind" = captain ]; then
+    if [ "$state" != "done" ] && [ "$hold_kind" = captain ]; then
       call=verified
-    elif [ "$state" = done ]; then
+    elif [ "$state" = "done" ]; then
       call=changed
       changed_detail="the call $id is closed"
     else
