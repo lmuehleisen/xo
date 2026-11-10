@@ -589,6 +589,63 @@ test_sweep_refuses_relaunch_on_ledger_errors() {
   pass "sweep: an unreadable or unwritable relaunch ledger refuses to kill or spawn"
 }
 
+# probe_local <w> <fakebin> -> "<status>|<reason>"
+probe_local() {
+  local w=$1 fb=$2
+  PATH="$fb:$BASE_PATH" FM_HOME="$w/home" FM_BACKEND=tmux \
+    FM_ROOT="$ROOT" FM_TEST_PANE_CMD=zsh FM_TMUX_CALL_LOG="$w/calls.log" \
+    STATE="$w/home/state" bash -c '
+      . "$1/bin/fm-secondmate-liveness-lib.sh"
+      fm_secondmate_liveness_probe "$2" sm1 poll
+      printf "%s|%s\n" "$FM_SM_LIVE_STATUS" "$FM_SM_LIVE_REASON"
+    ' _ "$ROOT" "$w/home/state/sm1.meta"
+}
+
+test_probe_holds_unexpired_pause_and_releases_when_it_ends() {
+  local w fb out
+  w=$(new_world probe-pause)
+  add_sm_home "$w" sm1 firstmate:fm-sm1
+  fb=$(make_toolchain "$w")
+  make_liveness_tmux "$w" >/dev/null
+  : > "$w/calls.log"
+
+  printf 'paused [key=supervisor-park] [by=supervisor] [at=1]: upstream release until 2099-01-01T00:00:00Z\n' \
+    > "$w/home/state/sm1.status"
+  out=$(probe_local "$w" "$fb")
+  [ "$out" = 'skipped|bounded pause still holds' ] \
+    || fail "an unexpired pause must not authorize relaunch, got: $out"
+
+  printf 'paused [key=supervisor-park] [by=supervisor] [at=1]: upstream release until 2000-01-01T00:00:00Z\n' \
+    > "$w/home/state/sm1.status"
+  out=$(probe_local "$w" "$fb")
+  [ "${out%%|*}" = relaunchable ] \
+    || fail "an expired pause must authorize relaunch, got: $out"
+
+  printf 'paused [key=supervisor-park] [by=supervisor] [at=1]: upstream release until 2099-01-01T00:00:00Z\nworking: resumed\n' \
+    > "$w/home/state/sm1.status"
+  out=$(probe_local "$w" "$fb")
+  [ "${out%%|*}" = relaunchable ] \
+    || fail "a later working line must end the pause, got: $out"
+  pass "probe: an unexpired pause holds a dead secondmate, and an expired or ended pause does not"
+}
+
+test_sweep_does_not_relaunch_a_paused_secondmate() {
+  local w fb tmuxfb log out
+  w=$(new_world sweep-park-holds)
+  add_sm_home "$w" sm1 firstmate:fm-sm1
+  printf 'paused [key=supervisor-park] [by=supervisor] [at=1]: upstream release until 2099-01-01T00:00:00Z\n' \
+    > "$w/home/state/sm1.status"
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log")
+
+  assert_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: skipped: bounded pause still holds" \
+    "session start must report the pause instead of relaunching"
+  [ ! -s "$log" ] || fail "an unexpired pause must not kill or relaunch: $(cat "$log")"
+  pass "sweep: a secondmate with an unexpired pause is left stopped"
+}
+
 test_sweep_leaves_alive_secondmate_untouched() {
   local w fb tmuxfb log out
   w=$(new_world sweep-alive)
@@ -999,6 +1056,8 @@ test_sweep_respawns_on_the_recorded_backend
 test_sweep_recovers_the_durable_secondmate_account
 test_sweep_serializes_distinct_secondmate_relaunches
 test_sweep_keeps_tmux_best_effort_kill_when_close_fails
+test_probe_holds_unexpired_pause_and_releases_when_it_ends
+test_sweep_does_not_relaunch_a_paused_secondmate
 test_sweep_leaves_alive_secondmate_untouched
 test_sweep_respawns_authoritatively_missing_pi_secondmate
 test_sweep_respawns_authoritatively_missing_pi_signed_secondmate

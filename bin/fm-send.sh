@@ -53,6 +53,9 @@
 # outcome on this plane: "did the doorbell land" is no longer the question -
 # "was the message acted on" is, and that is answered asynchronously for an
 # ordinary record by the worker's acknowledgement move into handled/.
+# A supervisor park moves a named record to retired/ instead, which is not
+# that acknowledgement; an idempotent retry that lands on it is not rung
+# (bin/fm-park.sh, bin/fm-task-inbox-lib.sh).
 # bin/fm-task-inbox-lib.sh owns the record format, doorbell line, and retry and
 # escalation policy for ordinary and fire-and-forget records.
 # On pane backends, the composer pre-check before the ring is ADVISORY only: when
@@ -1289,6 +1292,9 @@ else
     4)
       [ "$ring_retry" != "the watcher will re-ring" ] || ring_retry="the watcher will press Enter on its next attempt"
       echo "fm-send: doorbell typed into $T but its Enter did not submit it, so it is not delivered yet; the steer is durably recorded at $INBOX_RECORD and $ring_retry (do not resend)" >&2
+      ;;
+    6)
+      echo "fm-send: doorbell not rung; a supervisor park already retired this steer at $INBOX_RECORD" >&2
       ;;
     esac
     exit 0

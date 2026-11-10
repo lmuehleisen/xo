@@ -19,7 +19,11 @@
 #   unverified  - the endpoint is recorded under a session this home does not
 #                 own, so probing is not authorized
 #
-# Only `dead` and `missing` authorize recovery. The probe and recovery functions
+# Only `dead` and `missing` authorize recovery. A paused status line whose
+# until has not passed does not, even when the endpoint is dead or missing:
+# the same bound bin/fm-watch.sh uses for an ordinary declared wait, including
+# a pause with no readable until. bin/fm-park.sh is one writer of that line.
+# The probe and recovery functions
 # below own whether that means resuming the endpoint or proving its close before
 # replacement; docs/t3code-backend.md owns T3's native status meanings.
 # `ambiguous`, `unreadable`, and `unverified` leave the endpoint untouched -
@@ -64,6 +68,21 @@ FM_SM_LIVE_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$FM_SM_LIVE_LIB_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$FM_SM_LIVE_LIB_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$FM_SM_LIVE_LIB_DIR/fm-classify-lib.sh"
+
+# 0 when the mate's declared wait is a pause that has not expired. A missing
+# until still holds. An until in the past does not, and a later non-resolution
+# status line ends the wait through status_declared_wait_line.
+fm_sm_live_pause_holds() {  # <id>
+  local line until
+  line=$(status_declared_wait_line "$STATE/$1.status")
+  status_is_paused "$line" || return 1
+  if until=$(status_paused_until "$line"); then
+    [ "$(date +%s)" -lt "$until" ] || return 1
+  fi
+  return 0
+}
 
 # Per-task probe+kill+relaunch serialization. A busy lock means another
 # supervisor (the other sweep, or a racing tick) is mid-episode on this mate;
@@ -217,6 +236,10 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
         FM_SM_LIVE_LINE="remote secondmate $id already live (host=$remote_host)"
         ;;
       dead|missing)
+        if fm_sm_live_pause_holds "$id"; then
+          FM_SM_LIVE_REASON="bounded pause still holds"
+          return 0
+        fi
         FM_SM_LIVE_STATUS=relaunchable
         FM_SM_LIVE_CAUSE="remote endpoint $agent_state on its configured host"
         FM_SM_LIVE_WHERE="host=$remote_host"
@@ -249,6 +272,10 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
       FM_SM_LIVE_LINE="secondmate $id already live (backend=$backend)"
       ;;
     dead|missing)
+      if fm_sm_live_pause_holds "$id"; then
+        FM_SM_LIVE_REASON="bounded pause still holds"
+        return 0
+      fi
       FM_SM_LIVE_STATUS=relaunchable
       if [ "$agent_state" = dead ] && [ "$backend" = t3code ]; then
         FM_SM_LIVE_RESUME=1
