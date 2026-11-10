@@ -41,6 +41,12 @@
 # lift the deferral (it authorizes discarding unlanded WORK, never the
 # captain's question), and bin/fm-captain-hold.sh answer stays the only act
 # that closes the call.
+# A task dispatched with bin/fm-spawn.sh --answers <call> carries the
+# captain-held call its work was meant to answer, and landing does not resolve
+# it: after the landed close this script asks `open` about that recorded call
+# and, when it is still held, prints one line naming the call and this task.
+# That line changes nothing - it never answers, releases, reconciles, or
+# closes the call - and an unreadable hold check warns without failing.
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
 # reachable from any remote-tracking branch other than the local no-mistakes
@@ -730,6 +736,11 @@ fm_backlog_record_present "$META" "task record" "$STATE" || {
 }
 TEARDOWN_META_KIND=$(fm_meta_get "$META" kind)
 [ -n "$TEARDOWN_META_KIND" ] || TEARDOWN_META_KIND=ship
+# The --answers link this task was dispatched under (bin/fm-spawn.sh); read now
+# because the close transition below removes this record. Surfaced only after
+# the landed close - a teardown that refuses or merely retires a record never
+# claims the work landed against the call.
+TEARDOWN_ANSWERS=$(fm_meta_get "$META" answers)
 if [ "$RETIRE_STALE_CLAIM" = 1 ] && [ "$TEARDOWN_META_KIND" != ship ]; then
   echo "REFUSED: --retire-stale-claim is only available for ship records." >&2
   exit 1
@@ -1909,6 +1920,37 @@ backlog_done_args() {
 # printed instruction for a later turn (bin/fm-backlog-transition-lib.sh owns the
 # invariant). This prints what already happened, so the follow-up wording stays
 # only where a human still owes the edit.
+# A task dispatched with --answers <call> (bin/fm-spawn.sh) carries the call it
+# was meant to answer, and its landing does not resolve that call: when the
+# landed close just ran and the call is still an open captain call, name both
+# so firstmate reconciles the obligation by hand. Print only - this never
+# answers, releases, reconciles, or closes the call, and a hold read that
+# cannot be established warns without failing the teardown it followed.
+captain_answer_reminder() {
+  local status=0 out
+  # BACKLOG_CLOSED also reads 1 through the retain transition, and a retained
+  # captain call never landed work against the recorded call - only a real
+  # close claims that.
+  [ "$BACKLOG_CLOSED" = 1 ] || return 0
+  [ "$BACKLOG_TRANSITION" = close ] || return 0
+  [ "$TEARDOWN_RECORD_ONLY" != 1 ] || return 0
+  [ -n "$TEARDOWN_ANSWERS" ] || return 0
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" open "$TEARDOWN_ANSWERS" 2>&1) || status=$?
+  case "$status" in
+    0)
+      printf '%s\n' "Backlog: $TEARDOWN_ANSWERS is still held for the captain, and $ID just landed against it - answer or release that call with bin/fm-captain-hold.sh when it is resolved."
+      ;;
+    1) ;;
+    *)
+      echo "warning: $ID was dispatched to answer $TEARDOWN_ANSWERS, but whether that captain call is still open could not be read; check bin/fm-captain-hold.sh open $TEARDOWN_ANSWERS by hand" >&2
+      [ -z "$out" ] || printf '%s\n' "$out" >&2
+      ;;
+  esac
+  return 0
+}
+
 backlog_refresh_reminder() {
   local backlog_display root backend=markdown
   [ "$KIND" = secondmate ] && return 0
@@ -4572,5 +4614,6 @@ elif [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
 else
   echo "teardown $ID complete (window ${T:-none}, worktree $WT)"
 fi
+captain_answer_reminder
 backlog_refresh_reminder
 [ "$TEARDOWN_POOL_SLOT_LOST" = 0 ] || exit "$TEARDOWN_LOST_SLOT_EXIT"

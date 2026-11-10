@@ -91,6 +91,11 @@ After cleanup, and still under the task's own lock, teardown does three things:
 The row returns to Queued with its hold intact.
 It remains on the appropriate Captain's Call or Charted Next decision surface instead of reading as work still under way.
 
+### The recorded answering task
+
+`bin/fm-spawn.sh --answers <held-task-id>` records at dispatch which captain-held call a ship or scout was sent to answer: a `blocked-by` edge from the call to the task at the dispatch commit, plus an `answers=` line the task record carries through relaunch and promotion.
+Teardown asks the same `open` predicate about that recorded call after its landed close and prints one line naming the call and the landed task when the call is still held; the line resolves nothing, and a check that cannot be established warns without failing the teardown.
+
 ### Interrupted cleanup
 
 [`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns when teardown publishes its pending-close record.

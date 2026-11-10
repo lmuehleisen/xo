@@ -511,6 +511,9 @@ Completion refuses to report success until the item is closed, and session start
 
 When a spawn is interrupted after launch delivery began, its exit path re-reads the paired task record and the backlog row under the same per-task lock as the commit, repairs a row the commit believed it had moved, and reports only what was verified or honestly attempted, never intent phrased as outcome ([`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-backlog-atomicity.test.sh`](../tests/fm-backlog-atomicity.test.sh)).
 
+A ship or scout dispatched to answer part of a captain-held call may carry `bin/fm-spawn.sh --answers <captain-held-task-id>`: the flag refuses an id that is not an open captain call, records the call as `blocked-by` the dispatched task at the dispatch commit, and writes `answers=` in the task record for relaunch and promotion to carry.
+The link resolves nothing by itself; `bin/fm-teardown.sh` prints one line naming the still-open call when the answering task lands, and the flag's full contract lives in the `bin/fm-spawn.sh` header.
+
 ### Which backlog receives a transition
 
 Automatic transitions run from the configured data directory's parent, letting that home's effective tasks-axi configuration address its selected adapter while keeping relative scout-report links rooted there.

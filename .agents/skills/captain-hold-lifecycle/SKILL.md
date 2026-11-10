@@ -34,6 +34,7 @@ Do not close a captain-held task merely because the originating investigation co
 Holding the work item the question gates is safe for exactly that reason: cleanup keeps such a row open with the finished work's deliverable recorded and returns it to the queue, so it still reads as the captain's own call.
 Only `answer` with the captain's words, `answer --actor firstmate` for a ruling the ask-user-authority policy lets firstmate make, or an evidence-backed `reconcile close` may resolve it.
 A firstmate ruling records that ruling under the firstmate actor and must not be written as the captain's words.
+When dispatching a ship or scout whose work answers part of a held call, pass `bin/fm-spawn.sh --answers <held-task-id>` so the dispatch records the link and teardown names the still-open call when that work lands.
 
 Never close anything the captain owns without recording what he actually said: `bin/fm-captain-hold.sh answer` writes his exact words into the task and closes a question-shaped call, while `--release` frees a captain-gated work item to proceed.
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
