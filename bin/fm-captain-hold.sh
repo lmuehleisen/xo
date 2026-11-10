@@ -32,6 +32,7 @@
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
 #   fm-captain-hold.sh decision <task-id>
+#   fm-captain-hold.sh recheck <task-id> [--expect <revision>]
 #   fm-captain-hold.sh diverged
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
@@ -243,6 +244,29 @@
 #
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
+#
+# `recheck` is the read-only re-verification a presentation surface runs on
+# each captain call it is about to show, owned here beside the record it
+# checks. It re-reads the held task's durable row and the small structured
+# sources the call's premise rests on, then prints one compact
+# fm-presentation-receipt.v1 JSON object: what was checked, against which
+# source and revision, and when. Its verdict is `verified` when the task is
+# still an open captain call and every check found its premise consistent,
+# `changed` when a recorded premise provably moved (the call closed or was
+# released, its deferral date passed, its recorded blockers resolved, its
+# linked work's latest event is no longer the quiet completion a finished
+# call's hold implies, or the record moved past the revision `--expect`
+# names), and `unknown` when a needed source could not be read - an
+# unavailable source is reported as unknown, never as still true, and a check
+# that cannot run reports only its own outcome so an absent backlog row still
+# leaves the reconcile-request and linked-work sources readable. The printed
+# revision - the hold-set stamp, the resolution count, and a digest of the
+# presented face - is what expires the receipt: hand an earlier receipt's
+# revision back as `--expect` and any change to the title, hold reason,
+# deferral, hold or blocked state, kind, repo, or links reports `changed`.
+# Cost is bounded to the one task named: one bounded `tasks-axi show`, one
+# status-log tail, and one request-file read, so a turn that presents no
+# decision pays nothing at all. It mutates nothing.
 #
 # Resolution records: the block written into the body names this script, the
 # decision digest, and a `Resolution mode:` of answered, released, repaired, or
@@ -2865,12 +2889,234 @@ command_decision() {  # <task-id>
   printf '%s\n' "$text"
 }
 
+# --- presentation receipt -----------------------------------------------------
+#
+# `recheck` re-verifies one captain call at the moment a surface is about to
+# put it in front of the captain. The receipt it prints names what was
+# checked, the source and revision it was checked against, and when; a source
+# that cannot be read reports unknown, never still-true. The checks are the
+# structured premises a presentation rests on, and only those: the durable
+# row itself, its recorded deferral and blockers, a pending reconcile
+# request, and the linked work's latest status event. Reason prose is
+# digested into the revision, never interpreted.
+
+RECHECK_SCHEMA=fm-presentation-receipt.v1
+
+# Emit one compact receipt line in one JSON encode. Check values stay inside
+# the outcome vocabulary the header names; specifics ride the sanitized
+# detail field, and an empty revision encodes as JSON null.
+emit_receipt() {  # <id> <checked-at> <source> <revision> <verdict> <call> <deferral> <blockers> <reconcile> <linked> <detail>
+  perl -MJSON::PP -e '
+    utf8::decode($_) for @ARGV;
+    my ($schema, $task, $checked_at, $source, $revision, $verdict,
+        $call, $deferral, $blockers, $reconcile, $linked, $detail) = @ARGV;
+    print JSON::PP->new->utf8->canonical->encode({
+      schema => $schema,
+      task => $task,
+      checked_at => $checked_at,
+      source => $source,
+      revision => (length $revision ? $revision : undef),
+      verdict => $verdict,
+      checks => {
+        call => $call, deferral => $deferral, blockers => $blockers,
+        reconcile => $reconcile, linked_work => $linked,
+      },
+      detail => $detail,
+    }), "\n";
+  ' "$RECHECK_SCHEMA" "$@"
+}
+
+command_recheck() {  # <task-id> [--expect <revision>]
+  local id='' expect='' checked_at today
+  local call=unknown deferral=unknown blockers=unknown reconcile=unknown linked=unknown
+  local verdict detail='' changed_detail='' unknown_detail='' revision=''
+  local request meta status_file origin verb
+  local data show='' show_status=0
+  local state hold_kind hold_reason hold_until held title kind repo links
+  local blocked blocked_by shown_body decoded_body hold_set face_digest
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --expect) shift; expect=${1:-} ;;
+      -*) usage >&2; exit 2 ;;
+      *)
+        [ -z "$id" ] || { usage >&2; exit 2; }
+        id=$1
+        ;;
+    esac
+    shift
+  done
+  case "$id" in
+    ''|*[!A-Za-z0-9._-]*)
+      printf 'fm-captain-hold: task id must be a non-empty privacy-safe slug: %s\n' "$id" >&2
+      exit 2
+      ;;
+  esac
+  checked_at=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+  case "$checked_at" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) : ;;
+    *) fail "FM_CAPTAIN_HOLD_NOW must be a UTC YYYY-MM-DDTHH:MM:SSZ timestamp" ;;
+  esac
+  today=${checked_at%%T*}
+
+  # The reconcile-request check does not need the backlog row, so it runs
+  # even when the row read below fails; its evidence is its own file.
+  request=$(reconcile_request_path "$id")
+  if [ -f "$request" ] && [ ! -L "$request" ]; then
+    reconcile=pending
+  elif [ -e "$request" ] || [ -L "$request" ]; then
+    reconcile=unknown
+    unknown_detail="the pending reconcile request for $id is not a plain file"
+  else
+    reconcile=clear
+  fi
+
+  # The durable row, read inline rather than through task_show: task_show
+  # stops the whole command on a read-bound hit, while this receipt's whole
+  # job is to report that same wedged read as `unknown` instead of dying
+  # before any receipt exists. An absent row is a definite change and any
+  # other read failure is the unknown this receipt exists to name.
+  if data=$(fm_backlog_data_absolute "$DATA"); then
+    show=$(fm_backlog_row_show "$data" "$id" --full 2>/dev/null) || show_status=$?
+  else
+    show_status=1
+  fi
+  if [ "$show_status" -eq 0 ]; then
+    state=$(show_field "$show" state)
+    hold_kind=$(show_field_value "$show" hold_kind)
+    hold_reason=$(show_field_value "$show" hold_reason)
+    hold_until=$(show_field_value "$show" hold_until)
+    held=$(show_field_value "$show" held)
+    title=$(show_field_value "$show" title)
+    kind=$(show_field_value "$show" kind)
+    repo=$(show_field_value "$show" repo)
+    links=$(show_field_value "$show" links)
+    blocked=$(show_field_value "$show" blocked)
+    blocked_by=$(show_field_value "$show" blocked_by)
+    shown_body=$(show_field "$show" body)
+    decoded_body=$(decode_shown_value "$shown_body" 2>/dev/null || true)
+    hold_set=$(body_hold_set_timestamp "$decoded_body")
+    face_digest=$(sha256_text "$(printf 'state=%s\nheld=%s\nhold_kind=%s\nhold_reason=%s\nhold_until=%s\ntitle=%s\nblocked=%s\nblocked_by=%s\nkind=%s\nrepo=%s\nlinks=%s\n' \
+      "$state" "$held" "$hold_kind" "$hold_reason" "$hold_until" "$title" \
+      "$blocked" "$blocked_by" "$kind" "$repo" "$links")")
+    revision="${hold_set}#$(resolution_record_count "$shown_body")#${face_digest:0:12}"
+
+    if [ "$state" != done ] && [ "$hold_kind" = captain ]; then
+      call=verified
+    elif [ "$state" = done ]; then
+      call=changed
+      changed_detail="the call $id is closed"
+    else
+      call=changed
+      changed_detail="the call $id is no longer held for the captain"
+    fi
+
+    if [ -z "$hold_until" ]; then
+      deferral=none
+    elif [ "$hold_until" \> "$today" ]; then
+      deferral=future
+    else
+      deferral=lapsed
+      [ -n "$changed_detail" ] || changed_detail="the call $id recorded a deferral until $hold_until, which has passed"
+    fi
+
+    if [ "$blocked" = yes ]; then
+      blockers=unresolved
+    elif [ -n "$blocked_by" ] && [ "$blocked_by" != none ]; then
+      blockers=resolved
+      [ -n "$changed_detail" ] || changed_detail="the call $id recorded blockers ($blocked_by) that have resolved"
+    else
+      blockers=none
+    fi
+
+    # --expect expires an earlier receipt: a record whose presented face no
+    # longer digests to the handed-back revision has moved, whatever the
+    # individual checks say about how.
+    if [ -n "$expect" ] && [ "$revision" != "$expect" ]; then
+      [ -n "$changed_detail" ] || changed_detail="the record of $id moved since the receipt revision it was checked against"
+    fi
+  else
+    if printf '%s\n' "$show" | grep -q '^code: NOT_FOUND$'; then
+      call=changed
+      changed_detail="the call $id has no record in this home's backlog"
+    else
+      call=unknown
+      request=$(sanitize_field "$(printf '%s\n' "$show" | sed -n '1p')")
+      [ -n "$request" ] || request="the backlog record for $id could not be read"
+      unknown_detail=${unknown_detail:+$unknown_detail; }
+      unknown_detail="${unknown_detail}the backlog read failed: $request"
+    fi
+  fi
+
+  # The linked-work check follows the row read because the work the call is
+  # attached to is the recorded hold origin, which only the row's body knows.
+  # A call held on its own work item has no second premise (`self`), and a
+  # call whose row could not be read cannot name its origin (`unknown`).
+  # For an origin, the premise a presented call rests on is the quiet
+  # completion `hold`/`complete` leaves behind - done, captain-held, or a
+  # resolved key - so any newer active verb means the work moved on.
+  if [ "$show_status" -ne 0 ]; then
+    if [ "$call" = changed ]; then linked=none; else linked=unknown; fi
+  else
+    origin=$(body_hold_origin "$decoded_body")
+    case "$origin" in
+      '')
+        linked=self
+        ;;
+      *[!A-Za-z0-9._-]*)
+        linked=unknown
+        unknown_detail=${unknown_detail:+$unknown_detail; }
+        unknown_detail="${unknown_detail}the recorded hold origin on $id is not a resolvable id"
+        ;;
+      *)
+        meta="$STATE/$origin.meta"
+        status_file="$STATE/$origin.status"
+        if [ ! -f "$meta" ] || [ -L "$meta" ]; then
+          linked=none
+        elif [ -f "$status_file" ] && [ ! -L "$status_file" ] && [ -r "$status_file" ]; then
+          verb=$(status_line_verb "$(last_status_line "$status_file")")
+          case "$verb" in
+            done|captain-held|resolved) linked=consistent ;;
+            '')
+              linked=unknown
+              unknown_detail=${unknown_detail:+$unknown_detail; }
+              unknown_detail="${unknown_detail}the linked work $origin has no readable status event"
+              ;;
+            *)
+              linked=changed
+              [ -n "$changed_detail" ] || changed_detail="the linked work $origin last reported $verb, not the quiet completion its hold implies"
+              ;;
+          esac
+        else
+          linked=unknown
+          unknown_detail=${unknown_detail:+$unknown_detail; }
+          unknown_detail="${unknown_detail}the linked work $origin has metadata but no readable status log"
+        fi
+        ;;
+    esac
+  fi
+
+  if [ -n "$changed_detail" ]; then
+    verdict=changed
+    detail=$changed_detail
+  elif [ -n "$unknown_detail" ]; then
+    verdict=unknown
+    detail=$unknown_detail
+  else
+    verdict=verified
+    detail="open captain call"
+    [ "$deferral" != future ] || detail="open captain call (deferred until $hold_until)"
+  fi
+  emit_receipt "$id" "$checked_at" backlog "$revision" "$verdict" \
+    "$call" "$deferral" "$blockers" "$reconcile" "$linked" "$detail"
+}
+
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;
+  recheck) shift; command_recheck "$@" ;;
   unbind) shift; command_unbind "$@" ;;
   binding) shift; command_binding "$@" ;;
   complete) shift; command_complete "$@" ;;
