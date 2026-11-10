@@ -250,6 +250,14 @@ if admit ensure-native >/dev/null; then fail 'native route admitted an unproven 
 [ ! -e "$CASE/attempts" ] || fail 'unsupported native candidate reached model prompts'
 pass 'agy admission: native guard failure and unsupported startup versions refuse certification'
 
+new_case native-1.5 1.5.3
+admit ensure-native >/dev/null || fail 'in-range 1.5.x release was refused before verification'
+[ "$(cat "$CASE/attempts")" = native ] || fail '1.5.x native admission ran guards outside its consolidated contract'
+new_case native-too-new 1.6.0
+if admit ensure-native >/dev/null; then fail 'native route admitted an unproven 1.6.x release'; fi
+[ ! -e "$CASE/attempts" ] || fail 'out-of-range native candidate reached model prompts'
+pass 'agy admission: the native bound admits a 1.5.x candidate and refuses 1.6.x before any prompt'
+
 # Exercise the real native setup without invoking the vendor executable.
 new_case native-setup
 cp "$ROOT/tests/fm-agy-native-live-e2e.test.sh" "$CODE/tests/"

@@ -1038,6 +1038,7 @@ tests/fm-turnend-foreign-owner-arm-fix.test.sh 4332
 tests/fm-turnend-guard.test.sh 39026
 tests/fm-update.test.sh 15171
 tests/fm-upstream-callsite-scan.test.sh 682
+tests/fm-upstream-removed-helper-scan.test.sh 1140
 tests/fm-usage-warner.test.sh 46532
 tests/fm-vendor-auth-probe.test.sh 44452
 tests/fm-voice-relay.test.sh 29086

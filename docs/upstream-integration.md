@@ -29,6 +29,16 @@ This page is the maintainer checklist for one integration run; the fork's invari
    Read each reported line against the other side's current code, fix any caller, test, or list that no longer fits, and account for every reported line in the pull request body.
    The script's `--help` owns the exact matching rules and their limits.
    A convention change confined to a helper's body stays invisible to it, so also read each fork-divergent function that upstream-new code calls.
+   Once the merge commit exists, run the removed-helper scan on that commit:
+
+   ```sh
+   bin/fm-upstream-removed-helper-scan.sh <merge-base> <upstream/main> HEAD
+   ```
+
+   It reports a helper defined at the merge base or the upstream tip, absent from the merged commit, and still mentioned under `bin/` or `tests/`.
+   The call-site scan cannot see that shape: a surviving caller of a helper upstream deleted, or merged lines that still call a helper the resolution dropped.
+   Account for every reported mention in the pull request body.
+   The script's `--help` owns the exact matching rules and their limits.
 4. Verify the fork's dropped dependencies stay dropped and review what upstream changed under the opt-in: `git grep -n -E 'gh-axi|lavish-axi|chrome-devtools-axi|no-mistakes' -- bin .agents/skills AGENTS.md README.md CONTRIBUTING.md docs`, and account for every new hit upstream introduced.
    Include `CONTRIBUTING.md` and `docs`, because upstream prose can reintroduce a requirement the fork removed, such as a required check the fork deleted.
    gh-axi and chrome-devtools-axi stay dropped, while `no-mistakes` is an optional opt-in through `config/no-mistakes` and `lavish-axi` an optional toggle through `config/lavish`, so an upstream change to either can belong in the fork instead of being stripped; never accept an upstream Lavish change that runs `setup`, `update`, or `share`, unpins the version, or widens the bound address.
@@ -47,6 +57,6 @@ This page is the maintainer checklist for one integration run; the fork's invari
    A failing test that pins one side's design is adapted to the fork's intended behavior as the ledger records it, and the pull request body names each adaptation and why.
 8. Update the ledger in the same pull request: drop carried entries upstream made redundant, add entries for newly deliberate differences, remove realigned incidental items, and check that README "Fork: what differs" and `AGENTS.md` section 7 still describe the fork.
 9. Open the pull request against the fork with `gh pr create --repo lmuehleisen/xo --base main`, always passing `--repo` because this checkout also carries the upstream remote.
-   Its body states the upstream source commit, that a merge commit is required, every conflict and its resolution, every upstream change dropped or adapted, the call-site scan result, the shared-file classification, the guard results, the ledger changes, and the test results.
+   Its body states the upstream source commit, that a merge commit is required, every conflict and its resolution, every upstream change dropped or adapted, the call-site scan result, the removed-helper scan result, the shared-file classification, the guard results, the ledger changes, and the test results.
    The body may use up to 80 lines and 6000 characters when the publish gate verifies the integration ancestry and the recorded source commit; see `bin/fm-publish-gate.sh policy` for the verification and fallback limits.
    Keep it a concise technical record, with no machine names, runner details, logs, or full hunk audit; the publish judge still reviews the whole description.

@@ -305,6 +305,37 @@ agy updates itself, so re-run the live guard after any upgrade before trusting t
 
 ### Native Auto workers
 
+Verified on 2026-11-09 with agy 1.5.3, `gemini-3.8-flash-low`, macOS on Apple silicon, tmux then Herdr.
+Admission accepts the 1.5.x patch family on this evidence.
+
+```sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=tmux \
+  bin/fm-test-run.sh tests/fm-agy-native-live-e2e.test.sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=herdr \
+  bin/fm-test-run.sh tests/fm-agy-native-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - native Auto: warm activation, actual random command result, observer pair and accepted Stop
+ok - native Auto: exact status append completed through native review
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.5.3, tmux)
+```
+
+```text
+ok - native Auto: warm activation, actual random command result, observer pair and accepted Stop
+ok - native Auto: exact status append completed through native review
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.5.3, herdr)
+```
+
+Both runs completed through production `/quit` control and owned-hook retirement.
+On tmux both outside-sandbox canaries auto-approved without a prompt; on Herdr a live one-shot approval completed.
+Live decline was not observed on either transport.
+The run needed the empty-argv `fm_hermes_process_matches` repair from pull request 120 applied uncommitted: without it the crash empties every macOS Bash 3.2 tmux agent-state verdict and the exit postcondition cannot prove a cleanly stopped agent.
+
 Verified on 2026-11-01 with agy 1.4.12, `gemini-3.8-flash-low`, macOS and tmux.
 The consolidated guard passed active Auto, an actual random command result, matching current-generation pre/post events, accepted Stop, encoded brief handoff, attempted outside-root denial with absent target, exact status/inbox effects, production `/quit` control and owned-hook retirement.
 A live one-shot approval completed; live decline was not observed.
@@ -474,6 +505,28 @@ Its accept-edits placeholder uses SGR 90; the shared classifier removes only tha
 Without styling, a placeholder-looking row stays unknown.
 Typing hides the shortcuts hint while the accept-edits mode cell remains; a manual-mode row without that footer proof stays unknown.
 Ordinary typed input, wrapped text, and a shell below a stale composer remain protected by the portable composer regressions.
+
+Agy 1.5.3 / tmux 3.8 compatibility (2026-11-09): Accept-edits, Auto and Plan render their exact placeholders as `ESC[90m` + hint + `ESC[39m`; typed input hides the shortcuts hint and retains the corresponding `accept-edits ·`, `auto ·` or `plan ·` cell.
+Best-of-N was absent from the reachable mode cycle and has no placeholder exemption.
+Composer-only Auto and Plan captures, both styled and plain, are pinned in `tests/fixtures/agy-composer/`; CRLF regression replays cover the same bytes with Herdr row endings without claiming a live Herdr capture.
+Capture commands, with the private server and pane supplied as variables:
+
+```sh
+tmux -S "$SOCKET" send-keys -t "$TARGET" BTab
+tmux -S "$SOCKET" capture-pane -p -e -t "$TARGET"
+tmux -S "$SOCKET" capture-pane -p -t "$TARGET"
+tmux -S "$SOCKET" send-keys -t "$TARGET" -l 'pending command'
+tmux -S "$SOCKET" send-keys -t "$TARGET" C-u
+bash bin/fm-test-run.sh tests/fm-composer-agy.test.sh
+```
+
+Observed regression output:
+
+```text
+ok - agy Auto and Plan captures preserve idle ambiguity and typed input across capture capabilities
+```
+
+The opt-in signals guard above refreshes all three real mode checks; plain placeholder rows stay `unknown`, while styled idle rows read `empty` and ordinary typed rows read `pending` with every capture capability profile.
 [Google's hook reference](https://antigravity.google/docs/hooks) owns the vendor payload and response schema.
 
 ### Log-only tool observer
@@ -650,7 +703,8 @@ Changed-file lint and the four focused portable suites `fm-agy-admission.test.sh
 ### Primary and secondmate supervision
 
 The current primary and secondmate transport adopts upstream SessionStart and synchronous Stop parking.
-Interactive live verification of this path is pending; no live agy or supervisor lifecycle run was performed for the convergence.
+Verified on 2026-11-09 with agy 1.5.3, `gemini-3.8-flash` at low effort, and a private tmux backend in disposable primary and marked-secondmate homes.
+Both roles passed startup-context delivery, real session-lock ownership, native tool denial and silent review abstention, synchronous Stop parking, automatic watcher follow-up, and automatic re-parking without model-owned arms.
 The prior agy 1.4.7 PreInvocation/background-command result covered the retired transport and cannot certify this implementation.
 Supervisor permissions remain unchanged, and worker native Auto evidence above does not extend to supervisors.
 
@@ -660,14 +714,21 @@ Shared cross-harness regressions remain in the arm, cd, subagent, turn-end and s
 
 ```sh
 bash bin/fm-test-run.sh tests/fm-agy-primary.test.sh
-FM_AGY_PRIMARY_LIVE=1 bash bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
+FM_AGY_PRIMARY_LIVE=1 bash bin/fm-test-run.sh --per-script-timeout-secs 1800 tests/fm-agy-primary-live-e2e.test.sh
+```
+
+```text
+ok - agy primary: real Stop park, automatic wake and re-park without model arming
+ok - agy secondmate: real Stop park, automatic wake and re-park without model arming
+# all agy interactive primary live checks passed (agy 1.5.3)
 ```
 
 The opt-in live suite retains `tests/agy-primary-live-probe.py` because the upstream headless bypass suite cannot replace interactive session-lock and automatic re-entry coverage.
 It carries upstream's startup-context, real tool-denial and real-watcher scenarios into interactive primary and marked-secondmate homes with native supervisor review, without global trust writes.
 The updated scenarios also require silent abstention to execute a harmless tool, and automatic Stop re-parking without model-owned arms.
 Its captures, observer events and transcripts are retained on failure.
-Only a future successful live run may add dated binary/model/backend results here; compilation or a gate skip establishes no vendor behavior.
+The portable suite passed 21/21, including ordered observation before a delegated park or deny, and fixture park withdrawal before empty-fleet settlement.
+These live results cover the named binary/model/backend; compilation or a gate skip establishes no vendor behavior.
 
 ### Inherited primary hooks in worker worktrees
 
