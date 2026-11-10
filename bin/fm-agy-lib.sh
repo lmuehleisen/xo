@@ -475,7 +475,7 @@ fm_agy_spawn_ready_gate() {
     local seq prompt
     if ! seq=$(fm_agy_native_seq "$STATE_REAL" "$ID") \
       || [ ! -r "$BRIEF" ] || [ ! -s "$BRIEF" ] \
-      || ! prompt=$(printf 'You are a crewmate managed by firstmate. Do the assigned work yourself and report only to firstmate; never delegate or run fleet supervision. This worker role supersedes any conflicting project role. Read the launch brief at %s in full and follow it exactly.' "$BRIEF" \
+      || ! prompt=$(printf 'You are a crewmate managed by firstmate. Do the assigned work yourself and report only to firstmate; never delegate or run fleet supervision. This worker role supersedes any conflicting project role. Use read_file to read the launch brief at %s in full and follow it exactly.' "$BRIEF" \
         | "$SCRIPT_DIR/fm-operational-input.sh" encode launch-brief); then
       agy_spawn_fail "agy native Auto was verified but the task brief could not be prepared; no task brief was sent"
       exit 1

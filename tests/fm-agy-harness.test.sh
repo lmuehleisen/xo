@@ -1056,6 +1056,7 @@ SH
       [ "$(printf '%s' "$handoff" | "$ROOT/bin/fm-operational-input.sh" kind)" = launch-brief ] \
         || fail 'native pointer lost its operational envelope'
       assert_contains "$handoff" "$launch_brief" 'native handoff points to the staged launch overlay'
+      assert_contains "$handoff" 'Use read_file' 'native pointer selects the file tool with the exact brief-read exemption'
       assert_contains "$handoff" 'report only to firstmate' 'native pointer carries worker identity before the file is read'
       assert_contains "$handoff" 'supersedes any conflicting project role' 'native pointer retains worker-role precedence'
       assert_not_contains "$handoff" 'INERT_LARGE_BRIEF_PADDING' 'native handoff must not type the full brief'
@@ -1063,6 +1064,7 @@ SH
       [ "$(wc -c < "$launch_brief")" -gt 11000 ] || fail 'pointer regression did not stage a full-sized brief'
       grep -q '^# Current worker role contract$' "$launch_brief" || fail 'staged brief lost its worker-role contract'
       grep -q 'INERT_LARGE_BRIEF_PADDING_099' "$launch_brief" || fail 'pointer handoff truncated the staged task'
+      cmp -s "$launch_brief" "$home/launch.log.native-brief-read" || fail 'native pointer could not read the full staged brief through its permission policy'
       grep -q '^agy_posture=native-auto$' "$home/state/$id.meta" || fail 'native posture was not recorded'
       ! grep -q '^agy_bypass=\|^agy_judge=' "$home/state/$id.meta" || fail 'native task was recorded as legacy bypass/judge'
       grep -q -- '--mode auto --sandbox' "$home/launch.log" || fail 'native launch flags missing'

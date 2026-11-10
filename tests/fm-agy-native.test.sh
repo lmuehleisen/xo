@@ -25,6 +25,13 @@ payload() {
     '{conversationId:"fixture",stepIdx:$step,workspacePaths:[$wt],
       toolCall:{name:"run_command",args:{CommandLine:$cmd,Cwd:$wt}}}' > "$PAYLOAD"
 }
+file_payload() { # <tool> <absolute-path> <step>
+  jq -n --arg wt "$WT" --arg tool "$1" --arg path "$2" --argjson step "$3" \
+    '{conversationId:"fixture",stepIdx:$step,workspacePaths:[$wt],toolCall:{name:$tool,args:
+      (if $tool == "view_file" then {AbsolutePath:$path}
+       elif $tool == "list_dir" then {DirectoryPath:$path}
+       else {Path:$path} end)}}' > "$PAYLOAD"
+}
 hook() { "$ROOT/bin/fm-agy-permission-policy.sh" "$1" "$POLICY" < "$PAYLOAD"; }
 export FM_NATIVE_ROOT="$ROOT" FM_NATIVE_SCREEN="$SCREEN" FM_NATIVE_KEYS="$TMP_ROOT/keys"
 export FM_NATIVE_POLICY="$POLICY" FM_NATIVE_PAYLOAD="$PAYLOAD"
@@ -171,6 +178,48 @@ pass 'native policy: residue goes to native review; force, wiring and credential
 
 # Scope approvals are exact one-shot tokens, even without a legacy judge.
 printf '# Task\n## Captain\047s intent\nDo not read excluded research files.\n' > "$TMP_ROOT/data/brief.md"
+for file_tool in read_file view_file; do
+  file_payload "$file_tool" "$TMP_ROOT/data/brief.md" 80
+  [ -z "$(hook pre-tool-use)" ] || fail 'native read exclusions blocked the exact staged brief'
+  hook post-tool-use >/dev/null
+done
+file_payload read_file "$TMP_ROOT/data/./brief.md" 81
+[ -z "$(hook pre-tool-use)" ] || fail 'normalizing the staged brief path lost its exemption'
+hook post-tool-use >/dev/null
+mkdir -p "$TMP_ROOT/data/other-task"
+printf 'raw instructions\n' > "$TMP_ROOT/data/raw-brief.md"
+printf 'another task\n' > "$TMP_ROOT/data/other-task/brief.md"
+printf 'ordinary source\n' > "$WT/ordinary.txt"
+step=82
+for other_file in "$TMP_ROOT/data/raw-brief.md" "$TMP_ROOT/data/other-task/brief.md" "$WT/ordinary.txt"; do
+  file_payload read_file "$other_file" "$step"
+  hook pre-tool-use | jq -e '.decision == "deny" and (.reason | contains("read exclusions"))' >/dev/null \
+    || fail 'the staged-brief exemption widened to another file'
+  step=$((step + 1))
+done
+file_payload list_dir "$TMP_ROOT/data" 85
+hook pre-tool-use | jq -e '.decision == "deny"' >/dev/null || fail 'the staged-brief exemption widened to directory listing'
+for file_tool in write_file edit_file; do
+  file_payload "$file_tool" "$TMP_ROOT/data/brief.md" 86
+  hook pre-tool-use | jq -e '.decision == "deny" and (.reason | contains("own instructions"))' >/dev/null \
+    || fail 'the staged-brief read exemption allowed instruction writes'
+done
+cp "$TMP_ROOT/data/brief.md" "$WT/excluded.md"
+mv "$TMP_ROOT/data/brief.md" "$TMP_ROOT/data/saved-brief.md"
+ln -s "$WT/excluded.md" "$TMP_ROOT/data/brief.md"
+file_payload read_file "$TMP_ROOT/data/brief.md" 87
+hook pre-tool-use | jq -e '.decision == "deny" and (.reason | contains("read exclusions"))' >/dev/null \
+  || fail 'a staged-brief symlink carried the exemption to an excluded file'
+rm "$TMP_ROOT/data/brief.md"
+mv "$TMP_ROOT/data/saved-brief.md" "$TMP_ROOT/data/brief.md"
+cp "$TMP_ROOT/data/brief.md" "$TMP_ROOT/data/brief.env"
+jq --arg brief "$TMP_ROOT/data/brief.env" '.brief = $brief' "$POLICY" > "$STATE/credential-brief.json"
+file_payload read_file "$TMP_ROOT/data/brief.env" 88
+"$ROOT/bin/fm-agy-permission-policy.sh" pre-tool-use "$STATE/credential-brief.json" < "$PAYLOAD" \
+  | jq -e '.decision == "deny" and (.reason | contains("held for firstmate"))' >/dev/null \
+  || fail 'the exact staged-brief exception bypassed credential policy'
+manage retire
+pass 'native brief reads: exact staged file is readable; other files, listings, symlink escapes, credentials and instruction writes stay constrained'
 nonce=0123456789abcdef0123456789abcdef0123456789abcdef
 payload "/usr/bin/printf '$nonce' > '$TMP_ROOT/tmp/agy-activation-$GEN-$nonce'" 18
 [ -z "$(hook pre-tool-use)" ] || fail 'read exclusions blocked the source-free native activation canary'

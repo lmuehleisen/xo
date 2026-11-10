@@ -56,11 +56,11 @@ def spawn(args):
         footer = "auto · Gemini" if mode == "auto" else "Gemini"
         screen.write_text(RULE + "\n> " + text + "\n" + RULE + "\n? for shortcuts    " + footer + "\n")
 
-    def event(name, command=None, conversation="spawn-fixture"):
+    def event(name, command=None, conversation="spawn-fixture", tool_call=None):
         root = Path(os.environ["FM_NATIVE_ROOT"])
         payload = {"conversationId": conversation, "workspacePaths": [policy["worktree"]],
                    "fullyIdle": True, "executionNum": 0, "invocationNum": 0,
-                   "stepIdx": 1, "toolCall": {"name": "run_command", "args": {
+                   "stepIdx": 1, "toolCall": tool_call or {"name": "run_command", "args": {
                        "CommandLine": command, "Cwd": policy["worktree"]}}}
         subprocess.run([str(root / "bin/fm-agy-hook.sh"), "worker", name,
                         str(hooks.parent), task, policy["gen"], policy["worktree"]],
@@ -71,7 +71,7 @@ def spawn(args):
                                  str(policy_path)], input=json.dumps(payload), text=True,
                                 stdout=subprocess.PIPE, check=True)
         if name == "PreToolUse" and result.stdout:
-            raise ValueError("synthetic canary was refused by the real policy: " + result.stdout)
+            raise ValueError("fixture tool call was refused by the real policy: " + result.stdout)
 
     if args[0] == "spawn-start":
         Path(str(log) + ".native-started").touch()
@@ -132,6 +132,10 @@ def spawn(args):
                 if not Path(str(log) + ".native-canary").exists():
                     raise ValueError("real brief sent before activation proof")
                 Path(str(log) + ".native-brief").write_text(text)
+                read_call = {"name": "read_file", "args": {"Path": policy["brief"]}}
+                event("PreToolUse", tool_call=read_call)
+                Path(str(log) + ".native-brief-read").write_text(Path(policy["brief"]).read_text())
+                event("PostToolUse", tool_call=read_call)
             event("Stop")
             paint()
 
