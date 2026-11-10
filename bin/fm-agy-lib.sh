@@ -15,6 +15,8 @@
 # fm-agy-admission.sh owns executable/model/effort/backend compatibility proof.
 # jq, Python 3, owned hook wiring and readable per-task policy are required.
 # Project .agents/hooks.json files refuse a policy-layer launch.
+# Native Auto hands off a short launch-brief pointer after activation; the
+# staged file retains the complete worker role and task contract.
 #
 # --agy-bypass, --no-agy-bypass and --agy-judge refuse new worker launches.
 
@@ -73,6 +75,29 @@ fm_agy_default_posture() {  # <harness> <kind>
   [ "$CREW_PERMISSION_MODE" = auto ] || return 0
   AGY_NATIVE_AUTO=1
   AGY_BYPASS_POSTURE_SET=1
+}
+
+# Shared native Auto eligibility gate for launch and dispatch resolution.
+# Prints the refusal reason on stdout; success is silent. Resolve physically
+# and stop at the git root, including dangling project-hook symlinks.
+fm_agy_native_project_compatible() {  # <project-dir>
+  local dir git_root
+  dir=$(cd "$1" && pwd -P) || {
+    printf 'agy native policy could not inspect project directory: %s\n' "$1"
+    return 1
+  }
+  git_root=$(git -C "$dir" rev-parse --show-toplevel) || {
+    printf 'agy native policy could not find the project git root: %s\n' "$dir"
+    return 1
+  }
+  while :; do
+    if [ -e "$dir/.agents/hooks.json" ] || [ -L "$dir/.agents/hooks.json" ]; then
+      printf 'agy native policy requires owned hook wiring; project hooks exist at %s/.agents/hooks.json\n' "$dir"
+      return 1
+    fi
+    [ "$dir" != "$git_root" ] || break
+    dir=$(dirname "$dir")
+  done
 }
 
 # The recorded bypass posture binds to agy worker spawns: a relaunch onto a
@@ -350,8 +375,8 @@ fm_agy_launch_guard() {
   printf '&& '
 }
 
-# agy starts its brief itself (-i), so there is no pointer to deliver; what
-# spawn must prove is that the brief actually began running. The worker hook's
+# Native Auto receives a pointer after activation; other wired agy launches
+# start their brief through -i. Spawn must prove a new invocation. The worker hook's
 # PreInvocation is agy's own report of that: it replaces the fm-spawn seed with
 # an agy-hook record under this incarnation's gen. Only that source counts - the
 # seed is busy from the start, and a rendered footer is not consulted. A launch
@@ -443,7 +468,9 @@ fm_agy_spawn_ready_gate() {
     fi
     local seq prompt
     if ! seq=$(fm_agy_native_seq "$STATE_REAL" "$ID") \
-      || ! prompt=$("$SCRIPT_DIR/fm-operational-input.sh" encode launch-brief < "$BRIEF"); then
+      || [ ! -r "$BRIEF" ] || [ ! -s "$BRIEF" ] \
+      || ! prompt=$(printf 'You are a crewmate managed by firstmate. Do the assigned work yourself and report only to firstmate; never delegate or run fleet supervision. This worker role supersedes any conflicting project role. Read the launch brief at %s in full and follow it exactly.' "$BRIEF" \
+        | "$SCRIPT_DIR/fm-operational-input.sh" encode launch-brief); then
       agy_spawn_fail "agy native Auto was verified but the task brief could not be prepared; no task brief was sent"
       exit 1
     fi
@@ -502,19 +529,13 @@ fm_agy_meta_lines() {
 # cannot authorize this launch. Exact task roots stay in the deterministic
 # policy, while ordinary residue goes to the vendor's native reviewer.
 fm_agy_native_wire() {
-  local wt dir git_root policy task_data grants_sha config
+  local wt reason policy task_data grants_sha config
   command -v jq >/dev/null 2>&1 || { echo 'error: agy native policy requires jq' >&2; exit 1; }
   wt=$(cd "$WT" && pwd -P) || exit 1
-  dir=$wt
-  git_root=$(git -C "$WT" rev-parse --show-toplevel) || exit 1
-  while :; do
-    [ ! -e "$dir/.agents/hooks.json" ] && [ ! -L "$dir/.agents/hooks.json" ] || {
-      echo "error: agy native policy requires owned hook wiring; project hooks exist at $dir/.agents/hooks.json" >&2
-      exit 1
-    }
-    [ "$dir" != "$git_root" ] || break
-    dir=$(dirname "$dir")
-  done
+  if ! reason=$(fm_agy_native_project_compatible "$wt"); then
+    echo "error: $reason" >&2
+    exit 1
+  fi
   AGY_JUDGE_TIER="native-$BACKEND" AGY_JUDGE_MODEL='' AGY_JUDGE_BIN=''
   AGY_ADMISSION_RECEIPT=$("$SCRIPT_DIR/fm-agy-admission.sh" ensure-native "$AGY_BIN" "${MODEL:-}" \
     "$(agy_effort_level "${EFFORT:-}" "${MODEL:-}")" "$AGY_JUDGE_TIER" '' '') || exit 1

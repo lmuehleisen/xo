@@ -28,6 +28,9 @@ RULES="$HOME_DIR/config/crew-dispatch.json"
 QUOTA="$TMP_ROOT/quota.json"
 BASE_PATH=$PATH
 mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN" "$NO_SECURITY_BIN" "$NO_JQ_BIN"
+# Existing lane cases name xo but exercise quota policy on a hook-free project;
+# keep them independent of the real checkout's supervisor hooks.
+fm_git_init_commit "$HOME_DIR/projects/xo"
 for command_name in bash chmod cp date dirname jq mkdir mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
   ln -s "$(command -v "$command_name")" "$NO_SECURITY_BIN/$command_name"
@@ -2368,6 +2371,59 @@ printf '{"rules":[{"when":"Coding","use":{"harness":"agy","model":"future-family
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TMP_ROOT/unknown-agy.json" run code out err "$BRIEF"
 assert_contains "$out" 'status: escalate' "catalog-listed unknown family cannot rank generic evidence"
 pass "Agy catalog establishes the reviewed bucket mapping, including effort aliases"
+
+# Native Auto shares the launcher's project-hook gate, before quota ranking
+# (including the shared-quota path). Explicit manual review is a separate route.
+test_agy_project_hooks() (
+  local project_root="$HOME_DIR/projects/agy-project" reason shared self_root="$TMP_ROOT/self-code"
+  local response="$TMP_ROOT/agy-project-response.json"
+  fm_git_init_commit "$project_root"
+  mkdir -p "$project_root/.agents" "$project_root/nested/work"
+  printf '{}\n' > "$project_root/.agents/hooks.json"
+  reason=$(bash -c '. "$1/bin/fm-agy-lib.sh"; fm_agy_native_project_compatible "$2"' _ "$ROOT" "$project_root/nested/work")
+  [ -n "$reason" ] || fail 'project-hook fixture did not produce the shared refusal'
+  jq '.answers.rule = {type:"choice",choice:"rule_1",confidence:0.99,probabilities:{rule_1:0.99,default:0.01}}' "$RESPONSE" > "$response"
+  export FAKE_CURL_RESPONSE="$response"
+  for shared in false true; do
+    jq -n --argjson shared "$shared" '{shared_quota:$shared,rules:[{when:"Coding",use:[
+      {harness:"agy",model:"gemini-3.8-flash-high"},{harness:"claude",model:"sonnet"}]}]}' > "$RULES"
+    TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project agy-project
+    expect_code 0 "$code" 'native project-hook resolution exits normally'
+    assert_contains "$out" "not eligible: $reason" 'resolver excludes native Auto with the launcher reason'
+    assert_contains "$out" "profile: --harness 'claude'" 'eligible alternative remains selectable'
+    TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project "$project_root/nested/work"
+    assert_contains "$out" "not eligible: $reason" 'explicit nested project checks through the git root'
+    printf ' manual \n' > "$HOME_DIR/config/crew-permissions"
+    TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project agy-project
+    assert_not_contains "$out" 'project hooks exist' 'explicit manual review does not inherit the native Auto constraint'
+    if ! printf '%s\n' "$out" | grep 'candidate: agy:' | grep -q -- '-> eligible'; then fail 'manual agy candidate lost eligibility'; fi
+    rm "$HOME_DIR/config/crew-permissions" "$project_root/.agents/hooks.json"
+    TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project agy-project
+    assert_not_contains "$out" 'project hooks exist' 'hook-free project keeps the native Auto route'
+    if ! printf '%s\n' "$out" | grep 'candidate: agy:' | grep -q -- '-> eligible'; then fail 'hook-free agy candidate lost eligibility'; fi
+    printf '{}\n' > "$project_root/.agents/hooks.json"
+  done
+  TYPESAFE_API_KEY=$KEY FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" run code out err "$BRIEF" --project projects/agy-project
+  assert_contains "$out" "not eligible: $reason" 'projects path honors the project-root override'
+  cat > "$RULES" <<'JSON'
+{"shared_quota":true,"classes":{"same-model":{"family":"gemini","routes":[
+  {"harness":"agy","model":"gemini-3.8-flash-high"},{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}]}},
+ "rules":[{"when":"Coding","lane":"coding","classes":["same-model"]}]}
+JSON
+  run code out err "$BRIEF" --lane coding --project agy-project
+  expect_code 0 "$code" "named lane project-hook resolution exits normally: $err"
+  assert_contains "$out" "not eligible: $reason" 'named lane applies the shared project gate'
+  assert_contains "$out" "profile: --harness 'gemini'" 'another harness for the same model remains selectable'
+  fm_git_init_commit "$self_root"
+  mkdir -p "$self_root/.agents"
+  printf '{}\n' > "$self_root/.agents/hooks.json"
+  FM_ROOT_OVERRIDE="$self_root" run code out err "$BRIEF" --lane coding --project self-code
+  expect_code 0 "$code" "self-repository project-hook resolution exits normally: $err"
+  assert_contains "$out" "project hooks exist at $self_root/.agents/hooks.json" 'the code-root name resolves self-repository hook eligibility'
+  rm "$project_root/.agents/hooks.json"
+  pass 'resolver: native Auto and launcher share the project-hook refusal; manual and hook-free routes stay eligible'
+)
+test_agy_project_hooks || exit 1
 
 cat > "$RULES" <<'JSON'
 {"rules":[{"when":"Coding","use":{"harness":"pi","model":"kiro/claude-sonnet","provider":"kiro"}}]}

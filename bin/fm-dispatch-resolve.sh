@@ -213,6 +213,15 @@
 #   evidence, and an all-ineligible outcome keeps the ordinary escalate
 #   result.
 #
+# Native Auto project gate: agy routes use fm-agy-lib.sh's launch predicate
+#   when crew-permissions is auto (the default). --project accepts a clone
+#   name under ${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}, projects/<name>, or
+#   an explicit directory; the code root's name also identifies this repo.
+#   A local project with its own .agents/hooks.json excludes native Auto
+#   with the launcher's reason, including with shared quota. Explicit manual
+#   review retains its eligibility. An omitted or unavailable local project
+#   leaves launch-time validation authoritative.
+#
 # Environment:
 #   FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, FM_DISPATCH_BASE_URL,
 #   FM_DISPATCH_API_KEY, OPENAI_API_KEY, TYPESAFE_API_KEY, TYPESAFE_BASE, and
@@ -696,6 +705,7 @@ fi
 # ---- harness -> provider map and installed-tool probe -------------------------
 PMAP='{}'
 INSTALLED='{}'
+AGY_PROJECT_REASON=''
 while IFS= read -r h; do
   [ -n "$h" ] || continue
   p=$(fm_quota_single_provider_for_harness "$h" 2>/dev/null) || p=''
@@ -709,6 +719,29 @@ while IFS= read -r h; do
     INSTALLED=$(jq -c --arg h "$h" '. + {($h): true}' <<<"$INSTALLED")
   else
     INSTALLED=$(jq -c --arg h "$h" '. + {($h): false}' <<<"$INSTALLED")
+  fi
+  if [ "$h" = agy ] && [ -n "$PROJECT" ]; then
+    agy_permission_mode=auto
+    if [ -e "$CONFIG/crew-permissions" ] || [ -L "$CONFIG/crew-permissions" ]; then
+      [ -f "$CONFIG/crew-permissions" ] && [ -r "$CONFIG/crew-permissions" ] \
+        || die "config/crew-permissions must be a readable file containing auto or manual"
+      agy_permission_mode=$(cat "$CONFIG/crew-permissions") || die "could not read config/crew-permissions"
+      agy_permission_mode=${agy_permission_mode#"${agy_permission_mode%%[![:space:]]*}"}
+      agy_permission_mode=${agy_permission_mode%"${agy_permission_mode##*[![:space:]]}"}
+      case "$agy_permission_mode" in auto|manual) ;; *) die "invalid config/crew-permissions (expected auto or manual)" ;; esac
+    fi
+    if [ "$agy_permission_mode" = auto ]; then
+      case "$PROJECT" in
+        projects/*) agy_project="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/${PROJECT#projects/}" ;;
+        /*|./*|../*|*/*) agy_project=$PROJECT ;;
+        *)
+          agy_project="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/$PROJECT"
+          if [ ! -d "$agy_project" ] && [ "$PROJECT" = "$(basename "$FM_ROOT")" ]; then agy_project=$FM_ROOT; fi ;;
+      esac
+      if [ -d "$agy_project" ]; then
+        AGY_PROJECT_REASON=$(fm_agy_native_project_compatible "$agy_project") || true
+      fi
+    fi
   fi
 done < <(jq -r "$FM_DISPATCH_LANES_JQ"'
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
@@ -984,7 +1017,7 @@ LIVE_TASKS=$(
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 DIRECT=false
 [ -z "$LANE" ] || DIRECT=true
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson sq "$SQ" --argjson installed "$INSTALLED" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
+RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson sq "$SQ" --argjson installed "$INSTALLED" --arg agy_project_reason "$AGY_PROJECT_REASON" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
   --argjson planning "$PLANNING_JSON" --argjson planning_present "$PLANNING_PRESENT" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_PLANNING_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
@@ -1015,6 +1048,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if ($installed[$c.harness] // false) | not then
       {profile: $c, eligible: false, reason: "\($c.harness) tool not installed on this host"}
+    elif $c.harness == "agy" and $agy_project_reason != "" then
+      {profile: $c, provider: $p, eligible: false, reason: $agy_project_reason}
     elif $sq then
       {profile: $c, provider: $p, eligible: true, sq: true, reason: "ok"}
     elif $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}

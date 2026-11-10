@@ -1028,7 +1028,7 @@ test_agy_native_refuses_unproven_context_before_brief() {
 }
 
 test_agy_native_spawn_orders_proof_before_brief() {
-  local variant fields case_dir home proj wt fakebin id out state_real tasktmp
+  local variant fields case_dir home proj wt fakebin id out state_real tasktmp handoff launch_brief padding
   for variant in success fallback fallback-open missing-hook foreign-stop wrong-generation seq brief; do
     fields=$(make_spawn_case "native-$variant-${TMP_ROOT##*.}")
     IFS='|' read -r case_dir home proj wt fakebin id <<<"$fields"
@@ -1041,6 +1041,9 @@ SH
     printf 'auto\n' > "$home/config/crew-permissions"
     printf '\nDo not read unrelated source files or credential material.\n' >> "$home/data/$id/brief.md"
     if [ "$variant" = success ]; then
+      for ((padding=0; padding<100; padding++)); do
+        printf 'INERT_LARGE_BRIEF_PADDING_%03d: This is inert regression padding; preserve it in the staged brief without typing it into the composer.\n' "$padding"
+      done >> "$home/data/$id/brief.md"
       if ! out=$(FM_FAKE_AGY_NATIVE=1 FM_AGY_NATIVE_POLLS=8 FM_AGY_POLL_INTERVAL=0.1 \
         run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then
         cat "$home/launch.log.native-transport" "$home/launch.log.native-screen" >&2
@@ -1048,6 +1051,18 @@ SH
       fi
       [ -s "$home/launch.log.native-readiness" ] && [ -e "$home/launch.log.native-canary" ] && [ -s "$home/launch.log.native-brief" ] \
         || fail 'native spawn omitted activation or brief delivery'
+      handoff=$(cat "$home/launch.log.native-brief")
+      launch_brief=$(jq -r .brief "$home/state/$id.agy-permission.json")
+      [ "$(printf '%s' "$handoff" | "$ROOT/bin/fm-operational-input.sh" kind)" = launch-brief ] \
+        || fail 'native pointer lost its operational envelope'
+      assert_contains "$handoff" "$launch_brief" 'native handoff points to the staged launch overlay'
+      assert_contains "$handoff" 'report only to firstmate' 'native pointer carries worker identity before the file is read'
+      assert_contains "$handoff" 'supersedes any conflicting project role' 'native pointer retains worker-role precedence'
+      assert_not_contains "$handoff" 'INERT_LARGE_BRIEF_PADDING' 'native handoff must not type the full brief'
+      [ "${#handoff}" -lt 1024 ] || fail 'native handoff grew beyond a short pointer'
+      [ "$(wc -c < "$launch_brief")" -gt 11000 ] || fail 'pointer regression did not stage a full-sized brief'
+      grep -q '^# Current worker role contract$' "$launch_brief" || fail 'staged brief lost its worker-role contract'
+      grep -q 'INERT_LARGE_BRIEF_PADDING_099' "$launch_brief" || fail 'pointer handoff truncated the staged task'
       grep -q '^agy_posture=native-auto$' "$home/state/$id.meta" || fail 'native posture was not recorded'
       ! grep -q '^agy_bypass=\|^agy_judge=' "$home/state/$id.meta" || fail 'native task was recorded as legacy bypass/judge'
       grep -q -- '--mode auto --sandbox' "$home/launch.log" || fail 'native launch flags missing'
@@ -1087,6 +1102,22 @@ SH
     fm_test_rm_tmproot "$tasktmp"
   done
   pass 'native spawn: real-result proof precedes brief delivery, and unproven fallback closes without delivery'
+}
+
+test_agy_native_refuses_project_hooks() {
+  local dir="$TMP_ROOT/native-project-hooks" wt out reason
+  wt="$dir/worktree"
+  fm_git_init_commit "$wt"
+  mkdir -p "$wt/.agents" "$wt/nested/work"
+  ln -s "$wt/missing-hooks.json" "$wt/.agents/hooks.json"
+  if reason=$(fm_agy_native_project_compatible "$wt/nested/work"); then fail 'native project gate accepted ancestor hook symlink'; fi
+  if out=$(WT="$wt" fm_agy_native_wire 2>&1); then fail 'native wiring accepted project hooks'; fi
+  assert_contains "$out" "$reason" 'native wiring uses the shared project-hook refusal'
+  rm "$wt/.agents/hooks.json"
+  mkdir -p "$dir/.agents"
+  printf '{}\n' > "$dir/.agents/hooks.json"
+  fm_agy_native_project_compatible "$wt/nested/work" || fail 'hook-free nested project was refused'
+  pass 'native wiring: shared project gate rejects ancestor hook symlinks and admits hook-free projects through their git root'
 }
 
 test_agy_deprecated_worker_flags_refuse() {
@@ -1436,6 +1467,7 @@ test_agy_session_identity
 
 test_agy_native_mapping_and_grants || exit 1
 test_agy_native_refuses_unproven_context_before_brief
+test_agy_native_refuses_project_hooks
 test_agy_native_spawn_orders_proof_before_brief
 test_agy_deprecated_worker_flags_refuse
 test_agy_native_and_legacy_relaunch_postures || exit 1
