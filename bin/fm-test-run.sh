@@ -197,7 +197,7 @@ PER_SCRIPT_TIMEOUT_SECS=0
 # script is the dispatch-profile suite at about 923s under CI load (the hint
 # table below records that loaded figure). 1500s keeps every measured script
 # under the bound with headroom over the slowest loaded measurement,
-# and it stays under the 30-minute normal CI tier so a wedged script fails here,
+# and it stays under the 35-minute normal CI tier so a wedged script fails here,
 # with its output, before the job cap
 # cancels the lane. It is a guard, not a speed control: a HUNG script becomes a
 # bounded failure instead of an unbounded suite, which is the shape that

@@ -609,7 +609,7 @@ test_fast_tier_shares_one_short_tripwire() {
   pass "fast tier jobs share one $fast minute tripwire"
 }
 
-# Normal tier: every test or lint lane shares ONE fixed 30-minute budget,
+# Normal tier: every test or lint lane shares ONE fixed 35-minute budget,
 # above the fast tier. That budget is a hang tripwire, not a packing estimate.
 test_normal_tier_shares_one_budget() {
   local fast normal
@@ -619,8 +619,8 @@ test_normal_tier_shares_one_budget() {
   normal=$(tier_timeout normal $NORMAL_TIER_JOBS) || exit 1
   [ "$normal" -gt "$fast" ] \
     || fail "normal tier ($normal) must exceed the fast tier ($fast)"
-  [ "$normal" = 30 ] \
-    || fail "normal tier must be the single 30-minute shared budget, got $normal"
+  [ "$normal" = 35 ] \
+    || fail "normal tier must be the single 35-minute shared budget, got $normal"
   pass "normal tier jobs share one $normal minute budget"
 }
 

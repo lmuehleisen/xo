@@ -575,18 +575,30 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-composer-ghost.test.sh`; `tests/fm-composer-lib.test.sh` animation and painted-braille cases.
 - Upstream: replaced #4297 with #4532; retire these extraction seams only when its reader preserves draft characters and excludes decoration in the same cases.
 
+### ci-normal-tier-timeout
+
+- Intent: the shared normal CI tier is 35 minutes so portable behavior jobs finish when several pull requests run CI at once.
+- Class: carried.
+- Seam: normal-tier `timeout-minutes` in `.github/workflows/ci.yml`, the normal-tier assertion in `tests/fm-ci-workflow.test.sh`, the Timeouts section in `docs/fm-test-portable-shards.md`, and the changed-path per-script bound comment in `bin/fm-test-run.sh` (shared).
+- Guard: `tests/fm-ci-workflow.test.sh` `test_normal_tier_shares_one_budget`.
+- Upstream: keeps the shared normal tier at 30 minutes.
+  A hung lint, behavior, macOS, or publish-identity job runs five minutes longer before the tripwire fires.
+  Completed behavior jobs have reached about 30 minutes, and the 30-minute tripwire cancels the ones that run longer; 35 restores five minutes above that completion.
+  Drop this once upstream's normal tier is at least 35 minutes.
+
 ### ci-shard-split
 
 - Intent: portable serial CI runs as fourteen shards, using upstream's supervision-host and watch-triage suite boundaries plus focused fork regression suites, so each shard stays inside the CI job limit; canonical lint supports `NofM` partitions and CI uses three.
 - Class: carried.
 - Seam: the shard and lint matrices in `.github/workflows/ci.yml`, partition parsing and balancing in `bin/fm-lint.sh`, measured shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, and `CONTRIBUTING.md`; upstream split suites share `tests/supervision-host-helpers.sh` and `tests/watch-triage-helpers.sh`, with fork-only regressions in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`.
 - Guard: `tests/fm-test-run.test.sh` shard cases; `tests/fm-lint.test.sh`; `tests/fm-ci-workflow.test.sh`; every integration ports upstream's new supervision-host tests into the split suites.
-- Upstream: runs ten serial shards and split supervision-host and watcher-triage suites; retain the fork shard count until it fits that layout with headroom.
+- Upstream: runs eleven serial shards and split supervision-host and watcher-triage suites; retain the fork shard count until it fits that layout with headroom.
   Successful suite durations in green runs [40214527890](https://github.com/lmuehleisen/xo/actions/runs/40214527890) and [40116342702](https://github.com/lmuehleisen/xo/actions/runs/40116342702) sum to 258.03 and 264.77 minutes respectively when shard sums are rounded to hundredths, implying a nine-shard minimum of 28.67 and 29.42 minutes even with perfect balance and no job setup.
   Their measured shard sums in numerical order were 19.41, 19.25, 20.91, 24.44, 11.33, 14.92, 19.81, 16.15, 18.62, 17.48, 19.11, 19.12, 16.56, 20.92 minutes and 19.89, 19.09, 18.39, 25.92, 10.24, 14.55, 20.03, 21.63, 19.60, 19.53, 20.45, 19.25, 19.13, 17.07 minutes.
   The post-merge candidate run [40419989504](https://github.com/lmuehleisen/xo/actions/runs/40419989504) measured 20.90, 19.58, 21.24, 19.98, 10.13, 20.04, 19.99, 22.70, 17.68, 20.64, 18.32, 17.97, 16.29, 16.15 minutes; two shards contained failures, so its 261.61-minute total (summing the rounded shard values) is not a complete successful baseline.
   A 25-minute suite budget leaves five minutes of the 30-minute job limit for setup and runner variance; both green-run lower bounds exceed that budget before combining suites or accounting for imbalance.
   The candidate run's successful watch-triage and declared-wait suites alone took 13.61 and 17.24 minutes, so their combined 30.85 minutes also exceeds the job limit before setup.
+  The 30-minute tripwire those runs were measured against is now `ci-normal-tier-timeout`.
 
 ### pi-saved-trust-denial
 
