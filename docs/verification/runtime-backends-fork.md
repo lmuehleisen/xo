@@ -583,7 +583,7 @@ Admission checks beyond the guard, on agy 1.2.11 (2026-09-25) with the productio
 - Default judge tier: `judge-probe` on a residue `run_command` printed `tier=agy model=gemini-3.6-flash-low static=residue verdict=approve reason=...` and left every file in the case state directory byte-identical.
 
 `--sandbox` composition probe, 2026-09-19, agy 1.2.7: the flag composes with the bypass launch in headless mode, but the probe found no containment the adapter could rely on in that mode, and its interactive-session behaviour under a spawned pane is unverified.
-Recorded legacy launches retain `--dangerously-skip-permissions` with the policy layer's write guards; new workers use the native route above.
+Recorded legacy launches refuse relaunch and require explicit recovery; new workers use the native route above.
 
 #### Release refreshes
 

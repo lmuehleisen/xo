@@ -231,9 +231,17 @@ agy_spawn_fail() { # <detail>
     # rollback removes only the record and generation, so retire its hooks
     # and any native policy wiring here.
     if [ "$RELAUNCH" -ne 1 ]; then
+      if ! "$FM_ROOT/bin/fm-agy-permission-policy.sh" retire \
+        "$STATE_REAL/$ID.agy-permission.json" </dev/null; then
+        # Keep the record and generation as recovery anchors for unresolved
+        # policy state, even though this endpoint is confirmed closed.
+        # shellcheck disable=SC2034 # Read by fm-spawn.sh's EXIT trap.
+        SPAWN_FRESH_COMMIT_PENDING=0
+        printf '%s\n' "$(status_stamp_line "failed: $1; permission retirement failed; task record and policy state kept; explicit recovery is required")" >>"$STATE/$ID.status"
+        echo "error: agy permission retirement failed for $ID; policy, cache, pending decisions, hooks and task record were kept; explicit recovery is required." >&2
+        return 1
+      fi
       "$FM_ROOT/bin/fm-agy-hook.sh" retire-worker "$STATE_REAL" "$ID" || true
-      "$FM_ROOT/bin/fm-agy-permission-policy.sh" retire \
-        "$STATE_REAL/$ID.agy-permission.json" </dev/null 2>/dev/null || true
       rm -f "$STATE_REAL/$ID.agy-permission.json" 2>/dev/null || true
       rm -rf "$STATE_REAL/$ID.agy-permission-cache" 2>/dev/null || true
     fi

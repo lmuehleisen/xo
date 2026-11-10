@@ -6,8 +6,8 @@
 #
 # The facts pinned here are the ones an Antigravity release could silently
 # change and the ones a wrong guess would make dangerous:
-#   Auto selects verified native review; old bypass records retain their
-#   original relaunch contract. Manual retains native review prompts.
+#   Auto selects verified native review; old bypass records require explicit
+#   recovery before relaunch. Manual retains native review prompts.
 #   Physical grants, catalog/effort validation, native hook generation and
 #   primary/control compatibility remain independently covered below.
 #   Credentialed tests/fm-agy-native-live-e2e.test.sh proves the native route.
@@ -387,6 +387,17 @@ case "${1:-}" in
     printf 'kill-window %s\n' "$*" >> "$FM_FAKE_LAUNCH_LOG.kills"
     # FM_FAKE_KILL_FAILS models a kill that leaves the window running.
     [ "${FM_FAKE_KILL_FAILS:-0}" = 1 ] || : > "$FM_FAKE_LAUNCH_LOG.closed"
+    if [ "${FM_FAKE_AGY_RETIRE_FAIL:-0}" = 1 ] && [ -s "$FM_FAKE_LAUNCH_LOG.agy-hooks" ]; then
+      hooks=$(cat "$FM_FAKE_LAUNCH_LOG.agy-hooks")
+      stem=${hooks%.agy-hooks}
+      mkdir -p "$stem.agy-permission-pending" "$stem.agy-permission-cache" "$stem.retirement-status"
+      decision="agy-permission-${stem##*/}"
+      printf '%s\nheld fixture\nretained\nnever\n' "$decision" > "$stem.agy-permission-pending/retained.pending"
+      printf 'one-shot\n' > "$stem.agy-permission-cache/retained.once"
+      printf 'needs-decision [key=%s]: held fixture\n' "$decision" >> "$stem.status"
+      jq --arg status "$stem.retirement-status" '.status=$status' "$stem.agy-permission.json" > "$stem.policy-new"
+      mv "$stem.policy-new" "$stem.agy-permission.json"
+    fi
     exit 0
     ;;
   send-keys)
@@ -1074,6 +1085,8 @@ SH
         [ ! -e "$home/launch.log.closed" ] || fail 'closure-failure fixture did not retain its endpoint'
       else
         [ -f "$home/launch.log.closed" ] || fail 'unproven native endpoint was not closed'
+        [ ! -e "$home/state/$id.meta" ] && [ ! -e "$home/state/$id.agy-permission.json" ] \
+          || fail 'successful retirement left a failed fresh-spawn record or policy'
       fi
     else
       if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_PREP_FAIL="$variant" FM_AGY_NATIVE_POLLS=8 FM_AGY_POLL_INTERVAL=0.1 \
@@ -1087,6 +1100,44 @@ SH
     fm_test_rm_tmproot "$tasktmp"
   done
   pass 'native spawn: real-result proof precedes brief delivery, and unproven fallback closes without delivery'
+}
+
+test_agy_native_retirement_failure_keeps_recovery_state() {
+  local fields case_dir home proj wt fakebin id out policy marker decision
+  fields=$(make_spawn_case "native-retire-${TMP_ROOT##*.}")
+  IFS='|' read -r case_dir home proj wt fakebin id <<<"$fields"
+  mv "$fakebin/agy" "$fakebin/agy-catalog"
+  cat > "$fakebin/agy" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'agy 1.4.7\n'; else exec "$(dirname "$0")/agy-catalog" "$@"; fi
+SH
+  chmod +x "$fakebin/agy"
+  printf 'auto\n' > "$home/config/crew-permissions"
+  if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_NO_AUTO=1 FM_FAKE_AGY_RETIRE_FAIL=1 \
+    FM_AGY_NATIVE_POLLS=3 FM_AGY_POLL_INTERVAL=0.1 \
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then
+    fail 'failed native activation was reported dispatched'
+  fi
+  [ -f "$home/launch.log.closed" ] || fail 'retirement fixture did not close its endpoint'
+  [ ! -e "$home/launch.log.native-brief" ] || fail 'unqualified worker received its task brief'
+  policy="$home/state/$id.agy-permission.json"
+  marker="$home/state/$id.agy-permission-pending/retained.pending"
+  [ -f "$home/state/$id.meta" ] && [ -f "$home/state/$id.busy-gen" ] \
+    || fail 'failed retirement lost the recoverable task record or generation'
+  [ -f "$policy" ] && [ -f "$marker" ] && [ -f "$home/state/$id.agy-permission-cache/retained.once" ] \
+    && [ -f "$home/state/$id.agy-hooks/.agents/hooks.json" ] \
+    || fail 'failed retirement discarded owned policy, pending, cache or hook evidence'
+  decision=$(sed -n '1p' "$marker")
+  grep -qF "needs-decision [key=$decision]" "$home/state/$id.status" || fail 'failed retirement lost its open decision'
+  ! grep -qF "resolved [key=$decision]" "$home/state/$id.status" || fail 'failed retirement claimed a resolution'
+  case "$out" in *'explicit recovery is required'*) ;; *) fail 'retirement failure has no recovery diagnostic' ;; esac
+  # Repair only the synthetic status destination and prove retained state can retire.
+  jq --arg status "$home/state/$id.status" '.status=$status' "$policy" > "$policy.new"
+  mv "$policy.new" "$policy"
+  "$ROOT/bin/fm-agy-permission-policy.sh" retire "$policy" </dev/null || fail 'preserved policy could not be retired after repair'
+  grep -qF "resolved [key=$decision]" "$home/state/$id.status" || fail 'recovery did not resolve the exact pending decision'
+  fm_test_rm_tmproot "/tmp/fm-$id"
+  pass 'native startup: failed retirement preserves the task and exact decisions for recovery'
 }
 
 test_agy_deprecated_worker_flags_refuse() {
@@ -1447,3 +1498,5 @@ test_agy_native_refuses_unproven_context_before_brief
 test_agy_native_spawn_orders_proof_before_brief
 test_agy_deprecated_worker_flags_refuse
 test_agy_native_and_legacy_relaunch_postures || exit 1
+
+test_agy_native_retirement_failure_keeps_recovery_state
