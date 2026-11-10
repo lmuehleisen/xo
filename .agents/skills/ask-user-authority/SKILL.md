@@ -34,6 +34,14 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
    - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary
 5. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 
+## Record
+
+When this policy lets firstmate decide, record the ruling with `bin/fm-captain-hold.sh answer --actor firstmate` or `bin/fm-send.sh --resolve-key --actor firstmate`.
+The ruling text is the decision firstmate made.
+Do not phrase it as the captain's words.
+Exact captain words stay on the default actor.
+The implementation worker still never answers its own finding.
+
 ## Captain-facing escalation
 
 State all five of these elements in one concise, evidence-first escalation:
