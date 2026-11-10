@@ -513,18 +513,17 @@ ok - agy 1.2.5: installed worker hooks emit a PreToolUse and PostToolUse line wh
 # agy observer live checks passed (agy 1.2.5)
 ```
 
-The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, field caps, never-log-contents rule, inert failure paths, concurrent appends, native/manual and legacy posture selection, and refusal of malformed merged hooks.
+The portable suite `tests/fm-agy-harness.test.sh` pins the record schema, field caps, never-log-contents rule, inert failure paths, concurrent appends, native/manual posture selection and retired-record relaunch refusal, and refusal of malformed merged hooks.
 
 ### Legacy bypass permission layer
 
-Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
-The manually verified release set is `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4`; `bin/fm-agy-permission-policy.sh verified-versions` prints it, and the per-release refresh evidence is below.
-A version without that evidence - 1.2.8 through 1.2.10, 1.3.0, 1.3.2 through 1.3.4, and 1.4.1 through 1.4.3 - stays outside the set.
-A recorded legacy bypass launch requires an executable-bound receipt: `bin/fm-agy-admission.sh ensure` proves a candidate in the `>=1.4.4,<1.5.0` family with the legacy live guards, and `manual-baseline` runs those checks on a release in this set.
+Legacy bypass execution, judge receipts, manual-baseline admission and the bypass live guard are retired.
+The release observations below are historical; [Native Auto workers](#native-auto-workers) owns current launch qualification, and `tests/fm-agy-permission-policy.test.sh` covers historical audit and exact decision-key retirement.
 
-```sh
-FM_AGY_BYPASS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
-```
+Verified on 2026-09-25 with agy 1.2.11 on macOS on Apple silicon in scratch workspaces under the task temp root, on `gemini-3.6-flash-low` headless runs.
+The former manually verified release set was `1.2.4 1.2.5 1.2.6 1.2.7 1.2.11 1.3.1 1.3.5 1.3.6 1.4.0 1.4.4`; it no longer supplies launch authority.
+A version without that evidence - 1.2.8 through 1.2.10, 1.3.0, 1.3.2 through 1.3.4, and 1.4.1 through 1.4.3 - stays outside the set.
+The retired bypass path required executable-bound receipts; `ensure` and `manual-baseline` now refuse with a recovery diagnostic.
 
 ```text
 ok - agy 1.2.11: a policy deny blocks a bypassed call and the reason reaches the model
@@ -583,7 +582,6 @@ Separate shell and native requests require both real pre-tool vetoes and sentine
 The native write case also requires a real refusal before an outside-root fixture file is created.
 
 ```sh
-FM_AGY_BYPASS_LIVE=1 bash bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
 FM_AGY_SIGNALS_LIVE=1 bash bin/fm-test-run.sh tests/fm-agy-signals-live-e2e.test.sh
 FM_AGY_OBSERVER_LIVE=1 bash bin/fm-test-run.sh tests/fm-agy-observer-live-e2e.test.sh
 FM_AGY_PRIMARY_LIVE=1 bash bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
@@ -1014,12 +1012,12 @@ ok - devin 3000.11.3: catalog-backed included_quota binding verified without mod
 ## Shared credential hook veto
 
 Verified 2026-10-14 with Devin 3000.11.3 (9c803229faa4) and agy 1.3.5.
-The focused guards use a harmless credential fixture, attempt one shell read and one native read through each real CLI, and assert both vetoes and absence of fixture values in transcripts and decision metadata.
+The focused guards used a harmless credential fixture and asserted shell/native vetoes and absence of fixture values in transcripts and decision metadata.
+The agy bypass guard is retired; its result below is historical and cannot refresh current Auto qualification.
 The guards' headers own the focused mode and model override; the shared classification contract is owned by [`bin/fm-credential-access.mjs`](../../bin/fm-credential-access.mjs).
 
 ```sh
 FM_CREDENTIAL_HOOK_ONLY=1 FM_DEVIN_PERMISSION_LIVE=1 bash bin/fm-test-run.sh tests/fm-devin-permission-policy-live-e2e.test.sh
-FM_CREDENTIAL_HOOK_ONLY=1 FM_AGY_BYPASS_LIVE=1 FM_AGY_BYPASS_LIVE_MODEL=gemini-3.8-flash-low bash bin/fm-test-run.sh tests/fm-agy-bypass-live-e2e.test.sh
 ```
 
 ```text

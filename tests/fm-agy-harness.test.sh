@@ -1104,15 +1104,11 @@ test_agy_deprecated_worker_flags_refuse() {
 test_agy_native_and_legacy_relaunch_postures() (
   local ordering posture meta="$TMP_ROOT/relaunch-posture.meta"
   for ordering in inherit-first default-first; do
-  for posture in native-auto legacy-bypass legacy-prompt manual legacy-manual old-prompt; do
+  for posture in native-auto manual; do
     printf 'model=fixture-model\neffort=high\n' > "$meta"
     case "$posture" in
       native-auto) printf 'agy_posture=native-auto\n' >> "$meta" ;;
-      legacy-bypass) printf 'agy_bypass=on\nagy_judge=devin:fixture-judge\n' >> "$meta" ;;
-      legacy-prompt) printf 'agy_bypass=off\n' >> "$meta" ;;
       manual) printf 'agy_posture=manual\nagy_permission_mode=manual\n' >> "$meta" ;;
-      legacy-manual) printf 'agy_permission_mode=manual\nagy_bypass=off\n' >> "$meta" ;;
-      old-prompt) printf 'agy_permission_mode=auto\n' >> "$meta" ;;
     esac
     ARG3=agy KIND=scout RELAUNCH_META="$meta" RELAUNCH_PRIOR_HARNESS=agy
     MODEL_SET=0 EFFORT_SET=0 MODEL='' EFFORT='' AGY_NATIVE_AUTO=0
@@ -1124,14 +1120,12 @@ test_agy_native_and_legacy_relaunch_postures() (
     [ "$MODEL:$EFFORT" = fixture-model:high ] || fail 'relaunch lost its tested model context'
     case "$posture" in
       native-auto) [ "$AGY_NATIVE_AUTO:$AGY_BYPASS" = 1:0 ] || fail 'native relaunch changed posture' ;;
-      legacy-bypass) [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$AGY_JUDGE_ARG" = 0:1:devin:fixture-judge ] || fail 'legacy relaunch changed its judge' ;;
-      legacy-prompt|old-prompt) [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$AGY_BYPASS_OPT_OUT" = 0:0:1 ] || fail 'legacy prompt relaunch changed posture' ;;
-      manual|legacy-manual)
+      manual)
         [ "$AGY_NATIVE_AUTO:$CREW_PERMISSION_MODE" = 0:manual ] || fail 'manual relaunch changed posture'
         [ -z "$(fm_agy_permission_flags "$CREW_PERMISSION_MODE")" ] || fail 'manual relaunch enabled automatic edits' ;;
     esac
     # The emitted descriptor must keep the same route on a second restart.
-    HARNESS=agy AGY_BIN='' AGY_JUDGE_TIER=devin AGY_JUDGE_MODEL=fixture-judge RAW_LAUNCH=0
+    HARNESS=agy AGY_BIN='' RAW_LAUNCH=0
     before="$AGY_NATIVE_AUTO:$AGY_BYPASS:$CREW_PERMISSION_MODE"
     printf 'model=fixture-model\neffort=high\n' > "$meta"
     fm_agy_meta_lines >> "$meta"
@@ -1141,7 +1135,21 @@ test_agy_native_and_legacy_relaunch_postures() (
     [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$CREW_PERMISSION_MODE" = "$before" ] || fail 'recording the posture changed the next restart'
   done
   done
-  pass 'native, manual and recorded legacy relaunches retain their own posture and context'
+  for posture in legacy-bypass legacy-prompt legacy-manual old-prompt accept-edits unknown raw; do
+    printf 'model=fixture-model\neffort=high\n' > "$meta"
+    case "$posture" in
+      legacy-bypass) printf 'agy_bypass=on\nagy_judge=devin:fixture-judge\n' >> "$meta" ;;
+      legacy-prompt) printf 'agy_bypass=off\n' >> "$meta" ;;
+      legacy-manual) printf 'agy_permission_mode=manual\n' >> "$meta" ;;
+      old-prompt) ;;
+      *) printf 'agy_posture=%s\n' "$posture" >> "$meta" ;;
+    esac
+    cp "$meta" "$meta.before"
+    if (fm_agy_relaunch_inherit) > "$meta.out" 2>&1; then fail "$posture inherited a new posture"; fi
+    grep -q 'explicit recovery before relaunch' "$meta.out" || fail "$posture lacks a recovery diagnostic"
+    cmp -s "$meta" "$meta.before" || fail 'recovery refusal changed the task record'
+  done
+  pass 'native/manual relaunches retain context; retired and pre-field records require recovery'
 )
 
 # --- control mechanics ------------------------------------------------------
