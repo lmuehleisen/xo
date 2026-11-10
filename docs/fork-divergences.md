@@ -142,8 +142,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: upstream arrives through real-merge integration runs and the updater only fast-forwards; README upstream integration paragraph.
 - Class: intended.
-- Seam: fork-only `docs/upstream-integration.md`, `docs/fork-divergences.md`, and `bin/fm-upstream-callsite-scan.sh`, plus the updater skill (shared).
-- Guard: fork-only `tests/fm-upstream-callsite-scan.test.sh`.
+- Seam: fork-only `docs/upstream-integration.md`, `docs/fork-divergences.md`, `bin/fm-upstream-callsite-scan.sh`, and `bin/fm-upstream-removed-helper-scan.sh`, plus the updater skill (shared).
+- Guard: fork-only `tests/fm-upstream-callsite-scan.test.sh` and `tests/fm-upstream-removed-helper-scan.test.sh`.
 - Upstream: not applicable.
 
 ### fork-documentation
@@ -643,6 +643,15 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-captain-alert.sh` and `tests/fm-captain-alert.test.sh`, its away reach, arm, and return-health calls in `bin/fm-afk-contract.sh`, `bin/fm-afk-launch.sh`, and `bin/fm-afk-return.sh`, and the corresponding afk skill, architecture, configuration, scripts, and wedge-alarm prose (shared).
 - Guard: `tests/fm-captain-alert.test.sh`.
 - Upstream: has no equivalent one-way outcome notifier; drop once the same opt-in delivery, secrecy, failure reporting, and bounded queue behavior is available.
+
+### hermes-empty-argv-bash32
+
+- Intent: Hermes process identity accepts an empty argv under Bash 3.2 `set -u` instead of aborting.
+- Class: carried.
+- Seam: the empty-array expansion in `fm_hermes_process_matches` in `bin/fm-hermes-process-lib.sh`, and the empty-argv case in `tests/fm-hermes-harness.test.sh` (shared).
+- Guard: the empty-argv case in `tests/fm-hermes-harness.test.sh`.
+- Upstream: expands `"${words[@]}"`, which Bash 3.2 with `set -u` treats as an unbound variable when the array is empty.
+  Drop the alternate expansion once upstream's expansion is safe under that shell.
 
 ## Incidental
 
