@@ -33,6 +33,8 @@ done
 for args in 'node /tmp/server.js /opt/hermes-agent/ui-tui/dist/entry.js' 'python3 -c tui_gateway.entry' 'node -e hermes' 'hermes-helper'; do
   ! fm_hermes_process_matches "$args" || fail "false identity: $args"
 done
+# Bash 3.2 set -u treats an empty array as unbound; an empty argv must miss.
+! fm_hermes_process_matches '' || fail 'empty argv matched a hermes process'
 # Use a real interpreter process so kernel-name loss and argv loss are
 # independent regressions, not expectations encoded into a fake harness.
 mkdir -p "$TMP_ROOT/process/tui_gateway"

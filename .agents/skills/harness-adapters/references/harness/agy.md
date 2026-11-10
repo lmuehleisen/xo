@@ -118,8 +118,8 @@ PreInvocation may repeat during a turn, and Stop with fullyIdle=false does not c
 Escape supplies no semantic cancellation acknowledgement; lifecycle control reports delivery and endpoint liveness only.
 Missing or invalid hook data never manufactures idle.
 
-Composer delivery needs the native footer or accept-edits mode cell as well as the rule pair and prompt.
-An unstyled accept-edits hint, a manual-mode row with no identifying footer, and rendered busy-only acknowledgement of a queued Enter remain unproven; the adapter does not manufacture a successful delivery for them.
+Composer delivery needs the native footer or an accept-edits, auto or plan mode cell as well as the rule pair and prompt.
+An unstyled mode hint, a manual-mode row with no identifying footer, and rendered busy-only acknowledgement of a queued Enter remain unproven; the adapter does not manufacture a successful delivery for them.
 Native background-task observation uses the returned log with `view_file`; delegation-shaped native tools retain the shared pre-tool guard.
 
 Interactive SessionStart/Stop-park behavior, compaction refresh, headless primary supervision and general semantic interrupt completion have no current live proof for this supervisor transport.
