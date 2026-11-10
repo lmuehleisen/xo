@@ -526,6 +526,7 @@ unexcluded_tracked_read() {
   # the held-call path rather than guessing their meaning.
   [ -z "$NOT_APPROVABLE" ] || return 1
   local path abs root rel line excluded ancestor seen=0
+  # shellcheck disable=SC2016 # Backticks are literal Markdown delimiters in the regex.
   local rule='^[[:space:]]*[Dd][Oo][[:space:]]+[Nn][Oo][Tt][[:space:]]+[Rr][Ee][Aa][Dd][[:space:]]+`([[:alnum:]_./-]+)`[.]?[[:space:]]*$'
   case "$TOOL" in
     read_file|view_file)
