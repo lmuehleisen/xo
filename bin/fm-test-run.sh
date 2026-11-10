@@ -299,6 +299,7 @@ family_for_basename() {
     fm-composer-agy.test.sh|fm-composer-devin.test.sh|\
     fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|\
     fm-captain-hold-completed-ship.test.sh|fm-captain-hold-rehold.test.sh|\
+    fm-captain-hold-recheck.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
     fm-devin-permission-policy.test.sh|fm-devin-rate-limit-retry.test.sh|fm-devin-fork-harness.test.sh|\
     fm-agy-permission-policy.test.sh|fm-agy-admission.test.sh|fm-agy-native.test.sh|\

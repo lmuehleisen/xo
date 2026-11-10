@@ -1205,6 +1205,30 @@ EOF
   pass "captain-held tasks of any kind reach Captain's Call, deferral is honored, and landed excludes answered calls"
 }
 
+# The default TOON table derives its columns from the first gate row, so an
+# ordinary gate leading a captain gate must not drop the receipt column: every
+# gate carries the field, null where no verification applies.
+test_toon_keeps_receipt_column_on_mixed_gates() {
+  local home fakebin toon
+  home=$(make_home toon-mixed-gates)
+  mkdir -p "$home/data"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] ext-gate - Externally held work (repo: firstmate) (kind: ship) (hold: upstream release pending) (hold-kind: external)
+- [ ] cap-later - Deferred captain call (repo: firstmate) (kind: captain) (hold: revisit with the captain) (hold-kind: captain) (hold-until: 2026-08-01)
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  toon=$(run "$home" "$fakebin")
+  printf '%s\n' "$toon" | grep -E '^gates\[[0-9]+\]\{[^}]*receipt' >/dev/null \
+    || fail "the mixed-gate TOON table lost the receipt column: $toon"
+  assert_contains "$toon" "fm-presentation-receipt.v1" "the captain gate's receipt evidence is missing"
+  pass "an ordinary gate ahead of a captain gate keeps the receipt column in TOON"
+}
+
 test_undated_hold_phrasing_and_aging_projection() {
   local home mate fakebin json
   home=$(make_home undated-aging-proj)
@@ -3515,6 +3539,7 @@ fm_test_run \
   test_perl_fallback_bounds_github_call \
   test_section_caps_and_expansion_flags \
   test_collapsed_captain_call_deferral_and_landed \
+  test_toon_keeps_receipt_column_on_mixed_gates \
   test_undated_hold_phrasing_and_aging_projection \
   test_blocked_deferred_hold_has_concrete_disclosure \
   test_revealed_deferred_holds_show_their_deferral_reason \

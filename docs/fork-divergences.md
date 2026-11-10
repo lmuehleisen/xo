@@ -62,6 +62,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-brief.test.sh` `test_no_mistakes_*` and `test_workers_wait_without_spending_turns`; `tests/fm-task-delivery.test.sh` `test_no_mistakes_*`; `tests/fm-bootstrap.test.sh` `test_no_mistakes_opt_in_reports_unavailable_cli`.
 - Upstream: requires the no-mistakes pipeline for every ship and enforces its minimum version at bootstrap.
 
+### presentation-receipts
+
+- Intent: every captain-facing call is re-verified at presentation time, and anything that cannot be verified is visibly marked rather than silently shown as true.
+- Class: intended.
+- Seam: the `recheck` subcommand and `fm-presentation-receipt.v1` contract in `bin/fm-captain-hold.sh`, the `captain` marker and `receipt` attachment in `bin/fm-bearings-snapshot.sh`, the receipt validation and publish-time recheck pass in `bin/fm-bearings-board.sh`, and the receipt rendering in `.agents/skills/bearings/assets/board-template.html` (shared); the matching contract lines in the captain-hold-lifecycle and bearings skills, `docs/captain-hold-lifecycle.md`, and `tests/fm-captain-hold-recheck.test.sh` (fork-owned hunks).
+- Guard: `tests/fm-captain-hold-recheck.test.sh` covers the receipt producer, snapshot attachment and captain-gate marking, board publish-time recheck and expiry, foreign-owner unknowns, and malformed-receipt refusal.
+- Upstream: presents captain calls as composed without a publish-time re-verification receipt; an upstreamable shape would keep the receipt producer as one appended `recheck` subcommand and the snapshot/board passes as additive fields, but the schema, verdict vocabulary, and per-check rules are fork-authored and upstream has no equivalent to merge with.
+
 ### reviewed-worker-permissions
 
 - Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so pane-backed Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".

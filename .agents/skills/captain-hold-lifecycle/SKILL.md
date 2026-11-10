@@ -58,6 +58,11 @@ A captain-held task closed outside this owner leaves no durable answer, so the c
 Resolved findings, recommendations that need no captain choice, and prose that merely sounds decision-like do not create held tasks.
 Ops reads the resulting structured state and must never compensate by scraping historical reports, visual-review artifacts, terminal output, chat, or other prose.
 
+A surface that puts a captain call in front of the captain rechecks it first through `bin/fm-captain-hold.sh recheck`, never trusting the record it composed earlier.
+Every presented call carries the command's `fm-presentation-receipt.v1` receipt: `verified` means the call's structured premises still hold, `changed` means one provably moved, and `unknown` means a needed source could not be read.
+An unavailable source is presented as unknown, never silently as still true, and a call owned by another home is verified only there.
+The command's header owns the receipt contract, the per-check outcomes, and the bounded-cost rule: only selected calls are rechecked, so a turn that presents no decision pays nothing.
+
 A captain call can be written down twice - as the keyed status decision the fold reads, and as the backlog task held for the captain - and those two records can disagree without either surface saying so.
 `bin/fm-captain-hold.sh diverged` reports that contradiction and the wake drain prints it as `RECORD DIVERGENCE`; it closes nothing, because a captain call closed wrongly leaves review entirely, which is worse than the noise.
 Read such a line as "these two records disagree", never as "the captain ruled and someone forgot to file it": a call can dissolve because its premise was false, or turn out to have been a question of fact rather than the captain's to answer.
