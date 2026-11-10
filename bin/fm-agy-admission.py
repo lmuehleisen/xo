@@ -4,8 +4,8 @@
 Internal verbs: snapshot, match, publish, complete, assert. Receipts are private
 local evidence, not signatures or a security boundary against their owner.
 The binding includes executable stat/hash, platform, integration/guard bytes,
-explicit worker model/effort, and selected judge identity/model. A version is
-only eligibility; the historical verified-versions list never proves a binary.
+explicit worker model/effort and backend. A version is only eligibility;
+legacy judge contexts cannot authorize execution.
 """
 
 import hashlib
@@ -29,17 +29,6 @@ GUARDS = {
         "native-prompt-or-safe-completion", "deterministic-deny",
         "status-inbox-roundtrip", "busy-start-stop", "observer-pair", "hook-retire",
     ],
-    "bypass": [
-        "credential-shell", "credential-native", "shell-refusal",
-        "native-create-edit", "native-outside-refusal", "judge-approval",
-        "dead-judge", "malformed-hooks", "force-ask-attempt", "unarmed-session",
-    ],
-    "observer": ["observer-pair"],
-    "signals": [
-        "interactive-composer", "accept-edits-native", "shell-prompt",
-        "busy-start-stop", "interrupt-delivery", "interactive-exit", "hook-retire",
-        "effort-conflict",
-    ],
 }
 INTEGRATION = [
     "bin/fm-agy-admission.py", "bin/fm-agy-admission.sh",
@@ -51,36 +40,24 @@ INTEGRATION = [
     "bin/fm-judge-tier-lib.sh", "bin/fm-timeout-lib.sh", "bin/fm-wake-lib.sh",
     "bin/fm-path-lib.sh", "bin/fm-primary-scope-lib.sh",
     "bin/fm-subagent-pretool-check.sh", "bin/fm-arm-pretool-check.sh",
-    "bin/fm-cd-pretool-check.sh", ".agents/hooks.json",
+    "bin/fm-cd-pretool-check.sh",
     "bin/fm-busy-event.sh", "bin/fm-busy-lib.sh", "bin/fm-control-lib.sh",
     "bin/fm-composer-lib.sh", "bin/fm-operational-input.sh",
     "tests/lib.sh", "tests/agy-live-helpers.sh",
     "tests/git-config-helpers.sh", "tests/tmproot-guard.sh",
-    "tests/fm-agy-bypass-live-e2e.test.sh",
-    "tests/fm-agy-observer-live-e2e.test.sh",
-    "tests/fm-agy-signals-live-e2e.test.sh",
     "tests/fm-agy-native-live-e2e.test.sh",
     "tests/fm-agy-native.test.sh", "tests/agy-native-terminal-fixture.py",
 ]
 
 
-# Native workers never load the primary hooks or the standalone legacy/upgrade
-# guards. Keep the shared policy, backend, composer, control and spawn owners:
-# their transitive behavior still affects the guarantee (including common
-# launch substitutions outside the extracted agy template).
-NATIVE_INTEGRATION = [name for name in INTEGRATION if name not in {
-    ".agents/hooks.json",
-    "tests/fm-agy-bypass-live-e2e.test.sh",
-    "tests/fm-agy-observer-live-e2e.test.sh",
-    "tests/fm-agy-signals-live-e2e.test.sh",
-}]
 
 
 def guards_for(binding):
     if not isinstance(binding, dict) or not isinstance(binding.get("context"), dict):
         raise ValueError("compatibility binding requires an object context")
-    names = ("native",) if binding["context"].get("posture") == "native-auto" else ("bypass", "observer", "signals")
-    return {name: GUARDS[name] for name in names}
+    if binding["context"].get("posture") != "native-auto":
+        raise ValueError("retired or unknown compatibility context; explicit recovery required")
+    return GUARDS
 
 
 def digest(value):
@@ -167,13 +144,7 @@ def context(args):
         return {"model": model, "effort": effort,
                 "tool_contract": "native-file-and-shell-v2", "posture": "native-auto",
                 "backend": tier[len("native-"):]}
-    if tier not in ("agy", "devin") or not judge_model:
-        raise ValueError("unknown judge context")
-    return {
-        "model": model, "effort": effort, "tool_contract": "native-file-and-shell-v1",
-        "judge_tier": tier, "judge_model": judge_model,
-        "judge_executable": identity(judge_bin),
-    }
+    raise ValueError("retired or unknown compatibility context; explicit recovery required")
 
 
 def snapshot(args):
@@ -189,8 +160,7 @@ def snapshot(args):
     if not match or binary != identity(executable):
         raise ValueError("unreadable version or executable replaced during version query")
     selected_context = context(args)
-    integration = NATIVE_INTEGRATION if selected_context.get("posture") == "native-auto" else INTEGRATION
-    hashes = {name: digest((ROOT / name).read_bytes()) for name in integration}
+    hashes = {name: digest((ROOT / name).read_bytes()) for name in INTEGRATION}
     return {
         "executable": binary, "version": match[1],
         "platform": {
@@ -221,7 +191,7 @@ def coverage(proofs, binding):
 def receipt_matches(path, binding):
     receipt = read_json(path, trusted=True)
     if (receipt.get("schema") != SCHEMA or receipt.get("binding") != binding
-            or receipt.get("origin") not in ("patch-verification", "manual-baseline")
+            or receipt.get("origin") != "patch-verification"
             or type(receipt.get("completed_at")) is not int):
         raise ValueError("stale or malformed compatibility receipt")
     coverage(receipt["proofs"], binding)
