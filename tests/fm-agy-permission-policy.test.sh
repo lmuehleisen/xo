@@ -132,8 +132,9 @@ test_worker_completion_home_binding() {
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && abstained "$OUT" \
-      || fail "exact own-home completion must abstain under bypass: $OUT"
+    if [ "$RC" != 0 ] || ! abstained "$OUT"; then
+      fail "exact own-home completion must abstain under bypass: $OUT"
+    fi
   done <<EOF
 cd '$dir' && FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none
 FM_HOME='$dir' bash '$dir/bin/fm-captain-hold.sh' complete t1 --none
@@ -143,8 +144,9 @@ EOF
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
-      || fail "non-contract completion must stay held under bypass: $OUT"
+    if [ "$RC" != 0 ] || ! denied "$OUT" 'held for firstmate'; then
+      fail "non-contract completion must stay held under bypass: $OUT"
+    fi
   done <<EOF
 FM_HOME='$dir/another-home' '$dir/bin/fm-captain-hold.sh' complete t1 --none
 FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t2 --none
