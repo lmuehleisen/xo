@@ -3854,6 +3854,58 @@ test_away_branch_relaunch_accepts_existing_dispatchable_items() {
   pass "away supervision relaunches existing In-flight and queued items under the saturated fresh-spawn spend cap"
 }
 
+# A relaunched task inherits answers= from its record; the commit must re-read
+# that call rather than blindly re-block it, because resolving and pruning the
+# call while the task ran is exactly what the link exists to notice.
+test_relaunch_skips_a_stale_answers_edge() {
+  local dir id call out rc state dep
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi is not installed, so the backlog transition is inert"
+    return 0
+  }
+  fm_tasks_axi_compatible || {
+    pass "skipped: installed tasks-axi predates ${FM_TASKS_AXI_MIN}, so dispatch refuses automatic backlog transitions"
+    return 0
+  }
+
+  for state in open closed pruned; do
+    id="rl-ans-$state"
+    call="call-$state"
+    dir=$(new_case "ans-$state" "$id")
+    add_ship_task "$dir" "$id" claude
+    printf 'answers=%s\n' "$call" >> "$dir/home/state/$id.meta"
+    seed_backlog "$dir" "$id" in_flight
+    tasks-axi add "$call" "captain call $call" --kind captain \
+      --file "$dir/home/data/backlog.md" >/dev/null
+    tasks-axi hold "$call" --kind captain --reason 'waiting on the captain' \
+      --file "$dir/home/data/backlog.md" >/dev/null
+    # The open case starts with the edge already recorded, so a successful
+    # relaunch must leave exactly one copy rather than duplicating it.
+    [ "$state" != open ] || tasks-axi block "$call" --by "$id" \
+      --file "$dir/home/data/backlog.md" >/dev/null
+    case "$state" in
+      closed) tasks-axi "done" "$call" --file "$dir/home/data/backlog.md" >/dev/null ;;
+      pruned) tasks-axi rm "$call" --file "$dir/home/data/backlog.md" >/dev/null ;;
+    esac
+
+    rc=0
+    out=$(run_control "$dir" "$id" relaunch --note "picking the work back up") || rc=$?
+    expect_code 0 "$rc" "a relaunch whose recorded call is $state should succeed"$'\n'"$out"
+    grep -qx "answers=$call" "$dir/home/state/$id.meta" \
+      || fail "a $state-call relaunch dropped the recorded answers link"
+    if [ "$state" = open ]; then
+      dep=$(tasks-axi show "$call" --file "$dir/home/data/backlog.md" 2>/dev/null \
+        | sed -n 's/^  deps: *//p' | head -1)
+      [ "$dep" = "\"blocked-by:$id\"" ] || [ "$dep" = "blocked-by:$id" ] \
+        || fail "an open call did not keep its refreshed edge (deps: $dep)"
+    else
+      assert_contains "$out" 'edge is not refreshed' \
+        "a $state call did not print the stale-edge notice"
+    fi
+  done
+  pass "relaunch refreshes an open call's edge and skips a closed or pruned one"
+}
+
 test_exit_and_relaunch_remove_the_dialog_file() {
   local dir out rc
   dir=$(new_case dialog-file-exit rl70)
@@ -4015,3 +4067,4 @@ test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
 test_away_branch_relaunch_accepts_existing_dispatchable_items
+test_relaunch_skips_a_stale_answers_edge

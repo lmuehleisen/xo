@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--answers <captain-held-task-id>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--ultracode] [--goal <condition>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--answers <captain-held-task-id>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -818,6 +818,20 @@
 # keeps no data/backlog.md. A configured non-markdown adapter remains
 # active without a markdown file; any active automatic backend without
 # compatible tasks-axi refuses before creating lifecycle state.
+#   --answers <captain-held-task-id> declares that this ship or scout was
+#   dispatched to answer part of an open captain-held call. The named id must
+#   already exist in this home's backlog and still be an open captain call
+#   (not done, hold kind captain); anything else refuses the spawn before any
+#   endpoint, worktree, or record exists. The flag is never inferred from
+#   brief prose. It is per-task, so batch dispatch refuses it, and a
+#   --secondmate spawn refuses it because persistent agents are never work
+#   items. At the dispatch commit the spawn records the call as blocked-by
+#   this task through bin/fm-backlog-transition-lib.sh - an edge the backlog
+#   renders and that the landing clears - and writes answers=<id> in the task
+#   record, which relaunch and scout promotion carry like other dispatch
+#   values. Recording the link changes nothing by itself: it does not answer,
+#   release, or reconcile the call, and bin/fm-teardown.sh only names the
+#   still-open call when the answering task lands.
 # Private dispatch call history is owned by bin/fm-dispatch-history-lib.sh.
 #
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
@@ -1062,6 +1076,9 @@ ULTRACODE=0
 GOAL=
 GOAL_SET=0
 DISPATCH_OVERRIDE=
+ANSWERS=
+ANSWERS_SET=0
+SPAWN_ANSWERS_EDGE_FAILED=
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -1122,6 +1139,7 @@ for a in "$@"; do
       ;;
     goal) GOAL=$a; GOAL_SET=1 ;;
     dispatch-override) DISPATCH_OVERRIDE=$a ;;
+    answers) ANSWERS=$a; ANSWERS_SET=1 ;;
     hermes-profile)
       HERMES_PROFILE=$a
       HERMES_PROFILE_SET=1
@@ -1201,6 +1219,8 @@ for a in "$@"; do
   --goal=*) GOAL=${a#--goal=}; GOAL_SET=1 ;;
   --dispatch-override) want_value=dispatch-override ;;
   --dispatch-override=*) DISPATCH_OVERRIDE=${a#--dispatch-override=} ;;
+  --answers) want_value=answers ;;
+  --answers=*) ANSWERS=${a#--answers=}; ANSWERS_SET=1 ;;
   --hermes-profile) want_value=hermes-profile ;;
   --hermes-profile=*) HERMES_PROFILE=${a#--hermes-profile=}; HERMES_PROFILE_SET=1 ;;
   --backend) want_value=backend ;;
@@ -1283,6 +1303,14 @@ done
 }
 if [ "$KIND" = secondmate ] && [ "$HERMES_PROFILE_SET" = 1 ]; then
   echo 'error: --hermes-profile is for crewmate/scout launches, never a secondmate' >&2
+  exit 1
+fi
+if [ "$ANSWERS_SET" -eq 1 ] && [ -z "$ANSWERS" ]; then
+  echo "error: --answers requires a non-empty value" >&2
+  exit 1
+fi
+if [ "$KIND" = secondmate ] && [ "$ANSWERS_SET" -eq 1 ]; then
+  echo 'error: --answers is for ship and scout launches, never a secondmate' >&2
   exit 1
 fi
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || {
@@ -2421,6 +2449,12 @@ if [ "$RELAUNCH" -eq 1 ] && [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart"
   exit 1
 fi
 if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in */*) false ;; *) true ;; esac then
+  if [ "$ANSWERS_SET" -eq 1 ]; then
+    # --answers names the one call this task answers; a shared batch flag would
+    # point every pair at the same call, so each answering task dispatches alone.
+    echo "error: --answers is per-task; dispatch each answering task explicitly" >&2
+    exit 1
+  fi
   if [ "$KIND" != secondmate ] && [ -z "$HARNESS_ARG" ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
     echo "error: config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules (the consultation backstop, so the rules are never silently skipped)." >&2
     exit 1
@@ -2856,6 +2890,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
   UPSTREAM_CONSENT=$(fm_meta_get "$RELAUNCH_META" upstream_consent)
+  [ "$ANSWERS_SET" -eq 1 ] || ANSWERS=$(fm_meta_get "$RELAUNCH_META" answers)
   if [ "$KIND" = ship ]; then
     BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)
     [ -n "$BRANCH" ] || BRANCH="fm/$ID"
@@ -5682,10 +5717,36 @@ if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
     echo "error: this home's backlog item $ID is not dispatchable in state $BACKLOG_ROW_STATE; refusing before creating its endpoint or local copy" >&2
     exit 1
   fi
+  if [ "$ANSWERS_SET" -eq 1 ]; then
+    # The link is explicit, never inferred: the named row must already be an
+    # open captain call, using the same predicate bin/fm-captain-hold.sh's
+    # `open` owns (not done, hold kind captain). A refusal here costs nothing
+    # - no endpoint, worktree, or record exists yet.
+    if [ "$ANSWERS" = "$ID" ]; then
+      echo "error: --answers cannot name the task being dispatched ($ID)" >&2
+      exit 1
+    fi
+    if ! fm_backlog_row_probe "$DATA" "$ANSWERS"; then
+      if [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
+        echo "error: --answers $ANSWERS has no backlog item in this home, so it is not an existing captain-held task" >&2
+      else
+        echo "error: --answers $ANSWERS could not be read ($FM_BACKLOG_ROW_ERROR)" >&2
+      fi
+      exit 1
+    fi
+    if [ "${FM_BACKLOG_ROW_STATE%% *}" = "done" ] || [ "$FM_BACKLOG_ROW_HOLD_KIND" != captain ]; then
+      echo "error: --answers $ANSWERS is not an open captain-held task in this home's backlog" >&2
+      exit 1
+    fi
+  fi
 else
   BACKLOG_GATE_STATUS=$?
   if [ "$BACKLOG_GATE_STATUS" -eq 2 ]; then
     echo "error: task $ID cannot be dispatched because its backlog data directory is inaccessible: $DATA ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+    exit 1
+  fi
+  if [ "$ANSWERS_SET" -eq 1 ]; then
+    echo "error: --answers records the call in this home's backlog, which this launch does not use ($FM_BACKLOG_TRANSITION_SKIP)" >&2
     exit 1
   fi
 fi
@@ -8112,7 +8173,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness hermes_profile hermes_home approval_mode kind mode effective_mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version omp_profile model_family ultracode goal account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx agy_bypass agy_judge agy_posture agy_permission_mode agy_version worker_tmux_dir opencode_launch_failure polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project harness hermes_profile hermes_home approval_mode kind mode effective_mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version omp_profile model_family ultracode goal answers account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx agy_bypass agy_judge agy_posture agy_permission_mode agy_version worker_tmux_dir opencode_launch_failure polytoken_session polytoken_port polytoken_credential", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -8165,6 +8226,7 @@ fi
   [ "$ULTRACODE" = 0 ] || echo "ultracode=on"
   [ "$GOAL_SET" = 0 ] || echo "goal=$GOAL"
   [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+  [ -z "$ANSWERS" ] || echo "answers=$ANSWERS"
   # The worker account pin, only when this home declares one, so an unpinned
   # task record stays byte-identical.
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
@@ -8259,9 +8321,40 @@ fi
 # this task's own meta lock, so a steer or teardown racing the same id stays
 # serialized exactly as before. The call itself is deferred to the final commit
 # point below so every earlier launch-delivery failure remains unwindable.
+# The --answers edge is written at this same point: a successful dispatch has
+# it, a dispatch that never reached the commit has none, and a relaunch's
+# re-run is idempotent on an already-linked pair.
 spawn_commit_backlog_transition() {
   [ "$BACKLOG_TRANSITION" = 1 ] || return 0
-  fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE"
+  SPAWN_ANSWERS_EDGE_FAILED=
+  fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE" || return
+  [ -n "$ANSWERS" ] || return 0
+  if [ "$ANSWERS_SET" -eq 0 ]; then
+    # An inherited link is re-read, never blindly re-blocked: the call may
+    # have been answered or pruned while the task ran - that resolution is
+    # exactly what the link exists to notice, so only a still-open call has
+    # its edge re-run. A row that cannot be read still fails, because a
+    # transient read error must not quietly drop the obligation; the record
+    # keeps answers= either way so teardown's reminder check is unchanged.
+    if ! fm_backlog_row_probe "$DATA" "$ANSWERS"; then
+      if [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
+        echo "notice: relaunch of $ID: the recorded --answers call $ANSWERS is gone from the backlog, so its edge is not refreshed" >&2
+        return 0
+      fi
+      SPAWN_ANSWERS_EDGE_FAILED=1
+      FM_BACKLOG_TRANSITION_ERROR="task $ID moved to In flight, but whether the recorded --answers call $ANSWERS is still open could not be read ($FM_BACKLOG_ROW_ERROR)"
+      return 1
+    fi
+    if [ "${FM_BACKLOG_ROW_STATE%% *}" = "done" ] || [ "$FM_BACKLOG_ROW_HOLD_KIND" != captain ]; then
+      echo "notice: relaunch of $ID: the recorded --answers call $ANSWERS is no longer an open captain call, so its edge is not refreshed" >&2
+      return 0
+    fi
+  fi
+  fm_backlog_block "$DATA" "$ANSWERS" "$ID" || {
+    SPAWN_ANSWERS_EDGE_FAILED=1
+    FM_BACKLOG_TRANSITION_ERROR="task $ID moved to In flight, but the --answers edge ${ANSWERS} blocked-by $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR)"
+    return 1
+  }
 }
 
 # The deferred-signal exit path's preservation report. A claim about preserved
@@ -9223,11 +9316,31 @@ else
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   if [ "$RELAUNCH" -eq 0 ]; then
+    SPAWN_ANSWERS_ROW_QUEUED=
+    if [ -n "$SPAWN_ANSWERS_EDGE_FAILED" ]; then
+      # The dispatch transition already moved the row, so return it to Queued
+      # before the record removal below: an in-flight row with no record is
+      # the orphan_in_flight shape fm-fleet-snapshot reports as invalid
+      # inventory. A failed reopen keeps the same residue and message as
+      # before this pairing existed.
+      fm_backlog_mutate "$DATA" reopen "$ID" >/dev/null 2>&1 \
+        && SPAWN_ANSWERS_ROW_QUEUED=1
+    fi
     if spawn_fresh_commit_rollback; then
-      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its record was removed so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
+      if [ -n "$SPAWN_ANSWERS_EDGE_FAILED" ]; then
+        SPAWN_ANSWERS_ROW_OUTCOME='remains In flight'
+        [ -z "$SPAWN_ANSWERS_ROW_QUEUED" ] || SPAWN_ANSWERS_ROW_OUTCOME='was returned to Queued'
+        echo "error: task $ID's dispatch commit could not finish ($FM_BACKLOG_TRANSITION_ERROR); its record was removed and its backlog item $SPAWN_ANSWERS_ROW_OUTCOME for the re-run, so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
+      else
+        echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its record was removed so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
+      fi
+    elif [ -n "$SPAWN_ANSWERS_EDGE_FAILED" ]; then
+      echo "error: task $ID's dispatch commit could not finish ($FM_BACKLOG_TRANSITION_ERROR), and failed-dispatch cleanup is incomplete; the provisional record may remain at $STATE/$ID.meta and its backlog item may read In flight - close out endpoint $T and local copy $WT by hand, then remove the record and busy state before retrying" >&2
     else
       echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR), and failed-dispatch cleanup is incomplete; the provisional record may remain at $STATE/$ID.meta - close out endpoint $T and local copy $WT by hand, then remove the record and busy state before retrying" >&2
     fi
+  elif [ -n "$SPAWN_ANSWERS_EDGE_FAILED" ]; then
+    echo "error: task $ID was republished but its dispatch commit could not finish ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
   else
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
   fi

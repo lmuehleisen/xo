@@ -515,6 +515,14 @@ fm_backlog_start() {  # <data-dir> <id>
   fm_backlog_mutate "$1" start "$2"
 }
 
+# `<id> blocked-by <blocker>`: the dependency edge a dispatch writes for
+# `bin/fm-spawn.sh --answers`, recording that a captain-held call waits on
+# this task's landing. tasks-axi's block is idempotent for an already-linked
+# pair, so a relaunch can safely re-run it.
+fm_backlog_block() {  # <data-dir> <id> <blocker-id>
+  fm_backlog_mutate "$1" block "$2" --by "$3"
+}
+
 # tasks-axi takes a --pr link only as a canonical GitHub or Forgejo pull request
 # and refuses anything else, so a Gerrit change or GitLab merge request URL is
 # recorded on the row as a note instead. Prints the note's label for such a URL

@@ -694,6 +694,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Upstream: expands `"${words[@]}"`, which Bash 3.2 with `set -u` treats as an unbound variable when the array is empty.
   Drop the alternate expansion once upstream's expansion is safe under that shell.
 
+### captain-answer-task-link
+
+- Intent: a ship or scout dispatched to answer part of a captain-held call records that link (`bin/fm-spawn.sh --answers`), and teardown names the still-open call when the answering task lands.
+- Class: carried.
+- Seam: the `--answers` flag, its preflight validation, `answers=` metadata, relaunch inheritance, and the commit-time `blocked-by` edge in `bin/fm-spawn.sh`; `fm_backlog_block` in `bin/fm-backlog-transition-lib.sh`; `TEARDOWN_ANSWERS` and `captain_answer_reminder` plus their header paragraph in `bin/fm-teardown.sh`; the matching lines in the captain-hold-lifecycle skill, `docs/captain-hold-lifecycle.md`, and `docs/configuration.md` (shared).
+- Guard: `tests/fm-answers-link.test.sh`.
+- Upstream: no equivalent link between a dispatched task and the call it answers; drop once upstream ships the same flag, edge, and close-time reminder.
+
 ## Incidental
 
 - `ssh-remote-spelling`: equivalent shell quoting of the SSH remote prefix in `bin/fm-pr-health.sh`; realign when the same literal-scanning compatibility is available.
