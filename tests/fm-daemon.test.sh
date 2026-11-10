@@ -3916,3 +3916,243 @@ test_dialog_name_survives_away_self_handle
 test_seen_terminal_dialog_stale_clears_like_a_plain_stale
 test_dialog_name_joins_unseen_status_escalation
 test_dialog_name_after_demand_deep_inspection_still_escalates
+
+# Age <file> by <days>, plus two hours, so find -mtime comparisons are not on
+# the day boundary. BSD date -r takes an epoch; GNU date -d takes @epoch.
+age_capture_by_days() {  # <file> <days>
+  local file=$1 days=$2 epoch stamp
+  epoch=$(( $(date +%s) - days * 86400 - 7200 ))
+  stamp=$(date -u -r "$epoch" +%Y%m%d%H%M.%S 2>/dev/null || date -u -d "@$epoch" +%Y%m%d%H%M.%S) \
+    || fail "could not format a timestamp $days days ago"
+  TZ=UTC touch -t "$stamp" "$file" || fail "could not set the mtime of $file"
+}
+
+capture_mtime() {  # <file>
+  if stat -f %m "$1" >/dev/null 2>&1; then
+    stat -f %m "$1"
+  else
+    stat -c %Y "$1"
+  fi
+}
+
+write_prune_executable() {  # <path>
+  cat > "$1" <<'EOF'
+#!/usr/bin/env bash
+set -u
+export FM_STATE_OVERRIDE="$1"
+shift
+exec "$@" prune-submit-failures
+EOF
+  chmod +x "$1"
+}
+
+test_housekeeping_prunes_aged_captures_without_a_new_failure() {
+  local dir state exe
+  dir=$(make_supercase capture-retention-housekeeping)
+  state="$dir/state"
+  mkdir -p "$state/.subsuper-submit-failures"
+  printf 'aged pane\n' > "$state/.subsuper-submit-failures/20200101T000000-aged.txt"
+  printf 'recent pane\n' > "$state/.subsuper-submit-failures/20240101T000000-recent.txt"
+  printf 'fresh pane\n' > "$state/.subsuper-submit-failures/20260101T000000-fresh.txt"
+  printf 'leave-me\n' > "$state/.subsuper-submit-failures/notes.md"
+  age_capture_by_days "$state/.subsuper-submit-failures/20200101T000000-aged.txt" 8
+  age_capture_by_days "$state/.subsuper-submit-failures/20240101T000000-recent.txt" 2
+  age_capture_by_days "$state/.subsuper-submit-failures/notes.md" 8
+  exe="$dir/housekeeping-prune.sh"
+  cat > "$exe" <<'EOF'
+#!/usr/bin/env bash
+set -u
+. "$1"
+FM_ESCALATE_BATCH_SECS=99999999
+FM_HEARTBEAT_SCAN_SECS=99999999
+FM_MAX_DEFER_SECS=0
+export FM_ESCALATE_BATCH_SECS FM_HEARTBEAT_SCAN_SECS FM_MAX_DEFER_SECS
+housekeeping "$2"
+EOF
+  chmod +x "$exe"
+  "$exe" "$DAEMON" "$state" || fail "housekeeping prune executable failed"
+  assert_absent "$state/.subsuper-submit-failures/20200101T000000-aged.txt" \
+    "housekeeping left a capture older than the retention bound"
+  assert_grep 'recent pane' "$state/.subsuper-submit-failures/20240101T000000-recent.txt" \
+    "housekeeping removed a capture still inside the retention bound"
+  assert_grep 'fresh pane' "$state/.subsuper-submit-failures/20260101T000000-fresh.txt" \
+    "housekeeping removed a fresh capture"
+  assert_grep 'leave-me' "$state/.subsuper-submit-failures/notes.md" \
+    "housekeeping removed a file that is not a pane capture"
+  [ "$(find "$state/.subsuper-submit-failures" -type f -name '*.txt' | wc -l | tr -d ' ')" -eq 2 ] \
+    || fail "housekeeping recorded a new failure capture: $(find "$state/.subsuper-submit-failures" -type f -name '*.txt')"
+  pass "housekeeping prunes an aged pane capture without recording a new failure"
+}
+
+test_prune_subcommand_keeps_newest_capture_while_owned_recovery_is_open() {
+  local dir state exe out before
+  dir=$(make_supercase capture-retention-owned)
+  state="$dir/state"
+  mkdir -p "$state/.subsuper-submit-failures"
+  printf 'old aged\n' > "$state/.subsuper-submit-failures/20200101T000000-old.txt"
+  printf 'recovery snapshot\n' > "$state/.subsuper-submit-failures/20200102T000000-newest.txt"
+  age_capture_by_days "$state/.subsuper-submit-failures/20200101T000000-old.txt" 8
+  age_capture_by_days "$state/.subsuper-submit-failures/20200102T000000-newest.txt" 8
+  printf 'epoch=1\ntarget=pane\nbackend=tmux\nlines=0\nsum=\nrecord=\nturn=\ntext=digest\n' \
+    > "$state/.subsuper-inject-owned"
+  exe="$dir/prune.sh"
+  write_prune_executable "$exe"
+  out=$("$exe" "$state" "$DAEMON" 2>&1) || fail "prune subcommand failed while recovery was open: $out"
+  [ -z "$out" ] || fail "prune subcommand wrote output: $out"
+  assert_absent "$state/.subsuper-submit-failures/20200101T000000-old.txt" \
+    "an older aged capture survived while a newer one was the recovery snapshot"
+  assert_grep 'recovery snapshot' "$state/.subsuper-submit-failures/20200102T000000-newest.txt" \
+    "the newest capture was removed while the owned-digest record still existed"
+  before=$(capture_mtime "$state/.subsuper-submit-failures/20200102T000000-newest.txt")
+  out=$("$exe" "$state" "$DAEMON" 2>&1) || fail "second prune failed: $out"
+  [ "$(capture_mtime "$state/.subsuper-submit-failures/20200102T000000-newest.txt")" = "$before" ] \
+    || fail "a second prune rewrote the capture recovery still needs"
+  rm -f "$state/.subsuper-inject-owned"
+  out=$("$exe" "$state" "$DAEMON" 2>&1) || fail "prune after recovery finished failed: $out"
+  assert_absent "$state/.subsuper-submit-failures/20200102T000000-newest.txt" \
+    "an aged capture outlived retention after the owned-digest record was gone"
+  pass "capture retention keeps the newest snapshot only while owned-input recovery is open"
+}
+
+test_prune_subcommand_keeps_newest_captures_under_the_count_cap() {
+  local dir state exe i name
+  dir=$(make_supercase capture-retention-cap)
+  state="$dir/state"
+  mkdir -p "$state/.subsuper-submit-failures"
+  i=0
+  while [ "$i" -le 50 ]; do
+    name=$(printf '20260101T120000-%03d.txt' "$i")
+    printf 'n=%s\n' "$name" > "$state/.subsuper-submit-failures/$name"
+    i=$((i + 1))
+  done
+  printf 'not a capture\n' > "$state/.subsuper-submit-failures/readme.md"
+  exe="$dir/prune.sh"
+  write_prune_executable "$exe"
+  "$exe" "$state" "$DAEMON" >/dev/null || fail "prune subcommand failed on the count cap"
+  assert_absent "$state/.subsuper-submit-failures/20260101T120000-000.txt" \
+    "the oldest capture beyond the newest 50 was kept"
+  assert_grep 'n=20260101T120000-001.txt' "$state/.subsuper-submit-failures/20260101T120000-001.txt" \
+    "a capture inside the newest 50 was removed"
+  assert_grep 'n=20260101T120000-050.txt' "$state/.subsuper-submit-failures/20260101T120000-050.txt" \
+    "the newest capture was removed by the count cap"
+  assert_grep 'not a capture' "$state/.subsuper-submit-failures/readme.md" \
+    "the count cap removed a file that is not a pane capture"
+  [ "$(find "$state/.subsuper-submit-failures" -type f -name '*.txt' | wc -l | tr -d ' ')" -eq 50 ] \
+    || fail "capture retention did not leave exactly the newest 50 captures"
+  pass "capture retention keeps the newest 50 pane captures"
+}
+
+test_prune_subcommand_is_a_noop_without_a_capture_directory() {
+  local dir state exe out
+  dir=$(make_supercase capture-retention-missing)
+  state="$dir/state"
+  exe="$dir/prune.sh"
+  write_prune_executable "$exe"
+  out=$("$exe" "$state" "$DAEMON" 2>&1) || fail "prune subcommand failed when no capture directory exists: $out"
+  [ -z "$out" ] || fail "prune subcommand wrote output for a missing directory: $out"
+  assert_absent "$state/.subsuper-submit-failures" \
+    "prune created a capture directory when there was nothing to retain"
+  pass "capture retention does nothing when no capture directory exists"
+}
+
+test_record_submit_failure_still_prunes_aged_captures() {
+  local dir state exe out
+  dir=$(make_supercase capture-retention-record)
+  state="$dir/state"
+  mkdir -p "$state/.subsuper-submit-failures"
+  printf 'aged pane\n' > "$state/.subsuper-submit-failures/20200101T000000-aged.txt"
+  printf 'fresh pane\n' > "$state/.subsuper-submit-failures/20260101T000000-fresh.txt"
+  age_capture_by_days "$state/.subsuper-submit-failures/20200101T000000-aged.txt" 8
+  exe="$dir/record-failure.sh"
+  cat > "$exe" <<'EOF'
+#!/usr/bin/env bash
+set -u
+. "$1"
+fm_backend_composer_state() { printf 'empty\n'; }
+fm_backend_capture() { printf 'captured pane\n'; }
+record_submit_failure "$2" tmux target "synthetic failure"
+EOF
+  chmod +x "$exe"
+  out=$("$exe" "$DAEMON" "$state" 2>"$dir/record.err") || fail "recording a failure failed: $(cat "$dir/record.err")"
+  [ -f "$out" ] || fail "recording a failure did not return a capture path: $out"
+  assert_grep 'captured pane' "$out" "the new capture does not contain the pane text"
+  assert_grep 'synthetic failure' "$out" "the new capture does not name the failure"
+  assert_absent "$state/.subsuper-submit-failures/20200101T000000-aged.txt" \
+    "recording a failure left an aged capture behind"
+  assert_grep 'fresh pane' "$state/.subsuper-submit-failures/20260101T000000-fresh.txt" \
+    "recording a failure removed a fresh capture"
+  [ "$(find "$state/.subsuper-submit-failures" -type f -name '*.txt' | wc -l | tr -d ' ')" -eq 2 ] \
+    || fail "recording a failure did not leave the fresh capture plus the new one"
+  pass "recording a failure still applies capture retention"
+}
+
+test_fresh_away_prunes_aged_captures_without_dropping_the_wake_queue() {
+  local dir state exe
+  dir=$(make_supercase capture-retention-fresh-away)
+  state="$dir/state"
+  mkdir -p "$state/.subsuper-submit-failures"
+  : > "$state/.subsuper-escalations"
+  : > "$state/.subsuper-escalations.since"
+  : > "$state/.subsuper-inject-wedged"
+  : > "$state/.subsuper-unknown-acked"
+  printf 'durable\n' > "$state/.wake-queue"
+  printf 'aged pane\n' > "$state/.subsuper-submit-failures/20200101T000000-aged.txt"
+  printf 'fresh pane\n' > "$state/.subsuper-submit-failures/20260101T000000-fresh.txt"
+  age_capture_by_days "$state/.subsuper-submit-failures/20200101T000000-aged.txt" 8
+  exe="$dir/fresh-away.sh"
+  cat > "$exe" <<'EOF'
+#!/usr/bin/env bash
+set -u
+export FM_HOME="$1"
+export FM_STATE_OVERRIDE="$2"
+# shellcheck source=bin/fm-afk-start.sh
+. "$3"
+fm_afk_clear_stale_artifacts "$2"
+EOF
+  chmod +x "$exe"
+  "$exe" "$dir" "$state" "$AFK_START" || fail "fresh away cleanup failed"
+  assert_absent "$state/.subsuper-escalations" "fresh away left the escalation buffer"
+  assert_absent "$state/.subsuper-escalations.since" "fresh away left the escalation sidecar"
+  assert_absent "$state/.subsuper-inject-wedged" "fresh away left the wedge marker"
+  assert_absent "$state/.subsuper-unknown-acked" "fresh away left unknown-wake acknowledgements"
+  assert_grep 'durable' "$state/.wake-queue" "fresh away removed the durable wake queue"
+  assert_absent "$state/.subsuper-submit-failures/20200101T000000-aged.txt" \
+    "fresh away left an aged pane capture"
+  assert_grep 'fresh pane' "$state/.subsuper-submit-failures/20260101T000000-fresh.txt" \
+    "fresh away removed a fresh pane capture"
+  pass "fresh away prunes aged pane captures and still clears only the stale delivery artifacts"
+}
+
+test_away_return_prunes_aged_captures_and_guard_does_not() {
+  local dir state status out
+  dir=$(make_supercase capture-retention-return)
+  state="$dir/state"
+  mkdir -p "$state/.subsuper-submit-failures" "$dir/data" "$dir/config"
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
+  printf 'aged pane\n' > "$state/.subsuper-submit-failures/20200101T000000-aged.txt"
+  printf 'fresh pane\n' > "$state/.subsuper-submit-failures/20260101T000000-fresh.txt"
+  age_capture_by_days "$state/.subsuper-submit-failures/20200101T000000-aged.txt" 8
+  status=0
+  out=$(FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-afk-return.sh" guard 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "return guard failed: $status $out"
+  assert_grep 'aged pane' "$state/.subsuper-submit-failures/20200101T000000-aged.txt" \
+    "return guard removed an aged capture"
+  assert_grep 'fresh pane' "$state/.subsuper-submit-failures/20260101T000000-fresh.txt" \
+    "return guard removed a fresh capture"
+  status=0
+  out=$(FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-afk-return.sh" begin 2>&1) || status=$?
+  assert_absent "$state/.subsuper-submit-failures/20200101T000000-aged.txt" \
+    "away return left an aged pane capture (exit $status): $out"
+  assert_grep 'fresh pane' "$state/.subsuper-submit-failures/20260101T000000-fresh.txt" \
+    "away return removed a fresh pane capture (exit $status): $out"
+  pass "away return prunes aged pane captures and the read-only guard does not"
+}
+
+test_housekeeping_prunes_aged_captures_without_a_new_failure
+test_prune_subcommand_keeps_newest_capture_while_owned_recovery_is_open
+test_prune_subcommand_keeps_newest_captures_under_the_count_cap
+test_prune_subcommand_is_a_noop_without_a_capture_directory
+test_record_submit_failure_still_prunes_aged_captures
+test_fresh_away_prunes_aged_captures_without_dropping_the_wake_queue
+test_away_return_prunes_aged_captures_and_guard_does_not

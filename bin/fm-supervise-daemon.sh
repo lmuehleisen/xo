@@ -182,11 +182,16 @@
 #          daemon's own unsent digest from the primary's composer, release the
 #          lock. A crashing fm-watch.sh is logged and restarted, never killing
 #          the daemon; a tight crash-restart spin is detected and backed off.
+#          Shutdown also applies submit-failure capture retention.
 #        fm-supervise-daemon.sh clear-owned-input
 #          One-shot: clear the digest the daemon typed but could not prove
 #          delivered from the primary's composer (clear_owned_input_at_exit).
 #          bin/fm-afk-return.sh runs it at return. Exits 1, naming the target,
 #          when daemon text may still be there.
+#        fm-supervise-daemon.sh prune-submit-failures
+#          One-shot: apply submit-failure capture retention
+#          (prune_submit_failure_captures) and exit 0. Fresh away entry and
+#          away return run it so a capture ages out without another failure.
 set -u
 
 FM_DAEMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -286,9 +291,8 @@ INJECT_PROOF_POLLS_DEFAULT=20
 # Digest files older than DIGEST_RETAIN_DAYS are pruned at the next long flush.
 INJECT_INLINE_MAX_DEFAULT=480
 DIGEST_RETAIN_DAYS=7
-# A failed submit's owned-digest record and its pane captures (see
-# recover_owned_input). The newest SUBMIT_FAILURES_KEEP captures are kept, none
-# older than DIGEST_RETAIN_DAYS.
+# Pane captures under SUBMIT_FAILURES_DIR_NAME. prune_submit_failure_captures
+# owns their retention.
 INJECT_OWNED_NAME=.subsuper-inject-owned
 SUBMIT_FAILURES_DIR_NAME=.subsuper-submit-failures
 SUBMIT_FAILURES_KEEP=50
@@ -1421,7 +1425,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 }
 
 # --- housekeeping (runs every tick while the watcher is mid-cycle) ----------
-# Four cheap jobs, each guarded so an empty/quiet fleet costs near zero:
+# Cheap jobs, each guarded so an empty/quiet fleet costs near zero:
 #  1) batch flush: if the escalation buffer's oldest content is older than
 #     ESCALATE_BATCH_SECS (or batching is disabled), inject one digest.
 #  1b) max-defer escape: if the buffer is STILL undelivered past MAX_DEFER_SECS,
@@ -1436,6 +1440,8 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #     the window (repeating bounded re-surface, never a wedge).
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, run the catch-all status scan in
 #     the block below and escalate what it finds; that block owns its file set.
+#  4) submit-failure capture retention: prune_submit_failure_captures, so a
+#     pane capture ages out without another failure being recorded.
 housekeeping() {  # <state>
   local state=$1 now due f key task win marker age last max_defer oldest pause_secs marker_epoch until bounded_until pause_reason dialog_name persisted
   now=$(_now)
@@ -1641,6 +1647,10 @@ housekeeping() {  # <state>
       fi
     done
   fi
+
+  # (4) submit-failure capture retention. Independent of whether this tick
+  # recorded a failure; an empty capture directory returns immediately.
+  prune_submit_failure_captures "$state"
 }
 
 # Find a recorded or live window target whose task id matches the marker key.
@@ -1671,7 +1681,8 @@ window_for_task() {  # <task-key> [state]
 # state/.subsuper-inject-owned BEFORE typing it, bound to the head of the
 # escalation buffer that digest carried, and removes the record only once
 # delivery is proven; every failed submit also saves a pane capture under
-# state/.subsuper-submit-failures/. Every later
+# state/.subsuper-submit-failures/ (prune_submit_failure_captures owns
+# retention). Every later
 # flush first runs recover_owned_input, which acts only on an idle pane whose
 # composer the backend's ownership read (fm_tmux_composer_owned_input,
 # fm_backend_herdr_composer_owned_input) proves holds exactly that digest:
@@ -1692,10 +1703,40 @@ window_for_task() {  # <task-key> [state]
 # is why herdr records too. The same record lets clear_owned_input_at_exit remove the
 # daemon's own unsent text when away mode ends.
 
+# prune_submit_failure_captures: drop pane captures that have outlived the
+# retention bound. Idempotent, and a no-op when the capture directory is
+# absent. Removes *.txt files whose mtime is older than DIGEST_RETAIN_DAYS,
+# then keeps only the newest SUBMIT_FAILURES_KEEP by filename order, the same
+# order record_submit_failure uses when it names a capture. While the
+# owned-digest record exists, the single newest capture is kept even past the
+# age bound: that file is the pane snapshot owned-input recovery recorded, and
+# a later pass removes it once the record is gone. Nothing else in the
+# directory is touched.
+prune_submit_failure_captures() {  # <state>
+  local state=$1 dir newest='' path base old
+  dir="$state/$SUBMIT_FAILURES_DIR_NAME"
+  [ -d "$dir" ] || return 0
+  if [ -e "$state/$INJECT_OWNED_NAME" ]; then
+    newest=$(find "$dir" -type f -name '*.txt' -exec basename {} \; 2>/dev/null | sort -r | head -n 1)
+  fi
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    base=${path##*/}
+    [ -n "$newest" ] && [ "$base" = "$newest" ] && continue
+    rm -f -- "$path" || true
+  done < <(find "$dir" -type f -name '*.txt' -mtime +"$DIGEST_RETAIN_DAYS" -print 2>/dev/null)
+  while IFS= read -r old; do
+    [ -n "$old" ] || continue
+    rm -f -- "${dir:?}/${old:?}" || true
+  done < <(find "$dir" -type f -name '*.txt' -exec basename {} \; 2>/dev/null \
+    | sort -r | tail -n +$((SUBMIT_FAILURES_KEEP + 1)))
+  return 0
+}
+
 # record_submit_failure: save a plain capture of the supervisor pane with what
-# failed, prune old captures, and print the capture's path.
+# failed, apply capture retention, and print the capture's path.
 record_submit_failure() {  # <state> <backend> <target> <what>
-  local state=$1 backend=$2 target=$3 what=$4 dir file old
+  local state=$1 backend=$2 target=$3 what=$4 dir file
   dir="$state/$SUBMIT_FAILURES_DIR_NAME"
   mkdir -p "$dir" || return 1
   file="$dir/$(date '+%Y%m%dT%H%M%S')-$$-$RANDOM.txt"
@@ -1708,11 +1749,7 @@ record_submit_failure() {  # <state> <backend> <target> <what>
       fm_backend_capture "$backend" "$target" 60 2>/dev/null
     } > "$file"
   ) || return 1
-  find "$dir" -type f -name '*.txt' -mtime +"$DIGEST_RETAIN_DAYS" -exec rm -f {} + 2>/dev/null || true
-  while IFS= read -r old; do
-    [ -n "$old" ] && rm -f -- "${dir:?}/${old:?}"
-  done < <(find "$dir" -type f -name '*.txt' -exec basename {} \; 2>/dev/null \
-    | sort -r | tail -n +$((SUBMIT_FAILURES_KEEP + 1)))
+  prune_submit_failure_captures "$state"
   printf '%s' "$file"
 }
 
@@ -2573,6 +2610,7 @@ fm_super_main() {
   afk_active "$STATE" && afk_status="on"
   log "daemon starting (pid $$); target=$TARGET; target_source=$target_source; backend=$BACKEND; backend_source=$backend_source; afk=$afk_status; inject_skip='${FM_INJECT_SKIP:-$INJECT_SKIP_DEFAULT}'; stale_escalate=${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}s; batch=${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}s"
   migrate_watcher_pause_markers "$STATE"
+  prune_submit_failure_captures "$STATE"
 
   # --- shutdown: flush buffered escalations, reap child, release lock -------
   local WATCHER_PID="" CUR_TMP=""
@@ -2582,6 +2620,9 @@ fm_super_main() {
     # Bounded so a delivery proof cannot outlast fm-afk-launch.sh stop's wait.
     FM_INJECT_PROOF_POLLS=${FM_INJECT_PROOF_POLLS:-6} escalate_flush "$STATE" 2>/dev/null || true
     clear_owned_input_at_exit "$STATE" 2>/dev/null || true
+    # After the owned record is cleared or kept, retention can drop a snapshot
+    # that recovery no longer needs.
+    prune_submit_failure_captures "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then
       kill "$WATCHER_PID" 2>/dev/null || true
       wait "$WATCHER_PID" 2>/dev/null || true
@@ -2697,6 +2738,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     clear_owned_input_at_exit "$(_state_root)" && exit 0
     echo "fm-supervise-daemon: an unsent away-mode digest may still be in the input box of $OWNED_TARGET; check it before pressing Enter there" >&2
     exit 1
+  fi
+  if [ "${1:-}" = prune-submit-failures ]; then
+    prune_submit_failure_captures "$(_state_root)"
+    exit 0
   fi
   fm_super_main "$@"
 else

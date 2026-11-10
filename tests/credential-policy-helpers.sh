@@ -225,7 +225,14 @@ EOF
   credential_allowed || fail "ordinary home configuration must stay usable"
   credential_exec "$policy" "python3 -c 'print(1)'" "$step"; step=$((step + 1))
   credential_allowed || fail "ordinary unresolved execution must still reach the judge"
-  [ -s "$CREDENTIAL_JUDGE_CALLS" ] || fail "ordinary residue never reached the judge"
+  case "${POLICY_SH##*/}" in
+    fm-agy*)
+      tail -1 "$(jq -r .log "$policy")" | jq -e '.decision == "native-review" and .decider == "native"' >/dev/null \
+        || fail "ordinary agy residue never reached native review"
+      : > "$CREDENTIAL_JUDGE_CALLS"
+      : > "$CREDENTIAL_JUDGE_PROMPT" ;;
+    *) [ -s "$CREDENTIAL_JUDGE_CALLS" ] || fail "ordinary residue never reached the judge" ;;
+  esac
   fields='{"file_path":"new-resource","AbsolutePath":"new-resource"}'
   # Force a prior ordinary cacheable verdict through the public hook by
   # using a supported edit outside the task roots, then register that file.

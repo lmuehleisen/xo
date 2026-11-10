@@ -11,7 +11,7 @@ agy updates itself often and without asking, so treat every version-scoped fact 
 | Fact | Value |
 |---|---|
 | Binary | Absolute `agy` from `PATH`, resolved once and refused if absent. A single self-updating Go binary; the installed path is the real executable, not a launcher. |
-| Launch | Native Auto uses `--prompt-interactive` for a synthetic readiness turn, then verifies activation before delivering the task brief; manual and recorded legacy launches retain `-i`; headless `-p` is never a worker route. |
+| Launch | Native Auto uses `--prompt-interactive` for a synthetic readiness turn, then verifies activation before delivering the task brief; manual launches retain `-i`; headless `-p` is never a worker route. |
 | Directory grants | `--add-dir`, repeatable, and MANDATORY - see "The worktree grant" below. |
 | Approvals | New Auto workers use verified native Auto plus deterministic task constraints. Manual retains native review. See "Approvals" below. |
 | Busy state | `agy-hook`: PreInvocation opens; fullyIdle Stop closes. The worker binds its generation and main conversation; interruption emits no Stop and conservatively leaves busy. |
@@ -82,8 +82,8 @@ The [verification record](../../../../../docs/verification/runtime-backends-fork
 ### Recorded legacy tasks
 
 New-worker `--agy-bypass`, `--no-agy-bypass` and `--agy-judge` flags are deprecated and refuse with a migration diagnostic.
-Recorded legacy tasks retain their bypass/judge, accept-edits or manual posture on relaunch and keep their existing pending decisions until normal retirement.
-Legacy judge selection, exact retry approvals and verdict caches remain implemented for those tasks.
+Recorded legacy and pre-field tasks refuse relaunch with a recovery diagnostic and preserve their records and pending decisions.
+Legacy judge launches, reusable verdicts and manual-baseline admission are retired; historical policy readers, exact decision-key retirement and audit remain available.
 Shared command-policy and judge-tier code also remains available to Devin and explicitly selected judges for other adapters.
 
 ### Prompted review

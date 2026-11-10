@@ -81,12 +81,12 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### agy-permission-posture
 
-- Intent: new agy Auto workers use verified native review plus deterministic task constraints; recorded legacy workers retain their existing posture and decisions.
+- Intent: new agy Auto workers use verified native review plus deterministic task constraints; legacy worker records retain audit and decision retirement, with execution and relaunch refused pending explicit recovery.
   Native launch uses upstream's interactive prompt shape for readiness, with the real brief withheld until activation.
   One bounded native guard qualifies the exact executable/model/effort/backend; observer and accept-edits signals remain explicit upgrade/legacy checks.
 - Class: intended.
 - Seam: fork-only `bin/fm-agy-lib.sh`, `bin/fm-agy-native-lib.sh`, `bin/fm-agy-native.py`, `bin/fm-agy-admission.sh`, `bin/fm-agy-admission.py`, `bin/fm-agy-permission-policy.sh`, `bin/fm-command-policy-lib.sh` with its credential-access classifier `bin/fm-credential-access-lib.sh` and `bin/fm-credential-access.mjs` (shared with the Devin layer) and their fixture `tests/credential-policy-helpers.sh`, `bin/fm-judge-tier-lib.sh`, and `bin/fm-agy-audit.sh`, including executable-bound admission, generation-bound approval evidence and cleanup audit, with fixtures in `tests/agy-admission-helpers.sh` and `tests/agy-live-helpers.sh`, plus small spawn hooks in `bin/fm-spawn.sh` and the audit prerequisite in `docs/configuration.md` (shared).
-- Guard: `tests/fm-agy-native.test.sh` with its `tests/agy-native-terminal-fixture.py`, `tests/fm-agy-harness.test.sh`, `tests/fm-agy-admission.test.sh`, and the opt-in `tests/fm-agy-native-live-e2e.test.sh`; existing policy/bypass tests, including the opt-in `tests/fm-agy-bypass-live-e2e.test.sh`, retain legacy coverage.
+- Guard: `tests/fm-agy-native.test.sh` with its `tests/agy-native-terminal-fixture.py`, `tests/fm-agy-harness.test.sh`, `tests/fm-agy-admission.test.sh`, and the opt-in `tests/fm-agy-native-live-e2e.test.sh`; `tests/fm-agy-permission-policy.test.sh` retains historical audit and decision-retirement coverage while legacy launch and admission refuse recovery records.
 - Limit: live No/reconciliation proof covers agy 1.4.7 with Flash High on Herdr; the [verification record](verification/runtime-backends-fork.md#native-auto-workers) owns other model/backend limits and adversarial fixture coverage.
 - Upstream: its own agy adapter has no fork permission layer.
 
@@ -376,10 +376,13 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 ### away-inject-delivery-proof
 
 - Intent: count an away digest delivered only on positive proof, own it before typing it on tmux and herdr, read a named Claude session's composer, clear it when away mode ends, and repeat a delivery wedge as the return output's last line, because a digest that only looked submitted can stall away mode indefinitely; upstream issue https://github.com/kunchenguid/firstmate/issues/6034.
+  Pane captures saved for a failed submit are pruned to the newest 50 and any older than seven days without waiting for another failure.
+  The newest capture stays while the owned-digest record still exists.
 - Class: carried.
-- Seam: `fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`; the titled-rule reader and the shared owned-input submit and clear loops in `bin/fm-composer-lib.sh`; `fm_backend_herdr_composer_owned_input` in `bin/backends/herdr.sh`; the tmux and herdr submit, owned-record, and exit-cleanup hunks in `bin/fm-supervise-daemon.sh`; the opened marker in `bin/fm-operational-input.sh`; the owned-text cleanup and wedge tail in `bin/fm-afk-return.sh`; the afk skill's return and submit-model text; the family registration in `bin/fm-test-run.sh` and exclusions in `bin/fm-test-isolation-proof.sh`; fork-only `tests/named-claude-composer-fixture.py`; and the turn footer in `tests/wake-helpers.sh`'s fake tmux (shared).
-- Guard: fork-only `tests/fm-afk-inject-delivery-proof.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; `tests/fm-afk-inject-titled-composer.test.sh`; the separately gated `tests/fm-afk-inject-titled-composer-herdr-e2e.test.sh`; `tests/fm-afk-inject-e2e.test.sh`; `tests/fm-afk-return.test.sh`; the named-session checks in `tests/fm-composer-matrix-live-e2e.test.sh`.
+- Seam: `fm_tmux_proven_submit` in `bin/fm-tmux-lib.sh`; the titled-rule reader and the shared owned-input submit and clear loops in `bin/fm-composer-lib.sh`; `fm_backend_herdr_composer_owned_input` in `bin/backends/herdr.sh`; the tmux and herdr submit, owned-record, and exit-cleanup hunks in `bin/fm-supervise-daemon.sh`, including `prune_submit_failure_captures` and its housekeeping, startup, and shutdown calls; the fresh-away call in `bin/fm-afk-start.sh`; the opened marker in `bin/fm-operational-input.sh`; the owned-text cleanup, capture-retention call, and wedge tail in `bin/fm-afk-return.sh`; the afk skill's return and submit-model text; the family registration in `bin/fm-test-run.sh` and exclusions in `bin/fm-test-isolation-proof.sh`; fork-only `tests/named-claude-composer-fixture.py`; and the turn footer in `tests/wake-helpers.sh`'s fake tmux (shared).
+- Guard: fork-only `tests/fm-afk-inject-delivery-proof.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; `tests/fm-afk-inject-titled-composer.test.sh`; the separately gated `tests/fm-afk-inject-titled-composer-herdr-e2e.test.sh`; `tests/fm-afk-inject-e2e.test.sh`; `tests/fm-afk-return.test.sh`; the capture-retention cases in `tests/fm-daemon.test.sh`; the named-session checks in `tests/fm-composer-matrix-live-e2e.test.sh`.
 - Upstream: counts a composer that reads empty after Enter as delivered and has no owned-text recovery; drop once upstream fixes issue 6034 equivalently.
+  Upstream has no submit-failure pane captures, so this retention goes away with the owned-input recovery it belongs to.
   Its titled-rule fallback requires an eight-dash prefix and an ASCII title, so the fork retains its broader named-session reader and takes its width check and grey slash-command fix while preserving the optional row separator used by owned-input recovery.
 
 ### markless-op-header
@@ -518,6 +521,14 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: `fm_pr_metadata_identity_parse` in `bin/fm-pr-lib.sh` and the registration-mismatch wake wording in `bin/fm-watch.sh`.
 - Guard: `tests/fm-pr-check-security.test.sh`.
 - Upstream: accepts a fixed list of trailing metadata keys and groups mismatched polls with unauthenticated checks; drop once equivalent.
+
+### pr-repository-binding
+
+- Intent: record a reported pull request only when its repository is the task project's forge origin or an explicitly declared contribution target, so a reachable commit on another repository is not armed.
+- Class: carried.
+- Seam: repository binding in `bin/fm-pr-check.sh` (shared); `docs/architecture.md`, `docs/scripts.md`, and `docs/configuration.md` name it.
+- Guard: `tests/fm-pr-check-security.test.sh` `test_pr_repository_is_bound_to_the_task`.
+- Upstream: records any canonical URL whose commit is reachable; drop once upstream refuses a mismatched repository before recording.
 
 ### remote-job-ownership
 
