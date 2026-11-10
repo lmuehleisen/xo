@@ -1004,9 +1004,9 @@ EOF
 
 test_agy_native_mapping_and_grants() (
   shell_quote() { printf '%q' "$1"; }
-  AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=0 AGY_NATIVE_AUTO=0 CREW_PERMISSION_MODE=auto
+  AGY_BYPASS_POSTURE_SET=0 AGY_NATIVE_AUTO=0 CREW_PERMISSION_MODE=auto
   fm_agy_default_posture agy ship
-  [ "$AGY_NATIVE_AUTO:$AGY_BYPASS" = 1:0 ] || fail 'Auto did not select native review'
+  [ "$AGY_NATIVE_AUTO" = 1 ] || fail 'Auto did not select native review'
   [ "$(fm_agy_permission_flags auto)" = '--mode auto --sandbox' ] || fail 'native review flags missing'
   [ -z "$(fm_agy_permission_flags manual)" ] || fail 'manual must preserve default native review'
   WT="$TMP_ROOT/native-grants/worktree" STATE_REAL="$TMP_ROOT/native-grants/state"
@@ -1163,27 +1163,27 @@ test_agy_native_and_legacy_relaunch_postures() (
     esac
     ARG3=agy KIND=scout RELAUNCH_META="$meta" RELAUNCH_PRIOR_HARNESS=agy
     MODEL_SET=0 EFFORT_SET=0 MODEL='' EFFORT='' AGY_NATIVE_AUTO=0
-    AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=0 AGY_BYPASS_OPT_OUT=0 AGY_JUDGE_ARG=''
+    AGY_BYPASS_POSTURE_SET=0
     CREW_PERMISSION_MODE=auto
     if [ "$ordering" = default-first ]; then fm_agy_default_posture agy scout; fi
     fm_agy_relaunch_inherit
     fm_agy_default_posture agy scout
     [ "$MODEL:$EFFORT" = fixture-model:high ] || fail 'relaunch lost its tested model context'
     case "$posture" in
-      native-auto) [ "$AGY_NATIVE_AUTO:$AGY_BYPASS" = 1:0 ] || fail 'native relaunch changed posture' ;;
+      native-auto) [ "$AGY_NATIVE_AUTO" = 1 ] || fail 'native relaunch changed posture' ;;
       manual)
         [ "$AGY_NATIVE_AUTO:$CREW_PERMISSION_MODE" = 0:manual ] || fail 'manual relaunch changed posture'
         [ -z "$(fm_agy_permission_flags "$CREW_PERMISSION_MODE")" ] || fail 'manual relaunch enabled automatic edits' ;;
     esac
     # The emitted descriptor must keep the same route on a second restart.
     HARNESS=agy AGY_BIN='' RAW_LAUNCH=0
-    before="$AGY_NATIVE_AUTO:$AGY_BYPASS:$CREW_PERMISSION_MODE"
+    before="$AGY_NATIVE_AUTO:$CREW_PERMISSION_MODE"
     printf 'model=fixture-model\neffort=high\n' > "$meta"
     fm_agy_meta_lines >> "$meta"
-    AGY_NATIVE_AUTO=0 AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=0 AGY_BYPASS_OPT_OUT=0
+    AGY_NATIVE_AUTO=0 AGY_BYPASS_POSTURE_SET=0
     CREW_PERMISSION_MODE=auto
     fm_agy_relaunch_inherit
-    [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$CREW_PERMISSION_MODE" = "$before" ] || fail 'recording the posture changed the next restart'
+    [ "$AGY_NATIVE_AUTO:$CREW_PERMISSION_MODE" = "$before" ] || fail 'recording the posture changed the next restart'
   done
   done
   for posture in legacy-bypass legacy-prompt legacy-manual old-prompt accept-edits unknown raw; do

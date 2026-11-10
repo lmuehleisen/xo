@@ -94,7 +94,7 @@ fm_agy_relaunch_inherit() {
       echo 'error: unknown or retired agy permission posture; preserve the task and its decisions for explicit recovery before relaunch' >&2
       exit 1 ;;
   esac
-  AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=1
+  AGY_BYPASS_POSTURE_SET=1
 }
 
 # Native prerequisites and refusal of retired worker permission flags.
