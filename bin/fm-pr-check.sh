@@ -20,6 +20,19 @@
 # draft state does not refuse, matching how the head read below is optional.
 # bin/fm-pr-merge.sh records through this script with FM_PR_CHECK_MERGE=1 and
 # skips this refusal, because its own merge-time draft refusal is authoritative.
+# The pull request's repository is bound before anything is recorded or armed,
+# and the merge-time re-record does not skip that binding.
+# The task project's origin is the expected repository when that origin names a
+# forge repository (host/owner/repo). A local-path origin does not name one and
+# does not bind. Only a directory that is itself a repository is read, so a
+# parent repository is not used. An explicitly declared contribution target
+# is also accepted: the task's upstream_consent, and, when the project is
+# this firstmate repository, the home's maintainer scope.
+# A URL on any other repository is refused, including when the same commit is
+# reachable from the task's own remote. bin/fm-role-lib.sh owns identity
+# normalization. A task with no forge origin and no declared contribution
+# target keeps the reachability gate alone, because there is no repository
+# identity to bind.
 # The recorded pr= also frees the task's place in a declared project capacity
 # (bin/fm-project-capacity-lib.sh).
 # --pending arms GitHub follow-up before checks or the review settle window
@@ -64,6 +77,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-role-lib.sh
+. "$SCRIPT_DIR/fm-role-lib.sh"
 
 pr_check_reported_url() {  # <status-file>
   local line token found=
@@ -90,6 +105,81 @@ pr_check_reported_url() {  # <status-file>
 
 pr_check_rotate() {  # <last-id>: start the lines on stdin just after the line for last-id, wrapping
   awk -v last="$1" '{ a[NR] = $0; split($0, f, " "); if (f[1] == last) s = NR } END { for (i = 0; i < NR; i++) print a[(i + s) % NR + 1] }'
+}
+
+# Forge identity of <dir>'s origin, or nothing. A directory that is not itself a
+# repository contributes nothing, and a local-path origin contributes nothing.
+pr_check_origin_forge_identity() {  # <dir>
+  local url id
+  [ -n "${1:-}" ] && [ -d "$1" ] && [ -e "$1/.git" ] || return 0
+  url=$(git -C "$1" remote get-url origin 2>/dev/null) || return 0
+  [ -n "$url" ] || return 0
+  id=$(fm_role_remote_identity "$url" "$1" nolocal)
+  case "$id" in
+    ''|path:*) return 0 ;;
+  esac
+  printf '%s\n' "$id"
+}
+
+pr_check_meta_value() {  # <meta> <key>
+  grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+pr_check_join_targets() {  # <target> <target>
+  if [ -n "$1" ] && [ -n "$2" ]; then
+    printf '%s, %s' "$1" "$2"
+  else
+    printf '%s%s' "$1" "$2"
+  fi
+}
+
+# 0 when the parsed pull request may be recorded. 1, with one stderr line, when
+# its repository is neither the task's forge origin nor an explicitly declared
+# contribution target. 0 with no binding when the task has neither.
+pr_check_repository_allowed() {  # <meta>
+  local meta=$1 project wt origin consent maintainer pr_id config
+  project=$(pr_check_meta_value "$meta" project)
+  wt=$(pr_check_meta_value "$meta" worktree)
+  origin=$(pr_check_origin_forge_identity "$project")
+  [ -n "$origin" ] || origin=$(pr_check_origin_forge_identity "$wt")
+  consent=$(pr_check_meta_value "$meta" upstream_consent)
+  if [ -n "$consent" ] && fm_role_scope_valid "$consent"; then
+    consent=$(fm_role_scope_norm "$consent")
+  else
+    consent=
+  fi
+  if [ "$consent" = "$origin" ]; then
+    consent=
+  fi
+  maintainer=
+  if [ -n "$project" ] && [ -d "$project" ] && fm_role_self_repo "$project" "$FM_ROOT"; then
+    config=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
+    fm_role_resolve "$FM_HOME" "$config"
+    if [ "$FM_ROLE" = maintainer ] && [ -n "$FM_ROLE_SCOPE" ] \
+      && [ "$FM_ROLE_SCOPE" != "$origin" ] && [ "$FM_ROLE_SCOPE" != "$consent" ]; then
+      maintainer=$FM_ROLE_SCOPE
+    fi
+  fi
+  pr_id=$(printf '%s/%s' "$HOST" "$PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
+  if [ -z "$origin" ] && [ -z "$consent" ] && [ -z "$maintainer" ]; then
+    return 0
+  fi
+  if [ "$pr_id" = "$origin" ] || [ "$pr_id" = "$consent" ] || [ "$pr_id" = "$maintainer" ]; then
+    return 0
+  fi
+  if [ -n "$origin" ]; then
+    if [ -n "$consent" ] || [ -n "$maintainer" ]; then
+      printf 'error: %s is on %s, which is not this task'\''s repository %s or a declared contribution target (%s)\n' \
+        "$URL" "$pr_id" "$origin" "$(pr_check_join_targets "$consent" "$maintainer")" >&2
+    else
+      printf 'error: %s is on %s, which is not this task'\''s repository %s\n' \
+        "$URL" "$pr_id" "$origin" >&2
+    fi
+  else
+    printf 'error: %s is on %s, which is not a declared contribution target for this task (%s)\n' \
+      "$URL" "$pr_id" "$(pr_check_join_targets "$consent" "$maintainer")" >&2
+  fi
+  return 1
 }
 
 pr_check_pr_retired() {  # <id> <recorded-url>
@@ -208,6 +298,12 @@ fi
 KIND=$(grep '^kind=' "$META" | tail -1 | cut -d= -f2- || true)
 if [ "$KIND" = secondmate ]; then
   echo "error: $ID is a secondmate, not a delivery lane - $URL was reported on its status channel but belongs to a task in the mate's own home, which arms its own merge watch" >&2
+  exit 1
+fi
+
+# Refuse a repository that is not this task's before any forge read, record, or
+# armed poll. Reachability of the same commit is not a substitute for it.
+if ! pr_check_repository_allowed "$META"; then
   exit 1
 fi
 

@@ -6,8 +6,8 @@
 #
 # The facts pinned here are the ones an Antigravity release could silently
 # change and the ones a wrong guess would make dangerous:
-#   Auto selects verified native review; old bypass records retain their
-#   original relaunch contract. Manual retains native review prompts.
+#   Auto selects verified native review; old bypass records require explicit
+#   recovery before relaunch. Manual retains native review prompts.
 #   Physical grants, catalog/effort validation, native hook generation and
 #   primary/control compatibility remain independently covered below.
 #   Credentialed tests/fm-agy-native-live-e2e.test.sh proves the native route.
@@ -387,6 +387,17 @@ case "${1:-}" in
     printf 'kill-window %s\n' "$*" >> "$FM_FAKE_LAUNCH_LOG.kills"
     # FM_FAKE_KILL_FAILS models a kill that leaves the window running.
     [ "${FM_FAKE_KILL_FAILS:-0}" = 1 ] || : > "$FM_FAKE_LAUNCH_LOG.closed"
+    if [ "${FM_FAKE_AGY_RETIRE_FAIL:-0}" = 1 ] && [ -s "$FM_FAKE_LAUNCH_LOG.agy-hooks" ]; then
+      hooks=$(cat "$FM_FAKE_LAUNCH_LOG.agy-hooks")
+      stem=${hooks%.agy-hooks}
+      mkdir -p "$stem.agy-permission-pending" "$stem.agy-permission-cache" "$stem.retirement-status"
+      decision="agy-permission-${stem##*/}"
+      printf '%s\nheld fixture\nretained\nnever\n' "$decision" > "$stem.agy-permission-pending/retained.pending"
+      printf 'one-shot\n' > "$stem.agy-permission-cache/retained.once"
+      printf 'needs-decision [key=%s]: held fixture\n' "$decision" >> "$stem.status"
+      jq --arg status "$stem.retirement-status" '.status=$status' "$stem.agy-permission.json" > "$stem.policy-new"
+      mv "$stem.policy-new" "$stem.agy-permission.json"
+    fi
     exit 0
     ;;
   send-keys)
@@ -993,9 +1004,9 @@ EOF
 
 test_agy_native_mapping_and_grants() (
   shell_quote() { printf '%q' "$1"; }
-  AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=0 AGY_NATIVE_AUTO=0 CREW_PERMISSION_MODE=auto
+  AGY_BYPASS_POSTURE_SET=0 AGY_NATIVE_AUTO=0 CREW_PERMISSION_MODE=auto
   fm_agy_default_posture agy ship
-  [ "$AGY_NATIVE_AUTO:$AGY_BYPASS" = 1:0 ] || fail 'Auto did not select native review'
+  [ "$AGY_NATIVE_AUTO" = 1 ] || fail 'Auto did not select native review'
   [ "$(fm_agy_permission_flags auto)" = '--mode auto --sandbox' ] || fail 'native review flags missing'
   [ -z "$(fm_agy_permission_flags manual)" ] || fail 'manual must preserve default native review'
   WT="$TMP_ROOT/native-grants/worktree" STATE_REAL="$TMP_ROOT/native-grants/state"
@@ -1091,6 +1102,8 @@ SH
         [ ! -e "$home/launch.log.closed" ] || fail 'closure-failure fixture did not retain its endpoint'
       else
         [ -f "$home/launch.log.closed" ] || fail 'unproven native endpoint was not closed'
+        [ ! -e "$home/state/$id.meta" ] && [ ! -e "$home/state/$id.agy-permission.json" ] \
+          || fail 'successful retirement left a failed fresh-spawn record or policy'
       fi
     else
       if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_PREP_FAIL="$variant" FM_AGY_NATIVE_POLLS=8 FM_AGY_POLL_INTERVAL=0.1 \
@@ -1122,6 +1135,44 @@ test_agy_native_refuses_project_hooks() {
   pass 'native wiring: shared project gate rejects ancestor hook symlinks and admits hook-free projects through their git root'
 }
 
+test_agy_native_retirement_failure_keeps_recovery_state() {
+  local fields case_dir home proj wt fakebin id out policy marker decision
+  fields=$(make_spawn_case "native-retire-${TMP_ROOT##*.}")
+  IFS='|' read -r case_dir home proj wt fakebin id <<<"$fields"
+  mv "$fakebin/agy" "$fakebin/agy-catalog"
+  cat > "$fakebin/agy" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'agy 1.4.7\n'; else exec "$(dirname "$0")/agy-catalog" "$@"; fi
+SH
+  chmod +x "$fakebin/agy"
+  printf 'auto\n' > "$home/config/crew-permissions"
+  if out=$(FM_FAKE_AGY_NATIVE=1 FM_FAKE_AGY_NO_AUTO=1 FM_FAKE_AGY_RETIRE_FAIL=1 \
+    FM_AGY_NATIVE_POLLS=3 FM_AGY_POLL_INTERVAL=0.1 \
+    run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then
+    fail 'failed native activation was reported dispatched'
+  fi
+  [ -f "$home/launch.log.closed" ] || fail 'retirement fixture did not close its endpoint'
+  [ ! -e "$home/launch.log.native-brief" ] || fail 'unqualified worker received its task brief'
+  policy="$home/state/$id.agy-permission.json"
+  marker="$home/state/$id.agy-permission-pending/retained.pending"
+  [ -f "$home/state/$id.meta" ] && [ -f "$home/state/$id.busy-gen" ] \
+    || fail 'failed retirement lost the recoverable task record or generation'
+  [ -f "$policy" ] && [ -f "$marker" ] && [ -f "$home/state/$id.agy-permission-cache/retained.once" ] \
+    && [ -f "$home/state/$id.agy-hooks/.agents/hooks.json" ] \
+    || fail 'failed retirement discarded owned policy, pending, cache or hook evidence'
+  decision=$(sed -n '1p' "$marker")
+  grep -qF "needs-decision [key=$decision]" "$home/state/$id.status" || fail 'failed retirement lost its open decision'
+  ! grep -qF "resolved [key=$decision]" "$home/state/$id.status" || fail 'failed retirement claimed a resolution'
+  case "$out" in *'explicit recovery is required'*) ;; *) fail 'retirement failure has no recovery diagnostic' ;; esac
+  # Repair only the synthetic status destination and prove retained state can retire.
+  jq --arg status "$home/state/$id.status" '.status=$status' "$policy" > "$policy.new"
+  mv "$policy.new" "$policy"
+  "$ROOT/bin/fm-agy-permission-policy.sh" retire "$policy" </dev/null || fail 'preserved policy could not be retired after repair'
+  grep -qF "resolved [key=$decision]" "$home/state/$id.status" || fail 'recovery did not resolve the exact pending decision'
+  fm_test_rm_tmproot "/tmp/fm-$id"
+  pass 'native startup: failed retirement preserves the task and exact decisions for recovery'
+}
+
 test_agy_deprecated_worker_flags_refuse() {
   local flag fields case_dir home proj wt fakebin id out
   for flag in --agy-bypass --no-agy-bypass '--agy-judge=agy'; do
@@ -1137,44 +1188,52 @@ test_agy_deprecated_worker_flags_refuse() {
 test_agy_native_and_legacy_relaunch_postures() (
   local ordering posture meta="$TMP_ROOT/relaunch-posture.meta"
   for ordering in inherit-first default-first; do
-  for posture in native-auto legacy-bypass legacy-prompt manual legacy-manual old-prompt; do
+  for posture in native-auto manual; do
     printf 'model=fixture-model\neffort=high\n' > "$meta"
     case "$posture" in
       native-auto) printf 'agy_posture=native-auto\n' >> "$meta" ;;
-      legacy-bypass) printf 'agy_bypass=on\nagy_judge=devin:fixture-judge\n' >> "$meta" ;;
-      legacy-prompt) printf 'agy_bypass=off\n' >> "$meta" ;;
       manual) printf 'agy_posture=manual\nagy_permission_mode=manual\n' >> "$meta" ;;
-      legacy-manual) printf 'agy_permission_mode=manual\nagy_bypass=off\n' >> "$meta" ;;
-      old-prompt) printf 'agy_permission_mode=auto\n' >> "$meta" ;;
     esac
     ARG3=agy KIND=scout RELAUNCH_META="$meta" RELAUNCH_PRIOR_HARNESS=agy
     MODEL_SET=0 EFFORT_SET=0 MODEL='' EFFORT='' AGY_NATIVE_AUTO=0
-    AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=0 AGY_BYPASS_OPT_OUT=0 AGY_JUDGE_ARG=''
+    AGY_BYPASS_POSTURE_SET=0
     CREW_PERMISSION_MODE=auto
     if [ "$ordering" = default-first ]; then fm_agy_default_posture agy scout; fi
     fm_agy_relaunch_inherit
     fm_agy_default_posture agy scout
     [ "$MODEL:$EFFORT" = fixture-model:high ] || fail 'relaunch lost its tested model context'
     case "$posture" in
-      native-auto) [ "$AGY_NATIVE_AUTO:$AGY_BYPASS" = 1:0 ] || fail 'native relaunch changed posture' ;;
-      legacy-bypass) [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$AGY_JUDGE_ARG" = 0:1:devin:fixture-judge ] || fail 'legacy relaunch changed its judge' ;;
-      legacy-prompt|old-prompt) [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$AGY_BYPASS_OPT_OUT" = 0:0:1 ] || fail 'legacy prompt relaunch changed posture' ;;
-      manual|legacy-manual)
+      native-auto) [ "$AGY_NATIVE_AUTO" = 1 ] || fail 'native relaunch changed posture' ;;
+      manual)
         [ "$AGY_NATIVE_AUTO:$CREW_PERMISSION_MODE" = 0:manual ] || fail 'manual relaunch changed posture'
         [ -z "$(fm_agy_permission_flags "$CREW_PERMISSION_MODE")" ] || fail 'manual relaunch enabled automatic edits' ;;
     esac
     # The emitted descriptor must keep the same route on a second restart.
-    HARNESS=agy AGY_BIN='' AGY_JUDGE_TIER=devin AGY_JUDGE_MODEL=fixture-judge RAW_LAUNCH=0
-    before="$AGY_NATIVE_AUTO:$AGY_BYPASS:$CREW_PERMISSION_MODE"
+    HARNESS=agy AGY_BIN='' RAW_LAUNCH=0
+    before="$AGY_NATIVE_AUTO:$CREW_PERMISSION_MODE"
     printf 'model=fixture-model\neffort=high\n' > "$meta"
     fm_agy_meta_lines >> "$meta"
-    AGY_NATIVE_AUTO=0 AGY_BYPASS=0 AGY_BYPASS_POSTURE_SET=0 AGY_BYPASS_OPT_OUT=0
+    AGY_NATIVE_AUTO=0 AGY_BYPASS_POSTURE_SET=0
     CREW_PERMISSION_MODE=auto
     fm_agy_relaunch_inherit
-    [ "$AGY_NATIVE_AUTO:$AGY_BYPASS:$CREW_PERMISSION_MODE" = "$before" ] || fail 'recording the posture changed the next restart'
+    [ "$AGY_NATIVE_AUTO:$CREW_PERMISSION_MODE" = "$before" ] || fail 'recording the posture changed the next restart'
   done
   done
-  pass 'native, manual and recorded legacy relaunches retain their own posture and context'
+  for posture in legacy-bypass legacy-prompt legacy-manual old-prompt accept-edits unknown raw; do
+    printf 'model=fixture-model\neffort=high\n' > "$meta"
+    case "$posture" in
+      legacy-bypass) printf 'agy_bypass=on\nagy_judge=devin:fixture-judge\n' >> "$meta" ;;
+      legacy-prompt) printf 'agy_bypass=off\n' >> "$meta" ;;
+      legacy-manual) printf 'agy_permission_mode=manual\n' >> "$meta" ;;
+      old-prompt) ;;
+      *) printf 'agy_posture=%s\n' "$posture" >> "$meta" ;;
+    esac
+    cp "$meta" "$meta.before"
+    if (fm_agy_relaunch_inherit) > "$meta.out" 2>&1; then fail "$posture inherited a new posture"; fi
+    grep -q 'explicit recovery before relaunch' "$meta.out" || fail "$posture lacks a recovery diagnostic"
+    cmp -s "$meta" "$meta.before" || fail 'recovery refusal changed the task record'
+  done
+  pass 'native/manual relaunches retain context; retired and pre-field records require recovery'
 )
 
 # --- control mechanics ------------------------------------------------------
@@ -1473,3 +1532,5 @@ test_agy_native_refuses_project_hooks
 test_agy_native_spawn_orders_proof_before_brief
 test_agy_deprecated_worker_flags_refuse
 test_agy_native_and_legacy_relaunch_postures || exit 1
+
+test_agy_native_retirement_failure_keeps_recovery_state

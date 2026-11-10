@@ -5,7 +5,7 @@
 fm_agy_fixture_receipt() {  # <home> <binary> <model> <effective-effort> <tier> <judge-model> <judge-bin>
   local home=$1 binary=$2 model=$3 effort=$4 tier=$5 judge_model=$6 judge=$7
   local proof cache key guard evidence="$ROOT/bin/fm-agy-admission.py"
-  case "$tier" in native-tmux|native-herdr) ;; *) [ -x "$judge" ] || return 0 ;; esac
+  case "$tier" in native-tmux|native-herdr) ;; *) return 1 ;; esac
   cache="$home/state/agy-compatibility"
   mkdir -p "$cache"
   chmod 700 "$cache"
@@ -14,12 +14,11 @@ fm_agy_fixture_receipt() {  # <home> <binary> <model> <effective-effort> <tier> 
     > "$proof/binding.json" || return 1
   key=$(python3 "$evidence" key "$proof/binding.json") || return 1
   printf '{"tool":"unit-fixture"}\n' > "$proof/tools.jsonl"
-  local guards=(bypass observer signals)
-  case "$tier" in native-tmux|native-herdr) guards=(native) ;; esac
+  local guards=(native)
   for guard in "${guards[@]}"; do
     FM_AGY_ADMISSION_BINDING="$proof/binding.json" python3 "$evidence" complete \
       "$proof" "$guard" 0 "$proof/tools.jsonl" || return 1
   done
-  python3 "$evidence" publish "$cache/$key.json" "$proof/binding.json" "$proof" manual-baseline \
+  python3 "$evidence" publish "$cache/$key.json" "$proof/binding.json" "$proof" patch-verification \
     "$binary" "$model" "$effort" "$tier" "$judge_model" "$judge"
 }

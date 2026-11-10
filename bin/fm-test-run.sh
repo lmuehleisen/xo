@@ -386,7 +386,7 @@ family_for_basename() {
     fm-launch-prompt-signals-live-e2e.test.sh|fm-backend-t3code-live-e2e.test.sh|\
     fm-backend-t3code-pr-tools-live-e2e.test.sh|fm-kimi-trust-prompt-live-e2e.test.sh|\
     fm-agy-primary-live-e2e.test.sh|fm-agy-observer-live-e2e.test.sh|\
-    fm-agy-bypass-live-e2e.test.sh|fm-agy-native-live-e2e.test.sh|\
+    fm-agy-native-live-e2e.test.sh|\
     fm-devin-permission-policy-live-e2e.test.sh|fm-devin-rate-limit-retry-live-e2e.test.sh|\
     fm-pi-seeded-home-trust-live-e2e.test.sh|\
     fm-herdr-version-floor-live-e2e.test.sh|\
@@ -771,7 +771,6 @@ tests/fm-afk-owned-digest-recovery.test.sh 45554
 tests/fm-afk-pi-herdr-return-e2e.test.sh 87
 tests/fm-afk-return.test.sh 69619
 tests/fm-afk-sentinel.test.sh 14195
-tests/fm-agy-bypass-live-e2e.test.sh 83
 tests/fm-agy-harness.test.sh 265162
 tests/fm-agy-observer-live-e2e.test.sh 82
 tests/fm-agy-permission-policy.test.sh 186790
@@ -1849,7 +1848,6 @@ families_for_changed_path() {
     bin/fm-agy-admission.sh|bin/fm-agy-admission.py|tests/agy-live-helpers.sh|tests/agy-admission-helpers.sh)
       printf '%s\n' __script__:fm-agy-admission.test.sh
       printf '%s\n' __script__:fm-agy-harness.test.sh
-      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-native-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-observer-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-signals-live-e2e.test.sh
@@ -1860,7 +1858,6 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-agy-native-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-admission.test.sh
       printf '%s\n' __script__:fm-agy-harness.test.sh
-      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       ;;
@@ -1884,7 +1881,6 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-agy-native.test.sh
       printf '%s\n' __script__:fm-agy-native-live-e2e.test.sh
       printf '%s\n' __script__:fm-agy-permission-policy.test.sh
-      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       ;;
     bin/fm-command-policy-lib.sh|bin/fm-devin-permission-policy.sh|bin/fm-credential-access-lib.sh|bin/fm-credential-access.mjs|tests/credential-policy-helpers.sh)
       # The shared command policy binds both adapters: a change to it or to
@@ -1893,7 +1889,6 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-devin-permission-policy.test.sh
       printf '%s\n' __script__:fm-agy-permission-policy.test.sh
       printf '%s\n' __script__:fm-devin-permission-policy-live-e2e.test.sh
-      printf '%s\n' __script__:fm-agy-bypass-live-e2e.test.sh
       ;;
     .claude/mods/firstmate-calm/*|.pi/extensions/lib/fm-calm-working-ship.ts|\
     .pi/extensions/lib/fm-calm-working-ship-sprite.ts)
