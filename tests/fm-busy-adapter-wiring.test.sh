@@ -417,6 +417,56 @@ JS
   pass "OpenCode model evidence requires the exact launch session; configuration, unrelated roots and children cannot prove it"
 }
 
+# drive_oc_plugin_unordered <plugin-path> <events-json-lines...>: fire every
+# event through hooks.event WITHOUT awaiting between calls - the dispatch shape
+# a turn's terminal busy/idle burst (~1ms apart) hits in production - then run
+# the queued fm-busy-event.sh children one at a time, last-queued first. The
+# driver interposes on child_process.execFile only to schedule the real
+# applies; a plugin that lets events race therefore lands the FIRST event's
+# apply last, deterministically, so the record order inverts exactly when the
+# plugin fails to serialize.
+drive_oc_plugin_unordered() {
+  local plugin=$1
+  shift
+  PLUGIN_PATH="$plugin" node --input-type=module - "$@" 2>&1 <<'EOF'
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+const cp = createRequire(import.meta.url)("node:child_process");
+const realExecFile = cp.execFile;
+const pending = [];
+cp.execFile = (file, args, options, callback) => {
+  if (typeof options === "function") { callback = options; options = undefined; }
+  pending.push({ file, args, options, callback });
+};
+const runJob = (job) => new Promise((resolve) => {
+  const done = (...a) => { job.callback?.(...a); resolve(); };
+  if (job.options === undefined) realExecFile(job.file, job.args, done);
+  else realExecFile(job.file, job.args, job.options, done);
+});
+const drain = async (calls) => {
+  while (true) {
+    for (let i = 0; !pending.length && calls.some((p) => !p.done) && i < 2000; i++) {
+      await new Promise((r) => setImmediate(r));
+    }
+    const job = pending.pop();
+    if (!job) break;
+    await runJob(job);
+  }
+  await Promise.all(calls);
+};
+setTimeout(() => { console.error("drive_oc_plugin_unordered: drain timed out"); process.exit(1); }, 30000).unref();
+const mod = await import(pathToFileURL(process.env.PLUGIN_PATH).href);
+const hooks = await mod.FmBusyState({});
+const calls = process.argv.slice(2).map((arg) => {
+  const p = Promise.resolve(hooks.event({ event: JSON.parse(arg) }));
+  p.done = false;
+  p.then(() => { p.done = true; }, () => { p.done = true; });
+  return p;
+});
+await drain(calls);
+EOF
+}
+
 test_opencode_plugin_semantic_lifecycle() {
   local rec id=busy-oc-1 out state plugin
   rec=$(make_spawn_case oc-lifecycle opencode "$id")
@@ -565,6 +615,48 @@ EOF
   ) || fail "V2 tool-hook drive failed: $out"
   assert_contains "$out" TOOL_HOOK_OK "the V2 boundary tool hook drive did not complete: $out"
   pass "OpenCode V2 boundary registers its tool hook before setup resolves and propagates a block"
+}
+
+# Live finding (opencode 1.19.3): every turn end emits session.status busy
+# then session.status idle/session.idle ~1ms apart, and the hook is not
+# awaited - so the applies used to race on the record lock and a late busy
+# could win the last write, leaving the worker recorded busy until its next
+# turn (5 of 13 observed turns). Reproduced live on opencode 1.18.32: 4 of 4
+# real `opencode run` turns ended state=busy. These drives fire the pair
+# unawaited and run the real applies in reverse spawn order, so the record
+# ends busy deterministically whenever the plugin fails to serialize.
+test_opencode_plugin_applies_events_in_emission_order() {
+  local rec id=busy-oc-ord out state plugin
+  rec=$(make_spawn_case oc-order opencode "$id")
+  read_case_record "$rec"
+  cat > "$FAKEBIN_DIR/opencode" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "${FM_FAKE_OPENCODE_VERSION:-2.0.21}"
+fi
+exit 0
+SH
+  chmod +x "$FAKEBIN_DIR/opencode"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "opencode spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  plugin="/tmp/fm-$id/opencode-plugin-$(cat "$state/$id.busy-gen")/index.mjs"
+  assert_present "$plugin" "opencode V2 spawn did not write the busy-state plugin"
+
+  out=$(drive_oc_plugin_unordered "$plugin" \
+    "$(oc_status ses_main busy)" \
+    "$(oc_status ses_main idle)") || fail "unordered session.status drive failed: $out"
+  out=$(classify opencode "$id" "$state")
+  [ "$out" = "idle opencode-plugin" ] || fail "a terminal busy must not out-write its session.status idle, got '$out'"
+
+  rm -f "$state/$id.turn-ended"
+  out=$(drive_oc_plugin_unordered "$plugin" \
+    "$(oc_status ses_main busy)" \
+    "$(oc_idle ses_main)") || fail "unordered session.idle drive failed: $out"
+  [ -f "$state/$id.turn-ended" ] || fail "session.idle no longer touches the notification marker"
+  out=$(classify opencode "$id" "$state")
+  [ "$out" = "idle opencode-plugin" ] || fail "a terminal busy must not out-write its session.idle, got '$out'"
+  pass "opencode V2 worker plugin applies a terminal busy/idle burst in emission order"
 }
 
 run_claude_hook() {  # <settings.json> <hook-event>
@@ -1290,6 +1382,7 @@ test_pi_extension_denies_when_the_publish_check_cannot_run
 test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_launch_model_session_scope
 test_opencode_plugin_semantic_lifecycle
+test_opencode_plugin_applies_events_in_emission_order
 test_claude_hooks_semantic_lifecycle
 test_claude_worker_approved_publish_allowance
 test_claude_hooks_stale_incarnation_harmless

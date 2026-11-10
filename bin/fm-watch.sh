@@ -227,6 +227,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+PR_DEGRADED_WATCH_ENABLED=0
+[ ! -e "$CONFIG/pr-degraded-watch" ] || PR_DEGRADED_WATCH_ENABLED=1
 mkdir -p "$STATE"
 # Hold this state directory open for the main loop's teardown check: a
 # directory recreated at the same path is then a different directory, and the
@@ -1530,12 +1532,21 @@ _wedge_cap_rollback() {
 # <min-age> replaces the cadence as the absorb-age gate for one call (0 lets a
 # declared `until` time that has just passed re-surface at once), while the
 # throttle keeps the cadence between repeats.
-resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min-age]
-  local win=$1 throttle=$2 age=$3 reason=$4 scope=${5-} min_age=${6:-$PAUSE_RESURFACE_SECS}
+resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min-age] [status-file] [blocked-line] [overdue-marker]
+  local win=$1 throttle=$2 age=$3 reason=$4 scope=${5-} min_age=${6:-$PAUSE_RESURFACE_SECS} statusf=${7-} blocked_line=${8-} overdue_marker=${9-} snapshot=${10-} append_rc task
   if [ -z "$scope" ] || [ ! -e "$throttle" ] \
     || [ "$(cat "$throttle" 2>/dev/null || true)" = "$scope" ]; then
     [ "$age" -ge "$min_age" ] || return 0
     [ "$(age_of "$throttle")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0   # 999999 when no prior re-surface
+  fi
+  if [ -n "$blocked_line" ]; then
+    task=${overdue_marker##*/}; task=${task#.paused-overdue-}
+    ! status_open_decisions "$statusf" | grep -Fq "paused-overdue-$task" || return 0
+    fm_wake_status_append_self_announced "$STATE" "$statusf" "$blocked_line"; append_rc=$?
+    [ "$append_rc" -eq 0 ] || [ "$append_rc" -eq 1 ] || exit 1
+    if printf '%s\n' "$snapshot" > "$overdue_marker"; then
+      pause_overdue_reconcile "$task" "$statusf" || return 0
+    fi
   fi
   fm_wake_append stale "$win" "$reason" || exit 1
   if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else date +%s > "$throttle"; fi
@@ -2434,8 +2445,9 @@ busy_stream_snapshot_current() {  # <task> <observed snapshot>
 }
 
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
-# dead-agent captain-held transfer, and re-surface it once every
-# PAUSE_RESURFACE_SECS for a recheck so it cannot rot invisibly. Called on any
+# dead-agent captain-held transfer. Non-overdue waits re-surface every
+# PAUSE_RESURFACE_SECS; an overdue pause opens a keyed blocked decision and stays
+# quiet until the worker writes another status event. Called on any
 # stale poll once pause_state_class permits the bounded cadence, so it must be
 # cheap: it NEVER re-reads crew state. The re-surface age is anchored on the
 # status file mtime, not a per-hash marker, so a churny idle pane (a ticking
@@ -2450,13 +2462,19 @@ busy_stream_snapshot_current() {  # <task> <observed snapshot>
 # wording; a caller that reached the bounded cadence off pause tracking alone, with
 # no declaring verb left on the log, keeps the external-wait wording it always had.
 handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age detail reason declaration last until now min_age
+  local win=$1 task=$2 h=$3 key statusf mtime age detail reason declaration last until now min_age rc snapshot pause_age
   key=$(window_key "$win")
+  pause_overdue_reconcile "$task" "$STATE/$task.status"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    triage_log "absorbed stale (overdue pause decision remains open): $win"
+    return 0
+  fi
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
   wedge_episode_end "$key"
   clear_write_tracking "$key"
   statusf="$STATE/$task.status"
+  snapshot="$(stat_devino "$statusf"):$(_fm_status_file_size "$statusf")"
   mtime=$(stat_mtime "$statusf")
   case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
   now=$(date +%s)
@@ -2464,7 +2482,13 @@ handle_paused_stale() {  # <window> <task> <hash>
   last=$(status_declared_wait_line "$statusf")
   min_age=$PAUSE_RESURFACE_SECS
   declaration="declared:$(fm_wake_signal_sig "$statusf" || true)"
-  if status_is_captain_held "$last"; then
+  pause_age=$(status_pause_age "$last" "$age" "$now")
+  if status_is_paused "$last" && status_pause_is_overdue "$last" "$pause_age" "$now"; then
+    detail="paused, wait overdue"
+    reason="paused ${pause_age}s, wait overdue - decide or release"
+    declaration="$declaration:overdue"
+    min_age=0
+  elif status_is_captain_held "$last"; then
     if away_record_present; then
       triage_log "absorbed stale (captain-held, never rechecked while the away-posture record exists): $win"
       return 0
@@ -2490,7 +2514,11 @@ handle_paused_stale() {  # <window> <task> <hash>
     detail="paused, awaiting external"
     reason="paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds"
   fi
-  resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" "stale: $win ($reason)" "$declaration" "$min_age"
+  if [ "$detail" = "paused, wait overdue" ]; then
+    resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" "stale: $win ($reason)" "$declaration" "$min_age" "$statusf" "blocked [key=paused-overdue-$task]: paused ${pause_age}s, wait overdue - decide or release" "$STATE/.paused-overdue-$task" "$snapshot"
+  else
+    resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" "stale: $win ($reason)" "$declaration" "$min_age"
+  fi
   triage_log "absorbed stale ($detail, age ${age}s): $win"
 }
 
@@ -2520,6 +2548,11 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
   local win=$1 task=$2 h=$3 since_file=$4 escalation_file=$5 dialog=${6-} key statusf declared
   local stream_episode stream_snapshot=$BUSY_STREAM_SNAPSHOT label="busy (no completed turn)"
   statusf="$STATE/$task.status"
+  if pause_overdue_reconcile "$task" "$statusf"; then
+    wedge_episode_end "$(window_key "$win")"
+    clear_write_tracking "$(window_key "$win")"
+    return 0
+  fi
   if status_is_paused_or_captain_held "$(status_declared_wait_line "$statusf")"; then
     if afk_present; then
       # Away mode is daemon-owned, so this bound hands off the PLAIN wake identity
@@ -2634,15 +2667,80 @@ clear_pause_tracking() {  # <window-key>
   clear_stale_hash_tracking "$key"
 }
 
+# Keep the overdue decision open until the worker appends another status event.
+# Without config/pause-ceiling every marker reads as absent.
+pause_overdue_reconcile() {  # <task> <status-file> -> 0 unchanged, 1 cleared or absent
+  local task=$1 statusf=$2 marker="$STATE/.paused-overdue-$1" identity marker_identity offset actual added line verb key append_rc resume=0 prior_pause new_pause pause_line pause_verb=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT} resolve_verb=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT} legacy_re="^[[:space:]]*(${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT})"
+  fm_pause_ceiling_enabled || return 1
+  [ -f "$marker" ] || return 1
+  [ -f "$statusf" ] || { rm -f "$marker"; return 1; }
+  identity=$(stat_devino "$statusf") || return 0
+  IFS=: read -r marker_identity offset < "$marker" || [ -n "$offset" ] || { rm -f "$marker"; return 1; }
+  actual=$(_fm_status_file_size "$statusf") || return 0
+  case "$offset:$actual" in *[!0-9:]*) rm -f "$marker"; return 1 ;; esac
+  if [ "$identity" != "$marker_identity" ] || [ "$actual" -lt "$offset" ]; then
+    rm -f "$marker"
+    return 1
+  fi
+  [ "$actual" -gt "$offset" ] || return 0
+  added=$(_fm_status_read_span "$statusf" "$offset" "$((actual - offset))") || return 0
+  pause_line=$(_fm_status_read_span "$statusf" 0 "$offset" | grep -E "^$pause_verb([[:space:]]|:)" | tail -n 1)
+  _fm_status_unstamped "$pause_line" prior_pause
+  while IFS= read -r line || [ -n "$line" ]; do
+    verb=$(status_line_verb "$line")
+    _fm_status_line_is_event "$line" "$legacy_re" || continue
+    case "$verb" in
+      blocked) ;;
+      "$resolve_verb")
+        key=$(_fm_decision_key "$line" '') || key=''
+        [ "$key" = "paused-overdue-$task" ] && { rm -f "$marker"; return 1; }
+        ;;
+      "$pause_verb")
+        _fm_status_unstamped "$line" new_pause
+        [ "$new_pause" = "$prior_pause" ] || resume=1
+        ;;
+      *) resume=1 ;;
+    esac
+  done <<EOF
+$added
+EOF
+  [ "$resume" -eq 1 ] || return 0
+  fm_wake_status_append_self_announced "$STATE" "$statusf" "$resolve_verb [key=paused-overdue-$task]: worker pause changed"
+  append_rc=$?
+  [ "$append_rc" -eq 0 ] || [ "$append_rc" -eq 1 ] || return 0
+  rm -f "$marker"
+  return 1
+}
+
+reconcile_overdue_pauses() {
+  local marker task statusf
+  for marker in "$STATE"/.paused-overdue-*; do
+    [ -f "$marker" ] || continue
+    task=${marker##*/}; task=${task#.paused-overdue-}
+    statusf="$STATE/$task.status"
+    pause_overdue_reconcile "$task" "$statusf" || true
+  done
+}
+
 # Reconcile a declared pause or captain-held status with authoritative crew state.
 # After fm-crew-state has fallen back to stopped or unknown, paused classification is
 # recovered only for a confidently dead ordinary crew, or for a secondmate, whose
 # endpoint liveness this function deliberately never reads.
 pause_state_class() {  # <window> <task>
-  local win=$1 task=$2 key last recheck_file class agent_alive kind
+  local win=$1 task=$2 key last recheck_file class agent_alive kind statusf rc
   key=$(window_key "$win")
-  last=$(status_declared_wait_line "$STATE/$task.status")
+  statusf="$STATE/$task.status"
+  pause_overdue_reconcile "$task" "$statusf"; rc=$?
+  if [ "$rc" -eq 0 ]; then printf 'paused'; return; fi
+  last=$(status_declared_wait_line "$statusf")
   recheck_file="$STATE/.paused-rechecked-$key"
+  if status_is_paused "$last"; then
+    local mtime now age
+    mtime=$(stat_mtime "$statusf"); now=$(date +%s)
+    case "$mtime" in ''|*[!0-9]*) mtime=$now ;; esac
+    age=$(status_pause_age "$last" "$(( now - mtime ))" "$now")
+    status_pause_is_overdue "$last" "$age" "$now" && { printf 'paused'; return; }
+  fi
   if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$recheck_file"
     crew_absorb_class "$task"
@@ -3912,6 +4010,8 @@ resurface_after_downtime() {
 }
 
 while :; do
+  PR_DEGRADED_WATCH_ENABLED=0
+  [ ! -e "$CONFIG/pr-degraded-watch" ] || PR_DEGRADED_WATCH_ENABLED=1
   # Native Codex may tear down the async hook and its watchdog together.
   # fm-codex-stop-park.sh owns this optional identity binding. Self-expiry
   # closes the normal recovery generation and lets the arm/host exit too.
@@ -4010,6 +4110,7 @@ while :; do
 
   # A process-event result carries richer adapter-owned wake context than the
   # generic recovery reason, so give that owner first refusal.
+  reconcile_overdue_pauses
   resurface_after_downtime
 
   # The existing poll loop also owns the bounded inactive-outcome cadence.
@@ -4076,7 +4177,11 @@ while :; do
             triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
             continue
           fi
-          run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated-readiness \
+          pr_poll_mode=--validated-readiness
+          if [ "$(fm_meta_get "$STATE/$id.meta" pr_pending)" = 0 ]; then
+            pr_poll_mode=--validated
+          fi
+          run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" "$pr_poll_mode" \
             "$provider" "$url" "$host" "$path" "$number" || exit 1
           out=$FM_CHECK_RESULT
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
@@ -4188,6 +4293,73 @@ EOF
             continue
           fi
           wake "$reason"
+        elif [ "$is_pr_poll" -eq 1 ] \
+          && { [ "$out" = ontrain ] || [ "${out%% *}" = degraded ]; } \
+          && [ "$PR_DEGRADED_WATCH_ENABLED" != 1 ]; then
+          pr_poll_control_release || exit 1
+          touch "$STATE/.last-check"
+          continue
+        elif [ "$is_pr_poll" -eq 1 ] && [ "$out" = ontrain ] && [ "$PR_DEGRADED_WATCH_ENABLED" = 1 ]; then
+          # A ready MR still on its merge train: remember it in the train
+          # marker so a later drop (the car gone while the MR is still open)
+          # is a transition worth a wake. The drop wake clears that marker,
+          # so a drop wakes once and a re-queue arms the next one.
+          if ! fm_pr_poll_degraded_already_notified "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" train=on; then
+            fm_pr_poll_degraded_mark_notified "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" train=on || exit 1
+          fi
+          pr_poll_control_release || exit 1
+          touch "$STATE/.last-check"
+          continue
+        elif [ "$is_pr_poll" -eq 1 ] && [ "${out%% *}" = degraded ] && [ "$PR_DEGRADED_WATCH_ENABLED" = 1 ]; then
+          # A ready PR/MR that degraded after its ready report - a failing
+          # check on GitHub, a failed head pipeline on GitLab, the readable
+          # trace of a merge train dropping the merge request - would
+          # otherwise leave the worker and this supervisor idle until a human
+          # notices. Wake once per transition: the poll names the head or
+          # pipeline that degraded, the marker records the identity that last
+          # woke, and a repeat or an unreadable line stays silent.
+          degraded_identity=${out#'degraded '}
+          degraded_identity=${degraded_identity%% *}
+          case $out in
+            *$'\n'*) degraded_identity= ;;
+          esac
+          if ! fm_pr_poll_degraded_identity_valid "$degraded_identity"; then
+            pr_poll_control_release || exit 1
+            touch "$STATE/.last-check"
+            triage_log "PR poll for $id emitted an unreadable degraded result; staying silent"
+            continue
+          fi
+          if [ "$degraded_identity" != train=dropped ] \
+              && fm_pr_poll_degraded_already_notified "$STATE" "$id" \
+                "$provider" "$host" "$path" "$number" "$degraded_identity"; then
+            pr_poll_control_release || exit 1
+            touch "$STATE/.last-check"
+            triage_log "absorbed duplicate degraded PR poll result for $id"
+            continue
+          fi
+          if [ "$degraded_identity" = train=dropped ] \
+              && ! fm_pr_poll_degraded_already_notified "$STATE" "$id" \
+                "$provider" "$host" "$path" "$number" train=on; then
+            pr_poll_control_release || exit 1
+            touch "$STATE/.last-check"
+            triage_log "PR poll for $id reported a train drop it never saw on the train; staying silent"
+            continue
+          fi
+          # The durable wake lands before the marker, both under the control
+          # lock, so a failure between them can only repeat this wake on the
+          # next poll, never record a transition nobody was woken for.
+          reason="check: PR $url degraded after ready: $out"
+          fm_wake_append check "$c" "$reason" || exit 1
+          fm_pr_poll_degraded_mark_notified "$STATE" "$id" \
+            "$provider" "$host" "$path" "$number" "$degraded_identity" || exit 1
+          if [ "$degraded_identity" = train=dropped ]; then
+            fm_pr_poll_train_clear "$STATE" "$id" || exit 1
+          fi
+          pr_poll_control_release || exit 1
+          touch "$STATE/.last-check"
+          wake "$reason"
         fi
         pr_poll_control_release || exit 1
         fm_wake_append check "$c" "$reason" || exit 1
@@ -4226,9 +4398,11 @@ EOF
   # hook land seconds apart, and reporting them as separate actionable wakes
   # costs a full firstmate turn each. The re-scan also picks up a newer
   # signature for an already-pending file (last write wins below).
+  reconcile_overdue_pauses
   pending=$(scan_signals)
   if [ -n "$pending" ]; then
     sleep "$SIGNAL_GRACE"
+    reconcile_overdue_pauses
     pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
@@ -4429,6 +4603,8 @@ EOF
             _wedge_cap_markers_clear "$key"
             wake "$stale_reason"
           fi
+        elif fm_pause_ceiling_enabled && [ -e "$STATE/.paused-overdue-$task" ]; then
+          printf '%s' "$h" > "$sf"
         elif stale_is_terminal "$w" "$STATE"; then
           # The log's latest status event is captain-relevant - but that alone is not
           # proof the crew is actually done: a crew's own status log gets no

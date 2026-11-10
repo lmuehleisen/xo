@@ -1097,6 +1097,29 @@ tests/fm-afk-return.test.sh
 tests/fm-branch-supervision.test.sh
 ```
 
+### Acknowledged hand-back retry over herdr
+
+Regression entry points for [Reaching a lost Claude continuation](../supervision-host.md#reaching-a-lost-claude-continuation) cover foreground ownership, native and rendered idle checks, composer protection, explicit acknowledgement, and retained supervision.
+
+Deterministic checks:
+
+```sh
+tests/fm-supervision-host-hook.test.sh
+tests/fm-backend-herdr.test.sh
+```
+
+Opt-in live check:
+
+```sh
+FM_SUPERVISION_HOST_HERDR_LIVE_E2E=1 tests/fm-supervision-host-herdr-live-e2e.test.sh
+```
+
+Expected successful final output:
+
+```text
+ok - herdr live e2e: a lost Claude hand-back is recovered by the detached retry, acknowledged, and supervision retained
+```
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

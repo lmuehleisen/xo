@@ -36,5 +36,15 @@ fm_test_run \
   test_paused_until_near_future_is_quiet_before_the_cadence \
   test_paused_until_wrong_year_is_bounded_by_the_cadence \
   test_paused_until_that_passed_is_rechecked_before_the_cadence \
+  test_pause_ceiling_dated_overdue_pause_opens_one_decision \
+  test_pause_ceiling_absent_keeps_old_pauses_on_the_recheck \
+  test_overdue_resume_race_uses_pause_snapshot \
+  test_busy_overdue_pause_does_not_enter_wedge_ladder \
+  test_overdue_marker_survives_reconcile_and_closes_on_working \
+  test_overdue_terminal_status_ignores_pane_display_churn \
+  test_reused_task_id_does_not_inherit_overdue_pause \
+  test_malformed_dated_pause_is_not_undated_overdue \
+  test_undated_pause_age_uses_the_pause_line \
+  test_undated_pause_overdue_bound \
   test_paused_bg_job_without_until_stays_silent_after_the_job_ends \
   test_paused_bg_job_until_timeout_rechecks_after_the_job_ends

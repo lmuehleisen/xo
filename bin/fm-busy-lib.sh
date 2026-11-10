@@ -21,8 +21,11 @@
 # must present the current gen; an event or record carrying any other gen is
 # a stale incarnation and is rejected (written events) or classified unknown
 # (read records). seq is a strictly increasing integer per gen, advanced
-# under the writer's lock, so an out-of-order apply can never regress a
-# newer record.
+# under the writer's lock: it records apply order, not harness emission order,
+# and cannot stop a late apply from overwriting a newer harness event.
+# OpenCode's emission-order queue is owned by the generated V2 worker plugin
+# in bin/fm-spawn.sh; tests/fm-busy-adapter-wiring.test.sh covers unawaited bursts
+# and the worker subscription boundary.
 #
 # Semantic sources written by adapters (fm_busy_sources_for_harness owns the
 # per-harness trust table; a record whose source is not trusted for the

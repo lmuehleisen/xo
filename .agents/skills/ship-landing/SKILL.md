@@ -23,7 +23,7 @@ On a GitHub finished PR signal, run `bin/fm-pr-check.sh --pending <id> <PR url>`
 A pending registration announces no review-ready result to the parent or fleet ledger.
 If registration fails, surface the failure instead of filing an unmonitored wait as routine.
 Until ready, the PR is not listed among the captain's calls or described as awaiting review or merge; when the pre-existing-failure exception applies, present the PR with that evidence stated plainly.
-Once the PR is ready, run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal - it records `pr=` and the forge's `pr_head=` when available in the task's meta and keeps the watcher's poll armed.
+Once the PR is ready, run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal - it records `pr=` and the forge's `pr_head=` when available in the task's meta and keeps the watcher's poll armed, including post-ready degradation alerts when `config/pr-degraded-watch` is present.
 With `config/pr-register-scan` present, the watcher's check sweep also records a PR that a `done:` line names when no `pr=` exists, and reports a refused registration as a `check: pr-register:` notification; handle that refusal as you would a refusal from a manual run.
 `bin/fm-dod-lib.sh` owns the named-head gate on that ready signal: a ship `done:` whose named head exists only in the worker's disposable copy is not ready (`bin/fm-crew-state.sh` reports blocked, `bin/fm-pr-check.sh` refuses to register, and a secondmate does not publish that done upstream).
 That blocked reading is the gate working, not a stuck worker, so steer the worker on the commit the refusal names rather than waiting.
