@@ -979,12 +979,12 @@ test_completion_inherited_data_is_bound() {
       "$dir/state/devin-permission-log.jsonl" >/dev/null \
       || fail 'recorded relocated data must be approved statically'
   done
-  FM_DATA_OVERRIDE= hook "$policy" permission-request exec "$cmd" data-relocated-wrong-default
+  FM_DATA_OVERRIDE='' hook "$policy" permission-request exec "$cmd" data-relocated-wrong-default
   [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
     || fail 'the home default must not override a different recorded data root'
   mv "$dir/data" "$dir/original-data"
   ln -s "$dir/relocated" "$dir/data"
-  FM_DATA_OVERRIDE= hook "$policy" permission-request exec "$cmd" data-relocated-linked-default
+  FM_DATA_OVERRIDE='' hook "$policy" permission-request exec "$cmd" data-relocated-linked-default
   [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
     || fail 'a home data symlink to the recorded relocation must retain approval'
   pass 'fm-devin-permission-policy: completion data matches policy authority, including recorded relocations and physical aliases'
