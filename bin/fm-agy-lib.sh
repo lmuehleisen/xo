@@ -79,14 +79,15 @@ fm_agy_default_posture() {  # <harness> <kind>
 
 # Shared native Auto eligibility gate for launch and dispatch resolution.
 # Prints the refusal reason on stdout; success is silent. Resolve physically
-# and stop at the git root, including dangling project-hook symlinks.
+# and stop at the git root, including dangling project-hook symlinks. An
+# unreachable git root refuses instead of walking the filesystem root forever.
 fm_agy_native_project_compatible() {  # <project-dir>
-  local dir git_root
-  dir=$(cd "$1" && pwd -P) || {
+  local dir git_root parent
+  dir=$(cd "$1" 2>/dev/null && pwd -P) || {
     printf 'agy native policy could not inspect project directory: %s\n' "$1"
     return 1
   }
-  git_root=$(git -C "$dir" rev-parse --show-toplevel) || {
+  git_root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || {
     printf 'agy native policy could not find the project git root: %s\n' "$dir"
     return 1
   }
@@ -96,7 +97,12 @@ fm_agy_native_project_compatible() {  # <project-dir>
       return 1
     fi
     [ "$dir" != "$git_root" ] || break
-    dir=$(dirname "$dir")
+    parent=$(dirname "$dir")
+    if [ "$parent" = "$dir" ]; then
+      printf 'agy native policy could not reach project git root: %s\n' "$git_root"
+      return 1
+    fi
+    dir=$parent
   done
 }
 

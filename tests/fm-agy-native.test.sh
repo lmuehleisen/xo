@@ -4,6 +4,8 @@
 set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$ROOT/bin/fm-timeout-lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-agy-native-unit)
 SCREEN="$TMP_ROOT/screen"
 POLICY="$TMP_ROOT/state/t1.agy-permission.json"
@@ -48,6 +50,25 @@ for value in null '[]' '{"tool":"run_command","args":[]}'; do
   ! grep -q Traceback "$TMP_ROOT/bad-candidate.stderr" || fail 'malformed candidate crashed the viewport parser'
 done
 pass 'native viewport: independent Auto signals, unknown/fallback refusal, active panel and wrapped choices'
+
+# A caller-supplied Git workspace can report a root outside the physical
+# project. The shared launch/resolver predicate must refuse within the bound.
+project="$TMP_ROOT/project-root/project"
+unrelated="$TMP_ROOT/project-root/unrelated"
+fm_git_init_commit "$project"
+mkdir -p "$unrelated"
+project_check() {
+  bash -c '. "$1/bin/fm-agy-lib.sh"; fm_agy_native_project_compatible "$2"' _ "$ROOT" "$project"
+}
+project_check || fail 'ordinary hook-free project was refused'
+[ "$(GIT_WORK_TREE="$unrelated" git -C "$project" rev-parse --show-toplevel)" = "$unrelated" ] \
+  || fail 'root-mismatch fixture did not change the reported Git workspace'
+root_rc=0
+root_reason=$(fm_run_timed 5 env GIT_WORK_TREE="$unrelated" bash -c \
+  '. "$1/bin/fm-agy-lib.sh"; fm_agy_native_project_compatible "$2"' _ "$ROOT" "$project") || root_rc=$?
+[ "$root_rc" = 1 ] || fail "unreachable project root did not refuse promptly: exit=$root_rc"
+assert_contains "$root_reason" "could not reach project git root: $unrelated" 'unreachable project roots fail closed with a concrete reason'
+pass 'native project gate: hook-free roots pass; a non-ancestor Git workspace refuses without looping'
 
 # A receipt cannot bypass each launch's readiness invocation. Refuse before
 # backend input when the owned hook has not opened this generation.
