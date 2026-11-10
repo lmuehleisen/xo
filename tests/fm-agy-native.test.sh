@@ -71,6 +71,7 @@ project_check || fail 'ordinary hook-free project was refused'
 [ "$(GIT_WORK_TREE="$unrelated" git -C "$project" rev-parse --show-toplevel)" = "$unrelated" ] \
   || fail 'root-mismatch fixture did not change the reported Git workspace'
 root_rc=0
+# shellcheck disable=SC2016 # Expanded by the child shell
 root_reason=$(fm_run_timed 5 env GIT_WORK_TREE="$unrelated" bash -c \
   '. "$1/bin/fm-agy-lib.sh"; fm_agy_native_project_compatible "$2"' _ "$ROOT" "$project") || root_rc=$?
 [ "$root_rc" = 1 ] || fail "unreachable project root did not refuse promptly: exit=$root_rc"
