@@ -24,13 +24,15 @@
 # recheck after the settle window and all reported checks stop pending.
 # It never declares readiness: fm-pr-state.sh's blockers and the full check
 # result remain for firstmate to assess, including repositories with no checks.
-# A closed GitHub PR emits closed immediately in readiness mode, so delivery
-# failure reaches supervision even before a readiness wait clears.
+# A validated GitHub watcher emits closed for both pending and ready PRs, so
+# delivery failure reaches supervision before or after a readiness wait clears.
+# Raw sidecar and baseline reads retain their merged-only closure contract.
 set -u
 LC_ALL=C
 export LC_ALL
 
 readiness=0
+report_closed=0
 # Status of a failed or unreadable forge read: silent success for the watcher,
 # a distinct status for the arming baseline read (--baseline, passed only by
 # bin/fm-pr-check.sh) so registration can tell "unknown" from "not degraded".
@@ -40,6 +42,7 @@ poll_home=${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/..
 [ -e "${FM_CONFIG_OVERRIDE:-$poll_home/config}/pr-degraded-watch" ] && degraded_enabled=1
 if [ "$#" -eq 6 ] && { [ "$1" = --validated ] || [ "$1" = --baseline ] || [ "$1" = --validated-readiness ]; }; then
   [ "$1" != --baseline ] || unknown=3
+  [ "$1" = --baseline ] || report_closed=1
   [ "$1" != --validated-readiness ] || readiness=1
   provider=$2
   url=$3
@@ -139,7 +142,11 @@ case "$provider" in
     fi
     if [ "$degraded_enabled" != 1 ]; then
       result=$(GH_HOST=$host gh pr view "$url" --json state --jq '.state' 2>/dev/null) || exit $unknown
-      [ "$result" = MERGED ] && printf '%s\n' merged
+      if [ "$result" = MERGED ]; then
+        printf '%s\n' merged
+      elif [ "$result" = CLOSED ] && [ "$report_closed" = 1 ]; then
+        printf '%s\n' closed
+      fi
       exit 0
     fi
     # One read answers both questions this poll owns: the merged wake it has
@@ -150,14 +157,15 @@ case "$provider" in
     # checks were green, so a failing one here is a change worth waking for.
     # The degraded line names every failing check with its conclusion and the
     # first one's URL, so the wake says which test broke without a job-log
-    # dig. Every error, a non-open state, a pending or green rollup, and an
-    # unreadable head all stay silent; only the exact line shape below leaves
-    # this branch, and the head is validated here so the watcher's dedupe
-    # marker never sees another byte.
+    # dig. Lookup errors, unknown states, and open PRs with pending or green
+    # rollups stay silent. Validated closed states use the terminal wake, and
+    # a degraded result's head is validated before reaching the dedupe marker.
     # shellcheck disable=SC2016  # The filter's $f and $r are jq variables, expanded by jq, not the shell.
     result=$(GH_HOST=$host gh pr view "$url" --json state,headRefOid,statusCheckRollup --jq '
       if .state == "MERGED" then
         "merged"
+      elif .state == "CLOSED" then
+        "closed"
       elif .state == "OPEN"
         and ([.statusCheckRollup[]?
                 | select((.conclusion // .state // "") as $r
@@ -183,6 +191,9 @@ case "$provider" in
     case $result in
       merged)
         printf '%s\n' merged
+        ;;
+      closed)
+        if [ "$report_closed" = 1 ]; then printf '%s\n' closed; fi
         ;;
       'degraded head='*)
         case $result in

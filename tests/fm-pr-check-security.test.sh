@@ -1866,7 +1866,7 @@ test_degraded_watch_flag_in_an_overridden_home() {
 }
 
 test_ready_registration_replaces_pending_poll_mode() {
-  local dir state url
+  local dir state url mode
   dir=$(make_case ready-after-pending)
   state="$dir/home/state"
   url=https://github.com/o/r/pull/1
@@ -1882,6 +1882,19 @@ test_ready_registration_replaces_pending_poll_mode() {
     run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err" \
     || fail "ready poll failed: $(cat "$dir/watch.err")"
   assert_grep "PR $url degraded after ready" "$dir/watch.out" "readiness polling hid a ready PR's degradation"
+  for mode in on off; do
+    dir=$(make_case "ready-closed-$mode")
+    state="$dir/home/state"
+    [ "$mode" != off ] || rm "$dir/home/config/pr-degraded-watch"
+    write_task_meta "$dir" task-a
+    run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/arm.err" \
+      || fail "ready registration failed with degradation $mode: $(cat "$dir/arm.err")"
+    FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err" \
+      || fail "closed ready poll failed with degradation $mode: $(cat "$dir/watch.err")"
+    assert_grep "PR closed without merging: $url" "$dir/watch.out" "ready closure was lost with degradation $mode"
+    assert_grep "PR closed without merging: $url" "$state/.wake-queue" "ready closure was not durable with degradation $mode"
+    assert_no_grep ': merged' "$dir/watch.out" "closed ready PR was reported as landed"
+  done
   pass "a ready registration replaces pending follow-up and preserves the degraded-ready wake"
 }
 
@@ -5696,6 +5709,11 @@ SH
   done
   unset FM_TEST_UPDATED_AT FM_TEST_GH_HEAD FM_TEST_CHECK_BUCKET FM_TEST_REQUIRED_BUCKET
 }
+
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit 0
+fi
 
 test_finished_pr_readiness_followup
 test_parser_matrix
