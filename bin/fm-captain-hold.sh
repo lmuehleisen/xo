@@ -2910,6 +2910,7 @@ emit_receipt() {  # <id> <checked-at> <source> <revision> <verdict> <call> <defe
     utf8::decode($_) for @ARGV;
     my ($schema, $task, $checked_at, $source, $revision, $verdict,
         $call, $deferral, $blockers, $reconcile, $linked, $detail) = @ARGV;
+    binmode STDOUT, ":raw";
     print JSON::PP->new->utf8->canonical->encode({
       schema => $schema,
       task => $task,
@@ -2994,9 +2995,21 @@ command_recheck() {  # <task-id> [--expect <revision>]
     blocked_by=$(show_field_value "$show" blocked_by)
     shown_body=$(show_field "$show" body)
     decoded_body=$(decode_shown_value "$shown_body" 2>/dev/null || true)
+    if [ -z "$hold_until" ]; then
+      deferral=none
+    elif [ "$hold_until" \> "$today" ]; then
+      deferral=future
+    else
+      deferral=lapsed
+    fi
+
     hold_set=$(body_hold_set_timestamp "$decoded_body")
-    face_digest=$(sha256_text "$(printf 'state=%s\nheld=%s\nhold_kind=%s\nhold_reason=%s\nhold_until=%s\ntitle=%s\nblocked=%s\nblocked_by=%s\nkind=%s\nrepo=%s\nlinks=%s\n' \
-      "$state" "$held" "$hold_kind" "$hold_reason" "$hold_until" "$title" \
+    # deferral rides the digested face so a hold crossing its date between a
+    # composition receipt and a publish --expect expires as changed, while a
+    # call already lapsed when first presented verifies - the lapsed state is
+    # disclosed in checks.deferral, not cried as movement.
+    face_digest=$(sha256_text "$(printf 'state=%s\nheld=%s\nhold_kind=%s\nhold_reason=%s\nhold_until=%s\ndeferral=%s\ntitle=%s\nblocked=%s\nblocked_by=%s\nkind=%s\nrepo=%s\nlinks=%s\n' \
+      "$state" "$held" "$hold_kind" "$hold_reason" "$hold_until" "$deferral" "$title" \
       "$blocked" "$blocked_by" "$kind" "$repo" "$links")")
     revision="${hold_set}#$(resolution_record_count "$shown_body")#${face_digest:0:12}"
 
@@ -3008,15 +3021,6 @@ command_recheck() {  # <task-id> [--expect <revision>]
     else
       call=changed
       changed_detail="the call $id is no longer held for the captain"
-    fi
-
-    if [ -z "$hold_until" ]; then
-      deferral=none
-    elif [ "$hold_until" \> "$today" ]; then
-      deferral=future
-    else
-      deferral=lapsed
-      [ -n "$changed_detail" ] || changed_detail="the call $id recorded a deferral until $hold_until, which has passed"
     fi
 
     if [ "$blocked" = yes ]; then
@@ -3053,7 +3057,8 @@ command_recheck() {  # <task-id> [--expect <revision>]
   # call whose row could not be read cannot name its origin (`unknown`).
   # For an origin, the premise a presented call rests on is the quiet
   # completion `hold`/`complete` leaves behind - done, captain-held, or a
-  # resolved key - so any newer active verb means the work moved on.
+  # resolved key - so any newer active verb, or a needs-decision/blocked key
+  # the status fold still holds open, means the work moved on.
   if [ "$show_status" -ne 0 ]; then
     if [ "$call" = changed ]; then linked=none; else linked=unknown; fi
   else
@@ -3073,7 +3078,11 @@ command_recheck() {  # <task-id> [--expect <revision>]
         if [ ! -f "$meta" ] || [ -L "$meta" ]; then
           linked=none
         elif [ -f "$status_file" ] && [ ! -L "$status_file" ] && [ -r "$status_file" ]; then
-          verb=$(status_line_verb "$(last_status_line "$status_file")")
+          # status_current_line, not last_status_line: a needs-decision or
+          # blocked key the fold still holds open wins over a later resolved
+          # event for another key, so an unanswered decision on the origin
+          # never reads as the quiet completion its hold implies.
+          verb=$(status_line_verb "$(status_current_line "$status_file" "")")
           case "$verb" in
             done|captain-held|resolved) linked=consistent ;;
             '')
@@ -3083,7 +3092,7 @@ command_recheck() {  # <task-id> [--expect <revision>]
               ;;
             *)
               linked=changed
-              [ -n "$changed_detail" ] || changed_detail="the linked work $origin last reported $verb, not the quiet completion its hold implies"
+              [ -n "$changed_detail" ] || changed_detail="the linked work $origin reports $verb, not the quiet completion its hold implies"
               ;;
           esac
         else
@@ -3105,6 +3114,7 @@ command_recheck() {  # <task-id> [--expect <revision>]
     verdict=verified
     detail="open captain call"
     [ "$deferral" != future ] || detail="open captain call (deferred until $hold_until)"
+    [ "$deferral" != lapsed ] || detail="open captain call (deferral until $hold_until has passed)"
   fi
   emit_receipt "$id" "$checked_at" backlog "$revision" "$verdict" \
     "$call" "$deferral" "$blockers" "$reconcile" "$linked" "$detail"

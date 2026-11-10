@@ -774,7 +774,11 @@ if [ -n "$RECHECK_ROWS" ]; then
               checks:{call:"unknown",deferral:"unknown",blockers:"unknown",
                       reconcile:"unknown",linked_work:"unknown"},
               detail:"no presentation receipt was produced for this call"})}
-        else . end)') \
+        # The TOON table derives its columns from the first gate row alone, so
+        # a receipt present only on captain gates would vanish when an ordinary
+        # gate leads the array. Every gate carries the field; null on a
+        # non-captain row means no verification applies.
+        else . + {receipt:null} end)') \
     || { rm -f "$RECEIPTS_FILE"; echo "fm-bearings-snapshot: receipt merge failed" >&2; exit 1; }
   rm -f "$RECEIPTS_FILE"
 fi

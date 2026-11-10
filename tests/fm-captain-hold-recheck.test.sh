@@ -146,19 +146,32 @@ test_recheck_absent_and_closed_calls() {
 }
 
 test_recheck_deferral_verdicts() {
-  local home receipt
+  local home receipt revision
   home=$(make_home deferral)
   tasks_in "$home" add call-future 'Decide tomorrow' --kind scout --repo sample >/dev/null
   run_captain "$home" hold call-future --reason 'deferred decision' --until 2099-01-01 >/dev/null
   receipt=$(run_recheck "$home" call-future)
   assert_equals "$(receipt_field "$receipt" .verdict)" "verified" "future deferral verdict"
   assert_equals "$(receipt_field "$receipt" '.checks.deferral')" "future" "future deferral check"
+  # A deferral already lapsed when the call is presented is disclosed, not
+  # cried as movement: nothing moved since the presented state was captured.
   tasks_in "$home" add call-lapsed 'Decide yesterday' --kind scout --repo sample >/dev/null
   run_captain "$home" hold call-lapsed --reason 'deferred decision' --until 2020-01-01 >/dev/null
   receipt=$(run_recheck "$home" call-lapsed)
   assert_equals "$(receipt_field "$receipt" '.checks.deferral')" "lapsed" "lapsed deferral check"
-  assert_equals "$(receipt_field "$receipt" .verdict)" "changed" "a lapsed deferral stayed verified"
-  pass "a live deferral verifies while a lapsed one reports changed"
+  assert_equals "$(receipt_field "$receipt" .verdict)" "verified" "a lapsed deferral misreports moved"
+  assert_contains "$(receipt_field "$receipt" .detail)" "has passed" "lapsed deferral detail"
+  # But a hold that crosses its date between a composition receipt and a
+  # publish --expect does expire: the presented face changed.
+  tasks_in "$home" add call-due 'Decide by mid-July' --kind scout --repo sample >/dev/null
+  run_captain "$home" hold call-due --reason 'deferred decision' --until 2026-07-10 >/dev/null
+  receipt=$(FM_CAPTAIN_HOLD_NOW=2026-07-01T00:00:00Z run_recheck "$home" call-due)
+  assert_equals "$(receipt_field "$receipt" '.checks.deferral')" "future" "pre-due deferral check"
+  revision=$(receipt_field "$receipt" .revision)
+  receipt=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T00:00:00Z run_recheck "$home" call-due --expect "$revision")
+  assert_equals "$(receipt_field "$receipt" '.checks.deferral')" "lapsed" "post-due deferral check"
+  assert_equals "$(receipt_field "$receipt" .verdict)" "changed" "a crossed due date stayed verified"
+  pass "a live deferral verifies, a lapsed one discloses without crying moved, and a crossed date expires"
 }
 
 test_recheck_reconcile_pending_stays_verified() {
@@ -202,6 +215,41 @@ test_recheck_linked_origin_states() {
   assert_equals "$(receipt_field "$receipt" '.checks.linked_work')" "unknown" "unreadable origin check"
   assert_equals "$(receipt_field "$receipt" .verdict)" "unknown" "unreadable origin verdict"
   pass "a linked origin's quiet, active, and unreadable states verify, change, and mark unknown"
+}
+
+test_recheck_linked_origin_open_decision() {
+  local home receipt
+  home=$(make_home openkey)
+  tasks_in "$home" add work-10 'Gated work item' --kind ship --repo sample >/dev/null
+  fm_write_meta "$home/state/work-10.meta" \
+    "window=firstmate:fm-work-10" \
+    "worktree=$home/projects/missing-work-10" \
+    "project=$home/projects/sample" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship" \
+    "spawn_gen=fixture-work-10"
+  # A needs-decision the fold still holds open wins over a later resolved
+  # event for another key: the origin is not quietly completed while the
+  # captain's question stands.
+  printf 'needs-decision [key=api-shape]: which payload shape\nresolved [key=log-name]: named the log\n' \
+    > "$home/state/work-10.status"
+  run_captain "$home" hold call-8 --title 'Call on work-10' --reason 'captain call' \
+    --repo sample --origin work-10 >/dev/null
+  receipt=$(run_recheck "$home" call-8)
+  assert_equals "$(receipt_field "$receipt" '.checks.linked_work')" "changed" "open decision check"
+  assert_equals "$(receipt_field "$receipt" .verdict)" "changed" "open decision verdict"
+  printf 'resolved [key=api-shape]: use the v2 envelope\n' >> "$home/state/work-10.status"
+  receipt=$(run_recheck "$home" call-8)
+  assert_equals "$(receipt_field "$receipt" '.checks.linked_work')" "consistent" "answered decision check"
+  assert_equals "$(receipt_field "$receipt" .verdict)" "verified" "answered decision verdict"
+  # An open blocked key is the same standing decision, not quiet completion.
+  printf 'blocked [key=await-secret]: secret never provisioned\nresolved [key=note-x]: noted\n' \
+    > "$home/state/work-10.status"
+  receipt=$(run_recheck "$home" call-8)
+  assert_equals "$(receipt_field "$receipt" '.checks.linked_work')" "changed" "open blocker check"
+  assert_equals "$(receipt_field "$receipt" .verdict)" "changed" "open blocker verdict"
+  pass "an open needs-decision or blocked key on the origin never verifies"
 }
 
 test_recheck_unreadable_source_is_unknown() {
@@ -286,7 +334,7 @@ EOF
 }
 
 test_board_publish_rechecks_and_marks() {
-  local home data board payload receipt revision stale
+  local home data board payload receipt stale
   home=$(make_home board)
   tasks_in "$home" add call-10 'Publish-time decision' --kind scout --repo sample >/dev/null
   run_captain "$home" hold call-10 --reason 'captain must decide' >/dev/null
@@ -302,7 +350,6 @@ test_board_publish_rechecks_and_marks() {
     and (.charted[0].receipt.verdict == "verified")
   ' >/dev/null || fail "the published board lacks fresh receipts: $payload"
   # A stale composed revision expires at publish time.
-  revision=$(printf '%s' "$payload" | jq -r '.captains_call[0].receipt.revision')
   stale="\"receipt\":{\"schema\":\"fm-presentation-receipt.v1\",\"task\":\"call-10\",\"checked_at\":\"2026-01-01T00:00:00Z\",\"source\":\"(main)\",\"revision\":\"stale\",\"verdict\":\"verified\",\"checks\":{\"call\":\"verified\",\"deferral\":\"none\",\"blockers\":\"none\",\"reconcile\":\"clear\",\"linked_work\":\"self\"},\"detail\":\"composed earlier\"}"
   write_board_payload "$data" call-10 "$stale"
   run_board "$home" build "$data" >/dev/null || fail "board rebuild failed"
@@ -352,6 +399,7 @@ fm_test_run \
   test_recheck_deferral_verdicts \
   test_recheck_reconcile_pending_stays_verified \
   test_recheck_linked_origin_states \
+  test_recheck_linked_origin_open_decision \
   test_recheck_unreadable_source_is_unknown \
   test_snapshot_attaches_receipts_to_presented_calls \
   test_snapshot_no_decisions_runs_no_recheck \

@@ -194,7 +194,11 @@ validate_payload() {  # <data.json>
       and ([.checks.call, .checks.deferral, .checks.blockers,
             .checks.reconcile, .checks.linked_work] | all(nonempty_string))
       and (.detail | type == "string");
-    def optional_receipt: (has("receipt") | not) or (.receipt | presentation_receipt);
+    # null marks a non-captain gate row where no verification applies; the
+    # build replaces or keeps it untouched.
+    def optional_receipt:
+      (has("receipt") | not) or (.receipt == null)
+      or (.receipt | presentation_receipt);
     def call_item:
       type == "object"
       and (.key | slug(128))
