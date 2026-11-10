@@ -678,10 +678,10 @@ fm_backend_endpoint_u64_valid() {  # <value>
 # No command here restores the line: only the operator can say which copy a task
 # holds, and a one-shot rewrite would make a damaged record convenient to keep.
 # Restoring it stays safe when the pool slot has since been handed to another
-# task: bin/fm-teardown.sh reads that slot's own claim (bin/fm-wake-lib.sh's
-# fm_treehouse_slot_owner_marker) and then touches nothing under it, while a
-# slot carrying no claim carries no such proof and leaves the worktree listing
-# as the only evidence.
+# task: bin/fm-teardown.sh refuses to return a slot another task record names,
+# or whose Treehouse lease (bin/fm-worktree-claims-lib.sh's
+# fm_worktree_lease_owner) belongs to anyone else. An unleased slot has no
+# holder proof and leaves the worktree listing as the only evidence.
 fm_backend_worktree_identity_repair_hint() {  # <meta-file>
   local meta=$1 prior project branch
   prior="${meta%.meta}.control-relaunch.meta-prior"

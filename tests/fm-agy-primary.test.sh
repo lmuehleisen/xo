@@ -492,26 +492,81 @@ test_turnend_guard_agy_loop_ceiling() {
   pass "fm-turnend-guard-agy: the loop ceiling notifies once while supervision is needed, then passes through"
 }
 
+test_live_observer_records_before_park_or_deny() {
+  python3 - "$ROOT" "$TMP_ROOT/live-observer" <<'PY' || fail 'live observer did not preserve ordered delegation'
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+
+root, home = map(Path, sys.argv[1:])
+(home / "state").mkdir(parents=True)
+payload = {"executionNum": 1, "terminationReason": "NO_TOOL_CALL"}
+delegate = home / "park.py"
+delegate.write_text('''import json, os, sys
+from pathlib import Path
+payload = json.load(sys.stdin)
+events = (Path(os.environ['FM_HOME'])/'state/events.jsonl').read_text().splitlines()
+event = json.loads(events[-1])
+assert event['event'] == sys.argv[1] and event['payload'] == payload
+if sys.argv[1] == 'PreToolUse':
+    print('{"decision":"deny","reason":"fixture deny"}')
+    sys.exit(0)
+print('{"decision":"continue","reason":"fixture wake"}')
+sys.exit(17)
+''')
+observer = [sys.executable, str(root / "tests/agy-primary-live-observer.py")]
+env = dict(os.environ, FM_HOME=str(home))
+for event, response, code in [
+    ("Stop", {"decision": "continue", "reason": "fixture wake"}, 17),
+    ("PreToolUse", {"decision": "deny", "reason": "fixture deny"}, 0),
+]:
+    result = subprocess.run(observer + [event, shlex.join([sys.executable, str(delegate), event])],
+                            input=json.dumps(payload), text=True, capture_output=True, env=env)
+    assert result.returncode == code, result
+    assert json.loads(result.stdout) == response
+    assert result.stderr == "", result.stderr
+result = subprocess.run(observer + ["PreToolUse"], input=json.dumps(payload),
+                        text=True, capture_output=True, env=env)
+assert result.returncode == 0 and result.stdout == result.stderr == "", result
+PY
+  pass 'agy live observer: records before delegated park or deny, preserves payload/output/status, and silently abstains'
+}
+
 test_turnend_guard_agy_supersession() {
-  local dir payload first_pid waited first_out
-  dir=$(make_primary_dir "$TMP_ROOT/stop-supersede")
-  : > "$dir/state/task1.meta"
-  write_arm_fixture "$dir" slow
-  payload='{"sessionId":"s-1","conversationId":"c-1","executionNum":1,"terminationReason":"NO_TOOL_CALL"}'
-  ( run_agy_stop "$dir" "$payload" > "$dir/state/first-out" ) &
-  first_pid=$!
-  waited=0
-  while [ ! -s "$dir/state/.agy-park-owner" ] || [ ! -e "$dir/state/arm-ran" ]; do
-    sleep 0.05
-    waited=$((waited + 1))
-    [ "$waited" -lt 100 ] || fail "first park never wrote state/.agy-park-owner"
+  local dir payload first_pid waited first_out mode
+  for mode in replace withdraw; do
+    dir=$(make_primary_dir "$TMP_ROOT/stop-supersede-$mode")
+    : > "$dir/state/task1.meta"
+    write_arm_fixture "$dir" slow
+    payload='{"sessionId":"s-1","conversationId":"c-1","executionNum":1,"terminationReason":"NO_TOOL_CALL"}'
+    ( run_agy_stop "$dir" "$payload" > "$dir/state/first-out" ) &
+    first_pid=$!
+    waited=0
+    while [ ! -s "$dir/state/.agy-park-owner" ] || [ ! -e "$dir/state/arm-ran" ]; do
+      sleep 0.05
+      waited=$((waited + 1))
+      [ "$waited" -lt 100 ] || fail "first park never wrote state/.agy-park-owner"
+    done
+    if [ "$mode" = withdraw ]; then
+      rm "$dir/state/task1.meta" "$dir/state/.agy-park-owner"
+    else
+      printf 'superseded-owner\n' > "$dir/state/.agy-park-owner"
+    fi
+    wait "$first_pid" 2>/dev/null || true
+    first_out=$(cat "$dir/state/first-out" 2>/dev/null || true)
+    assert_equals "{}" "$first_out" "superseded park must return {}"
+    ! kill -0 "$(cat "$dir/state/arm-ran")" 2>/dev/null || fail "a superseded park must stop its arm child"
+    if [ "$mode" = withdraw ]; then
+      rm "$dir/state/arm-ran"
+      first_out=$(run_agy_stop "$dir" "$payload")
+      assert_equals "{}" "$first_out" "withdrawn fixture must settle with an empty fleet"
+      [ ! -e "$dir/state/arm-ran" ] || fail "withdrawn fixture must not re-park"
+    fi
   done
-  printf 'superseded-owner\n' > "$dir/state/.agy-park-owner"
-  wait "$first_pid" 2>/dev/null || true
-  first_out=$(cat "$dir/state/first-out" 2>/dev/null || true)
-  assert_equals "{}" "$first_out" "superseded park must return {}"
-  ! kill -0 "$(cat "$dir/state/arm-ran")" 2>/dev/null || fail "a superseded park must stop its arm child"
-  pass "fm-turnend-guard-agy: superseded park owner returns {}"
+  pass "fm-turnend-guard-agy: replaced or withdrawn park owner releases the arm and returns {}"
 }
 
 test_turnend_guard_agy_bounded_repair_nag() {
@@ -767,6 +822,7 @@ fm_test_run \
   test_turnend_guard_agy_fleet_empty_and_healthy_close \
   test_turnend_guard_agy_non_normal_termination_reasons \
   test_turnend_guard_agy_loop_ceiling \
+  test_live_observer_records_before_park_or_deny \
   test_turnend_guard_agy_supersession \
   test_turnend_guard_agy_bounded_repair_nag \
   test_agy_stop_scope_payload_lock_and_away \

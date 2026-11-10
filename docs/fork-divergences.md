@@ -142,8 +142,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: upstream arrives through real-merge integration runs and the updater only fast-forwards; README upstream integration paragraph.
 - Class: intended.
-- Seam: fork-only `docs/upstream-integration.md`, `docs/fork-divergences.md`, and `bin/fm-upstream-callsite-scan.sh`, plus the updater skill (shared).
-- Guard: fork-only `tests/fm-upstream-callsite-scan.test.sh`.
+- Seam: fork-only `docs/upstream-integration.md`, `docs/fork-divergences.md`, `bin/fm-upstream-callsite-scan.sh`, and `bin/fm-upstream-removed-helper-scan.sh`, plus the updater skill (shared).
+- Guard: fork-only `tests/fm-upstream-callsite-scan.test.sh` and `tests/fm-upstream-removed-helper-scan.test.sh`.
 - Upstream: not applicable.
 
 ### fork-documentation
@@ -291,10 +291,10 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### agy-adapter-mechanics
 
-- Intent: native worker lifecycle hooks, physical directory grants, and model-aware effort support.
+- Intent: native worker lifecycle hooks, physical directory grants, model-aware effort support, and exact styled Accept-edits, Auto and Plan composer placeholders with conservative unstyled ambiguity.
 - Class: carried; these are functional additions to upstream's worker adapter.
-- Seam: fork-only `bin/fm-agy-lib.sh`, and the large fork diff in shared `tests/fm-agy-harness.test.sh`, and worker native-hook verification.
-- Guard: `tests/fm-agy-harness.test.sh`.
+- Seam: fork-only `bin/fm-agy-lib.sh`, the agy hint set and mode-cell footer in shared `bin/fm-composer-lib.sh`, the large fork diff in shared `tests/fm-agy-harness.test.sh`, and worker native-hook verification.
+- Guard: `tests/fm-agy-harness.test.sh`; `tests/fm-composer-agy.test.sh` with `tests/fixtures/agy-composer/`; the opt-in `tests/fm-agy-signals-live-e2e.test.sh`.
 - Upstream: the primary PreInvocation/background-command divergence is retired in favor of upstream SessionStart/Stop parking and autoarm routing, retaining supervisor permissions and secondmate-liveness recognition.
   Worker hooks, directory grants and effort mappings remain carried; primary transport validation is recorded in [runtime verification](verification/runtime-backends-fork.md#primary-and-secondmate-supervision).
   Drop each remaining seam when upstream supports its behavior, keeping the separately intended `agy-permission-posture` entry.
@@ -651,6 +651,15 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-captain-alert.sh` and `tests/fm-captain-alert.test.sh`, its away reach, arm, and return-health calls in `bin/fm-afk-contract.sh`, `bin/fm-afk-launch.sh`, and `bin/fm-afk-return.sh`, and the corresponding afk skill, architecture, configuration, scripts, and wedge-alarm prose (shared).
 - Guard: `tests/fm-captain-alert.test.sh`.
 - Upstream: has no equivalent one-way outcome notifier; drop once the same opt-in delivery, secrecy, failure reporting, and bounded queue behavior is available.
+
+### hermes-empty-argv-bash32
+
+- Intent: Hermes process identity accepts an empty argv under Bash 3.2 `set -u` instead of aborting.
+- Class: carried.
+- Seam: the empty-array expansion in `fm_hermes_process_matches` in `bin/fm-hermes-process-lib.sh`, and the empty-argv case in `tests/fm-hermes-harness.test.sh` (shared).
+- Guard: the empty-argv case in `tests/fm-hermes-harness.test.sh`.
+- Upstream: expands `"${words[@]}"`, which Bash 3.2 with `set -u` treats as an unbound variable when the array is empty.
+  Drop the alternate expansion once upstream's expansion is safe under that shell.
 
 ## Incidental
 

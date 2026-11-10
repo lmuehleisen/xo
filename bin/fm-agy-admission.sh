@@ -13,7 +13,7 @@
 # release outside the candidate family. Neither path certifies version text.
 # Matching exact receipts, including manually verified baselines, are reused.
 # A mutable default model is not a tested context: select --model explicitly.
-# ensure-native admits >=1.4.7,<1.5.0 with one native Auto guard
+# ensure-native admits >=1.4.7,<1.6.0 with one native Auto guard
 # bound to the selected backend. Ordinary safe native approvals need
 # not prompt. Receipts explicitly record whether live approval and decline
 # were observed; deterministic native-control fixtures cover the cancellation
@@ -80,8 +80,8 @@ version=$(jq -r .version "$work/binding.json")
 first_guard=bypass
 if [ "$mode" = ensure-native ]; then
   first_guard=native
-  case "$version" in 1.4.[7-9]|1.4.[1-9][0-9]*) ;; *)
-    echo "agy compatibility: native Auto candidate $version is outside >=1.4.7,<1.5.0" >&2
+  case "$version" in 1.4.[7-9]|1.4.[1-9][0-9]*|1.5.*) ;; *)
+    echo "agy compatibility: native Auto candidate $version is outside >=1.4.7,<1.6.0" >&2
     exit 1 ;;
   esac
 fi
@@ -98,7 +98,7 @@ if [ "$mode" = manual-baseline ]; then
     *" $version "*) origin=manual-baseline ;;
     *) echo "agy compatibility: $version has no historical manual baseline" >&2; exit 1 ;;
   esac
-elif [ "$eligible" != yes ]; then
+elif [ "$mode" != ensure-native ] && [ "$eligible" != yes ]; then
   echo "agy compatibility: $version is outside candidate family >=1.4.4,<1.5.0; an unchanged manually certified baseline needs its exact receipt" >&2
   exit 1
 fi
