@@ -632,7 +632,7 @@ test_opencode_plugin_applies_events_in_emission_order() {
   cat > "$FAKEBIN_DIR/opencode" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
-  printf '%s\n' "${FM_FAKE_OPENCODE_VERSION:-2.0.21}"
+  printf '%s\n' "${FM_FAKE_OPENCODE_VERSION:-opencode v2.0.21}"
 fi
 exit 0
 SH
