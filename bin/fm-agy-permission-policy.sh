@@ -36,9 +36,9 @@
 # Hook JSON uses conversationId, stepIdx, workspacePaths and toolCall.name/args.
 # run_command uses CommandLine/Cwd; read_file, write_file and edit_file use
 # absolute Path. Legacy file names remain mapped too. Observer/log input
-# excludes file contents. A conversation's own brain outputs and explicitly
-# directed skill reads retain their existing read-scope exception, after
-# credential checks. fm-command-policy-lib.sh owns command analysis and grant
+# excludes file contents. A conversation's own brain outputs, native Auto's
+# exact staged brief and explicitly directed skills have read-scope exceptions
+# after credential checks. fm-command-policy-lib.sh owns command analysis and grant
 # pinning; fm-credential-access.mjs owns credential metadata and use grants.
 #
 # The firstmate-owned policy declares task, worktree, status, inbox, data,
@@ -423,14 +423,14 @@ declined_key_file() {  # cache entry marking a call firstmate declined
   printf '%s/%s.declined' "$CACHE_DIR" "$k"
 }
 
-# 0 when this file-tool read targets only the worker's own brain directory or
-# a file the brief directs it to read. Neither can be an excluded source: the
-# brain directory holds only what this conversation's own reviewed calls
-# fetched, and a directed file is part of the instructions. The target is
-# resolved physically, so a symlink out of either cannot carry the read with
+# 0 when this file-tool read targets the worker's own brain directory, native
+# Auto's staged brief or a skill the brief directs it to read. The brain holds
+# only what this conversation's own reviewed calls fetched; the brief and
+# directed skills are instructions. The target is resolved physically, so a
+# symlink out of those paths cannot carry the read-scope exemption with
 # it; the credential checks in evaluate_tool still run first.
 own_read() {
-  local target abs d
+  local target abs d brief_path
   case "$TOOL" in
     read_file|view_file) target=$FILE_PATH ;;
     list_dir) target=$(printf '%s' "$PAYLOAD" | jq -r '.toolCall.args.DirectoryPath // ""' 2>/dev/null) ;;
@@ -444,6 +444,12 @@ own_read() {
     strictly_inside "$abs" "$FM_POLICY_OWN_OUTPUT_DIR" && return 0
   fi
   case "$TOOL" in read_file|view_file) ;; *) return 1 ;; esac
+  if [ "$NATIVE_AUTO" = 1 ] && [ -n "$BRIEF" ]; then
+    # Keep the recorded final component literal: replacing the staged brief
+    # with a symlink must not exempt a different file from read exclusions.
+    brief_path=$(physical_target "$BRIEF" '' 0 2>/dev/null) || brief_path=''
+    [ -n "$brief_path" ] && [ "$abs" = "$brief_path" ] && return 0
+  fi
   while IFS= read -r d; do
     [ -n "$d" ] && [ "$d" = "$abs" ] && return 0
   done <<<"$(brief_directed_reads)"
