@@ -887,7 +887,7 @@ test_answer_records_and_closes() {
 # are skipped. A different actor is not an idempotent retry.
 test_firstmate_decision_actor_closes_without_captain_words() {
   local home origin show out rc decision_out parent mate channel line digest text
-  local fb resend_err unkeyed
+  local fb unkeyed
   home=$(make_home decision-actor)
   origin=sample-actor-origin
   mkdir -p "$home/data/$origin"
@@ -1025,7 +1025,7 @@ $text
 EOF
   tasks_in "$home" update sample-legacy-actor --body-file "$home/legacy-body.txt" >/dev/null \
     || fail "could not plant the legacy resolution"
-  tasks_in "$home" done sample-legacy-actor >/dev/null \
+  tasks_in "$home" 'done' sample-legacy-actor >/dev/null \
     || fail "could not close the planted legacy resolution"
   decision_out=$(run_captain "$home" decision sample-legacy-actor) \
     || fail "a legacy record with no actor line did not return the captain's words"
@@ -1046,7 +1046,7 @@ $text
 EOF
   tasks_in "$home" update sample-preface-captain --body-file "$home/captain-preface.txt" >/dev/null \
     || fail "could not plant the captain preface"
-  tasks_in "$home" done sample-preface-captain >/dev/null \
+  tasks_in "$home" 'done' sample-preface-captain >/dev/null \
     || fail "could not close the planted captain preface"
   decision_out=$(run_captain "$home" decision sample-preface-captain) \
     || fail "an unknown preface line hid the captain's words"
@@ -1064,7 +1064,7 @@ $text
 EOF
   tasks_in "$home" update sample-preface-colon --body-file "$home/colon-preface.txt" >/dev/null \
     || fail "could not plant the colon-ended preface line"
-  tasks_in "$home" done sample-preface-colon >/dev/null \
+  tasks_in "$home" 'done' sample-preface-colon >/dev/null \
     || fail "could not close the planted colon-ended preface"
   set +e
   decision_out=$(run_captain "$home" decision sample-preface-colon 2>"$home/colon-preface.err")
@@ -1076,7 +1076,7 @@ EOF
     "$digest" "$text" > "$home/tab-preface.txt"
   tasks_in "$home" update sample-preface-tab --body-file "$home/tab-preface.txt" >/dev/null \
     || fail "could not plant the tab preface"
-  tasks_in "$home" done sample-preface-tab >/dev/null \
+  tasks_in "$home" 'done' sample-preface-tab >/dev/null \
     || fail "could not close the planted tab preface"
   decision_out=$(run_captain "$home" decision sample-preface-tab) \
     || fail "a tab after the colon hid the captain's words"
@@ -1096,7 +1096,7 @@ $text
 EOF
   tasks_in "$home" update sample-preface-firstmate --body-file "$home/firstmate-preface.txt" >/dev/null \
     || fail "could not plant the firstmate preface"
-  tasks_in "$home" done sample-preface-firstmate >/dev/null \
+  tasks_in "$home" 'done' sample-preface-firstmate >/dev/null \
     || fail "could not close the planted firstmate preface"
   set +e
   decision_out=$(run_captain "$home" decision sample-preface-firstmate 2>"$home/preface-fm.err")
