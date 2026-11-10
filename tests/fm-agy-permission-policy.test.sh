@@ -282,6 +282,7 @@ test_tracked_reads_respect_path_exclusions() {
   # not permission wiring. An unrelated exclusion must not change that.
   hook "$policy" pre-tool-use read_file "$wt/bin/fm-harness.sh" 0
   statically_approved "$OUT" "$policy" || fail "the tracked harness script must be readable: $OUT"
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
   printf '# Task\n## Firstmate spec\nDo not read `private/`.\n# Setup\n' > "$dir/data/t1/brief.md"
   for tool in read_file view_file; do
     step=$((step + 1))
@@ -302,6 +303,7 @@ test_tracked_reads_respect_path_exclusions() {
   step=$((step + 1))
   hook "$policy" pre-tool-use view_file bin/fm-harness.sh "$step"
   denied "$OUT" || fail "a relative native path has no proven worktree base: $OUT"
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
   printf '# Task\n## Firstmate spec\nDo not read `bin/fm-harness.sh`.\n# Setup\n' > "$dir/data/t1/brief.md"
   step=$((step + 1))
   hook "$policy" pre-tool-use read_file "$wt/bin/fm-harness.sh" "$step"
@@ -324,6 +326,7 @@ test_tracked_read_symlink_dotdot_stays_held() {
   # The kernel follows pivot before ..; lexical normalization would instead
   # select the tracked, permitted file at the root and approve the wrong read.
   [ "$(cat "$wt/read")" = excluded ] || fail 'the fixture must actually read the excluded physical destination'
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
   printf '# Task\n## Firstmate spec\nDo not read `other/privatefile`.\n# Setup\n' > "$dir/data/t1/brief.md"
   hook "$policy" pre-tool-use read_file "$wt/privatefile" 0
   statically_approved "$OUT" "$policy" || fail "an unrelated regular tracked file must retain its exemption: $OUT"
@@ -335,6 +338,7 @@ test_tracked_read_symlink_dotdot_stays_held() {
   step=$((step + 1))
   hook "$policy" pre-tool-use run_command "cat '$wt/read'" "$step"
   denied "$OUT" || fail "a shell read must retain the same final-symlink boundary: $OUT"
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
   printf '# Task\n## Firstmate spec\nDo not read `read`.\n# Setup\n' > "$dir/data/t1/brief.md"
   step=$((step + 1))
   hook "$policy" pre-tool-use read_file "$wt/other/privatefile" "$step"
