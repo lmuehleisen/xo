@@ -8,6 +8,7 @@ Exact task chronology, branch names, temporary homes, local paths, process ids, 
 This fork's own evidence - its reviewed launches, remote-less dispatch, task leases, tmux shell submission, Claude Code operational input, composer refresh, stranded-doorbell recovery, merge-grant gate, and its agy and Devin adapters - lives in [runtime-backends-fork.md](runtime-backends-fork.md).
 The shared credential classifier's real Devin and agy pre-tool veto evidence is recorded in [Shared credential hook veto](runtime-backends-fork.md#shared-credential-hook-veto).
 The 2026-10-26 agy 1.4.7 native Auto verification and its explicit live-decline limit are recorded in [Native Auto workers](runtime-backends-fork.md#native-auto-workers).
+The agy 1.5.3 Accept-edits, Auto and Plan composer captures and regression results are recorded in [Agy worker signals](runtime-backends-fork.md#agy-antigravity-cli).
 The [primary and secondmate verification inventory](runtime-backends-fork.md#primary-and-secondmate-supervision) records the SessionStart/Stop-park coverage and its pending interactive live gate.
 
 ## Devin exit and native resume
@@ -3652,6 +3653,28 @@ The calm suite's HTML export case passed on Pi 1.0.3 with both lookup names.
 `.github/workflows/ci.yml` still installs the unpinned npm package.
 The 1.0.2 failure was this repo passing only the old lookup name, so the pin stays off and the next Pi release remains what those tests run against.
 The Windows shell-invocation suite skipped because this host is not native Windows.
+
+### 2026-11-10 Pi 1.5.0 and 1.5.1 Calm queue compatibility
+
+The full Calm suite and credential-free live queue-retention guard passed against Pi 1.5.0 and 1.5.1 with Node v24.22.1.
+Pi 1.5.1's stock queued-listing redraw reads `pendingBashComponents`, which real interactive hosts initialize to an empty array.
+The prototype-only queued-row fixture now supplies that field too.
+Calm's existing adapter retains operational input across Escape and delivers it once on both versions.
+Other primary harnesses do not load this Pi extension, and its queue presentation is independent of the runtime session backend.
+
+Run this command once per installed version, selecting its executable directory and package directory:
+
+```sh
+PATH="$PI_BIN:$PATH" FM_PI_PACKAGE_DIR="$PI_PACKAGE" bin/fm-test-run.sh tests/fm-calm-pi-extension.test.sh tests/fm-calm-pi-queue-retention-live-e2e.test.sh
+```
+
+```text
+ok - Pi 1.5.0 with Calm on hides and retains queued Firstmate input through Escape, delivers it once, and leaves Calm off stock
+ok - Pi 1.5.0 exposes every queue-retention member Calm preflights before hiding queued Firstmate rows
+ok - Pi 1.5.1 with Calm on hides and retains queued Firstmate input through Escape, delivers it once, and leaves Calm off stock
+ok - Pi 1.5.1 exposes every queue-retention member Calm preflights before hiding queued Firstmate rows
+```
+
 ## Pi worker model-stream observation
 
 Verified on 2026-10-13 with the installed Pi 1.2.0 SDK and Node v24.13.0.
