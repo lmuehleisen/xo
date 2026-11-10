@@ -782,6 +782,7 @@ test_worker_completion_home_binding() {
   policy=$(new_case 'completion home binding')
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
   local -x FM_STATE_OVERRIDE="$dir/state"
+  local -x FM_DATA_OVERRIDE="$dir/data"
   # Exercise the public hook from an isolated code root so the exact contract
   # command's cd target, helper directory, and policy home agree.
   cp -R "$ROOT/bin" "$dir/bin"
@@ -871,6 +872,7 @@ test_completion_inherited_state_is_bound() {
   policy=$(new_case inherited-state 'echo "APPROVE: synthetic judge must not authorize redirected state"')
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
   local -x FM_STATE_OVERRIDE="$dir/state"
+  local -x FM_DATA_OVERRIDE="$dir/data"
   cp -R "$ROOT/bin/." "$dir/bin/"
   POLICY_SH="$dir/bin/fm-devin-permission-policy.sh"
   mkdir -p "$dir/other-state" "$dir/state-sibling" "$wt/state"
@@ -912,12 +914,89 @@ test_completion_inherited_state_is_bound() {
   pass 'fm-devin-permission-policy: completion state matches policy authority, including inherited paths and physical aliases'
 }
 
+test_completion_inherited_data_is_bound() {
+  local policy dir wt cmd data id=0
+  local POLICY_SH=$POLICY_SH
+  policy=$(new_case inherited-data 'echo "APPROVE: synthetic judge must not authorize redirected data"')
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  local -x FM_STATE_OVERRIDE="$dir/state"
+  local -x FM_DATA_OVERRIDE="$dir/data"
+  cp -R "$ROOT/bin/." "$dir/bin/"
+  POLICY_SH="$dir/bin/fm-devin-permission-policy.sh"
+  mkdir -p "$dir/other-data" "$dir/data-sibling" "$wt/data" "$dir/relocated/t1"
+  ln -s "$dir/data" "$dir/data-alias"
+  ln -s "$dir/other-data" "$dir/redirected-data"
+  ln -s "$dir/absent-data" "$dir/dangling-data"
+  cmd="FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none"
+  for data in '' "$dir/data" "$dir/data/." "$dir/data-alias" ../data; do
+    id=$((id + 1))
+    FM_DATA_OVERRIDE="$data" hook "$policy" pre-tool-use exec "$cmd" "data-safe-pre-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "matching inherited data must pass PreToolUse: $OUT"
+    FM_DATA_OVERRIDE="$data" hook "$policy" permission-request exec "$cmd" "data-safe-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "matching inherited data must retain completion approval: $OUT"
+    jq -e --arg id "data-safe-$id" \
+      'select(.tool_use_id == $id) | .decision == "approve" and .decider == "policy"' \
+      "$dir/state/devin-permission-log.jsonl" >/dev/null \
+      || fail 'matching data must be approved statically'
+  done
+  FM_DATA_OVERRIDE=data hook "$policy" permission-request exec \
+    "cd '$dir' && FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none" data-safe-cd
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail 'relative inherited data must resolve against the segment cwd'
+  for data in "$dir/other-data" "$dir/data-sibling" "$dir/redirected-data" data \
+    "$dir/dangling-data" "$dir/missing/../data" "$dir/data"$'\nforeign' "$dir/data"$'\r'; do
+    id=$((id + 1))
+    FM_DATA_OVERRIDE="$data" hook "$policy" pre-tool-use exec "$cmd" "data-bad-pre-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "redirected or unresolved data must block before pre-allowed execution: $OUT"
+    FM_DATA_OVERRIDE="$data" hook "$policy" permission-request exec "$cmd" "data-bad-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "a judge must not authorize redirected completion data: $OUT"
+    printf '%s' "$OUT" | jq -r .reason | grep -qF FM_DATA_OVERRIDE \
+      || fail 'the data-binding refusal must identify the corrective environment setting'
+  done
+  for data in '' "$dir/data/t2" "$dir/missing-data/t1"; do
+    id=$((id + 1))
+    jq --arg data "$data" '.data=$data' "$policy" > "$policy.tmp" && mv "$policy.tmp" "$policy"
+    hook "$policy" permission-request exec "$cmd" "data-unbound-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "an unbound policy data directory must refuse completion: $OUT"
+  done
+  cp "$dir/data/t1/brief.md" "$dir/relocated/t1/brief.md"
+  jq --arg data "$dir/relocated/t1" --arg brief "$dir/relocated/t1/brief.md" \
+    '.data=$data | .brief=$brief' "$policy" > "$policy.tmp" && mv "$policy.tmp" "$policy"
+  ln -s "$dir/relocated" "$dir/relocated-alias"
+  for data in "$dir/relocated" "$dir/relocated-alias" ../relocated; do
+    id=$((id + 1))
+    FM_DATA_OVERRIDE="$data" hook "$policy" pre-tool-use exec "$cmd" "data-relocated-pre-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "recorded relocated data must pass PreToolUse: $OUT"
+    FM_DATA_OVERRIDE="$data" hook "$policy" permission-request exec "$cmd" "data-relocated-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "the policy must authorize its recorded relocated data root: $OUT"
+    jq -e --arg id "data-relocated-$id" \
+      'select(.tool_use_id == $id) | .decision == "approve" and .decider == "policy"' \
+      "$dir/state/devin-permission-log.jsonl" >/dev/null \
+      || fail 'recorded relocated data must be approved statically'
+  done
+  FM_DATA_OVERRIDE= hook "$policy" permission-request exec "$cmd" data-relocated-wrong-default
+  [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+    || fail 'the home default must not override a different recorded data root'
+  mv "$dir/data" "$dir/original-data"
+  ln -s "$dir/relocated" "$dir/data"
+  FM_DATA_OVERRIDE= hook "$policy" permission-request exec "$cmd" data-relocated-linked-default
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail 'a home data symlink to the recorded relocation must retain approval'
+  pass 'fm-devin-permission-policy: completion data matches policy authority, including recorded relocations and physical aliases'
+}
+
 test_quoted_completion_bindings_are_not_assignments() {
   local policy dir wt planted cmd actual id=0
   local POLICY_SH=$POLICY_SH
   policy=$(new_case quoted-completion)
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
   local -x FM_STATE_OVERRIDE="$dir/state"
+  local -x FM_DATA_OVERRIDE="$dir/data"
   cp -R "$ROOT/bin" "$dir/bin"
   POLICY_SH="$dir/bin/fm-devin-permission-policy.sh"
   # Bash executes this relative pathname when the assignment name or equals
@@ -2928,6 +3007,7 @@ CASES
 test_worker_completion_home_binding
 test_quoted_completion_bindings_are_not_assignments
 test_completion_inherited_state_is_bound
+test_completion_inherited_data_is_bound
 test_refusal_list
 test_refusal_leaves_safe_commands_alone
 test_recursive_rm_resolves_symlinked_components

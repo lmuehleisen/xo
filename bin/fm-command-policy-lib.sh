@@ -190,9 +190,11 @@
 #     bash, /bin/bash, or /usr/bin/bash with no options. The helper's effective
 #     state directory, including an inherited FM_STATE_OVERRIDE, must resolve
 #     physically to that status directory; a mismatch or unresolved state is
-#     refused. Other assignments,
-#     wrappers, ANSI-C quoting, helpers, subcommands, and task ids keep their
-#     ordinary review.
+#     refused. Its effective data directory, including FM_DATA_OVERRIDE, must
+#     resolve to the parent of the policy's task data directory, including a
+#     recorded relocation; an unresolved or different data root is refused.
+#     Other assignments, wrappers, ANSI-C quoting, helpers, subcommands, and
+#     task ids keep their ordinary review.
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -2666,10 +2668,11 @@ home_helper() {  # <word> <expansion-flag> <helper-name>
 }
 
 # The read-and-build completion exception above, checked before stripping the
-# segment's assignment or interpreter. The status path supplies authority;
-# neither the command's cd target nor the hook's ambient FM_HOME does.
+# segment's assignment or interpreter. The policy's status and task data paths
+# supply authority; neither the cd target nor the hook's ambient FM_HOME does.
 own_task_completion_home_binding() {
   local i helper=1 expected binding state effective_state='' policy_state=''
+  local data expected_data effective_data='' policy_data=''
   [ "${SWA[0]-0}" = 1 ] || return 1
   [ -n "$TASK" ] || return 1
   case "$STATUS" in
@@ -2698,6 +2701,25 @@ own_task_completion_home_binding() {
   policy_state=$(physical_target "${STATUS%/*}" '' 1) || policy_state=''
   if [ -z "$policy_state" ] || [ "$effective_state" != "$policy_state" ]; then
     refuse "completion helper state does not match the policy status directory; clear or correct FM_STATE_OVERRIDE"
+    return 1
+  fi
+  case "$DATA_DIR" in
+    /*/"$TASK")
+      expected_data=${DATA_DIR%/"$TASK"}
+      expected_data=${expected_data:-/}
+      case "$expected_data" in
+        *$'\n'*|*$'\r'*) ;;
+        *) policy_data=$(physical_target "$expected_data" '' 1) || policy_data='' ;;
+      esac
+      ;;
+  esac
+  data=${FM_DATA_OVERRIDE:-$binding/data}
+  case "$data" in
+    *$'\n'*|*$'\r'*) ;;
+    *) effective_data=$(physical_target "$data" "$CWD" 1) || effective_data='' ;;
+  esac
+  if [ -z "$policy_data" ] || [ ! -d "$policy_data" ] || [ "$effective_data" != "$policy_data" ]; then
+    refuse "completion helper data does not match the policy task data directory; clear or correct FM_DATA_OVERRIDE"
     return 1
   fi
   return 0

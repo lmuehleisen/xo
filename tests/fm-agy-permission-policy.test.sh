@@ -114,6 +114,7 @@ test_worker_completion_home_binding() {
   policy=$(new_case completion-home)
   dir=$(case_dir "$policy")
   local -x FM_STATE_OVERRIDE="$dir/state"
+  local -x FM_DATA_OVERRIDE="$dir/data"
   cp -R "$ROOT/bin" "$dir/bin"
   POLICY_SH="$dir/bin/fm-agy-permission-policy.sh"
   while IFS= read -r cmd; do
@@ -158,6 +159,25 @@ EOF
   if [ "$RC" != 0 ] || ! denied "$OUT" FM_STATE_OVERRIDE; then
     fail "redirected completion state must be refused before native Auto execution: $OUT"
   fi
+  mkdir -p "$dir/other-data" "$dir/relocated/t1"
+  step=$((step + 1))
+  FM_DATA_OVERRIDE="$dir/other-data" hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" FM_DATA_OVERRIDE; then
+    fail "redirected completion data must be refused before native Auto execution: $OUT"
+  fi
+  cp "$dir/data/t1/brief.md" "$dir/relocated/t1/brief.md"
+  jq --arg data "$dir/relocated/t1" --arg brief "$dir/relocated/t1/brief.md" \
+    '.data=$data | .brief=$brief' "$policy" > "$dir/state/t1.relocated.json"
+  step=$((step + 1))
+  FM_DATA_OVERRIDE="$dir/relocated" hook "$dir/state/t1.relocated.json" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! abstained "$OUT"; then
+    fail "recorded relocated data must preserve native Auto completion: $OUT"
+  fi
+  tail -1 "$dir/state/agy-permission-log.jsonl" \
+    | jq -e '.decision == "approve" and .decider == "policy"' >/dev/null \
+    || fail 'recorded relocated data must retain static classification'
   jq 'del(.posture)' "$policy" > "$dir/state/t1.legacy.json"
   hook "$dir/state/t1.legacy.json" pre-tool-use run_command \
     "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" 20
