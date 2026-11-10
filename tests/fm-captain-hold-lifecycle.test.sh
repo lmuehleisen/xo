@@ -924,6 +924,12 @@ test_firstmate_decision_actor_closes_without_captain_words() {
   run_captain "$home" hold sample-preface-tab \
     --title "Choose the tab preface" --reason "tab preface pending" --repo sample --origin "$origin" >/dev/null \
     || fail "could not hold the tab preface"
+  run_captain "$home" hold sample-preface-task-line \
+    --title "Choose the task line" --reason "task line pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the task-line call"
+  run_captain "$home" hold sample-tab-before-actor \
+    --title "Choose the leading tab" --reason "leading tab pending" --repo sample --origin "$origin" >/dev/null \
+    || fail "could not hold the leading-tab call"
   run_captain "$home" hold sample-bad-actor \
     --title "Choose the bad actor" --reason "bad actor pending" --repo sample --origin "$origin" >/dev/null \
     || fail "could not hold the bad-actor call"
@@ -934,6 +940,7 @@ test_firstmate_decision_actor_closes_without_captain_words() {
     sample-fm-ruling sample-captain-words sample-fm-keyed sample-fm-actor-skip \
     sample-legacy-actor sample-preface-captain sample-preface-firstmate \
     sample-preface-colon sample-preface-tab \
+    sample-preface-task-line sample-tab-before-actor \
     sample-bad-actor sample-fm-send-call >/dev/null \
     || fail "completion failed for the actor inventory"
 
@@ -1081,6 +1088,57 @@ EOF
   decision_out=$(run_captain "$home" decision sample-preface-tab) \
     || fail "a tab after the colon hid the captain's words"
   assert_equals "$text" "$decision_out" "a tab after the colon changed the captain's words"
+
+  text='Task: sample-later-work stays recorded.'
+  digest=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')
+  cat > "$home/task-line-preface.txt" <<EOF
+Resolution recorded by fm-captain-hold.
+Decision digest: $digest
+Resolution mode: answered
+Decision actor: captain
+Note:
+
+Captain decision:
+$text
+EOF
+  tasks_in "$home" update sample-preface-task-line --body-file "$home/task-line-preface.txt" >/dev/null \
+    || fail "could not plant the colon line above keyed text"
+  tasks_in "$home" 'done' sample-preface-task-line >/dev/null \
+    || fail "could not close the planted colon line above keyed text"
+  set +e
+  decision_out=$(run_captain "$home" decision sample-preface-task-line 2>"$home/task-line-preface.err")
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "a later keyed line made a colon-ended line a preface"
+  assert_not_contains "$decision_out" "$text" "a later keyed line exposed the stored words"
+
+  text='Apply the tab-preface sample ruling.'
+  digest=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')
+  printf '%s\n' "$text" > "$home/tab-before-actor.txt"
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: answered\nVerification receipt:\tunchecked\nDecision actor: firstmate\n\nFirstmate decision:\n%s\n' \
+    "$digest" "$text" > "$home/tab-before-actor-body.txt"
+  tasks_in "$home" update sample-tab-before-actor --body-file "$home/tab-before-actor-body.txt" >/dev/null \
+    || fail "could not plant the tab preface before the actor"
+  set +e
+  decision_out=$(run_captain "$home" decision sample-tab-before-actor 2>"$home/tab-before-actor-decision.err")
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "a tab preface before the actor made a firstmate ruling readable as a captain answer"
+  assert_not_contains "$decision_out" "$text" "decision printed a ruling hidden behind a tab preface"
+  if run_captain "$home" answer sample-tab-before-actor --decision-file "$home/tab-before-actor.txt" \
+    > "$home/tab-before-actor.out" 2> "$home/tab-before-actor.err"; then
+    fail "the default actor replayed a firstmate ruling hidden behind a tab preface"
+  fi
+  assert_grep "actor firstmate" "$home/tab-before-actor.err" \
+    "the tab-preface replay did not name the recorded actor"
+  show=$(tasks_in "$home" show sample-tab-before-actor --full)
+  assert_contains "$show" "Decision actor: firstmate" "the tab-preface replay changed the recorded actor"
+  assert_contains "$show" "Firstmate decision:" "the tab-preface replay dropped the firstmate label"
+  assert_not_contains "$show" "Captain decision:" "the tab-preface replay relabeled the ruling"
+  assert_no_grep "Captain answer recorded for held call sample-tab-before-actor" \
+    "$home/state/.wake-queue" "the tab-preface replay woke its owner as a captain answer"
+  tasks_in "$home" 'done' sample-tab-before-actor >/dev/null \
+    || fail "could not close the planted tab-before-actor call"
 
   text='Apply the planted sample ruling.'
   digest=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')

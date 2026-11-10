@@ -601,8 +601,9 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
 
 # Newest record's Decision actor, or empty when that record has no actor line.
 # Empty means a legacy captain answer. Preface lines are `Token: value` between
-# the record leader and the blank line before the label. The decision text is
-# below that blank line and is not searched. Unknown preface lines are skipped.
+# the record leader and the blank line before the label, with a space or tab
+# after the colon. The decision text is below that blank line and is not
+# searched. Unknown preface lines are skipped.
 recorded_decision_actor() {  # <shown-or-raw body>
   local body
   body=$(decode_shown_value "$1") || return 1
@@ -616,7 +617,7 @@ recorded_decision_actor() {  # <shown-or-raw body>
     !inrec { next }
     $0 == "" { exit }
     $0 ~ /^Decision actor: / { actor = substr($0, 17); next }
-    $0 ~ /^[^:]+: / { next }
+    $0 ~ /^[^:]+:[[:blank:]]/ { next }
     { exit }
     END { printf "%s", actor }
   '
@@ -2807,14 +2808,16 @@ command_decision() {  # <task-id>
   # Preface lines sit between the mode and the blank line before the label.
   # `Decision actor` names who resolved the call. Other `Token: value` lines are
   # skipped so later records can add sibling fields without changing this read.
-  # `Captain decision:` has no space or tab after the colon, so it is not a preface line.
+  # The separator check is the current line only: a later `Token: value` line
+  # does not make an earlier line a preface. `Captain decision:` has no space
+  # or tab after the colon, so it is not a preface line.
   while :; do
     case "$rest" in
       ''|$'\n'*) break ;;
-      "Decision actor: "*)
-        line=${rest%%$'\n'*}
-        actor=${line#"Decision actor: "}
-        ;;
+    esac
+    line=${rest%%$'\n'*}
+    case "$line" in
+      "Decision actor: "*) actor=${line#"Decision actor: "} ;;
       *:[[:blank:]]*) ;;
       *) break ;;
     esac
