@@ -525,7 +525,7 @@ unexcluded_tracked_read() {
   # Positive limits, global prohibitions, lists and unrecognized prose retain
   # the held-call path rather than guessing their meaning.
   [ -z "$NOT_APPROVABLE" ] || return 1
-  local path abs root rel line excluded seen=0
+  local path abs root rel line excluded ancestor seen=0
   local rule='^[[:space:]]*[Dd][Oo][[:space:]]+[Nn][Oo][Tt][[:space:]]+[Rr][Ee][Aa][Dd][[:space:]]+`([[:alnum:]_./-]+)`[.]?[[:space:]]*$'
   case "$TOOL" in
     read_file|view_file)
@@ -555,7 +555,16 @@ unexcluded_tracked_read() {
     [[ $line =~ $rule ]] || return 1
     excluded=$(physical_target "${BASH_REMATCH[1]}" "$WORKTREE" 0) || return 1
     [ ! -L "$excluded" ] || return 1
+    [ "$excluded" != / ] || return 1
     [ "$abs" != "$excluded" ] && ! strictly_inside "$abs" "$excluded" || return 1
+    # Case aliases and hardlinks retain the same file identity. Check parents
+    # as well so a case-aliased directory exclusion covers its descendants.
+    ancestor=$abs
+    while [ "$ancestor" != / ]; do
+      [ "$ancestor" -ef "$excluded" ] && return 1
+      ancestor=${ancestor%/*}
+      [ -n "$ancestor" ] || ancestor=/
+    done
     seen=1
   done <<<"$READ_CONSTRAINTS"
   [ "$seen" = 1 ]
