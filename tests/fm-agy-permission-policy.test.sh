@@ -108,6 +108,85 @@ native_review() {  # <output> <policy> - residue must reach native review.
     | jq -e '.decision == "native-review" and .decider == "native"' >/dev/null
 }
 
+test_worker_completion_home_binding() {
+  local policy dir cmd step=0
+  local POLICY_SH=$POLICY_SH
+  policy=$(new_case completion-home)
+  dir=$(case_dir "$policy")
+  local -x FM_STATE_OVERRIDE="$dir/state"
+  local -x FM_DATA_OVERRIDE="$dir/data"
+  cp -R "$ROOT/bin" "$dir/bin"
+  POLICY_SH="$dir/bin/fm-agy-permission-policy.sh"
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! abstained "$OUT"; then
+      fail "exact own-home completion must retain native review: $OUT"
+    fi
+    tail -1 "$dir/state/agy-permission-log.jsonl" \
+      | jq -e '.decision == "approve" and .decider == "policy"' >/dev/null \
+      || fail 'exact own-home completion must retain its static policy classification'
+  done <<EOF
+cd '$dir' && FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none
+FM_HOME='$dir' bash '$dir/bin/fm-captain-hold.sh' complete t1 --none
+EOF
+  [ -z "$(find "$dir/state/t1.agy-permission-pending" -maxdepth 1 -name '*.pending' -print 2>/dev/null)" ] \
+    || fail 'static completion must not leave a held-call marker'
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! native_review "$OUT" "$policy"; then
+      fail "non-contract completion must reach native Auto review: $OUT"
+    fi
+  done <<EOF
+FM_HOME='$dir/another-home' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t2 --none
+FM_HOME='$dir' OTHER=value '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME='$dir' bash -c "$dir/bin/fm-captain-hold.sh complete t1 --none"
+'FM_HOME=$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+FM_HOME\\='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
+EOF
+  step=$((step + 1))
+  FM_STATE_OVERRIDE="$dir/state" hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! abstained "$OUT"; then
+    fail "matching inherited state must preserve native Auto completion: $OUT"
+  fi
+  mkdir -p "$dir/other-state"
+  step=$((step + 1))
+  FM_STATE_OVERRIDE="$dir/other-state" hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" FM_STATE_OVERRIDE; then
+    fail "redirected completion state must be refused before native Auto execution: $OUT"
+  fi
+  mkdir -p "$dir/other-data" "$dir/relocated/t1"
+  step=$((step + 1))
+  FM_DATA_OVERRIDE="$dir/other-data" hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" FM_DATA_OVERRIDE; then
+    fail "redirected completion data must be refused before native Auto execution: $OUT"
+  fi
+  cp "$dir/data/t1/brief.md" "$dir/relocated/t1/brief.md"
+  jq --arg data "$dir/relocated/t1" --arg brief "$dir/relocated/t1/brief.md" \
+    '.data=$data | .brief=$brief' "$policy" > "$dir/state/t1.relocated.json"
+  step=$((step + 1))
+  FM_DATA_OVERRIDE="$dir/relocated" hook "$dir/state/t1.relocated.json" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! abstained "$OUT"; then
+    fail "recorded relocated data must preserve native Auto completion: $OUT"
+  fi
+  tail -1 "$dir/state/agy-permission-log.jsonl" \
+    | jq -e '.decision == "approve" and .decider == "policy"' >/dev/null \
+    || fail 'recorded relocated data must retain static classification'
+  jq 'del(.posture)' "$policy" > "$dir/state/t1.legacy.json"
+  hook "$dir/state/t1.legacy.json" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" 20
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'explicit recovery'; then
+    fail "a completion binding must not reactivate a retired policy: $OUT"
+  fi
+  pass 'fm-agy-permission-policy: exact own-home completion is static; other bindings and quoted commands reach native Auto'
+}
+
 test_armed_heartbeat_proves_wiring() {
   local policy dir log
   policy=$(new_case armed)
@@ -1350,6 +1429,7 @@ test_retired_policies_preserve_exact_decisions() {
   pass 'retired and unknown policies refuse execution, retain decisions on failure and retire exact keys'
 }
 
+test_worker_completion_home_binding
 test_armed_heartbeat_proves_wiring
 test_refusal_list_denies
 test_refusal_leaves_safe_commands_alone

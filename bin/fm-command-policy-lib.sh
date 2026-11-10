@@ -128,7 +128,8 @@
 # This set supplies routine command approval after that check succeeds.
 # A command is approved only when it has no unquoted-delimiter heredoc, no
 # command or process substitution, no background &, no leading VAR=value
-# assignment, no argument naming credential material (.ssh, .aws, .gnupg,
+# assignment except the completion binding below, no argument naming
+# credential material (.ssh, .aws, .gnupg,
 # .netrc, .env, gh hosts.yml, key files, git credentials, agent config - except
 # a granted credential env file in the one `. <file>` / `source <file>` shape,
 # which is the only way a granted file may be used), only /dev/null, fd-dup, an
@@ -182,6 +183,18 @@
 #   - this home's fm-approved-publish.sh, only as `run <this-task>` with at
 #     most `--approval <captain-task-id>`; the runner itself refuses unless
 #     the captain's recorded decision names that task's procedure
+#   - this home's fm-captain-hold.sh `complete <this-task> --none` may carry
+#     one leading literal absolute FM_HOME binding, with its name and equals
+#     sign unquoted and unescaped, to the home derived from
+#     the policy's state/<this-task>.status path, directly or through a plain
+#     bash, /bin/bash, or /usr/bin/bash with no options. The helper's effective
+#     state directory, including an inherited FM_STATE_OVERRIDE, must resolve
+#     physically to that status directory; a mismatch or unresolved state is
+#     refused. Its effective data directory, including FM_DATA_OVERRIDE, must
+#     resolve to the parent of the policy's task data directory, including a
+#     recorded relocation; an unresolved or different data root is refused.
+#     Other assignments, wrappers, ANSI-C quoting, helpers, subcommands, and
+#     task ids keep their ordinary review.
 #
 # Hard refusals: sudo, launchctl, a git push force in any argument position
 # (--force, --force-with-lease, --force-if-includes, a short-flag cluster
@@ -1507,14 +1520,15 @@ resolve_maybe_tilde() {  # <word> <expansion-flag> <cwd>
 # --- tokenizer -----------------------------------------------------------------
 
 # tokenize <string>: fills T_TXT / T_KIND (w word, o operator, r redirect) /
-# T_VAR (word holds an expansion) / T_GLOB (unquoted glob) / T_SUBS (how many
+# T_VAR (word holds an expansion) / T_GLOB (unquoted glob) / T_ASSIGN (word
+# has an unquoted, unescaped assignment prefix and no ANSI-C quoting) / T_SUBS (how many
 # substitution bodies the word contributes to P_INNER), and sets P_SUBST
 # (command or process substitution), P_HEREDOC_EXPANDING (a heredoc with an
 # unquoted delimiter), and P_INNER (substitution bodies to re-check).
 tokenize() {
-  local s=$1 n=${#1} i=0 c nx word='' have=0 var=0 glob=0 quoted=0 word_subs=0
+  local s=$1 n=${#1} i=0 c nx word='' have=0 var=0 glob=0 quoted=0 word_subs=0 assignment=0
   local j q hd_delim='' hd_strip=0 hd_next=0 line start
-  T_TXT=() T_KIND=() T_VAR=() T_GLOB=() T_SUBS=()
+  T_TXT=() T_KIND=() T_VAR=() T_GLOB=() T_ASSIGN=() T_SUBS=()
   P_SUBST=0 P_HEREDOC_EXPANDING=0
 
   _emit_word() {
@@ -1524,13 +1538,13 @@ tokenize() {
         [ "$quoted" -eq 1 ] || P_HEREDOC_EXPANDING=1
       fi
       local k=${#T_TXT[@]}
-      T_TXT[k]=$word T_KIND[k]=w T_VAR[k]=$var T_GLOB[k]=$glob T_SUBS[k]=$word_subs
+      T_TXT[k]=$word T_KIND[k]=w T_VAR[k]=$var T_GLOB[k]=$glob T_ASSIGN[k]=$assignment T_SUBS[k]=$word_subs
     fi
-    word='' have=0 var=0 glob=0 quoted=0 word_subs=0
+    word='' have=0 var=0 glob=0 quoted=0 word_subs=0 assignment=0
   }
   _emit() {  # <kind> <text>
     local k=${#T_TXT[@]}
-    T_TXT[k]=$2 T_KIND[k]=$1 T_VAR[k]=0 T_GLOB[k]=0 T_SUBS[k]=0
+    T_TXT[k]=$2 T_KIND[k]=$1 T_VAR[k]=0 T_GLOB[k]=0 T_ASSIGN[k]=0 T_SUBS[k]=0
   }
   # Scan a $( ... ) / <( ... ) body starting at index $1 (just past the open
   # paren); sets _SUB_END to the index of the matching close paren.
@@ -1730,6 +1744,8 @@ tokenize() {
           i=$_SUB_END
         elif [ "$nx" = "'" ]; then
           # ANSI-C quoting: a literal string with backslash escapes.
+          # Its escapes are approximated here, so it cannot prove a binding.
+          assignment=0
           var=0 quoted=1
           i=$((i + 2))
           while [ "$i" -lt "$n" ]; do
@@ -1751,6 +1767,12 @@ tokenize() {
         ;;
       '*'|'?'|'[')
         glob=1
+        word="$word$c"
+        ;;
+      '=')
+        if [ "$quoted" = 0 ] && [ "$var" = 0 ] && [[ $word =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+          assignment=1
+        fi
         word="$word$c"
         ;;
       *) word="$word$c" ;;
@@ -1870,7 +1892,7 @@ checkout_discards() {  # <first-arg-index> <args>...
 
 analyze_segment() {
   local -a E=() EV=() EG=() ESRC=()
-  local k=0 w base='' credential_dynamic=false
+  local k=0 w base='' credential_dynamic=false completion_home_binding=0
   local count=${#SW[@]}
   SEG_BASE='' SEG_EMITS_FETCH=0
 
@@ -1879,7 +1901,11 @@ analyze_segment() {
   while [ "$k" -lt "$count" ]; do
     w=${SW[k]}
     if [[ $w =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-      no_approve "environment assignment"
+      if [ "$k" = 0 ] && own_task_completion_home_binding; then
+        completion_home_binding=1
+      else
+        no_approve "environment assignment"
+      fi
       k=$((k + 1)); continue
     fi
     case "$w" in
@@ -2120,6 +2146,10 @@ analyze_segment() {
           && { never_approve "runs a fetched page as code"; break; }
       done ;;
   esac
+
+  # The completion exception has already checked the full literal segment.
+  # Keep the credential, redirect, and fetched-code checks above authoritative.
+  [ "$completion_home_binding" = 1 ] && return 0
 
   # Shells and eval re-parse a string.
   case "$base" in
@@ -2637,6 +2667,64 @@ home_helper() {  # <word> <expansion-flag> <helper-name>
   [ "$abs" = "$(norm_abs "$SCRIPT_DIR/$3")" ]
 }
 
+# The read-and-build completion exception above, checked before stripping the
+# segment's assignment or interpreter. The policy's status and task data paths
+# supply authority; neither the cd target nor the hook's ambient FM_HOME does.
+own_task_completion_home_binding() {
+  local i helper=1 expected binding state effective_state='' policy_state=''
+  local data expected_data effective_data='' policy_data=''
+  [ "${SWA[0]-0}" = 1 ] || return 1
+  [ -n "$TASK" ] || return 1
+  case "$STATUS" in
+    /*/state/"$TASK".status) expected=${STATUS%/state/"$TASK".status} ;;
+    *) return 1 ;;
+  esac
+  case "${SW[0]}" in FM_HOME=/*) binding=${SW[0]#FM_HOME=} ;; *) return 1 ;; esac
+  for ((i = 0; i < ${#SW[@]}; i++)); do
+    [ "${SWV[i]}" = 0 ] && [ "${SWG[i]}" = 0 ] || return 1
+  done
+  binding=$(physical_target "$binding" '' 1) || return 1
+  expected=$(physical_target "$expected" '' 1) || return 1
+  [ "$binding" = "$expected" ] || return 1
+  case "${SW[1]-}" in bash|/bin/bash|/usr/bin/bash) helper=2 ;; esac
+  [ "${#SW[@]}" -eq $((helper + 4)) ] || return 1
+  home_helper "${SW[helper]}" "${SWV[helper]}" fm-captain-hold.sh || return 1
+  if [ "${SW[helper + 1]}" != complete ] || [ "${SW[helper + 2]}" != "$TASK" ] \
+    || [ "${SW[helper + 3]}" != --none ]; then
+    return 1
+  fi
+  state=${FM_STATE_OVERRIDE:-$binding/state}
+  case "$state" in
+    *$'\n'*|*$'\r'*) ;;
+    *) effective_state=$(physical_target "$state" "$CWD" 1) || effective_state='' ;;
+  esac
+  policy_state=$(physical_target "${STATUS%/*}" '' 1) || policy_state=''
+  if [ -z "$policy_state" ] || [ "$effective_state" != "$policy_state" ]; then
+    refuse "completion helper state does not match the policy status directory; clear or correct FM_STATE_OVERRIDE"
+    return 1
+  fi
+  case "$DATA_DIR" in
+    /*/"$TASK")
+      expected_data=${DATA_DIR%/"$TASK"}
+      expected_data=${expected_data:-/}
+      case "$expected_data" in
+        *$'\n'*|*$'\r'*) ;;
+        *) policy_data=$(physical_target "$expected_data" '' 1) || policy_data='' ;;
+      esac
+      ;;
+  esac
+  data=${FM_DATA_OVERRIDE:-$binding/data}
+  case "$data" in
+    *$'\n'*|*$'\r'*) ;;
+    *) effective_data=$(physical_target "$data" "$CWD" 1) || effective_data='' ;;
+  esac
+  if [ -z "$policy_data" ] || [ ! -d "$policy_data" ] || [ "$effective_data" != "$policy_data" ]; then
+    refuse "completion helper data does not match the policy task data directory; clear or correct FM_DATA_OVERRIDE"
+    return 1
+  fi
+  return 0
+}
+
 # fm-ensure-agents-md.sh is firstmate's project-notes helper; it is
 # approvable only against this task's own worktree.
 approve_ensure_agents_md() {
@@ -3130,7 +3218,7 @@ analyze_command() {
   [ "$P_SUBST" -eq 1 ] && no_approve "command or process substitution"
   [ "$P_HEREDOC_EXPANDING" -eq 1 ] && no_approve "heredoc with expansions"
   credential_trace_context
-  SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
+  SW=() SWV=() SWG=() SWA=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
   local pending_redir=
   for ((idx = 0; idx < ${#T_TXT[@]}; idx++)); do
     case "${T_KIND[idx]}" in
@@ -3145,6 +3233,7 @@ analyze_command() {
           SW[${#SW[@]}]=${T_TXT[idx]}
           SWV[${#SWV[@]}]=${T_VAR[idx]}
           SWG[${#SWG[@]}]=${T_GLOB[idx]}
+          SWA[${#SWA[@]}]=${T_ASSIGN[idx]}
           SWINNER[${#SWINNER[@]}]=$subst_pos
           SWSUBS[${#SWSUBS[@]}]=${T_SUBS[idx]-0}
         fi
@@ -3162,7 +3251,7 @@ analyze_command() {
         else
           PIPE_FROM_FETCH=0
         fi
-        SW=() SWV=() SWG=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
+        SW=() SWV=() SWG=() SWA=() SWINNER=() SWSUBS=() SRO=() SRT=() SRV=() SRG=()
         pending_redir=
         ;;
     esac
