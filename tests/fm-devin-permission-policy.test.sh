@@ -781,6 +781,7 @@ test_worker_completion_home_binding() {
   local POLICY_SH=$POLICY_SH
   policy=$(new_case 'completion home binding')
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  local -x FM_STATE_OVERRIDE="$dir/state"
   # Exercise the public hook from an isolated code root so the exact contract
   # command's cd target, helper directory, and policy home agree.
   cp -R "$ROOT/bin" "$dir/bin"
@@ -864,11 +865,59 @@ EOF
   pass 'fm-devin-permission-policy: exact own-home completion approves; other assignments, tasks, helpers, and effects stay judged'
 }
 
+test_completion_inherited_state_is_bound() {
+  local policy dir wt cmd state id=0
+  local POLICY_SH=$POLICY_SH
+  policy=$(new_case inherited-state 'echo "APPROVE: synthetic judge must not authorize redirected state"')
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  local -x FM_STATE_OVERRIDE="$dir/state"
+  cp -R "$ROOT/bin/." "$dir/bin/"
+  POLICY_SH="$dir/bin/fm-devin-permission-policy.sh"
+  mkdir -p "$dir/other-state" "$dir/state-sibling" "$wt/state"
+  ln -s "$dir/state" "$dir/state-alias"
+  ln -s "$dir/other-state" "$dir/redirected-state"
+  ln -s "$dir/absent-state" "$dir/dangling-state"
+  cmd="FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none"
+  for state in '' "$dir/state" "$dir/state/." "$dir/state-alias" ../state; do
+    id=$((id + 1))
+    FM_STATE_OVERRIDE="$state" hook "$policy" pre-tool-use exec "$cmd" "state-safe-pre-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "matching inherited state must pass PreToolUse: $OUT"
+    FM_STATE_OVERRIDE="$state" hook "$policy" permission-request exec "$cmd" "state-safe-$id"
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "matching inherited state must retain completion approval: $OUT"
+    jq -e --arg id "state-safe-$id" \
+      'select(.tool_use_id == $id) | .decision == "approve" and .decider == "policy"' \
+      "$dir/state/devin-permission-log.jsonl" >/dev/null \
+      || fail 'matching state must be approved statically'
+  done
+  FM_STATE_OVERRIDE=state hook "$policy" permission-request exec \
+    "cd '$dir' && FM_HOME='$dir' bin/fm-captain-hold.sh complete t1 --none" state-safe-cd
+  [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+    || fail 'a relative inherited state must resolve against the segment cwd'
+  jq -e 'select(.tool_use_id == "state-safe-cd") | .decision == "approve" and .decider == "policy"' \
+    "$dir/state/devin-permission-log.jsonl" >/dev/null \
+    || fail 'the segment-cwd completion must be approved statically'
+  for state in "$dir/other-state" "$dir/state-sibling" "$dir/redirected-state" state \
+    "$dir/dangling-state" "$dir/missing/../state" "$dir/state"$'\nforeign' "$dir/state"$'\r'; do
+    id=$((id + 1))
+    FM_STATE_OVERRIDE="$state" hook "$policy" pre-tool-use exec "$cmd" "state-bad-pre-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "a redirected or unresolved state must block before pre-allowed execution: $OUT"
+    FM_STATE_OVERRIDE="$state" hook "$policy" permission-request exec "$cmd" "state-bad-$id"
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "a judge must not authorize redirected completion state: $OUT"
+    printf '%s' "$OUT" | jq -r .reason | grep -qF FM_STATE_OVERRIDE \
+      || fail 'the state-binding refusal must identify the corrective environment setting'
+  done
+  pass 'fm-devin-permission-policy: completion state matches policy authority, including inherited paths and physical aliases'
+}
+
 test_quoted_completion_bindings_are_not_assignments() {
   local policy dir wt planted cmd actual id=0
   local POLICY_SH=$POLICY_SH
   policy=$(new_case quoted-completion)
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  local -x FM_STATE_OVERRIDE="$dir/state"
   cp -R "$ROOT/bin" "$dir/bin"
   POLICY_SH="$dir/bin/fm-devin-permission-policy.sh"
   # Bash executes this relative pathname when the assignment name or equals
@@ -2878,6 +2927,7 @@ CASES
 
 test_worker_completion_home_binding
 test_quoted_completion_bindings_are_not_assignments
+test_completion_inherited_state_is_bound
 test_refusal_list
 test_refusal_leaves_safe_commands_alone
 test_recursive_rm_resolves_symlinked_components

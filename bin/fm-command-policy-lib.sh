@@ -187,7 +187,10 @@
 #     one leading literal absolute FM_HOME binding, with its name and equals
 #     sign unquoted and unescaped, to the home derived from
 #     the policy's state/<this-task>.status path, directly or through a plain
-#     bash, /bin/bash, or /usr/bin/bash with no options. Other assignments,
+#     bash, /bin/bash, or /usr/bin/bash with no options. The helper's effective
+#     state directory, including an inherited FM_STATE_OVERRIDE, must resolve
+#     physically to that status directory; a mismatch or unresolved state is
+#     refused. Other assignments,
 #     wrappers, ANSI-C quoting, helpers, subcommands, and task ids keep their
 #     ordinary review.
 #
@@ -2666,7 +2669,7 @@ home_helper() {  # <word> <expansion-flag> <helper-name>
 # segment's assignment or interpreter. The status path supplies authority;
 # neither the command's cd target nor the hook's ambient FM_HOME does.
 own_task_completion_home_binding() {
-  local i helper=1 expected binding
+  local i helper=1 expected binding state effective_state='' policy_state=''
   [ "${SWA[0]-0}" = 1 ] || return 1
   [ -n "$TASK" ] || return 1
   case "$STATUS" in
@@ -2683,8 +2686,21 @@ own_task_completion_home_binding() {
   case "${SW[1]-}" in bash|/bin/bash|/usr/bin/bash) helper=2 ;; esac
   [ "${#SW[@]}" -eq $((helper + 4)) ] || return 1
   home_helper "${SW[helper]}" "${SWV[helper]}" fm-captain-hold.sh || return 1
-  [ "${SW[helper + 1]}" = complete ] && [ "${SW[helper + 2]}" = "$TASK" ] \
-    && [ "${SW[helper + 3]}" = --none ]
+  if [ "${SW[helper + 1]}" != complete ] || [ "${SW[helper + 2]}" != "$TASK" ] \
+    || [ "${SW[helper + 3]}" != --none ]; then
+    return 1
+  fi
+  state=${FM_STATE_OVERRIDE:-$binding/state}
+  case "$state" in
+    *$'\n'*|*$'\r'*) ;;
+    *) effective_state=$(physical_target "$state" "$CWD" 1) || effective_state='' ;;
+  esac
+  policy_state=$(physical_target "${STATUS%/*}" '' 1) || policy_state=''
+  if [ -z "$policy_state" ] || [ "$effective_state" != "$policy_state" ]; then
+    refuse "completion helper state does not match the policy status directory; clear or correct FM_STATE_OVERRIDE"
+    return 1
+  fi
+  return 0
 }
 
 # fm-ensure-agents-md.sh is firstmate's project-notes helper; it is

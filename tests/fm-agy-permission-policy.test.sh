@@ -113,6 +113,7 @@ test_worker_completion_home_binding() {
   local POLICY_SH=$POLICY_SH
   policy=$(new_case completion-home)
   dir=$(case_dir "$policy")
+  local -x FM_STATE_OVERRIDE="$dir/state"
   cp -R "$ROOT/bin" "$dir/bin"
   POLICY_SH="$dir/bin/fm-agy-permission-policy.sh"
   while IFS= read -r cmd; do
@@ -144,6 +145,19 @@ FM_HOME='$dir' bash -c "$dir/bin/fm-captain-hold.sh complete t1 --none"
 'FM_HOME=$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
 FM_HOME\\='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none
 EOF
+  step=$((step + 1))
+  FM_STATE_OVERRIDE="$dir/state" hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! abstained "$OUT"; then
+    fail "matching inherited state must preserve native Auto completion: $OUT"
+  fi
+  mkdir -p "$dir/other-state"
+  step=$((step + 1))
+  FM_STATE_OVERRIDE="$dir/other-state" hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" FM_STATE_OVERRIDE; then
+    fail "redirected completion state must be refused before native Auto execution: $OUT"
+  fi
   jq 'del(.posture)' "$policy" > "$dir/state/t1.legacy.json"
   hook "$dir/state/t1.legacy.json" pre-tool-use run_command \
     "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" 20
