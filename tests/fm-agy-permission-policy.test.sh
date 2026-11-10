@@ -103,6 +103,11 @@ denied() {  # <out> [reason-fragment]
 
 abstained() { [ -z "$1" ]; }
 
+statically_approved() {  # <output> <policy>
+  abstained "$1" && tail -1 "$(case_dir "$2")/state/agy-permission-log.jsonl" \
+    | jq -e '.decision == "approve" and .decider == "policy"' >/dev/null
+}
+
 native_review() {  # <output> <policy> - residue must reach native review.
   abstained "$1" && tail -1 "$(case_dir "$2")/state/agy-permission-log.jsonl" \
     | jq -e '.decision == "native-review" and .decider == "native"' >/dev/null
@@ -178,6 +183,18 @@ EOF
   tail -1 "$dir/state/agy-permission-log.jsonl" \
     | jq -e '.decision == "approve" and .decider == "policy"' >/dev/null \
     || fail 'recorded relocated data must retain static classification'
+  cp "$dir/data/t1/brief.md" "$dir/brief.saved"
+  printf '# Task\n## Firstmate spec\nDo not read file contents.\n# Setup\n' > "$dir/data/t1/brief.md"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir' bash '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  statically_approved "$OUT" "$policy" \
+    || fail "read exclusions must not hold the exact bound completion attestation: $OUT"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command \
+    "FM_HOME='$dir/another-home' bash '$dir/bin/fm-captain-hold.sh' complete t1 --none" "$step"
+  denied "$OUT" || fail "read exclusions must still hold a foreign-home completion: $OUT"
+  mv "$dir/brief.saved" "$dir/data/t1/brief.md"
   jq 'del(.posture)' "$policy" > "$dir/state/t1.legacy.json"
   hook "$dir/state/t1.legacy.json" pre-tool-use run_command \
     "FM_HOME='$dir' '$dir/bin/fm-captain-hold.sh' complete t1 --none" 20
@@ -185,6 +202,230 @@ EOF
     fail "a completion binding must not reactivate a retired policy: $OUT"
   fi
   pass 'fm-agy-permission-policy: exact own-home completion is static; other bindings and quoted commands reach native Auto'
+}
+
+test_names_only_worktree_listing() {
+  local policy dir wt cmd step=0
+  policy=$(new_case names-only-listing)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/bin" "$dir/outside"
+  printf 'fixture\n' > "$wt/bin/fm-harness.sh"
+  ln -s "$dir/outside" "$wt/escape"
+  printf '# Task\n## Firstmate spec\nList repository names. Do not read file contents.\n# Setup\n' > "$dir/data/t1/brief.md"
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    statically_approved "$OUT" "$policy" || fail "a literal directory listing reads no file contents: $cmd => $OUT"
+  done <<EOF
+ls '$wt'
+ls -1A -- '$wt/bin'
+/bin/ls -la '$wt' '$wt/bin'
+ls
+EOF
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    denied "$OUT" || fail "a listing exemption must not carry another read or an unproved path: $cmd => $OUT"
+  done <<EOF
+ls '$wt' && cat '$wt/bin/fm-harness.sh'
+ls '$wt' | xargs cat
+ls '$wt'/*
+ls '$wt/escape'
+ls '$dir/outside'
+ls -R '$wt'
+cat '$wt/bin/fm-harness.sh'
+EOF
+  step=$((step + 1))
+  hook "$policy" pre-tool-use read_file "$wt/bin/fm-harness.sh" "$step"
+  denied "$OUT" || fail "the global file-content exclusion must still hold native reads: $OUT"
+  pass 'fm-agy-permission-policy: literal worktree directory listings do not open excluded file contents'
+}
+
+test_own_tool_version_queries() {
+  local policy dir cmd step=0
+  policy=$(new_case own-tool-version)
+  dir=$(case_dir "$policy")
+  printf '# Task\n## Firstmate spec\nDo not read file contents.\n# Setup\n' > "$dir/data/t1/brief.md"
+  for cmd in 'agy --version' 'agy -v'; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    statically_approved "$OUT" "$policy" || fail "own-tool version metadata must be static: $cmd => $OUT"
+  done
+  for cmd in 'agy --version extra' 'agy run' 'agy --help' 'agy --version && cat README.md' './agy --version'; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    denied "$OUT" || fail "another agy invocation must retain scope review: $cmd => $OUT"
+  done
+  policy=$(new_case own-tool-other-command)
+  hook "$policy" pre-tool-use run_command 'agy run'
+  native_review "$OUT" "$policy" || fail "other agy subcommands must not enter the read-and-build set: $OUT"
+  pass 'fm-agy-permission-policy: only the exact own-tool version queries are static'
+}
+
+test_tracked_reads_respect_path_exclusions() {
+  local policy dir wt tool step=0
+  policy=$(new_case tracked-read-exclusions)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/bin" "$wt/private"
+  printf '# fixture\n' > "$wt/bin/fm-harness.sh"
+  printf 'excluded\n' > "$wt/private/records.csv"
+  printf 'untracked\n' > "$wt/untracked.txt"
+  printf 'TOKEN=fixture\n' > "$wt/.env"
+  printf 'outside\n' > "$dir/outside.txt"
+  ln -s ../private/records.csv "$wt/bin/excluded-link"
+  ln -s "$dir/outside.txt" "$wt/bin/outside-link"
+  git -C "$wt" init -q
+  git -C "$wt" add bin private .env
+  # Without exclusions this script already reads normally; its basename is
+  # not permission wiring. An unrelated exclusion must not change that.
+  hook "$policy" pre-tool-use read_file "$wt/bin/fm-harness.sh" 0
+  statically_approved "$OUT" "$policy" || fail "the tracked harness script must be readable: $OUT"
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
+  printf '# Task\n## Firstmate spec\nDo not read `private/`.\n# Setup\n' > "$dir/data/t1/brief.md"
+  for tool in read_file view_file; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use "$tool" "$wt/bin/fm-harness.sh" "$step"
+    statically_approved "$OUT" "$policy" || fail "an unrelated exact exclusion must not hold a tracked read: $OUT"
+  done
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "cat '$wt/bin/fm-harness.sh'" "$step"
+  statically_approved "$OUT" "$policy" || fail "the literal shell read must have the same scope: $OUT"
+  for tool in "$wt/private/records.csv" "$wt/bin/excluded-link" "$wt/bin/outside-link" "$wt/untracked.txt" "$wt/.env"; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use read_file "$tool" "$step"
+    denied "$OUT" || fail "an excluded, untracked, escaping or credential read must remain held: $tool => $OUT"
+  done
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "cat '$wt/bin/'*" "$step"
+  denied "$OUT" || fail "a glob cannot borrow an exact tracked-read exemption: $OUT"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use view_file bin/fm-harness.sh "$step"
+  denied "$OUT" || fail "a relative native path has no proven worktree base: $OUT"
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
+  printf '# Task\n## Firstmate spec\nDo not read `bin/fm-harness.sh`.\n# Setup\n' > "$dir/data/t1/brief.md"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use read_file "$wt/bin/fm-harness.sh" "$step"
+  denied "$OUT" || fail "an exact exclusion overrides tracked-file status: $OUT"
+  pass 'fm-agy-permission-policy: exact path exclusions hold their targets and allow unrelated tracked reads'
+}
+
+test_tracked_read_symlink_dotdot_stays_held() {
+  local policy dir wt tool step=0
+  policy=$(new_case tracked-symlink-dotdot)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/other/nested"
+  printf 'allowed\n' > "$wt/privatefile"
+  printf 'excluded\n' > "$wt/other/privatefile"
+  ln -s other/nested "$wt/pivot"
+  ln -s pivot/../privatefile "$wt/read"
+  git -C "$wt" init -q
+  git -C "$wt" add privatefile other/privatefile pivot read
+  # The kernel follows pivot before ..; lexical normalization would instead
+  # select the tracked, permitted file at the root and approve the wrong read.
+  [ "$(cat "$wt/read")" = excluded ] || fail 'the fixture must actually read the excluded physical destination'
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
+  printf '# Task\n## Firstmate spec\nDo not read `other/privatefile`.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use read_file "$wt/privatefile" 0
+  statically_approved "$OUT" "$policy" || fail "an unrelated regular tracked file must retain its exemption: $OUT"
+  for tool in read_file view_file; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use "$tool" "$wt/read" "$step"
+    denied "$OUT" || fail "a final symlink must not exempt the wrong physical read: $OUT"
+  done
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "cat '$wt/read'" "$step"
+  denied "$OUT" || fail "a shell read must retain the same final-symlink boundary: $OUT"
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the brief.
+  printf '# Task\n## Firstmate spec\nDo not read `read`.\n# Setup\n' > "$dir/data/t1/brief.md"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use read_file "$wt/other/privatefile" "$step"
+  denied "$OUT" || fail "a final-symlink exclusion must not be normalized to a different file: $OUT"
+  pass 'fm-agy-permission-policy: final symlinks in read targets or exclusions retain scope review'
+}
+
+test_listing_multiline_paths_stay_held() {
+  local policy dir wt operand extra
+  policy=$(new_case listing-multiline)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/"$'\n' "$dir/outside"
+  touch "$dir/outside/outside-marker"
+  operand="$wt/"$'\n'"/../../outside"
+  [ "$(ls "$operand")" = outside-marker ] || fail 'the complete newline operand must actually list the sibling directory'
+  printf '# Task\n## Firstmate spec\nDo not read file contents.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use run_command "ls '$wt'" 0
+  statically_approved "$OUT" "$policy" || fail "an ordinary worktree listing must retain its exemption: $OUT"
+  hook "$policy" pre-tool-use run_command "ls '$operand'" 1
+  denied "$OUT" || fail "a multiline operand must not validate only its first line: $OUT"
+  extra=$(jq -nc --arg cwd "$operand" '{Cwd:$cwd}')
+  hook "$policy" pre-tool-use run_command ls 2 "$extra"
+  denied "$OUT" || fail "a multiline working directory must not validate only its first line: $OUT"
+  pass 'fm-agy-permission-policy: multiline listing operands and working directories retain scope review'
+}
+
+test_tracked_read_case_alias_exclusions() {
+  local policy dir wt boundary excluded target
+  for boundary in file directory; do
+    policy=$(new_case "case-alias-$boundary")
+    dir=$(case_dir "$policy")
+    wt=$(jq -r .worktree "$policy")
+    mkdir -p "$wt/Restricted"
+    printf 'excluded\n' > "$wt/Restricted/source.txt"
+    git -C "$wt" init -q
+    git -C "$wt" add Restricted/source.txt
+    excluded=restricted/SOURCE.TXT target="$wt/Restricted/source.txt"
+    if [ "$boundary" = directory ]; then excluded=RESTRICTED target="$wt/Restricted"; fi
+    if [ ! "$target" -ef "$wt/$excluded" ]; then
+      printf 'note - case-alias exclusion subcase unavailable on this case-sensitive filesystem\n'
+      continue
+    fi
+    hook "$policy" pre-tool-use read_file "$wt/Restricted/source.txt" 0
+    statically_approved "$OUT" "$policy" || fail "an unrestricted tracked read must be static: $OUT"
+    printf '# Task\n## Firstmate spec\nDo not read \140%s\140.\n# Setup\n' "$excluded" > "$dir/data/t1/brief.md"
+    hook "$policy" pre-tool-use read_file "$wt/Restricted/source.txt" 1
+    denied "$OUT" || fail "a case alias for an excluded $boundary must retain scope review: $OUT"
+    pass "fm-agy-permission-policy: case-aliased $boundary exclusions retain scope review"
+  done
+}
+
+test_tracked_read_hardlink_identity_exclusion() {
+  local policy dir wt
+  policy=$(new_case hardlink-exclusion)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  printf 'excluded\n' > "$wt/private.txt"
+  ln "$wt/private.txt" "$wt/alias.txt"
+  printf 'unrelated\n' > "$wt/ordinary.txt"
+  git -C "$wt" init -q
+  git -C "$wt" add private.txt alias.txt ordinary.txt
+  [ "$wt/private.txt" -ef "$wt/alias.txt" ] || fail 'the exclusion fixture must share physical file identity'
+  printf '# Task\n## Firstmate spec\nDo not read \140private.txt\140.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use read_file "$wt/ordinary.txt" 0
+  statically_approved "$OUT" "$policy" || fail "an unrelated inode must retain its tracked-read exemption: $OUT"
+  hook "$policy" pre-tool-use read_file "$wt/alias.txt" 1
+  denied "$OUT" || fail "a hardlink to the excluded inode must retain scope review: $OUT"
+  pass 'fm-agy-permission-policy: physical-file exclusions cover tracked hardlink aliases'
+}
+
+test_filesystem_root_read_exclusion() {
+  local policy dir wt
+  policy=$(new_case root-exclusion)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  printf 'fixture\n' > "$wt/ordinary.txt"
+  git -C "$wt" init -q
+  git -C "$wt" add ordinary.txt
+  hook "$policy" pre-tool-use read_file "$wt/ordinary.txt" 0
+  statically_approved "$OUT" "$policy" || fail "the same read must be static without a root exclusion: $OUT"
+  printf '# Task\n## Firstmate spec\nDo not read \140/\140.\n# Setup\n' > "$dir/data/t1/brief.md"
+  hook "$policy" pre-tool-use read_file "$wt/ordinary.txt" 1
+  denied "$OUT" || fail "the filesystem root exclusion covers every tracked read: $OUT"
+  hook "$policy" pre-tool-use run_command "cat '$wt/ordinary.txt'" 2
+  denied "$OUT" || fail "the filesystem root exclusion covers shell reads too: $OUT"
+  pass 'fm-agy-permission-policy: a filesystem-root exclusion covers native and shell reads'
 }
 
 test_armed_heartbeat_proves_wiring() {
@@ -1429,6 +1670,14 @@ test_retired_policies_preserve_exact_decisions() {
   pass 'retired and unknown policies refuse execution, retain decisions on failure and retire exact keys'
 }
 
+test_tracked_read_case_alias_exclusions
+test_tracked_read_hardlink_identity_exclusion
+test_filesystem_root_read_exclusion
+test_tracked_read_symlink_dotdot_stays_held
+test_listing_multiline_paths_stay_held
+test_names_only_worktree_listing
+test_own_tool_version_queries
+test_tracked_reads_respect_path_exclusions
 test_worker_completion_home_binding
 test_armed_heartbeat_proves_wiring
 test_refusal_list_denies

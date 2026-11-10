@@ -3139,6 +3139,11 @@ approve_plain() {  # <base>
         && { [ "${E[1]}" = -v ] || [ "${E[1]}" = --version ]; } && return 0
       no_approve "node requires effect review (not a forbidden interpreter)"
       return 0 ;;
+    agy)
+      [ "${FM_POLICY_ADAPTER:-}" = agy ] && [ "${#E[@]}" -eq 2 ] \
+        && [ "${EV[1]}${EG[1]}" = 00 ] \
+        && { [ "${E[1]}" = -v ] || [ "${E[1]}" = --version ]; } && return 0
+      ;;
     make)
       for ((k = 1; k < ${#E[@]}; k++)); do
         case "${E[k]}" in

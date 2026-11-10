@@ -38,7 +38,12 @@
 # absolute Path. Legacy file names remain mapped too. Observer/log input
 # excludes file contents. A conversation's own brain outputs, native Auto's
 # exact staged brief and explicitly directed skills have read-scope exceptions
-# after credential checks. fm-command-policy-lib.sh owns command analysis and grant
+# after credential checks. Literal worktree directory listings, exact agy
+# version queries and the bound own-task completion attestation read no source.
+# Regular tracked-file reads can also prove scope against complete, simple
+# exclusions of the form "Do not read `<path>`."; ambiguous restrictions,
+# final symlinks and multiline paths still hold.
+# fm-command-policy-lib.sh owns command analysis and grant
 # pinning; fm-credential-access.mjs owns credential metadata and use grants.
 #
 # The firstmate-owned policy declares task, worktree, status, inbox, data,
@@ -471,11 +476,108 @@ native_activation_call() {
   done
 }
 
+literal_command() {
+  [ "$TOOL" = run_command ] || return 1
+  tokenize "$CMD"
+  [ "${#T_TXT[@]}" -gt 0 ] || return 1
+  local i
+  for ((i = 0; i < ${#T_TXT[@]}; i++)); do
+    [ "${T_KIND[i]}" = w ] && [ "${T_VAR[i]}${T_GLOB[i]}${T_SUBS[i]}" = 000 ] || return 1
+    case "${T_TXT[i]}" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  done
+}
+
+source_free_command() {
+  # evaluate_exec retains all credential, write, wiring and binding vetoes.
+  # Match the whole call, so a pipeline, substitution or extra segment cannot
+  # borrow the exemption of its first command.
+  [ -z "$NOT_APPROVABLE" ] && literal_command || return 1
+  local i dir root operands=0 options=1
+  case "${T_TXT[0]}" in
+    agy)
+      [ "${#T_TXT[@]}" = 2 ] && { [ "${T_TXT[1]}" = --version ] || [ "${T_TXT[1]}" = -v ]; }
+      return $? ;;
+    FM_HOME=*) own_task_completion_home_binding; return $? ;;
+    ls|/bin/ls|/usr/bin/ls) ;;
+    *) return 1 ;;
+  esac
+  case "$WORKTREE${AGY_CWD:-}" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  root=$(norm_abs "$WORKTREE")
+  for ((i = 1; i < ${#T_TXT[@]}; i++)); do
+    dir=${T_TXT[i]}
+    if [ "$options" = 1 ]; then
+      case "$dir" in
+        --) options=0; continue ;;
+        -*) [[ $dir =~ ^-[1aAdFhl]+$ ]] || return 1; continue ;;
+      esac
+    fi
+    dir=$(physical_target "$dir" "${AGY_CWD:-$WORKTREE}" 1) || return 1
+    [ -d "$dir" ] && { [ "$dir" = "$root" ] || strictly_inside "$dir" "$root"; } || return 1
+    operands=$((operands + 1))
+  done
+  [ "$operands" = 0 ] || return 0
+  dir=$(physical_target "${AGY_CWD:-$WORKTREE}" '' 1) || return 1
+  [ "$dir" = "$root" ] || strictly_inside "$dir" "$root"
+}
+
+unexcluded_tracked_read() {
+  # Only complete, literal negative-path statements are decidable here.
+  # Positive limits, global prohibitions, lists and unrecognized prose retain
+  # the held-call path rather than guessing their meaning.
+  [ -z "$NOT_APPROVABLE" ] || return 1
+  local path abs root rel line excluded ancestor seen=0
+  # shellcheck disable=SC2016 # Backticks are literal Markdown delimiters in the regex.
+  local rule='^[[:space:]]*[Dd][Oo][[:space:]]+[Nn][Oo][Tt][[:space:]]+[Rr][Ee][Aa][Dd][[:space:]]+`([[:alnum:]_./-]+)`[.]?[[:space:]]*$'
+  case "$TOOL" in
+    read_file|view_file)
+      path=$FILE_PATH
+      case "$path" in /*) ;; *) return 1 ;; esac
+      ;;
+    run_command)
+      literal_command && [ "${#T_TXT[@]}" = 2 ] || return 1
+      case "${T_TXT[0]}" in cat|/bin/cat|/usr/bin/cat) ;; *) return 1 ;; esac
+      path=${T_TXT[1]}
+      case "$path" in -*) return 1 ;; esac
+      ;;
+    *) return 1 ;;
+  esac
+  case "$path" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  case "$WORKTREE${AGY_CWD:-}" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  abs=$(physical_target "$path" "${AGY_CWD:-$WORKTREE}" 0) || return 1
+  # Do not lexically normalize a final symlink's contents: an intermediate
+  # directory symlink followed by .. can select a different physical file.
+  [ ! -L "$abs" ] || return 1
+  root=$(norm_abs "$WORKTREE")
+  strictly_inside "$abs" "$root" && [ -f "$abs" ] || return 1
+  rel=${abs#"$root"/}
+  git -C "$WORKTREE" --literal-pathspecs ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 || return 1
+  while IFS= read -r line; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    [[ $line =~ $rule ]] || return 1
+    excluded=$(physical_target "${BASH_REMATCH[1]}" "$WORKTREE" 0) || return 1
+    [ ! -L "$excluded" ] || return 1
+    [ "$excluded" != / ] || return 1
+    [ "$abs" != "$excluded" ] && ! strictly_inside "$abs" "$excluded" || return 1
+    # Case aliases and hardlinks retain the same file identity. Check parents
+    # as well so a case-aliased directory exclusion covers its descendants.
+    ancestor=$abs
+    while [ "$ancestor" != / ]; do
+      [ "$ancestor" -ef "$excluded" ] && return 1
+      ancestor=${ancestor%/*}
+      [ -n "$ancestor" ] || ancestor=/
+    done
+    seen=1
+  done <<<"$READ_CONSTRAINTS"
+  [ "$seen" = 1 ]
+}
+
 apply_read_constraints() {
   READ_CONSTRAINTS=$(brief_read_constraints)
   [ -n "$READ_CONSTRAINTS" ] || return 0
   own_read && return 0
   native_activation_call && return 0
+  source_free_command && return 0
+  unexcluded_tracked_read && return 0
   case "$TOOL" in
     run_command|read_file|view_file|grep_search|list_dir|search_web|read_url_content)
       no_approve "brief read exclusions require scope review"
