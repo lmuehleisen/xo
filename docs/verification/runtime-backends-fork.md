@@ -305,6 +305,37 @@ agy updates itself, so re-run the live guard after any upgrade before trusting t
 
 ### Native Auto workers
 
+Verified on 2026-11-09 with agy 1.5.3, `gemini-3.8-flash-low`, macOS on Apple silicon, tmux then Herdr.
+Admission accepts the 1.5.x patch family on this evidence.
+
+```sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=tmux \
+  bin/fm-test-run.sh tests/fm-agy-native-live-e2e.test.sh
+FM_AGY_NATIVE_LIVE=1 FM_AGY_NATIVE_LIVE_BACKEND=herdr \
+  bin/fm-test-run.sh tests/fm-agy-native-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - native Auto: warm activation, actual random command result, observer pair and accepted Stop
+ok - native Auto: exact status append completed through native review
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.5.3, tmux)
+```
+
+```text
+ok - native Auto: warm activation, actual random command result, observer pair and accepted Stop
+ok - native Auto: exact status append completed through native review
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.5.3, herdr)
+```
+
+Both runs completed through production `/quit` control and owned-hook retirement.
+On tmux both outside-sandbox canaries auto-approved without a prompt; on Herdr a live one-shot approval completed.
+Live decline was not observed on either transport.
+The run needed the empty-argv `fm_hermes_process_matches` repair from pull request 120 applied uncommitted: without it the crash empties every macOS Bash 3.2 tmux agent-state verdict and the exit postcondition cannot prove a cleanly stopped agent.
+
 Verified on 2026-11-01 with agy 1.4.12, `gemini-3.8-flash-low`, macOS and tmux.
 The consolidated guard passed active Auto, an actual random command result, matching current-generation pre/post events, accepted Stop, encoded brief handoff, attempted outside-root denial with absent target, exact status/inbox effects, production `/quit` control and owned-hook retirement.
 A live one-shot approval completed; live decline was not observed.
