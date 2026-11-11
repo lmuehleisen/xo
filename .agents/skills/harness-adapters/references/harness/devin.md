@@ -66,6 +66,7 @@ It works by full-command inspection, so it covers what `Exec(...)` prefixes cann
   Approving at the prompt closes the key through `PostToolUse`; a reject or interrupt fires no hook, so the key closes at the worker's next prompt or at session end.
 
 Every refusal, approval, judge verdict, escalation, and escalation outcome is one JSON line in the home-wide `state/devin-permission-log.jsonl`, the evidence for tuning the approve set and the posture, for example `jq -s 'group_by(.decision) | map({decision: .[0].decision, n: length})' state/devin-permission-log.jsonl`.
+Use [fm-send's prompt-approval annotation](../../../../../bin/fm-send.sh) when delivering a keyed approval at the prompt; its header owns the flags.
 Firstmate answers an escalation at the prompt or steers the worker; it never picks the menu's "always allow" or bypass options on the captain's behalf.
 Never move a Devin worker to `--permission-mode dangerous` or `--sandbox`: the pre-allowed set, the deny list, and the policy hooks are reviewed only under the two modes above, and even there they reduce risk rather than form a security boundary.
 
