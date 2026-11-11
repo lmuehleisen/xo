@@ -583,8 +583,9 @@ test_executable_identity_before_special_dispatch() {
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && native_review "$OUT" "$policy" \
-      || fail "a local tool basename must reach native review: $cmd => $OUT"
+    if [ "$RC" != 0 ] || ! native_review "$OUT" "$policy"; then
+      fail "a local tool basename must reach native review: $cmd => $OUT"
+    fi
   done <<EOF
 ./git status
 $wt/git status
@@ -597,8 +598,9 @@ EOF
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && statically_approved "$OUT" "$policy" \
-      || fail "installed tools and ordinary package runners must retain static approval: $cmd => $OUT"
+    if [ "$RC" != 0 ] || ! statically_approved "$OUT" "$policy"; then
+      fail "installed tools and ordinary package runners must retain static approval: $cmd => $OUT"
+    fi
   done <<'EOF'
 /usr/bin/git status
 /usr/bin/bash -c pwd
@@ -612,25 +614,30 @@ EOF
   for cmd in 'rg --pre ./helper' 'rg --pre ./helper marker sample.txt'; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
-      || fail "rg preprocessors must retain the credential veto: $OUT"
+    if [ "$RC" != 0 ] || ! denied "$OUT" 'held for firstmate'; then
+      fail "rg preprocessors must retain the credential veto: $OUT"
+    fi
   done
   step=$((step + 1))
   hook "$policy" pre-tool-use run_command "$wt/bash -c 'cat ~/.ssh/id_rsa'" "$step"
-  [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
-    || fail "an unrecognized shell path must retain nested credential holds: $OUT"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'held for firstmate'; then
+    fail "an unrecognized shell path must retain nested credential holds: $OUT"
+  fi
   step=$((step + 1))
   hook "$policy" pre-tool-use run_command "$wt/bash -c 'touch $dir/data/t1/brief.md'" "$step"
-  [ "$RC" = 0 ] && denied "$OUT" 'own instructions' \
-    || fail "an unrecognized shell path must retain nested instruction protection: $OUT"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'own instructions'; then
+    fail "an unrecognized shell path must retain nested instruction protection: $OUT"
+  fi
   step=$((step + 1))
   hook "$policy" pre-tool-use run_command "$wt/git push --force" "$step"
-  [ "$RC" = 0 ] && denied "$OUT" 'refused' \
-    || fail "a path-prefixed git must retain force-push refusal: $OUT"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'refused'; then
+    fail "a path-prefixed git must retain force-push refusal: $OUT"
+  fi
   step=$((step + 1))
   hook "$policy" pre-tool-use run_command "$wt/gh pr merge" "$step"
-  [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
-    || fail "a path-prefixed gh merge must retain mandatory escalation: $OUT"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'held for firstmate'; then
+    fail "a path-prefixed gh merge must retain mandatory escalation: $OUT"
+  fi
   pass 'fm-agy-permission-policy: local tool basenames reach native review; installed tools and rg veto retain their treatment'
 }
 
@@ -653,8 +660,9 @@ test_shell_writes_resolve_effective_targets() {
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && denied "$OUT" 'outside the task write roots' \
-      || fail "physical shell targets must use the existing out-of-root constraint: $cmd => $OUT"
+    if [ "$RC" != 0 ] || ! denied "$OUT" 'outside the task write roots'; then
+      fail "physical shell targets must use the existing out-of-root constraint: $cmd => $OUT"
+    fi
   done <<EOF
 printf marker > $dir/tmp/redirect-alias
 mkdir -p $wt/dir-alias/new-dir
@@ -666,14 +674,16 @@ EOF
   for cmd in "cp -r $wt/source/. $dir/data/t1/" "cp -r $wt/source/child/.. $dir/data/t1/" "cp -r $wt/source/ $dir/data/t1/"; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && { native_review "$OUT" "$policy" || denied "$OUT" 'held for firstmate'; } \
-      || fail "directory-contents copies must retain existing review paths: $cmd => $OUT"
+    if [ "$RC" != 0 ] || ! { native_review "$OUT" "$policy" || denied "$OUT" 'held for firstmate'; }; then
+      fail "directory-contents copies must retain existing review paths: $cmd => $OUT"
+    fi
   done
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && denied "$OUT" 'own instructions' \
-      || fail "effective protected targets must use the existing instruction constraint: $cmd => $OUT"
+    if [ "$RC" != 0 ] || ! denied "$OUT" 'own instructions'; then
+      fail "effective protected targets must use the existing instruction constraint: $cmd => $OUT"
+    fi
   done <<EOF
 touch $dir/data/t1/brief.md
 mkdir -p $dir/data/t1/brief.md
@@ -684,8 +694,9 @@ EOF
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
-    [ "$RC" = 0 ] && statically_approved "$OUT" "$policy" \
-      || fail "ordinary in-root shell writes must retain static approval: $cmd => $OUT"
+    if [ "$RC" != 0 ] || ! statically_approved "$OUT" "$policy"; then
+      fail "ordinary in-root shell writes must retain static approval: $cmd => $OUT"
+    fi
   done <<EOF
 printf marker > $dir/tmp/plain.txt
 mkdir -p $wt/real/new-dir

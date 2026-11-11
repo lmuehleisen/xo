@@ -2985,9 +2985,10 @@ EOF
   [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
     || fail "a path-prefixed git must retain force-push refusal: $OUT"
   hook "$policy" permission-request exec "$wt/gh pr merge" identity-merge
-  [ "$RC" = 0 ] && [ -z "$OUT" ] \
-    && tail -1 "$dir/state/devin-permission-log.jsonl" | jq -e '.decision == "escalate" and .decider == "policy"' >/dev/null \
-    || fail "a path-prefixed gh merge must retain mandatory policy escalation: $OUT"
+  if [ "$RC" != 0 ] || [ -n "$OUT" ] \
+    || ! tail -1 "$dir/state/devin-permission-log.jsonl" | jq -e '.decision == "escalate" and .decider == "policy"' >/dev/null; then
+    fail "a path-prefixed gh merge must retain mandatory policy escalation: $OUT"
+  fi
   pass 'fm-devin-permission-policy: local tool basenames reach review; installed tools and rg veto retain their treatment'
 }
 
