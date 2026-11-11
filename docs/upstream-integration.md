@@ -14,8 +14,10 @@ This page is the maintainer checklist for one integration run; the fork's invari
 
 ## Checklist
 
-1. Fetch `origin` and `upstream`, branch from `origin/main`, and before merging record three commits: `git merge-base origin/main upstream/main` (the upstream commit the previous integration merged), `git rev-parse upstream/main`, and `git rev-parse origin/main`.
-2. Run `git merge --no-ff upstream/main`.
+1. Fetch `origin` and `upstream`, pin both tips to their full SHAs, branch from the pinned fork SHA, and record three commits: `git merge-base origin/main upstream/main` (the upstream commit the previous integration merged), `git rev-parse upstream/main`, and `git rev-parse origin/main`.
+2. Preflight trust for the worker runtime in the disposable checkout without changing global settings.
+   Run `git merge --no-ff --no-commit <pinned-upstream-sha>` and use the pinned SHAs throughout the audit; record and reconcile any later fork merge separately.
+   Before creating the merge commit, sanitize upstream verification evidence of home paths, process IDs, and lab names: the publish judge reads added lines in each commit, so a follow-up cannot clear the merge commit.
    A fully automatic merge still gets every step below; a clean textual merge is the case most likely to hide a semantic break.
    When upstream reformatted a file the fork also changed, resolve that file with a normalized three-way merge (the same formatter on base, fork, and upstream, then `git merge-file`) rather than hunk by hunk, and never with `-X ignore-all-space`, which silently keeps the fork's old formatting.
 3. Run the call-site scan with the three commits recorded in step 1, before any test:
@@ -36,15 +38,18 @@ This page is the maintainer checklist for one integration run; the fork's invari
    ```
 
    It reports a helper defined at the merge base or the upstream tip, absent from the merged commit, and still mentioned under `bin/` or `tests/`.
+   List functions absent from the merged tree and search their remaining references; the removed-helper scan automates this check.
+   A caller using `helper || return 0` can hide a missing command exit 127.
    The call-site scan cannot see that shape: a surviving caller of a helper upstream deleted, or merged lines that still call a helper the resolution dropped.
    Account for every reported mention in the pull request body.
    The script's `--help` owns the exact matching rules and their limits.
 4. Verify the fork's dropped dependencies stay dropped and review what upstream changed under the opt-in: `git grep -n -E 'gh-axi|lavish-axi|chrome-devtools-axi|no-mistakes' -- bin .agents/skills AGENTS.md README.md CONTRIBUTING.md docs`, and account for every new hit upstream introduced.
    Include `CONTRIBUTING.md` and `docs`, because upstream prose can reintroduce a requirement the fork removed, such as a required check the fork deleted.
    gh-axi and chrome-devtools-axi stay dropped, while `no-mistakes` is an optional opt-in through `config/no-mistakes` and `lavish-axi` an optional toggle through `config/lavish`, so an upstream change to either can belong in the fork instead of being stripped; never accept an upstream Lavish change that runs `setup`, `update`, or `share`, unpins the version, or widens the bound address.
-5. Classify every divergent hunk in a shared file: for each file present upstream in `git diff --stat upstream/main HEAD`, read `git diff upstream/main HEAD -- <file>` and match each hunk against the behavior and scope a ledger `Seam:` line describes.
+5. Classify every divergent hunk in a shared file: for each file present upstream in `git diff --stat <pinned-upstream-sha> HEAD`, read `git diff <pinned-upstream-sha> HEAD -- <file>` and match each hunk against the behavior and scope a ledger `Seam:` line describes.
    A file named by one entry does not claim its other hunks, so report each hunk no entry's scope covers in the pull request body as an incidental candidate and propose its realignment.
-   Also list the fork-only paths from the current trees, `comm -23 <(git ls-tree -r --name-only HEAD | sort) <(git ls-tree -r --name-only upstream/main | sort)`, which also catches a path the fork keeps after upstream deleted or renamed it, and report each one that no entry's `Seam:` or `Guard:` line and no incidental item names so it gets an entry or is removed.
+   Keep a reusable shared-hunk inventory keyed by the pinned source and fork SHAs; reuse only exact unchanged hunk content and review every changed or new hunk.
+   Also list the fork-only paths from the current trees, `comm -23 <(git ls-tree -r --name-only HEAD | sort) <(git ls-tree -r --name-only <pinned-upstream-sha> | sort)`, which also catches a path the fork keeps after upstream deleted or renamed it, and report each one that no entry's `Seam:` or `Guard:` line and no incidental item names so it gets an entry or is removed.
    For each `carried` entry, check whether this upstream range ships an equivalent, and if so propose dropping the fork copy.
    Also look for fork-tuned values inside upstream-owned files that an upstream test now pins.
 6. Run every guard the ledger names on the merged tree, before the broader suite; `grep '^- Guard:' docs/fork-divergences.md | grep -o 'tests/[a-z0-9-]*\.test\.sh' | sort -u` lists them.
@@ -54,9 +59,12 @@ This page is the maintainer checklist for one integration run; the fork's invari
    An opt-in live guard only skips by default, and a skip is not a pass: run the guards with `FM_LIVE=1` where each guard's harness is installed and signed in (the `fm_live_gate` contract in `tests/lib.sh`), and list every guard that still reported a skip in the pull request body as not exercised.
 7. Run `bin/fm-test-run.sh --changed` and `bin/fm-test-run.sh --check-coverage`, then each portable lane from `bin/fm-test-run.sh --list-lanes`, and `bin/fm-lint.sh`.
    When `--changed` refuses an unmapped path, run every suite the conflicts, the scan's findings, and the fork's divergent areas touch instead of skipping to the next step.
+   Compare local failures against fork main under equivalent conditions before attributing them to the integration.
    A failing test that pins one side's design is adapted to the fork's intended behavior as the ledger records it, and the pull request body names each adaptation and why.
 8. Update the ledger in the same pull request: drop carried entries upstream made redundant, add entries for newly deliberate differences, remove realigned incidental items, and check that README "Fork: what differs" and `AGENTS.md` section 7 still describe the fork.
 9. Open the pull request against the fork with `gh pr create --repo lmuehleisen/xo --base main`, always passing `--repo` because this checkout also carries the upstream remote.
    Its body states the upstream source commit, that a merge commit is required, every conflict and its resolution, every upstream change dropped or adapted, the call-site scan result, the removed-helper scan result, the shared-file classification, the guard results, the ledger changes, and the test results.
    The body may use up to 80 lines and 6000 characters when the publish gate verifies the integration ancestry and the recorded source commit; see `bin/fm-publish-gate.sh policy` for the verification and fallback limits.
    Keep it a concise technical record, with no machine names, runner details, logs, or full hunk audit; the publish judge still reviews the whole description.
+   Before reporting ready, wait for CI and review bots, read their inline threads and review bodies, and reconcile the final head, body, and hunk inventory after fixes.
+   Reply to inline review threads through the REST `pulls/<n>/comments/<id>/replies` endpoint; the publish guard refuses the GraphQL reply mutation.
