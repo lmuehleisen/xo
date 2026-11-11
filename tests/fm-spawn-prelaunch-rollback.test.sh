@@ -197,8 +197,8 @@ EOF
   printf '%s\n' '{"sentinel":true}' > "$case_dir/user/.gemini/antigravity-cli/settings.json"
   [ ! -e "$ROOT/bin/fm-agy-trust.sh" ] || fail "deleted global trust writer returned"
   out=$(HOME="$case_dir/user" XDG_CONFIG_HOME="$case_dir/user" run_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout "agy --version")
-  [ "$(cat "$case_dir/user/.gemini/antigravity-cli/settings.json")" = '{"sentinel":true}' ] || fail "agy spawn changed global settings"
   status=$?
+  [ "$(cat "$case_dir/user/.gemini/antigravity-cli/settings.json")" = '{"sentinel":true}' ] || fail "agy spawn changed global settings"
   case "$out" in
     *'unbound variable'*) fail "raw: the raw agy launch hit an unbound variable: $out" ;;
   esac
