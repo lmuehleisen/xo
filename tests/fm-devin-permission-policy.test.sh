@@ -2939,6 +2939,7 @@ test_executable_identity_before_special_dispatch() {
     printf '#!/usr/bin/env bash\nprintf "synthetic tool ran\\n"\n' > "$wt/$name"
     chmod +x "$wt/$name"
   done
+  ln -sf "$(command -v bash)" "$wt/bash"
   printf 'marker\n' > "$wt/sample.txt"
   while IFS= read -r cmd; do
     id=$((id + 1))
@@ -2975,6 +2976,18 @@ EOF
     [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
       || fail "rg preprocessors must retain the credential veto: $OUT"
   done
+  for cmd in "$wt/bash -c 'cat ~/.ssh/id_rsa'" "$wt/bash -c 'touch $dir/data/t1/brief.md'"; do
+    hook "$policy" pre-tool-use exec "$cmd" identity-nested
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "unrecognized shell paths must retain nested credential and instruction checks: $OUT"
+  done
+  hook "$policy" pre-tool-use exec "$wt/git push --force" identity-force
+  [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+    || fail "a path-prefixed git must retain force-push refusal: $OUT"
+  hook "$policy" permission-request exec "$wt/gh pr merge" identity-merge
+  [ "$RC" = 0 ] && [ -z "$OUT" ] \
+    && tail -1 "$dir/state/devin-permission-log.jsonl" | jq -e '.decision == "escalate" and .decider == "policy"' >/dev/null \
+    || fail "a path-prefixed gh merge must retain mandatory policy escalation: $OUT"
   pass 'fm-devin-permission-policy: local tool basenames reach review; installed tools and rg veto retain their treatment'
 }
 
@@ -2982,11 +2995,12 @@ test_shell_writes_resolve_effective_targets() {
   local policy dir wt cmd event id=0
   policy=$(new_case shell-write-targets)
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
-  mkdir -p "$wt/copy-dest" "$wt/copy-safe" "$wt/real"
+  mkdir -p "$wt/copy-dest" "$wt/copy-safe" "$wt/real" "$wt/source/child"
   printf 'marker\n' > "$wt/sample.txt"
   printf 'ordinary\n' > "$wt/ordinary.txt"
   printf 'replacement\n' > "$wt/note.txt"
   printf 'ordinary source\n' > "$wt/brief.md"
+  printf 'replacement\n' > "$wt/source/brief.md"
   ln -s /etc/hosts "$dir/tmp/redirect-alias"
   ln -s /etc "$wt/dir-alias"
   ln -s /etc/hosts "$wt/file-alias"
@@ -2996,10 +3010,10 @@ test_shell_writes_resolve_effective_targets() {
   while IFS= read -r cmd; do
     id=$((id + 1))
     hook "$policy" pre-tool-use exec "$cmd" "shell-target-$id"
-    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "an outside shell target must retain review: $OUT"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "an unsafe shell target must retain review: $OUT"
     hook "$policy" permission-request exec "$cmd" "shell-target-$id"
     [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/shell-target-$id.pending" ] \
-      || fail "a shell write through an outside symlink must escalate: $cmd => $OUT"
+      || fail "unsafe or unresolved shell write targets must escalate: $cmd => $OUT"
   done <<EOF
 printf marker > $dir/tmp/redirect-alias
 mkdir -p $wt/dir-alias/new-dir
@@ -3008,6 +3022,16 @@ cp $wt/sample.txt $wt/copy-dest/
 cp $wt/sample.txt $wt/copy-dest/sample.txt
 cp $wt/sample.txt $wt/ordinary.txt $wt/copy-dest/
 EOF
+  for cmd in "cp -r $wt/source/. $dir/data/t1/" "cp -r $wt/source/child/.. $dir/data/t1/" "cp -r $wt/source/ $dir/data/t1/"; do
+    id=$((id + 1))
+    hook "$policy" pre-tool-use exec "$cmd" "shell-contents-$id"
+    { [ "$RC" = 0 ] && [ -z "$OUT" ]; } \
+      || { [ "$RC" = 2 ] && printf '%s' "$OUT" | jq -e '.decision == "block" and (.reason | contains("credential access"))' >/dev/null; } \
+      || fail "directory-contents copies must preserve existing credential review: $OUT"
+    hook "$policy" permission-request exec "$cmd" "shell-contents-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/shell-contents-$id.pending" ] \
+      || fail "directory-contents copies must escalate rather than receive static approval: $OUT"
+  done
   while IFS= read -r cmd; do
     for event in pre-tool-use permission-request; do
       hook "$policy" "$event" exec "$cmd" shell-brief

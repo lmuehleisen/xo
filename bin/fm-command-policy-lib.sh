@@ -2154,7 +2154,7 @@ analyze_segment() {
   case "$base" in
     bash|sh|zsh|dash|ksh|find|git|gh)
       read_build_executable "${E[0]}" \
-        || { no_approve "unrecognized executable ${E[0]}"; return 0; } ;;
+        || no_approve "unrecognized executable ${E[0]}" ;;
   esac
 
   # Shells and eval re-parse a string.
@@ -3088,6 +3088,10 @@ approve_plain() {  # <base>
         for ((k = 0; k < n_cp - 1; k++)); do
           source_i=${cp_sources[k]}
           [ "${EG[source_i]}" = 0 ] || { no_approve "cp of a glob"; return 0; }
+          # Directory-contents forms have no single portable child destination.
+          case "${E[source_i]}" in
+            .|..|*/.|*/..|*/) no_approve "cp directory contents require review"; return 0 ;;
+          esac
           source=$(resolve_maybe_tilde "${E[source_i]}" "${EV[source_i]}" "$CWD") \
             || { no_approve "cp of an unresolvable source"; return 0; }
           child=$(write_target_path "$dabs/${source##*/}" 0) \

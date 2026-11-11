@@ -578,6 +578,7 @@ test_executable_identity_before_special_dispatch() {
     printf '#!/usr/bin/env bash\nprintf "synthetic tool ran\\n"\n' > "$wt/$name"
     chmod +x "$wt/$name"
   done
+  ln -sf "$(command -v bash)" "$wt/bash"
   printf 'marker\n' > "$wt/sample.txt"
   while IFS= read -r cmd; do
     step=$((step + 1))
@@ -614,6 +615,22 @@ EOF
     [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
       || fail "rg preprocessors must retain the credential veto: $OUT"
   done
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/bash -c 'cat ~/.ssh/id_rsa'" "$step"
+  [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
+    || fail "an unrecognized shell path must retain nested credential holds: $OUT"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/bash -c 'touch $dir/data/t1/brief.md'" "$step"
+  [ "$RC" = 0 ] && denied "$OUT" 'own instructions' \
+    || fail "an unrecognized shell path must retain nested instruction protection: $OUT"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/git push --force" "$step"
+  [ "$RC" = 0 ] && denied "$OUT" 'refused' \
+    || fail "a path-prefixed git must retain force-push refusal: $OUT"
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/gh pr merge" "$step"
+  [ "$RC" = 0 ] && denied "$OUT" 'held for firstmate' \
+    || fail "a path-prefixed gh merge must retain mandatory escalation: $OUT"
   pass 'fm-agy-permission-policy: local tool basenames reach native review; installed tools and rg veto retain their treatment'
 }
 
@@ -621,11 +638,12 @@ test_shell_writes_resolve_effective_targets() {
   local policy dir wt cmd step=0
   policy=$(new_case shell-write-targets)
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
-  mkdir -p "$wt/copy-dest" "$wt/copy-safe" "$wt/real"
+  mkdir -p "$wt/copy-dest" "$wt/copy-safe" "$wt/real" "$wt/source/child"
   printf 'marker\n' > "$wt/sample.txt"
   printf 'ordinary\n' > "$wt/ordinary.txt"
   printf 'replacement\n' > "$wt/note.txt"
   printf 'ordinary source\n' > "$wt/brief.md"
+  printf 'replacement\n' > "$wt/source/brief.md"
   ln -s /etc/hosts "$dir/tmp/redirect-alias"
   ln -s /etc "$wt/dir-alias"
   ln -s /etc/hosts "$wt/file-alias"
@@ -645,6 +663,12 @@ cp $wt/sample.txt $wt/copy-dest/
 cp $wt/sample.txt $wt/copy-dest/sample.txt
 cp $wt/sample.txt $wt/ordinary.txt $wt/copy-dest/
 EOF
+  for cmd in "cp -r $wt/source/. $dir/data/t1/" "cp -r $wt/source/child/.. $dir/data/t1/" "cp -r $wt/source/ $dir/data/t1/"; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    [ "$RC" = 0 ] && { native_review "$OUT" "$policy" || denied "$OUT" 'held for firstmate'; } \
+      || fail "directory-contents copies must retain existing review paths: $cmd => $OUT"
+  done
   while IFS= read -r cmd; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
