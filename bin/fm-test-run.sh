@@ -592,8 +592,6 @@ tests/fm-test-tap-verify.test.sh 1000
 tests/fm-supervision-host-park.test.sh 329326
 tests/fm-supervision-host-hook.test.sh 403793
 tests/fm-supervision-host-drain.test.sh 45950
-tests/fm-read-repetition.test.sh 602
-tests/fm-read-repetition-live.test.sh 1110
 tests/fm-arm-pretool-check.test.sh 33778
 tests/fm-backend-herdr.test.sh 36331
 tests/fm-backend-t3code.test.sh 239245
@@ -958,6 +956,7 @@ tests/fm-remote-delta-read.test.sh 6412
 tests/fm-remote-doctor.test.sh 39289
 tests/fm-remote-entrypoint.test.sh 220
 tests/fm-remote-herdr-guard.test.sh 3329
+tests/fm-remote-herdr-identity.test.sh 6158
 tests/fm-remote-job-claim-reap.test.sh 2642
 tests/fm-remote-job-claim-retention.test.sh 299
 tests/fm-remote-job-launchagent.test.sh 61993
@@ -1012,6 +1011,7 @@ tests/fm-startup-network.test.sh 98879
 tests/fm-stat-shadowing.test.sh 101
 tests/fm-stow-audit.test.sh 2171
 tests/fm-stow-cascade.test.sh 3501
+tests/fm-stow-guard.test.sh 30000
 tests/fm-subagent-pretool-check.test.sh 1465
 tests/fm-supervision-events.test.sh 1455
 tests/fm-supervision-host-attended-live-e2e.test.sh 49

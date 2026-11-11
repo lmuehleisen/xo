@@ -12,6 +12,7 @@ fm_test_run \
   test_lost_pass_through_handoff \
   test_acknowledged_handoff_at_the_turn_keeps_the_pass_through_row \
   test_handoff_retry_respects_the_receiving_pane \
+  test_handoff_retry_reaches_the_receiving_herdr_pane \
   test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main \
   test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn \
   test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails \
