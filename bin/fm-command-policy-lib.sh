@@ -2042,7 +2042,7 @@ analyze_segment() {
         elif [ "$op" = '>>' ] && [ -n "$rabs" ] && [ -n "$STATUS" ] \
           && [ "$rabs" = "$(norm_abs "$STATUS")" ]; then
           :
-        elif [ -n "$rabs" ] && inside_scratch_write_roots "$rabs"; then
+        elif [ -n "$rwt" ] && inside_scratch_write_roots "$rwt"; then
           :
         elif [ "$base" = curl ] || [ "$base" = wget ]; then
           if [ -z "$rabs" ] || ! fetch_dest_ok "$rabs"; then
@@ -2151,6 +2151,12 @@ analyze_segment() {
   # Keep the credential, redirect, and fetched-code checks above authoritative.
   [ "$completion_home_binding" = 1 ] && return 0
 
+  case "$base" in
+    bash|sh|zsh|dash|ksh|find|git|gh)
+      read_build_executable "${E[0]}" \
+        || no_approve "unrecognized executable ${E[0]}" ;;
+  esac
+
   # Shells and eval re-parse a string.
   case "$base" in
     bash|sh|zsh|dash|ksh)
@@ -2236,6 +2242,7 @@ analyze_segment() {
     # than outroot-refused.
     ln) refuse_brief_operands all 0; refuse_bypass_outroot_operands last ;;
     dd|truncate|tee) refuse_brief_operands all 0; refuse_bypass_outroot_operands all ;;
+    touch|mkdir) refuse_brief_operands all 0 ;;
     patch|split) refuse_brief_operands all 0 ;;
   esac
   [ -n "$REFUSE_REASON" ] && return 0
@@ -2848,9 +2855,19 @@ js_tool() {
   return 1
 }
 
+read_build_executable() {  # <command word>: bare name or installed-tool directory
+  case "$1" in
+    */*)
+      case "${1%/*}" in
+        /bin|/usr/bin|/usr/local/bin|/opt/homebrew/bin|/usr/sbin|/sbin) return 0 ;;
+      esac
+      return 1 ;;
+  esac
+  return 0
+}
+
 approve_plain() {  # <base>
   local base=$1 k w pos=0
-  local sys_dir=${E[0]%/*}
   # The worker-contract helpers this home owns, matched by resolved path.
   if home_helper "${E[0]}" "${EV[0]}" fm-ensure-agents-md.sh; then approve_ensure_agents_md; return 0; fi
   if home_helper "${E[0]}" "${EV[0]}" fm-captain-hold.sh; then approve_captain_hold; return 0; fi
@@ -2859,15 +2876,10 @@ approve_plain() {  # <base>
   for w in fm-lint.sh fm-test-run.sh fm-doc-audience-check.sh fm-install-shellcheck.sh fm-install-actionlint.sh; do
     home_helper "${E[0]}" "${EV[0]}" "$w" && return 0
   done
-  if [ "${E[0]}" != "$base" ]; then
-    case "$sys_dir" in
-      /bin|/usr/bin|/usr/local/bin|/opt/homebrew/bin|/usr/sbin|/sbin) ;;
-      *)
-        if runner_path "${E[0]}" "${EV[0]}"; then return 0; fi
-        no_approve "unrecognized executable ${E[0]}"
-        return 0
-        ;;
-    esac
+  if ! read_build_executable "${E[0]}"; then
+    if runner_path "${E[0]}" "${EV[0]}"; then return 0; fi
+    no_approve "unrecognized executable ${E[0]}"
+    return 0
   fi
   case "$base" in
     cat|head|tail|wc|grep|egrep|fgrep|rg|ls|pwd|echo|printf|which|type|file|stat|du|df|diff|cmp|cut|tr|jq|basename|dirname|realpath|readlink|date|true|false|test|'['|nl|od|hexdump|shasum|sha1sum|sha256sum|md5|md5sum|column|comm|paste|fold|rev|strings|whoami|uname|id|sleep|seq|ps|pgrep|shellcheck|actionlint)
@@ -3057,18 +3069,51 @@ approve_plain() {  # <base>
       return 0 ;;
     cp)
       local n_cp=0 dest='' dest_v=0 dabs
+      local -a cp_sources=()
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
         case "$w" in
           -r|-R|-p|-a|-v|-n|--recursive|--preserve*|--no-clobber) continue ;;
           -*) no_approve "cp option $w"; return 0 ;;
         esac
+        cp_sources[${#cp_sources[@]}]=$k
         dest=$w; dest_v=${EV[k]}; n_cp=$((n_cp + 1))
       done
       [ "$n_cp" -ge 2 ] || { no_approve "cp form"; return 0; }
-      dabs=$(resolve_maybe_tilde "$dest" "$dest_v" "$CWD") \
+      dabs=$(write_target_path "$dest" "$dest_v") \
         || { no_approve "cp of an unresolvable destination"; return 0; }
       write_dest_ok "$dabs" || { no_approve "cp outside the task write roots"; return 0; }
+      if [ -d "$dabs" ]; then
+        local source_i source child
+        for ((k = 0; k < n_cp - 1; k++)); do
+          source_i=${cp_sources[k]}
+          [ "${EG[source_i]}" = 0 ] || { no_approve "cp of a glob"; return 0; }
+          # Directory-contents forms have no single portable child destination.
+          case "${E[source_i]}" in
+            .|..|*/.|*/..|*/) no_approve "cp directory contents require review"; return 0 ;;
+          esac
+          source=$(resolve_maybe_tilde "${E[source_i]}" "${EV[source_i]}" "$CWD") \
+            || { no_approve "cp of an unresolvable source"; return 0; }
+          child=$(write_target_path "$dabs/${source##*/}" 0) \
+            || { no_approve "cp of an unresolvable destination"; return 0; }
+          if brief_protected "$child"; then
+            refuse "writing this task's own instructions ($child) is refused by firstmate policy"
+            return 0
+          fi
+          if protected_target "$child"; then
+            refuse "writing firstmate's own permission wiring ($child) is refused by firstmate policy"
+            return 0
+          fi
+          if ! write_dest_ok "$child"; then
+            if [ "${FM_POLICY_BYPASS:-0}" = 1 ]; then
+              refuse "cp writes outside the task write roots ($child) is refused under bypass"
+            else
+              no_approve "cp outside the task write roots"
+            fi
+            return 0
+          fi
+        done
+      fi
       return 0 ;;
     cd|pushd)
       if [ "${#E[@]}" -ge 2 ] && [ "${EV[1]}" = 0 ] && [ "${EG[1]}" = 0 ] && [ "${E[1]}" != - ]; then
@@ -3118,7 +3163,7 @@ approve_plain() {  # <base>
         esac
         [ "${EG[k]}" = 0 ] || { no_approve "$base of a glob"; return 0; }
         local abs
-        abs=$(resolve_maybe_tilde "$w" "${EV[k]}" "$CWD") \
+        abs=$(write_target_path "$w" "${EV[k]}") \
           || { no_approve "$base of an unresolvable path"; return 0; }
         if [ "$base" = mkdir ] && inbox_ack_path "$w" "${EV[k]}" "${EG[k]}" handled; then continue; fi
         if ! write_dest_ok "$abs"; then
@@ -3182,6 +3227,8 @@ approve_plain() {  # <base>
         uv:run|poetry:run|pipenv:run|bundle:exec)
           local -a inner=("${E[@]:2}")
           [ "${#inner[@]}" -gt 0 ] || { no_approve "$base ${E[1]}"; return 0; }
+          read_build_executable "${inner[0]}" \
+            || { no_approve "unrecognized executable ${inner[0]}"; return 0; }
           case "${inner[0]##*/}" in
             pytest|py.test|mypy|ruff|rspec|rake|tsc|eslint|prettier|vitest|jest) ;;
             python|python3)

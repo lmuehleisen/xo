@@ -2931,6 +2931,138 @@ EOF
   pass "fm-devin-permission-policy: pre-tool-use refuses the git forms a pre-allowed prefix could run unreviewed, each with its fix"
 }
 
+test_executable_identity_before_special_dispatch() {
+  local policy dir wt name cmd id=0
+  policy=$(new_case executable-identity)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  for name in git bash find gh pytest head; do
+    printf '#!/usr/bin/env bash\nprintf "synthetic tool ran\\n"\n' > "$wt/$name"
+    chmod +x "$wt/$name"
+  done
+  ln -sf "$(command -v bash)" "$wt/bash"
+  printf 'marker\n' > "$wt/sample.txt"
+  while IFS= read -r cmd; do
+    id=$((id + 1))
+    hook "$policy" pre-tool-use exec "$cmd" "identity-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "a local executable must reach review, not refusal: $OUT"
+    hook "$policy" permission-request exec "$cmd" "identity-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/identity-$id.pending" ] \
+      || fail "a local tool basename must not confer static approval: $cmd => $OUT"
+  done <<EOF
+./git status
+$wt/git status
+$wt/bash -c pwd
+$wt/find .
+$wt/gh pr view
+uv run $wt/pytest
+$wt/head sample.txt
+EOF
+  while IFS= read -r cmd; do
+    hook "$policy" permission-request exec "$cmd" identity-control
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "installed tools and ordinary package runners must retain approval: $cmd => $OUT"
+  done <<'EOF'
+/usr/bin/git status
+/usr/bin/bash -c pwd
+/usr/bin/find .
+/usr/bin/gh pr view
+/usr/bin/head sample.txt
+uv run pytest
+uv run /usr/bin/pytest
+rg marker sample.txt
+EOF
+  for cmd in 'rg --pre ./helper' 'rg --pre ./helper marker sample.txt'; do
+    hook "$policy" pre-tool-use exec "$cmd" identity-preprocessor
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "rg preprocessors must retain the credential veto: $OUT"
+  done
+  for cmd in "$wt/bash -c 'cat ~/.ssh/id_rsa'" "$wt/bash -c 'touch $dir/data/t1/brief.md'"; do
+    hook "$policy" pre-tool-use exec "$cmd" identity-nested
+    [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+      || fail "unrecognized shell paths must retain nested credential and instruction checks: $OUT"
+  done
+  hook "$policy" pre-tool-use exec "$wt/git push --force" identity-force
+  [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+    || fail "a path-prefixed git must retain force-push refusal: $OUT"
+  hook "$policy" permission-request exec "$wt/gh pr merge" identity-merge
+  if [ "$RC" != 0 ] || [ -n "$OUT" ] \
+    || ! tail -1 "$dir/state/devin-permission-log.jsonl" | jq -e '.decision == "escalate" and .decider == "policy"' >/dev/null; then
+    fail "a path-prefixed gh merge must retain mandatory policy escalation: $OUT"
+  fi
+  pass 'fm-devin-permission-policy: local tool basenames reach review; installed tools and rg veto retain their treatment'
+}
+
+test_shell_writes_resolve_effective_targets() {
+  local policy dir wt cmd event id=0
+  policy=$(new_case shell-write-targets)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/copy-dest" "$wt/copy-safe" "$wt/real" "$wt/source/child"
+  printf 'marker\n' > "$wt/sample.txt"
+  printf 'ordinary\n' > "$wt/ordinary.txt"
+  printf 'replacement\n' > "$wt/note.txt"
+  printf 'ordinary source\n' > "$wt/brief.md"
+  printf 'replacement\n' > "$wt/source/brief.md"
+  ln -s /etc/hosts "$dir/tmp/redirect-alias"
+  ln -s /etc "$wt/dir-alias"
+  ln -s /etc/hosts "$wt/file-alias"
+  ln -s /etc/hosts "$wt/copy-dest/sample.txt"
+  ln -s "$dir/data/t1/brief.md" "$dir/data/t1/note.txt"
+  ln -s "$wt/real" "$wt/in-link"
+  while IFS= read -r cmd; do
+    id=$((id + 1))
+    hook "$policy" pre-tool-use exec "$cmd" "shell-target-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "an unsafe shell target must retain review: $OUT"
+    hook "$policy" permission-request exec "$cmd" "shell-target-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/shell-target-$id.pending" ] \
+      || fail "unsafe or unresolved shell write targets must escalate: $cmd => $OUT"
+  done <<EOF
+printf marker > $dir/tmp/redirect-alias
+mkdir -p $wt/dir-alias/new-dir
+touch $wt/file-alias
+cp $wt/sample.txt $wt/copy-dest/
+cp $wt/sample.txt $wt/copy-dest/sample.txt
+cp $wt/sample.txt $wt/ordinary.txt $wt/copy-dest/
+EOF
+  for cmd in "cp -r $wt/source/. $dir/data/t1/" "cp -r $wt/source/child/.. $dir/data/t1/" "cp -r $wt/source/ $dir/data/t1/"; do
+    id=$((id + 1))
+    hook "$policy" pre-tool-use exec "$cmd" "shell-contents-$id"
+    { [ "$RC" = 0 ] && [ -z "$OUT" ]; } \
+      || { [ "$RC" = 2 ] && printf '%s' "$OUT" | jq -e '.decision == "block" and (.reason | contains("credential access"))' >/dev/null; } \
+      || fail "directory-contents copies must preserve existing credential review: $OUT"
+    hook "$policy" permission-request exec "$cmd" "shell-contents-$id"
+    [ "$RC" = 0 ] && [ -z "$OUT" ] && [ -f "$dir/state/t1.devin-permission-pending/shell-contents-$id.pending" ] \
+      || fail "directory-contents copies must escalate rather than receive static approval: $OUT"
+  done
+  while IFS= read -r cmd; do
+    for event in pre-tool-use permission-request; do
+      hook "$policy" "$event" exec "$cmd" shell-brief
+      [ "$RC" = 2 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = block ] \
+        || fail "effective protected targets must use the existing instruction refusal: $cmd => $OUT"
+    done
+  done <<EOF
+touch $dir/data/t1/brief.md
+mkdir -p $dir/data/t1/brief.md
+cp $wt/brief.md $dir/data/t1/
+cp $wt/note.txt $dir/data/t1/
+cp $wt/note.txt $wt/ordinary.txt $dir/data/t1/
+EOF
+  while IFS= read -r cmd; do
+    hook "$policy" permission-request exec "$cmd" shell-write-control
+    [ "$RC" = 0 ] && [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] \
+      || fail "ordinary in-root shell writes must stay approved: $cmd => $OUT"
+  done <<EOF
+printf marker > $dir/tmp/plain.txt
+mkdir -p $wt/real/new-dir
+mkdir -p $wt/in-link/new-dir
+touch $dir/data/t1/notes.txt
+touch $wt/in-link/new.txt
+cp $wt/sample.txt $wt/copy-safe/
+cp $wt/sample.txt $wt/ordinary.txt $wt/copy-safe/
+cp $dir/data/t1/brief.md $wt/copy-safe/
+EOF
+  pass 'fm-devin-permission-policy: shell writers check physical targets and every effective copy destination'
+}
+
 # The native write check measures a target where it physically resolves, so
 # a link inside the worktree cannot carry an approved write outside the roots.
 test_native_writes_resolve_symlinks() {
@@ -3012,6 +3144,8 @@ test_refusal_list
 test_refusal_leaves_safe_commands_alone
 test_recursive_rm_resolves_symlinked_components
 test_preallowed_git_forms_are_refused_before_they_run
+test_executable_identity_before_special_dispatch
+test_shell_writes_resolve_effective_targets
 test_native_writes_resolve_symlinks
 test_apply_patch_write_targets
 test_apply_patch_executor_paths

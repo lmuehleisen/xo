@@ -570,6 +570,146 @@ test_current_native_file_contract() {
   pass 'fm-agy-permission-policy: current native Path tools preserve credential, physical-root, wiring and absolute-target guards'
 }
 
+test_executable_identity_before_special_dispatch() {
+  local policy dir wt name cmd step=0
+  policy=$(new_case executable-identity)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  for name in git bash find gh pytest head; do
+    printf '#!/usr/bin/env bash\nprintf "synthetic tool ran\\n"\n' > "$wt/$name"
+    chmod +x "$wt/$name"
+  done
+  ln -sf "$(command -v bash)" "$wt/bash"
+  printf 'marker\n' > "$wt/sample.txt"
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! native_review "$OUT" "$policy"; then
+      fail "a local tool basename must reach native review: $cmd => $OUT"
+    fi
+  done <<EOF
+./git status
+$wt/git status
+$wt/bash -c pwd
+$wt/find .
+$wt/gh pr view
+uv run $wt/pytest
+$wt/head sample.txt
+EOF
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! statically_approved "$OUT" "$policy"; then
+      fail "installed tools and ordinary package runners must retain static approval: $cmd => $OUT"
+    fi
+  done <<'EOF'
+/usr/bin/git status
+/usr/bin/bash -c pwd
+/usr/bin/find .
+/usr/bin/gh pr view
+/usr/bin/head sample.txt
+uv run pytest
+uv run /usr/bin/pytest
+rg marker sample.txt
+EOF
+  for cmd in 'rg --pre ./helper' 'rg --pre ./helper marker sample.txt'; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! denied "$OUT" 'held for firstmate'; then
+      fail "rg preprocessors must retain the credential veto: $OUT"
+    fi
+  done
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/bash -c 'cat ~/.ssh/id_rsa'" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'held for firstmate'; then
+    fail "an unrecognized shell path must retain nested credential holds: $OUT"
+  fi
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/bash -c 'touch $dir/data/t1/brief.md'" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'own instructions'; then
+    fail "an unrecognized shell path must retain nested instruction protection: $OUT"
+  fi
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/git push --force" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'refused'; then
+    fail "a path-prefixed git must retain force-push refusal: $OUT"
+  fi
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command "$wt/gh pr merge" "$step"
+  if [ "$RC" != 0 ] || ! denied "$OUT" 'held for firstmate'; then
+    fail "a path-prefixed gh merge must retain mandatory escalation: $OUT"
+  fi
+  pass 'fm-agy-permission-policy: local tool basenames reach native review; installed tools and rg veto retain their treatment'
+}
+
+test_shell_writes_resolve_effective_targets() {
+  local policy dir wt cmd step=0
+  policy=$(new_case shell-write-targets)
+  dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  mkdir -p "$wt/copy-dest" "$wt/copy-safe" "$wt/real" "$wt/source/child"
+  printf 'marker\n' > "$wt/sample.txt"
+  printf 'ordinary\n' > "$wt/ordinary.txt"
+  printf 'replacement\n' > "$wt/note.txt"
+  printf 'ordinary source\n' > "$wt/brief.md"
+  printf 'replacement\n' > "$wt/source/brief.md"
+  ln -s /etc/hosts "$dir/tmp/redirect-alias"
+  ln -s /etc "$wt/dir-alias"
+  ln -s /etc/hosts "$wt/file-alias"
+  ln -s /etc/hosts "$wt/copy-dest/sample.txt"
+  ln -s "$dir/data/t1/brief.md" "$dir/data/t1/note.txt"
+  ln -s "$wt/real" "$wt/in-link"
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! denied "$OUT" 'outside the task write roots'; then
+      fail "physical shell targets must use the existing out-of-root constraint: $cmd => $OUT"
+    fi
+  done <<EOF
+printf marker > $dir/tmp/redirect-alias
+mkdir -p $wt/dir-alias/new-dir
+touch $wt/file-alias
+cp $wt/sample.txt $wt/copy-dest/
+cp $wt/sample.txt $wt/copy-dest/sample.txt
+cp $wt/sample.txt $wt/ordinary.txt $wt/copy-dest/
+EOF
+  for cmd in "cp -r $wt/source/. $dir/data/t1/" "cp -r $wt/source/child/.. $dir/data/t1/" "cp -r $wt/source/ $dir/data/t1/"; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! { native_review "$OUT" "$policy" || denied "$OUT" 'held for firstmate'; }; then
+      fail "directory-contents copies must retain existing review paths: $cmd => $OUT"
+    fi
+  done
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! denied "$OUT" 'own instructions'; then
+      fail "effective protected targets must use the existing instruction constraint: $cmd => $OUT"
+    fi
+  done <<EOF
+touch $dir/data/t1/brief.md
+mkdir -p $dir/data/t1/brief.md
+cp $wt/brief.md $dir/data/t1/
+cp $wt/note.txt $dir/data/t1/
+cp $wt/note.txt $wt/ordinary.txt $dir/data/t1/
+EOF
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    if [ "$RC" != 0 ] || ! statically_approved "$OUT" "$policy"; then
+      fail "ordinary in-root shell writes must retain static approval: $cmd => $OUT"
+    fi
+  done <<EOF
+printf marker > $dir/tmp/plain.txt
+mkdir -p $wt/real/new-dir
+mkdir -p $wt/in-link/new-dir
+touch $dir/data/t1/notes.txt
+touch $wt/in-link/new.txt
+cp $wt/sample.txt $wt/copy-safe/
+cp $wt/sample.txt $wt/ordinary.txt $wt/copy-safe/
+cp $dir/data/t1/brief.md $wt/copy-safe/
+EOF
+  pass 'fm-agy-permission-policy: shell writers check physical targets and every effective copy destination'
+}
+
 test_file_tool_writes_resolve_physically() {
   local policy dir wt
   policy=$(new_case symlink)
@@ -1684,6 +1824,8 @@ test_refusal_list_denies
 test_refusal_leaves_safe_commands_alone
 test_non_command_tool_mapping
 test_current_native_file_contract
+test_executable_identity_before_special_dispatch
+test_shell_writes_resolve_effective_targets
 test_file_tool_writes_resolve_physically
 test_fetch_dest_writes_resolve_physically
 test_file_tool_protected_and_config_paths
