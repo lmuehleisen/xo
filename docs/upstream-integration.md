@@ -67,4 +67,5 @@ This page is the maintainer checklist for one integration run; the fork's invari
    The body may use up to 80 lines and 6000 characters when the publish gate verifies the integration ancestry and the recorded source commit; see `bin/fm-publish-gate.sh policy` for the verification and fallback limits.
    Keep it a concise technical record, with no machine names, runner details, logs, or full hunk audit; the publish judge still reviews the whole description.
    Before reporting ready, wait for CI and review bots, read their inline threads and review bodies, and reconcile the final head, body, and hunk inventory after fixes.
+   Repeat the fork-only path scan on the final committed head and account for every newly uncovered path in the ledger or remove it.
    Reply to inline review threads through the REST `pulls/<n>/comments/<id>/replies` endpoint; the publish guard refuses the GraphQL reply mutation.
