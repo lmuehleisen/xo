@@ -892,7 +892,7 @@ test_local_exclusion_list_covers_every_no_external_sources_code() {
     esac
   done < <(printf '%s\n' "$out" | sed -n 's/.*\[\(SC[0-9][0-9]*\)\].*/\1/p' | LC_ALL=C sort -u)
   [ -z "$unexpected" ] \
-    || fail "no-external-sources pass emitted codes outside the local exclusion list: $unexpected"
+    || fail "no-external-sources pass emitted codes outside the local exclusion list: $unexpected"$'\n'"$out"
   pass "local exclusion list covers every no-external-sources ShellCheck code"
 }
 

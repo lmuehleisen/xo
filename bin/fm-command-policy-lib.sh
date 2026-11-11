@@ -392,22 +392,22 @@ log_record() {  # <decision> <decider> <reason> [input-override]
   case "$1:$2" in
     refuse:*) rule=refusal ;;
     escalate:policy)
-      if [ -n "${CREDENTIAL_HOLD:-}" ]; then rule=credential-hold
-      elif [ -n "${NEVER_APPROVE:-}" ]; then rule=outward-action
-      else rule=scope-hold; fi ;;
-    *:judge) rule=first-judge ;;
-    *:cache) rule=approval-cache ;;
-    *:prompt) rule=prompt-completion ;;
-    *:firstmate) rule=held-call ;;
-    *:native) rule=native-auto ;;
+      if [ -n "${CREDENTIAL_HOLD:-}" ]; then rule='credential-hold'
+      elif [ -n "${NEVER_APPROVE:-}" ]; then rule='outward-action'
+      else rule='scope-hold'; fi ;;
+    *:judge) rule='first-judge' ;;
+    *:cache) rule='approval-cache' ;;
+    *:prompt) rule='prompt-completion' ;;
+    *:firstmate) rule='held-call' ;;
+    *:native) rule='native-auto' ;;
   esac
   if [ -z "$provenance" ]; then
     case "$2" in
-      policy) provenance=static-policy ;;
-      judge) provenance=model-judge ;;
+      policy) provenance='static-policy' ;;
+      judge) provenance='model-judge' ;;
       cache) provenance=${CACHE_PROVENANCE:-unattributed} ;;
-      firstmate) provenance=firstmate-control-plane ;;
-      native) provenance=native-review ;;
+      firstmate) provenance='firstmate-control-plane' ;;
+      native) provenance='native-review' ;;
       *) provenance=unattributed ;;
     esac
   fi
@@ -3744,7 +3744,7 @@ judge_probe() {  # <static-class>
 # The script-context/key contract is in the header. Only approvals are stored;
 # adapters check refusals and never-approve before a reusable cache hit.
 cache_key() {  # [shape] - exact by default, including pending escalation keys
-  local h='' input=$CACHE_INPUT scope=exact authority='' targets=$CREDENTIAL_CONTEXT file digest worktree cwd
+  local h='' input=$CACHE_INPUT scope=exact authority='' target_context=$CREDENTIAL_CONTEXT file digest worktree cwd
   [ -n "$CACHE_DIR" ] && [ -n "$HASH_CMD" ] && [ -n "$TOOL" ] && [ -n "$POLICY_REVISION" ] || return 1
   [ -n "$POLICY" ] && [ -n "$BRIEF" ] || return 1
   # Hash operator-owned authority files, never operand contents. Missing brief
@@ -3774,7 +3774,7 @@ cache_key() {  # [shape] - exact by default, including pending escalation keys
         --arg field "$FM_POLICY_COMMAND_FIELD" --arg cmd "$CMD" --arg shape "$JUDGE_SCRIPT_SHAPE" \
         'if .[$field] == $cmd then .[$field] = $shape else error("command field mismatch") end' 2>/dev/null); then
         scope=shape
-        targets=$JUDGE_SCRIPT_HASHES
+        target_context=$JUDGE_SCRIPT_HASHES
       else
         input=$CACHE_INPUT
       fi
@@ -3782,7 +3782,7 @@ cache_key() {  # [shape] - exact by default, including pending escalation keys
     input="$input"$'\n'"script-$scope:$JUDGE_SCRIPT_HASHES"
   fi
   h=$(printf '%s\0' "$POLICY_REVISION" "$authority" "$GRANTS_SHA" "$WORKTREE" "$worktree" \
-    "$cwd" "$(pwd -P)" "$targets" "$TOOL" "$input" | $HASH_CMD 2>/dev/null) || return 1
+    "$cwd" "$(pwd -P)" "$target_context" "$TOOL" "$input" | $HASH_CMD 2>/dev/null) || return 1
   h=${h%% *}
   case "$h" in ''|*[!0-9a-f]*) return 1 ;; esac
   printf '%s' "${h:0:64}"
@@ -3836,11 +3836,11 @@ close_pending() {  # <marker-file> <decision> <resolved-note> [decider]
     CREDENTIAL_CATEGORY=$(printf '%s' "$context" | jq -r '.category // "ordinary"')
   fi
   if [ "${4:-}" = firstmate ]; then
-    APPROVAL_PROVENANCE=firstmate-control-plane
+    APPROVAL_PROVENANCE='firstmate-control-plane'
   elif [ "$2" = approved-at-prompt ] && [ -f "$marker.firstmate" ]; then
     digest=$($HASH_CMD "$marker" 2>/dev/null) || digest=''
     IFS= read -r marked < "$marker.firstmate" || marked=''
-    [ -z "$digest" ] || [ "$digest" != "$marked" ] || APPROVAL_PROVENANCE=firstmate-control-plane
+    [ -z "$digest" ] || [ "$digest" != "$marked" ] || APPROVAL_PROVENANCE='firstmate-control-plane'
   fi
   rm -f "$marker" "$marker.firstmate"
   [ -n "$key" ] || return 0
