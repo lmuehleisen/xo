@@ -1838,6 +1838,7 @@ test_one_shot_context() {
       policy) jq '.judge_timeout="7"' "$policy" > "$policy.new" && mv "$policy.new" "$policy" ;;
       brief) printf '\nChanged task instructions.\n' >> "$dir/data/t1/brief.md" ;;
       grants)
+        # shellcheck disable=SC2016 # Literal Markdown fences in the synthetic brief.
         printf '\n```firstmate-grants\n{"write_dirs":["%s"]}\n```\n' "$dir/extra" >> "$dir/data/t1/brief.md"
         "$POLICY_SH" repin-grants "$policy" </dev/null >/dev/null || fail 'fixture grants must repin'
         ;;
