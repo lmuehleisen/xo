@@ -769,8 +769,14 @@ test_gemini_hooks_semantic_lifecycle() {
   local rec id=busy-gm-1 out state settings
   rec=$(make_spawn_case gemini-lifecycle gemini "$id")
   read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  mkdir -p "$HOME_DIR/user-home/.gemini/antigravity-cli"
+  printf '%s\n' '{"sentinel":true}' > "$HOME_DIR/user-home/.gemini/settings.json"
+  printf '%s\n' '{"sentinel":true}' > "$HOME_DIR/user-home/.gemini/antigravity-cli/settings.json"
+  out=$(XDG_CONFIG_HOME="$HOME_DIR/user-home" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
   expect_code 0 $? "gemini spawn should succeed: $out"
+  for global in "$HOME_DIR/user-home/.gemini/settings.json" "$HOME_DIR/user-home/.gemini/antigravity-cli/settings.json"; do
+    [ "$(cat "$global")" = '{"sentinel":true}' ] || fail "gemini spawn changed global settings: $global"
+  done
   state="$HOME_DIR/state"
   settings="$state/$id.gemini-settings.json"
   assert_present "$settings" "gemini spawn did not write hook settings"

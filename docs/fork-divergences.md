@@ -121,7 +121,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: never write the captain's global `~/.gemini` settings.
 - Class: intended.
 - Seam: upstream's `bin/fm-agy-trust.sh`, which pre-registers worktrees in `~/.gemini/antigravity-cli/settings.json`, is deleted.
-- Guard: none.
+- Guard: `tests/fm-spawn-prelaunch-rollback.test.sh` and `tests/fm-busy-adapter-wiring.test.sh` exercise agy and gemini spawn settings.
 - Upstream: pre-registers each agy worktree in the global settings file.
 
 ### away-merge-grants
@@ -334,7 +334,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: inode-only identity where upstream admits a gap.
 - Class: carried.
 - Seam: PR poll identity in `bin/fm-pr-lib.sh` and `bin/fm-watch.sh` (shared); a small remainder after the last integration took upstream's stricter rule elsewhere.
-- Guard: none.
+- Guard: `tests/fm-pr-check-security.test.sh` exercises poll identity across device renumbering and replacement.
 - Upstream: drop once upstream closes the gap.
 
 ### doorbell-stranded-enter

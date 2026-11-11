@@ -3085,6 +3085,13 @@ renumber_recorded_device() {  # <file> <line>...
   rm -f "$tmp"
 }
 
+test_poll_inode_identity_comparison() {
+  fm_pr_identity_same 7:123 8:123 || fail "device renumbering changed inode identity"
+  ! fm_pr_identity_same 7:123 7:124 || fail "different inode matched"
+  ! fm_pr_identity_same invalid 8:123 || fail "malformed identity matched"
+  pass "poll identity compares valid identities by inode"
+}
+
 test_device_renumbering_keeps_the_poll_bound() {
   local dir state reg before after live
   dir=$(make_case device-renumbered)
@@ -5791,5 +5798,6 @@ test_teardown_removes_poll_artifacts
 test_fm_captain_hold_complete_does_not_disarm_an_armed_poll
 test_fm_control_relaunch_does_not_disarm_an_armed_poll
 test_armed_poll_still_refuses_a_tampered_binding
+test_poll_inode_identity_comparison
 test_device_renumbering_keeps_the_poll_bound
 test_watcher_names_a_mismatched_poll_plainly
