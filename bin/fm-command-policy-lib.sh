@@ -34,6 +34,14 @@
 #   cache, described below), tool_slug, close_pending (retires a pending
 #   escalation marker with a resolved status line). Pending markers live in
 #   <policy-file minus .json>-pending/ and the cache in -cache/ beside it.
+#   Cache line one remains the reason; line two retains approval provenance.
+#   Pending lines one-three remain key/summary/cache-key, line four is reserved
+#   for the adapter's class, and line five snapshots decision metadata.
+#   log_record retains its existing fields and adds rule_id (deciding route or
+#   comma-separated contributing static branches), policy_revision (adapter/library and policy
+#   content digest), credential_category (metadata only), and approval_provenance
+#   (static-policy, model-judge, firstmate-control-plane, native-review, or
+#   unattributed). Cache hits retain their original approval provenance.
 #
 #   Script context: only a plain script invocation, optionally through a known
 #   plain_interpreter, qualifies. The tokenizer must find only literal words:
@@ -63,7 +71,9 @@
 #   operands remain data and cannot change the authorized effects.
 #   Only judge approvals use this shape scope; escalation approvals remain
 #   exact for eligible calls. Other plain tool calls retain exact-input keys.
-#   Script keys also bind the full brief and recorded grants digest. The key
+#   All keys bind the policy/source revision, full brief and grants, effective
+#   cwd/worktree and inspected resolved targets. Script shape keys retain only
+#   script identity, since their later operands are deliberately data. The key
 #   is captured before judgment; changed authority rejects the approval, and
 #   storing it never recomputes a key under newer authority.
 #
@@ -349,6 +359,21 @@ if command -v shasum >/dev/null 2>&1; then HASH_CMD='shasum -a 256'
 elif command -v sha256sum >/dev/null 2>&1; then HASH_CMD='sha256sum'
 fi
 
+policy_revision() {
+  (set -o pipefail
+    { cat -- "$0" "$CREDENTIAL_LIB_DIR/fm-command-policy-lib.sh" \
+      "$CREDENTIAL_LIB_DIR/fm-credential-access-lib.sh" "$CREDENTIAL_LIB_DIR/fm-credential-access.mjs" \
+      "$CREDENTIAL_LIB_DIR/fm-judge-tier-lib.sh" || exit 1
+      [ ! -r "${POLICY:-}" ] || cat -- "$POLICY"
+    } | $HASH_CMD) 2>/dev/null
+}
+POLICY_REVISION=$(policy_revision) || POLICY_REVISION=''
+POLICY_REVISION=${POLICY_REVISION%% *}
+STATIC_RULE_IDS='' APPROVAL_PROVENANCE=''
+policy_rule() {  # <stable static branch id>; compound calls retain every branch
+  case ",$STATIC_RULE_IDS," in *",$1,"*) ;; *) STATIC_RULE_IDS="${STATIC_RULE_IDS:+$STATIC_RULE_IDS,}$1" ;; esac
+}
+
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 input_summary() {
@@ -363,14 +388,38 @@ input_summary() {
 
 log_record() {  # <decision> <decider> <reason> [input-override]
   [ -n "$LOG" ] || return 0
-  local input
+  local input rule=${STATIC_RULE_IDS:-unclassified} provenance=${APPROVAL_PROVENANCE:-}
+  case "$1:$2" in
+    refuse:*) rule=refusal ;;
+    escalate:policy)
+      if [ -n "${CREDENTIAL_HOLD:-}" ]; then rule='credential-hold'
+      elif [ -n "${NEVER_APPROVE:-}" ]; then rule='outward-action'
+      else rule='scope-hold'; fi ;;
+    *:judge) rule='first-judge' ;;
+    *:cache) rule='approval-cache' ;;
+    *:prompt) rule='prompt-completion' ;;
+    *:firstmate) rule='held-call' ;;
+    *:native) rule='native-auto' ;;
+  esac
+  if [ -z "$provenance" ]; then
+    case "$2" in
+      policy) provenance='static-policy' ;;
+      judge) provenance='model-judge' ;;
+      cache) provenance=${CACHE_PROVENANCE:-unattributed} ;;
+      firstmate) provenance='firstmate-control-plane' ;;
+      native) provenance='native-review' ;;
+      *) provenance=unattributed ;;
+    esac
+  fi
   if [ $# -ge 4 ]; then input=$4; else input=$(input_summary); fi
   jq -nc --arg ts "$(now_utc)" --arg task "$TASK" --arg event "$EVENT" \
     --arg tool "$TOOL" --arg id "$TOOL_USE_ID" --arg session "$SESSION_ID" --arg gen "${GEN-}" \
     --arg input "$input" --arg decision "$1" --arg decider "$2" --arg reason "$3" \
+    --arg rule "$rule" --arg revision "$POLICY_REVISION" --arg category "$CREDENTIAL_CATEGORY" \
+    --arg provenance "$provenance" \
     --argjson elapsed "${JUDGE_ELAPSED_SECONDS:-0}" --argjson attempts "${JUDGE_ATTEMPTS:-0}" \
     --argjson timeouts "${JUDGE_TIMEOUTS:-0}" \
-    '{ts:$ts, task:$task, event:$event, tool:$tool, tool_use_id:$id, session_id:$session, gen:$gen, input:$input, decision:$decision, decider:$decider, reason:$reason, judge_elapsed_seconds:$elapsed, judge_attempts:$attempts, judge_timeouts:$timeouts}' \
+    '{ts:$ts, task:$task, event:$event, tool:$tool, tool_use_id:$id, session_id:$session, gen:$gen, input:$input, decision:$decision, decider:$decider, reason:$reason, rule_id:$rule, policy_revision:$revision, credential_category:$category, approval_provenance:$provenance, judge_elapsed_seconds:$elapsed, judge_attempts:$attempts, judge_timeouts:$timeouts}' \
     >> "$LOG" 2>/dev/null || true
 }
 
@@ -1316,6 +1365,10 @@ brief_protected_or_parent() {  # <abs>
 # covers everything inside it.
 protected_target() {  # <abs>
   local b
+  # The new prompt-attribution marker is operator wiring, even before it exists.
+  if [ -n "${PENDING_DIR:-}" ]; then
+    case "$1" in "$(norm_abs "$PENDING_DIR")"/*.pending.firstmate) return 0 ;; esac
+  fi
   load_protected_briefs
   brief_protected "$1" && return 0
   while IFS= read -r b; do
@@ -2038,12 +2091,12 @@ analyze_segment() {
           return 0
         fi
         if [ "$tgt" = /dev/null ] && [ "$tv" = 0 ]; then
-          :
+          policy_rule redirect-null
         elif [ "$op" = '>>' ] && [ -n "$rabs" ] && [ -n "$STATUS" ] \
           && [ "$rabs" = "$(norm_abs "$STATUS")" ]; then
-          :
+          policy_rule status-append
         elif [ -n "$rwt" ] && inside_scratch_write_roots "$rwt"; then
-          :
+          policy_rule redirect-task
         elif [ "$base" = curl ] || [ "$base" = wget ]; then
           if [ -z "$rabs" ] || ! fetch_dest_ok "$rabs"; then
             never_approve "$base output redirected outside the task write roots ($tgt)"
@@ -2085,7 +2138,7 @@ analyze_segment() {
           && word_emits_fetch "${SWINNER[1]-0}" "${SWSUBS[1]-0}" \
           && never_approve "sources a fetched page"
       fi
-      if [ "$CREDENTIAL_LAST_CATEGORY" = authorized-load ]; then return 0; fi
+      if [ "$CREDENTIAL_LAST_CATEGORY" = authorized-load ]; then policy_rule credential-source; return 0; fi
       no_approve "sourcing ${SW[1]-a file} is not granted by the task instructions"
       return 0 ;;
   esac
@@ -2149,7 +2202,7 @@ analyze_segment() {
 
   # The completion exception has already checked the full literal segment.
   # Keep the credential, redirect, and fetched-code checks above authoritative.
-  [ "$completion_home_binding" = 1 ] && return 0
+  if [ "$completion_home_binding" = 1 ]; then policy_rule task-completion; return 0; fi
 
   case "$base" in
     bash|sh|zsh|dash|ksh|find|git|gh)
@@ -2160,6 +2213,7 @@ analyze_segment() {
   # Shells and eval re-parse a string.
   case "$base" in
     bash|sh|zsh|dash|ksh)
+      policy_rule shell
       local ci=1 has_c=0 syntax=0
       while [ "$ci" -lt "$count" ]; do
         case "${E[ci]}" in
@@ -2200,6 +2254,7 @@ analyze_segment() {
 
   # find -exec bodies are commands too.
   if [ "$base" = find ]; then
+    policy_rule find-read
     local fi_=1 body_start=-1
     local -a body=()
     for ((fi_ = 1; fi_ < count; fi_++)); do
@@ -2233,7 +2288,7 @@ analyze_segment() {
   # No statically visible writer may touch this worker's own instructions or
   # the adapter's protected wiring, and under a bypass launch no statically
   # visible writer may reach outside the task write roots at all.
-  if [ "$base" = mv ] && inbox_ack_move; then return 0; fi
+  if [ "$base" = mv ] && inbox_ack_move; then policy_rule inbox-ack; return 0; fi
   case "$base" in
     cp|install|rsync) refuse_brief_operands last 0; refuse_bypass_outroot_operands last ;;
     mv|rm|shred) refuse_brief_operands all 1; refuse_bypass_outroot_operands all ;;
@@ -2262,13 +2317,14 @@ analyze_segment() {
 
   # The task's own declared write pass, whether run directly or through a
   # plain interpreter word.
-  granted_script_invocation && return 0
+  if granted_script_invocation; then policy_rule granted-script; return 0; fi
 
   case "$base" in
     git) analyze_git; return 0 ;;
     gh) analyze_gh; return 0 ;;
     rm) analyze_rm; return 0 ;;
     set)
+      policy_rule shell-options
       # Only shell option words; a positional would set $1... for later words.
       local si
       for ((si = 1; si < count; si++)); do
@@ -2301,6 +2357,7 @@ rm_root_of() {  # <abs>
 }
 
 analyze_rm() {
+  policy_rule task-remove
   local k recursive=0 opts_done=0 w abs
   local -a targets=() tv=() tg=()
   for ((k = 1; k < ${#E[@]}; k++)); do
@@ -2384,6 +2441,7 @@ analyze_git() {
   for ((a = first; a < ${#E[@]}; a++)); do args[${#args[@]}]=${E[a]}; done
 
   if [ "$sub" = push ]; then
+    policy_rule git-push
     # Git accepts any unique abbreviation of a long option (--force-with-l is
     # --force-with-lease), so push options are matched against an exact list of
     # known non-force spellings and everything else is refused.
@@ -2453,9 +2511,10 @@ analyze_git() {
     merge) never_approve "git merge lands work outside this task's branch"; return 0 ;;
   esac
   case "$sub" in
-    status|log|diff|show|rev-parse|merge-base|ls-files|ls-tree|blame|grep|describe|cat-file|rev-list|shortlog|show-ref|for-each-ref|name-rev|range-diff|cherry|diff-tree|whatchanged|count-objects|check-ignore|check-attr|version) ;;
-    add) ;;
+    status|log|diff|show|rev-parse|merge-base|ls-files|ls-tree|blame|grep|describe|cat-file|rev-list|shortlog|show-ref|for-each-ref|name-rev|range-diff|cherry|diff-tree|whatchanged|count-objects|check-ignore|check-attr|version) policy_rule git-read ;;
+    add) policy_rule git-add ;;
     fetch)
+      policy_rule git-fetch
       # Git takes any unique abbreviation of a long option, and --upl is
       # already unique to --upload-pack, which names a program to run.
       for w in ${args[@]+"${args[@]}"}; do
@@ -2467,11 +2526,13 @@ analyze_git() {
       done
       ;;
     commit)
+      policy_rule git-commit
       for w in ${args[@]+"${args[@]}"}; do
         case "$w" in --amend) never_approve "git commit --amend rewrites history" ;; esac
       done
       ;;
     branch)
+      policy_rule git-branch-list
       local listing=0
       for w in ${args[@]+"${args[@]}"}; do
         case "$w" in
@@ -2484,6 +2545,7 @@ analyze_git() {
       done
       ;;
     tag)
+      policy_rule git-tag-list
       local listing=0
       [ "${#args[@]}" -eq 0 ] && listing=1
       for w in ${args[@]+"${args[@]}"}; do
@@ -2495,6 +2557,7 @@ analyze_git() {
       [ "$listing" -eq 1 ] || no_approve "git tag creates a tag"
       ;;
     remote)
+      policy_rule git-remote-read
       # -v and --verbose precede the subcommand, so `git remote -v add` adds.
       local ri=0
       while [ "$ri" -lt "${#args[@]}" ]; do
@@ -2509,9 +2572,10 @@ analyze_git() {
             "leave remotes to firstmate and name the one you need in a blocked: status line" ;;
       esac
       ;;
-    stash) case "${args[0]-}" in list|show) ;; *) no_approve "git stash ${args[0]-}" ;; esac ;;
-    worktree) case "${args[0]-}" in list) ;; *) no_approve "git worktree ${args[0]-}" ;; esac ;;
+    stash) policy_rule git-stash-read; case "${args[0]-}" in list|show) ;; *) no_approve "git stash ${args[0]-}" ;; esac ;;
+    worktree) policy_rule git-worktree-list; case "${args[0]-}" in list) ;; *) no_approve "git worktree ${args[0]-}" ;; esac ;;
     config)
+      policy_rule git-config-read
       local reading=0
       for w in ${args[@]+"${args[@]}"}; do
         case "$w" in
@@ -2522,6 +2586,7 @@ analyze_git() {
       [ "$reading" -eq 1 ] || no_approve "git config write"
       ;;
     checkout)
+      policy_rule git-branch-create
       # Only -b <name> [<start>] is read-and-build; a value that looks like an
       # option (-f, --, --force) could discard work, so it is not.
       case "${args[0]-}" in
@@ -2538,6 +2603,7 @@ analyze_git() {
           "use git checkout -b <name> [<start>] or git switch <branch> to change branches, or git restore <path>, which asks first"
       ;;
     switch)
+      policy_rule git-branch-create
       case "${args[0]-}" in
         -c|--create)
           if ! { [ "${#args[@]}" -ge 2 ] && [ "${#args[@]}" -le 3 ] && [ "${args[1]#-}" = "${args[1]}" ] \
@@ -2584,6 +2650,7 @@ gh_words() {  # fills GH_SUB and GH_VERB
 }
 
 analyze_gh() {
+  policy_rule forge
   local w has_repo=0
   gh_words
   local sub=$GH_SUB verb=$GH_VERB
@@ -2869,22 +2936,23 @@ read_build_executable() {  # <command word>: bare name or installed-tool directo
 approve_plain() {  # <base>
   local base=$1 k w pos=0
   # The worker-contract helpers this home owns, matched by resolved path.
-  if home_helper "${E[0]}" "${EV[0]}" fm-ensure-agents-md.sh; then approve_ensure_agents_md; return 0; fi
-  if home_helper "${E[0]}" "${EV[0]}" fm-captain-hold.sh; then approve_captain_hold; return 0; fi
-  if home_helper "${E[0]}" "${EV[0]}" fm-fleet-ledger.sh; then approve_fleet_ledger; return 0; fi
-  if home_helper "${E[0]}" "${EV[0]}" fm-approved-publish.sh; then approve_approved_publish; return 0; fi
+  if home_helper "${E[0]}" "${EV[0]}" fm-ensure-agents-md.sh; then policy_rule project-init; approve_ensure_agents_md; return 0; fi
+  if home_helper "${E[0]}" "${EV[0]}" fm-captain-hold.sh; then policy_rule task-completion; approve_captain_hold; return 0; fi
+  if home_helper "${E[0]}" "${EV[0]}" fm-fleet-ledger.sh; then policy_rule ledger-disabled; approve_fleet_ledger; return 0; fi
+  if home_helper "${E[0]}" "${EV[0]}" fm-approved-publish.sh; then policy_rule approved-publish; approve_approved_publish; return 0; fi
   for w in fm-lint.sh fm-test-run.sh fm-doc-audience-check.sh fm-install-shellcheck.sh fm-install-actionlint.sh; do
-    home_helper "${E[0]}" "${EV[0]}" "$w" && return 0
+    if home_helper "${E[0]}" "${EV[0]}" "$w"; then policy_rule verification; return 0; fi
   done
   if ! read_build_executable "${E[0]}"; then
-    if runner_path "${E[0]}" "${EV[0]}"; then return 0; fi
+    if runner_path "${E[0]}" "${EV[0]}"; then policy_rule verification; return 0; fi
     no_approve "unrecognized executable ${E[0]}"
     return 0
   fi
   case "$base" in
     cat|head|tail|wc|grep|egrep|fgrep|rg|ls|pwd|echo|printf|which|type|file|stat|du|df|diff|cmp|cut|tr|jq|basename|dirname|realpath|readlink|date|true|false|test|'['|nl|od|hexdump|shasum|sha1sum|sha256sum|md5|md5sum|column|comm|paste|fold|rev|strings|whoami|uname|id|sleep|seq|ps|pgrep|shellcheck|actionlint)
-      return 0 ;;
+      policy_rule read; return 0 ;;
     curl|wget)
+      policy_rule web-get
       # The full contract lives in the header: a GET-shaped lookup is approved
       # for ANY host; every other fetch shape is the never-approve class. Each
       # option's kind decides whether the next word is its value, a cluster's
@@ -3050,6 +3118,7 @@ approve_plain() {  # <base>
       done
       return 0 ;;
     tee)
+      policy_rule task-tee
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
         case "$w" in -a|-i|-p|--append|--ignore-interrupts) continue ;; -*) no_approve "tee option $w"; return 0 ;; esac
@@ -3068,6 +3137,7 @@ approve_plain() {  # <base>
       done
       return 0 ;;
     cp)
+      policy_rule task-copy
       local n_cp=0 dest='' dest_v=0 dabs
       local -a cp_sources=()
       for ((k = 1; k < ${#E[@]}; k++)); do
@@ -3116,25 +3186,29 @@ approve_plain() {  # <base>
       fi
       return 0 ;;
     cd|pushd)
+      policy_rule cwd
       if [ "${#E[@]}" -ge 2 ] && [ "${EV[1]}" = 0 ] && [ "${EG[1]}" = 0 ] && [ "${E[1]}" != - ]; then
         CWD=$(physical_target "${E[1]}" "$CWD" 1) || CWD=
       else
         CWD=
       fi
       return 0 ;;
-    popd) CWD=; return 0 ;;
+    popd) policy_rule cwd; CWD=; return 0 ;;
     sort|tree)
+      policy_rule read-output
       for w in "${E[@]}"; do
         case "$w" in -o|-o*|--output*) no_approve "$base writes a file" ;; esac
       done
       return 0 ;;
     uniq)
+      policy_rule read-uniq
       for ((k = 1; k < ${#E[@]}; k++)); do
         case "${E[k]}" in -*) ;; *) pos=$((pos + 1)) ;; esac
       done
       [ "$pos" -le 1 ] || no_approve "uniq writes its second file"
       return 0 ;;
     sed)
+      policy_rule read-sed
       local script_seen=0 nflag=0
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
@@ -3155,6 +3229,7 @@ approve_plain() {  # <base>
       [ "$nflag" -eq 1 ] || no_approve "sed without -n"
       return 0 ;;
     mkdir|touch)
+      policy_rule task-create
       for ((k = 1; k < ${#E[@]}; k++)); do
         w=${E[k]}
         case "$w" in
@@ -3180,16 +3255,19 @@ approve_plain() {  # <base>
       no_approve "mv is not an exact inbox acknowledgement"
       return 0 ;;
     node)
+      policy_rule node-version
       [ "${#E[@]}" -eq 2 ] && [ "${EV[1]}" = 0 ] && [ "${EG[1]}" = 0 ] \
         && { [ "${E[1]}" = -v ] || [ "${E[1]}" = --version ]; } && return 0
       no_approve "node requires effect review (not a forbidden interpreter)"
       return 0 ;;
     agy)
+      policy_rule agy-version
       [ "${FM_POLICY_ADAPTER:-}" = agy ] && [ "${#E[@]}" -eq 2 ] \
         && [ "${EV[1]}${EG[1]}" = 00 ] \
         && { [ "${E[1]}" = -v ] || [ "${E[1]}" = --version ]; } && return 0
       ;;
     make)
+      policy_rule make-build
       for ((k = 1; k < ${#E[@]}; k++)); do
         case "${E[k]}" in
           -j|-j*|-k|-n|-s) ;;
@@ -3199,6 +3277,7 @@ approve_plain() {  # <base>
       done
       return 0 ;;
     npm|pnpm|yarn|bun)
+      policy_rule package-build
       case "${E[1]-}" in
         test|t) return 0 ;;
         run|run-script) runner_script_name "${E[2]-}" || no_approve "$base run ${E[2]-}"; return 0 ;;
@@ -3209,20 +3288,23 @@ approve_plain() {  # <base>
           return 0 ;;
       esac ;;
     npx|pnpx|bunx)
+      policy_rule js-check
       js_tool "${E[1]-}" || no_approve "$base ${E[1]-}"
       return 0 ;;
-    tsc|eslint|prettier|vitest|jest|mocha|biome|pytest|py.test|mypy) return 0 ;;
-    ruff) case "${E[1]-}" in check|format) ;; *) no_approve "ruff ${E[1]-}" ;; esac; return 0 ;;
-    go) case "${E[1]-}" in test|vet|build|list|version|env) ;; *) no_approve "go ${E[1]-}" ;; esac; return 0 ;;
-    cargo) case "${E[1]-}" in test|check|clippy|build|fmt|metadata|tree) ;; *) no_approve "cargo ${E[1]-}" ;; esac; return 0 ;;
-    swift) case "${E[1]-}" in test|build) ;; *) no_approve "swift ${E[1]-}" ;; esac; return 0 ;;
+    tsc|eslint|prettier|vitest|jest|mocha|biome|pytest|py.test|mypy) policy_rule test-lint; return 0 ;;
+    ruff) policy_rule ruff-check; case "${E[1]-}" in check|format) ;; *) no_approve "ruff ${E[1]-}" ;; esac; return 0 ;;
+    go) policy_rule go-build; case "${E[1]-}" in test|vet|build|list|version|env) ;; *) no_approve "go ${E[1]-}" ;; esac; return 0 ;;
+    cargo) policy_rule cargo-build; case "${E[1]-}" in test|check|clippy|build|fmt|metadata|tree) ;; *) no_approve "cargo ${E[1]-}" ;; esac; return 0 ;;
+    swift) policy_rule swift-build; case "${E[1]-}" in test|build) ;; *) no_approve "swift ${E[1]-}" ;; esac; return 0 ;;
     python|python3)
+      policy_rule python-check
       if [ "${E[1]-}" = -m ]; then
         case "${E[2]-}" in pytest|unittest|mypy|ruff) return 0 ;; esac
       fi
       no_approve "$base ${E[1]-}"
       return 0 ;;
     uv|poetry|pipenv|bundle)
+      policy_rule env-runner
       case "$base:${E[1]-}" in
         uv:run|poetry:run|pipenv:run|bundle:exec)
           local -a inner=("${E[@]:2}")
@@ -3243,7 +3325,7 @@ approve_plain() {  # <base>
       esac
       no_approve "$base ${E[1]-}"
       return 0 ;;
-    rspec) return 0 ;;
+    rspec) policy_rule test-lint; return 0 ;;
   esac
   no_approve "$base is not in the read-and-build set"
 }
@@ -3330,6 +3412,7 @@ evaluate_exec() {
   SENSITIVE_HIT=''
   # shellcheck disable=SC2034 # CREDENTIAL_HOLD is an output read by both sourcing adapters.
   CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
+  CREDENTIAL_CONTEXT='' CREDENTIAL_CATEGORY=ordinary STATIC_RULE_IDS=''
   FETCH_FILES=''
   analyze_command "$1" "$start_cwd"
   while [ "$q" -lt "${#NESTED[@]}" ] && [ "$q" -lt 32 ]; do
@@ -3581,7 +3664,7 @@ run_judge() {
   JUDGE_VERDICT=decline JUDGE_REASON='' JUDGE_RETRYABLE=0
   JUDGE_ELAPSED_SECONDS=0 JUDGE_ATTEMPTS=0 JUDGE_TIMEOUTS=0
   JUDGE_CACHE_KEY=''
-  if [ -n "$JUDGE_SCRIPT_HASHES" ] && [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ]; then
+  if [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ]; then
     JUDGE_CACHE_KEY=$(cache_key shape) || JUDGE_CACHE_KEY=''
   fi
   if [ -z "$JUDGE_MODEL" ]; then JUDGE_REASON="first judge disabled"; return 0; fi
@@ -3661,14 +3744,26 @@ judge_probe() {  # <static-class>
 # The script-context/key contract is in the header. Only approvals are stored;
 # adapters check refusals and never-approve before a reusable cache hit.
 cache_key() {  # [shape] - exact by default, including pending escalation keys
-  local h='' input=$CACHE_INPUT scope=exact authority=''
-  [ -n "$CACHE_DIR" ] && [ -n "$HASH_CMD" ] && [ -n "$TOOL" ] || return 1
+  local h='' input=$CACHE_INPUT scope=exact authority='' target_context=$CREDENTIAL_CONTEXT file digest worktree cwd
+  [ -n "$CACHE_DIR" ] && [ -n "$HASH_CMD" ] && [ -n "$TOOL" ] && [ -n "$POLICY_REVISION" ] || return 1
+  [ -n "$POLICY" ] && [ -n "$BRIEF" ] || return 1
+  # Hash operator-owned authority files, never operand contents. Missing brief
+  # or policy cannot supply reusable authority; an absent registry is explicit.
+  for file in "$POLICY" "$BRIEF" "$CREDENTIAL_REGISTRY_PATH"; do
+    if [ -f "$file" ] && [ -r "$file" ]; then
+      digest=$($HASH_CMD "$file" 2>/dev/null) || return 1
+      digest=${digest%% *}
+    elif [ "$file" = "$CREDENTIAL_REGISTRY_PATH" ] && [ ! -e "$file" ]; then
+      digest=absent
+    else
+      return 1
+    fi
+    authority="$authority"$'\n'"$file:$digest"
+  done
+  worktree=$(CDPATH='' cd -P -- "$WORKTREE" 2>/dev/null && pwd -P) || return 1
+  cwd=$(CDPATH='' cd -P -- "${AGY_CWD:-$WORKTREE}" 2>/dev/null && pwd -P) || return 1
   [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] || input="$input"$'\n'"script-opaque-launch"
   if [ -n "$JUDGE_SCRIPT_HASHES" ]; then
-    [ -n "$BRIEF" ] && [ -f "$BRIEF" ] && [ -r "$BRIEF" ] || return 1
-    authority=$($HASH_CMD "$BRIEF" 2>/dev/null) || return 1
-    authority=${authority%% *}
-    case "$authority" in ''|*[!0-9a-f]*) return 1 ;; esac
     if [ "${1:-}" = shape ] && [ "$JUDGE_SCRIPT_SIMPLE" = 1 ] \
       && [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] \
       && [ -z "$NEVER_APPROVE" ] && [ -z "$SENSITIVE_HIT" ] \
@@ -3679,20 +3774,22 @@ cache_key() {  # [shape] - exact by default, including pending escalation keys
         --arg field "$FM_POLICY_COMMAND_FIELD" --arg cmd "$CMD" --arg shape "$JUDGE_SCRIPT_SHAPE" \
         'if .[$field] == $cmd then .[$field] = $shape else error("command field mismatch") end' 2>/dev/null); then
         scope=shape
+        target_context=$JUDGE_SCRIPT_HASHES
       else
         input=$CACHE_INPUT
       fi
     fi
     input="$input"$'\n'"script-$scope:$JUDGE_SCRIPT_HASHES"
-    input="$input"$'\n'"script-authority:$authority:$GRANTS_SHA"
   fi
-  h=$(printf '%s\n%s' "$TOOL" "$input" | $HASH_CMD 2>/dev/null) || return 1
+  h=$(printf '%s\0' "$POLICY_REVISION" "$authority" "$GRANTS_SHA" "$WORKTREE" "$worktree" \
+    "$cwd" "$(pwd -P)" "$target_context" "$TOOL" "$input" | $HASH_CMD 2>/dev/null) || return 1
   h=${h%% *}
   case "$h" in ''|*[!0-9a-f]*) return 1 ;; esac
   printf '%s' "${h:0:64}"
 }
 
 CACHE_REASON=
+CACHE_PROVENANCE=
 cache_lookup() {  # sets CACHE_REASON; 0 on a hit
   local key mode
   CACHE_REASON=
@@ -3700,20 +3797,25 @@ cache_lookup() {  # sets CACHE_REASON; 0 on a hit
   for mode in exact shape; do
     key=$(cache_key "$mode") || return 1
     [ -f "$CACHE_DIR/$key" ] || continue
-    IFS= read -r CACHE_REASON < "$CACHE_DIR/$key" 2>/dev/null || CACHE_REASON=''
+    { IFS= read -r CACHE_REASON; IFS= read -r CACHE_PROVENANCE; } < "$CACHE_DIR/$key" 2>/dev/null || true
     [ -n "$CACHE_REASON" ] || CACHE_REASON="approved earlier in this task"
     return 0
   done
   return 1
 }
 
-cache_store() {  # <reason> [key]
+cache_store() {  # <reason> [key] [approval-provenance]
   local key=${2-}
   [ "$JUDGE_SCRIPT_UNCACHEABLE" = 0 ] || return 0
   [ -n "$key" ] || key=$JUDGE_CACHE_KEY
   [ -n "$key" ] || key=$(cache_key shape) || return 0
   mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
-  printf '%s\n' "$(one_line "$1" 200)" > "$CACHE_DIR/$key" 2>/dev/null || true
+  printf '%s\n%s\n' "$(one_line "$1" 200)" "${3:-model-judge}" > "$CACHE_DIR/$key" 2>/dev/null || true
+}
+
+pending_context() {
+  jq -nc --arg rule "$STATIC_RULE_IDS" --arg revision "$POLICY_REVISION" \
+    --arg category "$CREDENTIAL_CATEGORY" '{rule:$rule,revision:$revision,category:$category}'
 }
 
 tool_slug() {
@@ -3724,13 +3826,28 @@ tool_slug() {
 
 close_pending() {  # <marker-file> <decision> <resolved-note> [decider]
   local marker=$1 key='' summary='' ckey=''
+  local STATIC_RULE_IDS="$STATIC_RULE_IDS" POLICY_REVISION="$POLICY_REVISION" CREDENTIAL_CATEGORY="$CREDENTIAL_CATEGORY"
+  local APPROVAL_PROVENANCE=unattributed context digest marked
   { IFS= read -r key; IFS= read -r summary; IFS= read -r ckey; } < "$marker" 2>/dev/null || true
-  rm -f "$marker"
+  context=$(sed -n '5p' "$marker" 2>/dev/null)
+  if [ -n "$context" ]; then
+    STATIC_RULE_IDS=$(printf '%s' "$context" | jq -r '.rule // "unclassified"')
+    POLICY_REVISION=$(printf '%s' "$context" | jq -r '.revision // ""')
+    CREDENTIAL_CATEGORY=$(printf '%s' "$context" | jq -r '.category // "ordinary"')
+  fi
+  if [ "${4:-}" = firstmate ]; then
+    APPROVAL_PROVENANCE='firstmate-control-plane'
+  elif [ "$2" = approved-at-prompt ] && [ -f "$marker.firstmate" ]; then
+    digest=$($HASH_CMD "$marker" 2>/dev/null) || digest=''
+    IFS= read -r marked < "$marker.firstmate" || marked=''
+    [ -z "$digest" ] || [ "$digest" != "$marked" ] || APPROVAL_PROVENANCE='firstmate-control-plane'
+  fi
+  rm -f "$marker" "$marker.firstmate"
   [ -n "$key" ] || return 0
   # Approval at the prompt may be reused for this exact call for the rest of
   # the task; a call that never ran is not an approval.
   [ "$2" = approved-at-prompt ] && [ -n "$ckey" ] \
-    && cache_store "approved at the prompt earlier in this task" "$ckey"
+    && cache_store "approved at the prompt earlier in this task" "$ckey" "$APPROVAL_PROVENANCE"
   log_record "$2" "${4:-prompt}" "escalation $key" "$summary"
   status_append "resolved [key=$key]: $3"
 }

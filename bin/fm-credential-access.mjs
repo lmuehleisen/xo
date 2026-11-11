@@ -14,6 +14,8 @@
 // declarations under an exclusive registry lock and never removes identities.
 // A revoked grant removes use authority, including for extensionless resources.
 // No operand file is opened, enumerated, or included as contents in a verdict.
+// approvalContext adds a digest of inspected path identities for approval keys;
+// it never changes the credential verdict or reads operand contents.
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -22,6 +24,39 @@ import { fileURLToPath } from "node:url";
 const result = (category, reason) => ({ category, reason });
 const inside = (p, root) => root && (p === root || p.startsWith(`${root.replace(/\/$/, "")}/`));
 const fold = p => p.replace(/^\/private\/(tmp|var|etc)(?=\/|$)/, "/$1");
+const approvalIdentities = new Set();
+
+function approvalIdentity(value, request) {
+  try {
+    const resolved = resolveOperand(value, request.cwd, request.userHome);
+    approvalIdentities.add(JSON.stringify([value, request.cwd, resolved.canonical, resolved.identity || "missing"]));
+    return resolved;
+  } catch {
+    approvalIdentities.add(JSON.stringify([value, request.cwd, "unresolved"]));
+    return null;
+  }
+}
+
+function approvalOperands(request) {
+  if (!request.approvalContext) return;
+  approvalIdentity(request.cwd, request);
+  const operands = (request.operands || []).filter(o => o.path
+    && (!o.expanded || /^~(?:\/|$)/.test(o.path) && !/[$`]/.test(o.path)) && !o.glob
+    && o.role !== "data" && o.role !== "pattern");
+  for (const operand of operands) {
+    const literal = operand.path.startsWith("~") && !operand.expanded ? `./${operand.path}` : operand.path;
+    approvalIdentity(literal, request);
+  }
+  // cp/install/rsync may address a child of an existing destination directory.
+  if (request.operation === "copy" && operands.length > 1) {
+    const destination = approvalIdentity(operands.at(-1).path, request);
+    if (destination?.directory) {
+      for (const source of operands.slice(0, -1)) {
+        approvalIdentity(path.join(destination.canonical, path.basename(source.path)), request);
+      }
+    }
+  }
+}
 
 // Follow components before .., including the leaf, with one bound for all hops.
 // A missing literal tail is resolvable; a dangling/cyclic alias is not.
@@ -209,6 +244,7 @@ function registerGrants(context) {
 }
 
 export function classify_credential_access(request, state = registry(request)) {
+  approvalOperands(request);
   if (request.environmentDisclosure) return result("protected-disclosure", "environment-or-token-output");
   if (request.operation === "metadata") return result("ordinary", "metadata-only-access");
   let protectedHit = false, modes = null;
@@ -549,6 +585,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     const verdict = request.operation === "register-grants" ? registerGrants(request)
       : request.operation === "exec-segment" ? segment(request)
       : request.operation === "native" ? native(request) : classify_credential_access(request);
+    if (request.approvalContext) verdict.approvalContext = crypto.createHash("sha256")
+      .update(JSON.stringify([...approvalIdentities].sort())).digest("hex");
     process.stdout.write(JSON.stringify(verdict) + "\n");
     if (request.operation === "register-grants" && verdict.category !== "ordinary") process.exitCode = 1;
   } catch {

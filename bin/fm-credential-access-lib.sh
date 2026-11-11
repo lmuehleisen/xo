@@ -19,6 +19,7 @@ CREDENTIAL_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 CREDENTIAL_USER_HOME='' CREDENTIAL_REGISTRY_PATH='' CREDENTIAL_REGISTRY_REQUIRED=false
 CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
 CREDENTIAL_LAST_CATEGORY=ordinary CREDENTIAL_LAST_REASON='' CREDENTIAL_LAST_WRITE_TARGETS='[]'
+CREDENTIAL_CATEGORY=ordinary CREDENTIAL_CONTEXT=''
 
 credential_policy() {
   local config=${CONFIG_DIR:-} fields
@@ -75,7 +76,7 @@ classify_credential_access() {  # <structured request JSON>
     --argjson required "$CREDENTIAL_REGISTRY_REQUIRED" --argjson trace "$CREDENTIAL_TRACE" \
     --arg grants "$GRANT_ENV_FILES" --arg roots "$WORKTREE"$'\n'"$DATA_DIR"$'\n'"$TASKTMP"$'\n'"$GRANT_WRITE_DIRS" \
     '. + {cwd:$cwd, userHome:$home, registryPath:$registry, registryRequired:$required,
-      trace:($trace == 1), useGrants:($grants | split("\n") | map(select(. != ""))),
+      trace:($trace == 1), approvalContext:true, useGrants:($grants | split("\n") | map(select(. != ""))),
       writeRoots:($roots | split("\n") | map(select(. != "")))}' 2>/dev/null) || request=''
   output=$(printf '%s' "$request" | node "$CREDENTIAL_LIB_DIR/fm-credential-access.mjs" 2>/dev/null) || output=''
   [ -n "$output" ] || return 0
@@ -86,11 +87,17 @@ classify_credential_access() {  # <structured request JSON>
     targets=$(printf '%s' "$output" | jq -ec '.writeTargets // [] | select(type == "array" and all(.[]; type == "string" and length > 0))' 2>/dev/null) || return 0
   fi
   CREDENTIAL_LAST_CATEGORY=$category CREDENTIAL_LAST_REASON=$reason CREDENTIAL_LAST_WRITE_TARGETS=$targets
+  CREDENTIAL_CONTEXT="$CREDENTIAL_CONTEXT:$(printf '%s' "$output" | jq -r '.approvalContext // "unavailable"')"
+  case "$CREDENTIAL_CATEGORY:$category" in
+    protected-disclosure:*|unresolved:ordinary|unresolved:authorized-load|authorized-load:ordinary) ;;
+    *) CREDENTIAL_CATEGORY=$category ;;
+  esac
 }
 
 credential_apply() {
   case "$CREDENTIAL_LAST_CATEGORY" in
     protected-disclosure|unresolved)
+      [ "$CREDENTIAL_CATEGORY" = protected-disclosure ] || CREDENTIAL_CATEGORY=$CREDENTIAL_LAST_CATEGORY
       # shellcheck disable=SC2034 # Output globals consumed by both sourcing adapters.
       CREDENTIAL_HOLD=1 SENSITIVE_HIT=1
       no_approve "credential access $CREDENTIAL_LAST_CATEGORY: $CREDENTIAL_LAST_REASON"
@@ -129,7 +136,7 @@ credential_segment() {
     case "${E[i]##*/}" in fm-devin-permission-policy.sh|fm-agy-permission-policy.sh) operator_script=1 ;; esac
     [ "$operator_script" = 1 ] || continue
     case "${E[i]}" in
-      register-credentials|repin-grants)
+      register-credentials|repin-grants|mark-prompt-approval|unmark-prompt-approval)
         target=$(write_target_path "${E[i+1]-}" "${EV[i+1]-1}" 2>/dev/null) || target=''
         if [ -n "$target" ] && [ "$target" = "$(norm_abs "${POLICY:-}")" ]; then
           refuse "worker mutation of credential authority is refused by firstmate policy"
@@ -160,6 +167,7 @@ credential_segment() {
 credential_native() {  # <path-role fields JSON or apply_patch string JSON> <effective cwd>
   # shellcheck disable=SC2034 # CREDENTIAL_HOLD is read by the sourcing adapters.
   CWD=$2 CREDENTIAL_TRACE=0 CREDENTIAL_HOLD=''
+  CREDENTIAL_CONTEXT='' CREDENTIAL_CATEGORY=ordinary
   local request
   if ! request=$(jq -nc --arg tool "$TOOL" --argjson fields "$1" '{operation:"native",tool:$tool,fields:$fields}' 2>/dev/null); then
     CREDENTIAL_LAST_CATEGORY=unresolved CREDENTIAL_LAST_REASON=invalid-native-fields CREDENTIAL_LAST_WRITE_TARGETS='[]'

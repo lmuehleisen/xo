@@ -41,6 +41,55 @@ credential_allowed() {
   esac
 }
 
+test_policy_decision_metadata() {
+  local policy dir log command expected fields step=7000
+  policy=$(new_case decision-metadata)
+  dir=$(case_dir "$policy")
+  log=$(jq -r .log "$policy")
+  while IFS='|' read -r command expected; do
+    credential_exec "$policy" "$command" "$step"; step=$((step + 1))
+    credential_allowed || fail "metadata fixture must retain static approval: $command => $OUT"
+    tail -1 "$log" | jq -e --arg rule "$expected" '
+      .decision=="approve" and .decider=="policy" and .reason=="read-and-build set"
+      and .rule_id==$rule and (.policy_revision|test("^[0-9a-f]{64}$"))
+      and .credential_category=="ordinary" and .approval_provenance=="static-policy"
+      and has("tool_use_id") and has("judge_attempts")' >/dev/null \
+      || fail "static branch must retain old fields and identify its rule: $command"
+  done <<'EOF'
+git status|git-read
+make test|make-build
+cat ordinary.txt|read
+EOF
+  credential_exec "$policy" "git status && printf fixture > '$dir/tmp/probe.txt'" "$step"; step=$((step + 1))
+  credential_allowed || fail 'compound metadata fixture must retain approval'
+  tail -1 "$log" | jq -e '.rule_id=="git-read,redirect-task,read"' >/dev/null \
+    || fail 'compound approval must retain every contributing static branch'
+  fields=$(jq -nc --arg path "$(jq -r .worktree "$policy")/ordinary.txt" '{file_path:$path,AbsolutePath:$path}')
+  credential_hook "$policy" write "$fields" "$step"; step=$((step + 1))
+  credential_allowed || fail 'native metadata fixture must retain approval'
+  tail -1 "$log" | jq -e '.rule_id=="native-write"' >/dev/null || fail 'native writes must identify their static branch'
+  printf 'fixture\n' > "$dir/state/t1.inbox/001.msg"
+  credential_exec "$policy" "mv '$dir/state/t1.inbox/001.msg' '$dir/state/t1.inbox/handled/'" "$step"; step=$((step + 1))
+  credential_allowed || fail 'exact acknowledgement metadata fixture must retain approval'
+  tail -1 "$log" | jq -e '.rule_id=="inbox-ack"' >/dev/null || fail 'inbox acknowledgements must identify their static branch'
+  credential_exec "$policy" 'cat .env.example' "$step"
+  credential_held || fail 'credential metadata fixture must remain held'
+  tail -1 "$log" | jq -e '.credential_category=="protected-disclosure" and .rule_id=="credential-hold"' >/dev/null \
+    || fail 'credential hold must identify its category without credential values'
+  step=$((step + 1))
+  APPROVAL_PROVENANCE=untrusted credential_exec "$policy" 'cat ordinary.txt' "$step"; step=$((step + 1))
+  tail -1 "$log" | jq -e '.approval_provenance=="static-policy"' >/dev/null \
+    || fail 'inherited environment must not supply approval provenance'
+  mkdir "$dir/no-node"
+  printf '#!/bin/sh\nexit 127\n' > "$dir/no-node/node"
+  chmod +x "$dir/no-node/node"
+  PATH="$dir/no-node:$PATH" credential_exec "$policy" 'cat ordinary.txt' "$step"
+  credential_held || fail 'classifier failure must retain its hold'
+  tail -1 "$log" | jq -e '.credential_category=="unresolved" and .rule_id=="credential-hold"' >/dev/null \
+    || fail 'classifier failure must record an unresolved category'
+  pass 'decision records retain existing fields and add stable static rules, source revision, credential category and provenance'
+}
+
 test_shared_credential_access() {
   local policy dir wt fields command kind step=1000 entry grants log judge_calls
   # shellcheck disable=SC2016 # This is the synthetic judge's script body.

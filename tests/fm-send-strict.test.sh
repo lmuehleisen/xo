@@ -247,6 +247,68 @@ test_key_send_exit_status_follows_delivery() {
   pass "fm-send --key: exit status follows delivery, and an undelivered key never reports success"
 }
 
+test_devin_prompt_approval_provenance() {
+  local dir fb home err log policy payload rc provenance id
+  dir="$TMP_ROOT/prompt-provenance"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home prompt); err="$dir/send.err"; log="$dir/tmux.log"
+  mkdir -p "$home/wt" "$home/data" "$home/tmp"
+  printf '# Task\n## Firstmate spec\nSynthetic permission fixture.\n' > "$home/data/brief.md"
+  policy="$home/state/lane-key.devin-permission.json"
+  jq -n --arg home "$home" '{task:"lane-key",worktree:($home+"/wt"),data:($home+"/data"),
+    brief:($home+"/data/brief.md"),tasktmp:($home+"/tmp"),status:($home+"/state/lane-key.status"),
+    log:($home+"/state/decisions.jsonl"),judge_model:""}' > "$policy"
+  fm_write_meta "$home/state/lane-key.meta" "window=sess:fm-lane-key" "kind=ship" "harness=devin"
+  for id in delivered unattributed failed cancelled mismatched; do
+    payload=$(jq -nc --arg id "$id" --arg cmd "make probe-$id" \
+      '{tool_name:"exec",tool_input:{command:$cmd},tool_use_id:$id,session_id:"fixture"}')
+    printf '%s' "$payload" | "$ROOT/bin/fm-devin-permission-policy.sh" permission-request "$policy" >/dev/null
+    provenance=unattributed
+    if [ "$id" = delivered ]; then
+      local mutation blocked
+      for mutation in \
+        "printf forged > '${policy%.json}-pending/$id.pending.firstmate'" \
+        "bash '$ROOT/bin/fm-devin-permission-policy.sh' mark-prompt-approval '$policy' 'devin-permission-$id'"; do
+        blocked=$(jq -nc --arg cmd "$mutation" '{tool_name:"exec",tool_input:{command:$cmd},tool_use_id:"mutation"}' \
+          | "$ROOT/bin/fm-devin-permission-policy.sh" pre-tool-use "$policy")
+        [ "$(printf '%s' "$blocked" | jq -r .decision)" = block ] || fail 'worker calls cannot forge the operator marker'
+      done
+    fi
+    case "$id" in
+      delivered|failed)
+        PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" \
+          FM_FAKE_TMUX_SEND_KEY_FAIL="$([ "$id" != failed ] || printf Enter)" \
+          "$SEND" lane-key --approve-permission "devin-permission-$id" --key Enter >/dev/null 2>"$err"; rc=$?
+        if [ "$id" = delivered ]; then
+          expect_code 0 "$rc" 'a delivered approval key must be marked'
+          provenance=firstmate-control-plane
+        else
+          [ "$rc" != 0 ] || fail 'a failed approval key must report failure'
+        fi
+        ;;
+      cancelled|mismatched)
+        "$ROOT/bin/fm-devin-permission-policy.sh" mark-prompt-approval "$policy" "devin-permission-$id" </dev/null || fail 'exact pending prompt must be markable'
+        if [ "$id" = cancelled ]; then
+          printf '{}' | "$ROOT/bin/fm-devin-permission-policy.sh" stop "$policy" >/dev/null
+          printf '%s' "$payload" | "$ROOT/bin/fm-devin-permission-policy.sh" permission-request "$policy" >/dev/null
+        else
+          printf '\n' >> "${policy%.json}-pending/$id.pending"
+        fi
+        ;;
+    esac
+    printf '%s' "$payload" | "$ROOT/bin/fm-devin-permission-policy.sh" post-tool-use "$policy" >/dev/null
+    tail -1 "$home/state/decisions.jsonl" | jq -e --arg provenance "$provenance" \
+      '.decision=="approved-at-prompt" and .decider=="prompt" and .approval_provenance==$provenance' >/dev/null \
+      || fail "$id prompt must record honest control-plane provenance"
+    [ ! -e "${policy%.json}-pending/$id.pending.firstmate" ] || fail 'prompt closure must consume the attribution marker'
+    printf '%s' "$payload" | "$ROOT/bin/fm-devin-permission-policy.sh" permission-request "$policy" >/dev/null
+    tail -1 "$home/state/decisions.jsonl" | jq -e --arg provenance "$provenance" \
+      '.decider=="cache" and .approval_provenance==$provenance' >/dev/null \
+      || fail 'cached prompt approval must retain its original provenance'
+  done
+  pass 'Devin prompt attribution follows explicit control-plane sends; failed, cancelled and unmarked approvals stay unattributed'
+}
+
+test_devin_prompt_approval_provenance
 test_exact_lane_id_send_still_works
 test_help_prints_usage
 test_key_send_exit_status_follows_delivery

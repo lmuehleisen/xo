@@ -334,6 +334,7 @@ native_control_boundary() {
 
 evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
+  STATIC_RULE_IDS=''
   local fields credential_tool=$TOOL native_tool=$TOOL
   case "$TOOL" in
     read_file|write_file|edit_file)
@@ -358,8 +359,9 @@ evaluate_tool() {  # non-exec agy tools: sets NOT_APPROVABLE
   TOOL=$native_tool
   case "$TOOL" in
     read_file|view_file|grep_search|list_dir|search_web|read_url_content)
-      ;;
+      policy_rule native-read ;;
     write_file|edit_file|write_to_file|replace_file_content)
+      policy_rule native-write
       local abs rel
       [ -n "$FILE_PATH" ] || { no_approve "$TOOL without a file path"; return 0; }
       # Whether agy's file tools expand a leading ~ is unverified; an
@@ -698,7 +700,7 @@ case "$EVENT" in
       if [ ! -e "$marker" ]; then
         ckey=$(cache_key 2>/dev/null || true)
         mclass=never
-        printf '%s\n%s\n%s\n%s\n' "$key" "$summary" "$ckey" "$mclass" \
+        printf '%s\n%s\n%s\n%s\n%s\n' "$key" "$summary" "$ckey" "$mclass" "$(pending_context)" \
           > "$marker" 2>/dev/null || true
         status_append "needs-decision [key=$key]: agy worker held a tool call for firstmate - $TOOL ($escalate_source: $(one_line "$escalate_reason" 160)): $(one_line "$summary" 300)"
       fi

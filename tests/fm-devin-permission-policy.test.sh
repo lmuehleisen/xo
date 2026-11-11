@@ -26,6 +26,8 @@ POLICY_SH="$ROOT/bin/fm-devin-permission-policy.sh"
 # shellcheck source=tests/credential-policy-helpers.sh
 . "$ROOT/tests/credential-policy-helpers.sh"
 TMP_ROOT=$(fm_test_tmproot fm-devin-permission-policy)
+# Credential identities fold the macOS /private/var alias, as in the agy suite.
+case "$TMP_ROOT" in /private/var/*) TMP_ROOT=${TMP_ROOT#/private} ;; esac
 
 # The shared publish policy (bin/fm-gh-publish-policy.mjs) runs inside this
 # layer. A synthetic publish-guard config whose allowlist names the suite's
@@ -209,6 +211,8 @@ test_apply_patch_executor_paths() {
   local policy dir wt patch target kind suffix id=0
   policy=$(new_case patch-executor-paths)
   dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+  # An escaped fixture target must also sit outside ambient scratch authority.
+  local -x TMPDIR="$dir/tmp"
   mkdir -p "$wt/src" "$wt/app/[slug]" "$wt/~"
   ln -s /etc "$wt/escape"
   # shellcheck disable=SC2016,SC2088 # Patch filenames contain literal dollar signs and tildes.
@@ -2130,10 +2134,10 @@ test_grants_are_honored_only_while_their_digest_matches() {
 import sys
 p = sys.argv[1]
 s = open(p).read()
-open(p, "w").write(s.replace('"/opt/fm-test-out"', '"/", "/etc"'))
+open(p, "w").write(s.replace('"/opt/fm-test-out"', '"/", "/opt/fm-test-repinned"'))
 PY
   rm -rf "$dir/state/t1.devin-permission-pending" "$dir/state/t1.devin-permission-cache"
-  hook "$policy" permission-request exec "cp out.csv /etc/"
+  hook "$policy" permission-request exec "cp out.csv /opt/fm-test-repinned/"
   [ -z "$OUT" ] || fail "a rewritten grants block must grant nothing, got: $OUT"
   hook "$policy" permission-request exec "cp out.csv /opt/fm-test-out/"
   [ -z "$OUT" ] || fail "a rewritten block must void the ORIGINAL grants too, got: $OUT"
@@ -2143,7 +2147,7 @@ PY
   # Firstmate edits grants on purpose and repins, and they bind again.
   "$POLICY_SH" repin-grants "$policy" >/dev/null 2>&1 || fail "repin-grants must succeed"
   rm -rf "$dir/state/t1.devin-permission-cache"
-  hook "$policy" permission-request exec "cp out.csv /etc/"
+  hook "$policy" permission-request exec "cp out.csv /opt/fm-test-repinned/"
   [ "$(printf '%s' "$OUT" | jq -r .decision 2>/dev/null)" = approve ] \
     || fail "a repinned grants block must be honored again, got: $OUT"
 
@@ -3094,6 +3098,7 @@ test_exact_inbox_acknowledgements_and_escapes() {
   local policy dir inbox cmd id=0
   policy=$(new_case exact-inbox)
   dir=$(case_dir "$policy")
+  local -x TMPDIR="$dir/tmp"
   inbox="$dir/state/t1.inbox"
   rmdir "$inbox/handled"
   printf 'one\n' > "$inbox/001.msg"
@@ -3136,6 +3141,82 @@ CASES
 }
 
 
+test_ordinary_cache_context() {
+  local policy dir wt context log payload old_cwd=$PWD
+  local POLICY_SH=$POLICY_SH
+  for context in missing-brief unchanged source policy brief grants registry cwd worktree target replacement patch-target shell-target; do
+    POLICY_SH="$ROOT/bin/fm-devin-permission-policy.sh"
+    # shellcheck disable=SC2016 # Literal fake judge body; no model calls.
+    policy=$(new_case "cache-context-$context" 'if [ -e ../disable-judge ]; then echo "DECLINE: disabled"; else echo "APPROVE: fixture"; fi')
+    dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+    mkdir -p "$wt/.git" "$dir/config" "$dir/other-wt"
+    printf 'first\n' > "$wt/.git/first"
+    printf 'second\n' > "$wt/.git/second"
+    ln -s "$wt/.git/first" "$wt/alias"
+    printf '{"version":1,"revision":"r1","entries":[]}\n' > "$dir/config/declared-credentials.json"
+    jq --arg config "$dir/config" '.config=$config' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+    if [ "$context" = missing-brief ]; then
+      jq '.brief="" | .config="" | .status=""' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+    fi
+    if [ "$context" = source ]; then
+      cp -R "$ROOT/bin" "$dir/source-bin"
+      POLICY_SH="$dir/source-bin/fm-devin-permission-policy.sh"
+    fi
+    if [ "$context" = patch-target ]; then
+      mkdir "$wt/~"
+      ln -s "$wt/.git/first" "$wt/~/alias"
+      payload=$(jq -nc --arg patch $'*** Begin Patch\n*** Add File: ~/alias\n*** End Patch' '$patch')
+      hook_input "$policy" permission-request apply_patch "$payload" seed
+    elif [ "$context" = target ] || [ "$context" = replacement ]; then
+      payload=$(jq -nc --arg path "$wt/alias" '{file_path:$path,content:"fixture"}')
+      hook_input "$policy" permission-request write "$payload" seed
+    else
+      payload='make probe'
+      [ "$context" != shell-target ] || payload="make probe '$wt/alias'"
+      hook "$policy" permission-request exec "$payload" seed
+    fi
+    log="$dir/state/devin-permission-log.jsonl"
+    [ "$(tail -1 "$log" | jq -r .decider)" = judge ] || fail "$context must seed a judged approval: $OUT"
+    : > "$dir/tmp/disable-judge"
+    case "$context" in
+      source) printf '\n# Fixture revision.\n' >> "$dir/source-bin/fm-command-policy-lib.sh" ;;
+      policy) jq '.judge_model=""' "$policy" > "$policy.new" && mv "$policy.new" "$policy" ;;
+      brief) printf '\nChanged task instructions.\n' >> "$dir/data/t1/brief.md" ;;
+      grants)
+        # shellcheck disable=SC2016 # Literal Markdown fences in the synthetic brief.
+        printf '\n```firstmate-grants\n{"write_dirs":["%s"]}\n```\n' "$dir/extra" >> "$dir/data/t1/brief.md"
+        "$POLICY_SH" repin-grants "$policy" </dev/null >/dev/null || fail 'fixture grants must repin'
+        ;;
+      registry) printf '{"version":1,"revision":"r2","entries":[]}\n' > "$dir/config/declared-credentials.json" ;;
+      worktree) jq --arg wt "$dir/other-wt" '.worktree=$wt' "$policy" > "$policy.new" && mv "$policy.new" "$policy" ;;
+      target|shell-target) rm "$wt/alias"; ln -s "$wt/.git/second" "$wt/alias" ;;
+      replacement) mv "$wt/.git/second" "$wt/.git/first" ;;
+      patch-target) rm "$wt/~/alias"; ln -s "$wt/.git/second" "$wt/~/alias" ;;
+    esac
+    if [ "$context" = patch-target ]; then
+      hook_input "$policy" permission-request apply_patch "$payload" retry
+    elif [ "$context" = target ] || [ "$context" = replacement ]; then
+      hook_input "$policy" permission-request write "$payload" retry
+    elif [ "$context" = cwd ]; then
+      OUT=$(cd "$dir/other-wt" && printf '%s' '{"tool_name":"exec","tool_input":{"command":"make probe"},"tool_use_id":"retry","session_id":"s1"}' | "$POLICY_SH" permission-request "$policy")
+      RC=$?
+    else
+      hook "$policy" permission-request exec "$payload" retry
+    fi
+    if [ "$context" = unchanged ]; then
+      [ "$(tail -1 "$log" | jq -r .decider)" = cache ] || fail 'unchanged ordinary approval must reuse its cache'
+    else
+      [ "$RC" = 0 ] && [ -z "$OUT" ] && [ "$(tail -1 "$log" | jq -r .decider)" != cache ] \
+        || fail "$context change must miss the ordinary cache: $OUT"
+    fi
+    [ "$PWD" = "$old_cwd" ] || fail 'cwd fixture must not change the suite cwd'
+  done
+  pass 'ordinary approvals bind source, policy, brief/grants, registry, cwd/worktree and resolved native/shell targets'
+}
+
+test_exact_inbox_acknowledgements_and_escapes
+test_ordinary_cache_context
+test_policy_decision_metadata
 test_worker_completion_home_binding
 test_quoted_completion_bindings_are_not_assignments
 test_completion_inherited_state_is_bound
@@ -3185,5 +3266,3 @@ test_task_script_nested_cache
 test_task_script_prompt_approval_scope
 test_task_script_context_exclusions
 test_missing_policy_file_still_refuses
-
-test_exact_inbox_acknowledgements_and_escapes

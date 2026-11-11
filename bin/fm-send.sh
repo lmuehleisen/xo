@@ -15,6 +15,10 @@
 # secondmate request delivers only marker and correlation bytes and leaves the
 # parent waiting on a reply to nothing.
 # Special keys instead of text: fm-send.sh <target> --key Enter
+# For a Devin prompt approval, use <task> --approve-permission <decision-key>
+# --key <key>. This marks only that pending call before delivery, cancels the
+# marker on send failure, and leaves unmarked prompt approvals unattributed.
+# The marker records firstmate's delivery intent, not a human approver identity.
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca supports Enter and C-c only; T3 Code maps Escape and C-c to a native
 # turn interrupt and treats Enter as a no-op.
@@ -529,6 +533,7 @@ fi
 RESOLVE_KEYS=
 RESOLVE_ACTOR=captain
 FIRE_AND_FORGET_ID=
+APPROVE_PERMISSION=
 fm_send_add_resolve_key() { # <key>
   local k=$1
   case "$k" in
@@ -547,6 +552,11 @@ fm_send_add_resolve_key() { # <key>
 }
 while :; do
   case "${1:-}" in
+  --approve-permission)
+    [ $# -ge 2 ] && [ -z "$APPROVE_PERMISSION" ] || { echo 'error: --approve-permission requires one decision key' >&2; exit 1; }
+    APPROVE_PERMISSION=$2
+    shift 2
+    ;;
   --resolve-key)
     [ $# -ge 2 ] || {
       echo "error: --resolve-key requires a key" >&2
@@ -959,6 +969,15 @@ if [ "${1:-}" = "--key" ]; then
   esac
   key=$2
   semantic_key=$(fm_send_normalize_key "$key")
+  approval_policy=''
+  if [ -n "$APPROVE_PERMISSION" ]; then
+    case "$key" in Enter|y|Y) ;; *) echo 'error: --approve-permission requires an approval key (Enter or y)' >&2; exit 1 ;; esac
+    [ -n "$TARGET_META" ] && [ "$TARGET_HARNESS" = devin ] && [ "$TARGET_BACKEND" != remote ] \
+      || { echo 'error: --approve-permission requires a recorded local Devin task' >&2; exit 1; }
+    approval_policy="$STATE/$(fm_send_id_from_meta "$TARGET_META").devin-permission.json"
+    "$SCRIPT_DIR/fm-devin-permission-policy.sh" mark-prompt-approval "$approval_policy" "$APPROVE_PERMISSION" </dev/null \
+      || { echo 'error: could not mark the pending Devin approval; no key was sent' >&2; exit 1; }
+  fi
   if [ "$TARGET_BACKEND" = remote ]; then
     FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
     case "$FM_SEND_REMOTE_BUDGET" in
@@ -973,12 +992,16 @@ if [ "${1:-}" = "--key" ]; then
       exit 1
     fi
   elif ! fm_backend_send_key "$TARGET_BACKEND" "$T" "$key" "$EXPECTED_LABEL"; then
+    if [ -n "$approval_policy" ]; then
+      "$SCRIPT_DIR/fm-devin-permission-policy.sh" unmark-prompt-approval "$approval_policy" "$APPROVE_PERMISSION" </dev/null || true
+    fi
     echo "error: key '$key' not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
   fi
   fm_send_clear_after_interrupt "$semantic_key" || exit 1
   fm_send_record_interrupt "$semantic_key" || exit 1
 else
+  [ -z "$APPROVE_PERMISSION" ] || { echo 'error: --approve-permission requires --key' >&2; exit 1; }
   MESSAGE=$*
   if [ -z "${MESSAGE//[[:space:]]/}" ]; then
     echo "error: a text steer requires a nonempty message; nothing was sent (an empty marked request would deliver only marker and correlation bytes and leave the parent waiting on a reply to nothing)" >&2

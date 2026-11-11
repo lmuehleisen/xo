@@ -8,9 +8,15 @@
 #
 # Usage: fm-devin-permission-policy.sh <event> <policy-file>
 #   events: pre-tool-use | permission-request | post-tool-use | stop | retire |
-#           repin-grants | register-credentials | judge-probe
+#           repin-grants | register-credentials | judge-probe |
+#           mark-prompt-approval | unmark-prompt-approval
 #        fm-devin-permission-policy.sh grants-digest <brief-file>
-# The Devin hook payload arrives as JSON on stdin (the last three read none).
+# Hook events and judge-probe read JSON on stdin; management events read none.
+# mark-prompt-approval <policy-file> <decision-key> marks the exact pending
+# call before fm-send delivers an approval key; unmark-prompt-approval cancels
+# a failed send. PostToolUse consumes the marker as firstmate-control-plane
+# provenance. Every other prompt approval remains unattributed. This records
+# control-plane delivery intent, never an identity inferred from a keypress.
 #
 #   pre-tool-use (every tool)
 #       Applies the shared credential veto to exec and native read/write tools
@@ -180,10 +186,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 EVENT=${1-}
 POLICY=${2-}
+KEY=${3-}
 case "$EVENT" in
-  pre-tool-use|permission-request|post-tool-use|stop|retire|repin-grants|register-credentials|grants-digest|judge-probe) ;;
+  pre-tool-use|permission-request|post-tool-use|stop|retire|repin-grants|register-credentials|grants-digest|judge-probe|mark-prompt-approval|unmark-prompt-approval) ;;
   *)
-    sed -n '9,11s/^# *//p' "${BASH_SOURCE[0]}" >&2
+    sed -n '9,13s/^# *//p' "${BASH_SOURCE[0]}" >&2
     exit 0
     ;;
 esac
@@ -236,7 +243,7 @@ if [ "$EVENT" = retire ]; then
 fi
 
 PAYLOAD=
-case "$EVENT" in retire|repin-grants|register-credentials) ;; *) PAYLOAD=$(cat) ;; esac
+case "$EVENT" in retire|repin-grants|register-credentials|mark-prompt-approval|unmark-prompt-approval) ;; *) PAYLOAD=$(cat) ;; esac
 
 TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' DEVIN='' JUDGE_MODEL='' JUDGE_TIMEOUT='' GRANTS_SHA='' CONFIG_DIR='' FM_POLICY_JUDGE_TIER='' FM_POLICY_JUDGE_BIN=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
@@ -313,8 +320,10 @@ evaluate_write_target() {  # <literal filename>: shared by native writes and eve
 
 evaluate_tool() {  # non-exec tools: sets NOT_APPROVABLE
   REFUSE_REASON='' NOT_APPROVABLE='' NEVER_APPROVE='' SENSITIVE_HIT=''
+  STATIC_RULE_IDS=''
   local fields target
   if [ "$TOOL" = apply_patch ]; then
+    policy_rule native-patch
     credential_native "$CACHE_INPUT" "$WORKTREE"
     INPUT_JSON=$(jq -nc --argjson targets "$CREDENTIAL_LAST_WRITE_TARGETS" '{writeTargets:$targets}')
     while IFS= read -r -d '' target; do
@@ -329,8 +338,8 @@ evaluate_tool() {  # non-exec tools: sets NOT_APPROVABLE
   fields=$(printf '%s' "$PAYLOAD" | jq -c '.tool_input | {file_path,path,notebook_path,recursive,url}' 2>/dev/null) || fields=''
   credential_native "$fields" "$WORKTREE"
   case "$TOOL" in
-    read|grep|glob|notebook_read) ;;
-    write|edit|notebook_edit) evaluate_write_target "$FILE_PATH" ;;
+    read|grep|glob|notebook_read) policy_rule native-read ;;
+    write|edit|notebook_edit) policy_rule native-write; evaluate_write_target "$FILE_PATH" ;;
     *) no_approve "$TOOL is not auto-approved" ;;
   esac
 }
@@ -583,6 +592,7 @@ case "$EVENT" in
     # action was the call's sole objection, and never cached.
     if [ "$TOOL" = exec ] && [ -n "$NEVER_APPROVE" ] && [ "$NOT_APPROVABLE" = "$NEVER_APPROVE" ] \
       && [ -z "$SENSITIVE_HIT" ] && own_pr_review_write "$CMD"; then
+      STATIC_RULE_IDS=own-pr-review
       log_record approve policy "own-PR review round: $OWN_PR_SHAPE"
       json_reason approve "Approved by firstmate policy: own-PR review round: $OWN_PR_SHAPE"
       exit 0
@@ -619,7 +629,7 @@ case "$EVENT" in
       if [ ! -e "$marker" ]; then
         ckey=''
         [ -n "$NEVER_APPROVE" ] || [ -n "$CREDENTIAL_HOLD" ] || ckey=$(cache_key 2>/dev/null || true)
-        printf '%s\n%s\n%s\n' "$key" "$(one_line "$(input_summary)" 2000)" "$ckey" \
+        printf '%s\n%s\n%s\n\n%s\n' "$key" "$(one_line "$(input_summary)" 2000)" "$ckey" "$(pending_context)" \
           > "$marker" 2>/dev/null || true
         status_append "needs-decision [key=$key]: Devin is waiting at a permission prompt for $TOOL ($escalate_source: $(one_line "$escalate_reason" 160)): $(one_line "$(input_summary)" 300)"
       fi
@@ -630,6 +640,20 @@ case "$EVENT" in
     marker="$PENDING_DIR/$(tool_slug).pending"
     [ -n "$TOOL_USE_ID" ] && [ -f "$marker" ] || exit 0
     close_pending "$marker" approved-at-prompt "the escalated $TOOL call was approved at the prompt and ran"
+    exit 0
+    ;;
+  mark-prompt-approval|unmark-prompt-approval)
+    slug=${KEY#devin-permission-}
+    case "$KEY:$slug" in devin-permission-*:*) ;; *) exit 1 ;; esac
+    case "$slug" in ''|*[!A-Za-z0-9._-]*) exit 1 ;; esac
+    marker="$PENDING_DIR/$slug.pending"
+    [ -n "$PENDING_DIR" ] && [ -f "$marker" ] && [ "$(head -1 "$marker")" = "$KEY" ] || exit 1
+    if [ "$EVENT" = mark-prompt-approval ]; then
+      [ -n "$HASH_CMD" ] || exit 1
+      $HASH_CMD "$marker" > "$marker.firstmate" || exit 1
+    else
+      rm -f "$marker.firstmate" || exit 1
+    fi
     exit 0
     ;;
   stop)

@@ -1810,6 +1810,64 @@ test_retired_policies_preserve_exact_decisions() {
   pass 'retired and unknown policies refuse execution, retain decisions on failure and retire exact keys'
 }
 
+test_one_shot_context() {
+  local policy dir wt context log extra command
+  local POLICY_SH=$POLICY_SH
+  for context in unchanged source policy brief grants registry cwd worktree target home-target exclusions; do
+    POLICY_SH="$ROOT/bin/fm-agy-permission-policy.sh"
+    policy=$(new_case "one-shot-context-$context")
+    dir=$(case_dir "$policy") wt=$(jq -r .worktree "$policy")
+    mkdir -p "$dir/config" "$dir/other-wt"
+    printf 'fixture one\n' > "$wt/first.env"
+    printf 'fixture two\n' > "$wt/second.env"
+    ln -s first.env "$wt/.env.example"
+    printf '{"version":1,"revision":"r1","entries":[]}\n' > "$dir/config/declared-credentials.json"
+    jq --arg config "$dir/config" --arg home "$wt" '.config=$config | .credential_user_home=$home' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+    if [ "$context" = source ]; then
+      cp -R "$ROOT/bin" "$dir/source-bin"
+      POLICY_SH="$dir/source-bin/fm-agy-permission-policy.sh"
+    fi
+    command='cat .env.example'
+    [ "$context" != home-target ] || command='cat ~/.env.example'
+    hook "$policy" pre-tool-use run_command "$command" 1
+    denied "$OUT" || fail "$context fixture must hold its credential call"
+    "$POLICY_SH" approve "$policy" agy-permission-c1-s1 </dev/null || fail 'fixture must approve the held call'
+    extra='{}'
+    case "$context" in
+      source) printf '\n# Fixture revision.\n' >> "$dir/source-bin/fm-command-policy-lib.sh" ;;
+      policy) jq '.judge_timeout="7"' "$policy" > "$policy.new" && mv "$policy.new" "$policy" ;;
+      brief) printf '\nChanged task instructions.\n' >> "$dir/data/t1/brief.md" ;;
+      grants)
+        # shellcheck disable=SC2016 # Literal Markdown fences in the synthetic brief.
+        printf '\n```firstmate-grants\n{"write_dirs":["%s"]}\n```\n' "$dir/extra" >> "$dir/data/t1/brief.md"
+        "$POLICY_SH" repin-grants "$policy" </dev/null >/dev/null || fail 'fixture grants must repin'
+        ;;
+      registry) printf '{"version":1,"revision":"r2","entries":[]}\n' > "$dir/config/declared-credentials.json" ;;
+      cwd) extra=$(jq -nc --arg cwd "$dir/other-wt" '{Cwd:$cwd}') ;;
+      worktree) jq --arg wt "$dir/other-wt" '.worktree=$wt' "$policy" > "$policy.new" && mv "$policy.new" "$policy" ;;
+      target|home-target) rm "$wt/.env.example"; ln -s second.env "$wt/.env.example" ;;
+      exclusions) printf '\nDo not read file contents.\n' >> "$dir/data/t1/brief.md" ;;
+    esac
+    hook "$policy" pre-tool-use run_command "$command" 2 "$extra"
+    log="$dir/state/agy-permission-log.jsonl"
+    if [ "$context" = unchanged ]; then
+      abstained "$OUT" || fail 'unchanged one-shot approval must be consumed'
+      tail -1 "$log" | jq -e '.decision=="approve" and .approval_provenance=="firstmate-control-plane" and .credential_category=="protected-disclosure"' >/dev/null \
+        || fail 'one-shot use must record its approval source and credential category'
+      hook "$policy" post-tool-use run_command 'cat .env.example' 2
+      hook "$policy" pre-tool-use run_command 'cat .env.example' 3
+      denied "$OUT" || fail 'an unchanged one-shot approval must still be spent only once'
+    else
+      denied "$OUT" || fail "$context change must not consume an old one-shot approval"
+      [ "$(find "$dir/state/t1.agy-permission-cache" -name '*.once' | wc -l | tr -d ' ')" = 1 ] \
+        || fail "$context change must leave the mismatched token unconsumed"
+    fi
+  done
+  pass 'one-shot approvals bind source, policy, authority, cwd/worktree and physical targets; cwd/exclusion controls remain held'
+}
+
+test_one_shot_context
+test_policy_decision_metadata
 test_tracked_read_case_alias_exclusions
 test_tracked_read_hardlink_identity_exclusion
 test_filesystem_root_read_exclusion
