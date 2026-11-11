@@ -3746,6 +3746,7 @@ judge_probe() {  # <static-class>
 cache_key() {  # [shape] - exact by default, including pending escalation keys
   local h='' input=$CACHE_INPUT scope=exact authority='' targets=$CREDENTIAL_CONTEXT file digest worktree cwd
   [ -n "$CACHE_DIR" ] && [ -n "$HASH_CMD" ] && [ -n "$TOOL" ] && [ -n "$POLICY_REVISION" ] || return 1
+  [ -n "$POLICY" ] && [ -n "$BRIEF" ] || return 1
   # Hash operator-owned authority files, never operand contents. Missing brief
   # or policy cannot supply reusable authority; an absent registry is explicit.
   for file in "$POLICY" "$BRIEF" "$CREDENTIAL_REGISTRY_PATH"; do
@@ -3825,7 +3826,7 @@ tool_slug() {
 
 close_pending() {  # <marker-file> <decision> <resolved-note> [decider]
   local marker=$1 key='' summary='' ckey=''
-  local STATIC_RULE_IDS=$STATIC_RULE_IDS POLICY_REVISION=$POLICY_REVISION CREDENTIAL_CATEGORY=$CREDENTIAL_CATEGORY
+  local STATIC_RULE_IDS="$STATIC_RULE_IDS" POLICY_REVISION="$POLICY_REVISION" CREDENTIAL_CATEGORY="$CREDENTIAL_CATEGORY"
   local APPROVAL_PROVENANCE=unattributed context digest marked
   { IFS= read -r key; IFS= read -r summary; IFS= read -r ckey; } < "$marker" 2>/dev/null || true
   context=$(sed -n '5p' "$marker" 2>/dev/null)

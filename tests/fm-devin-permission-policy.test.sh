@@ -3144,7 +3144,7 @@ CASES
 test_ordinary_cache_context() {
   local policy dir wt context log payload old_cwd=$PWD
   local POLICY_SH=$POLICY_SH
-  for context in unchanged source policy brief grants registry cwd worktree target replacement patch-target shell-target; do
+  for context in missing-brief unchanged source policy brief grants registry cwd worktree target replacement patch-target shell-target; do
     POLICY_SH="$ROOT/bin/fm-devin-permission-policy.sh"
     # shellcheck disable=SC2016 # Literal fake judge body; no model calls.
     policy=$(new_case "cache-context-$context" 'if [ -e ../disable-judge ]; then echo "DECLINE: disabled"; else echo "APPROVE: fixture"; fi')
@@ -3155,6 +3155,9 @@ test_ordinary_cache_context() {
     ln -s "$wt/.git/first" "$wt/alias"
     printf '{"version":1,"revision":"r1","entries":[]}\n' > "$dir/config/declared-credentials.json"
     jq --arg config "$dir/config" '.config=$config' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+    if [ "$context" = missing-brief ]; then
+      jq '.brief="" | .config="" | .status=""' "$policy" > "$policy.new" && mv "$policy.new" "$policy"
+    fi
     if [ "$context" = source ]; then
       cp -R "$ROOT/bin" "$dir/source-bin"
       POLICY_SH="$dir/source-bin/fm-devin-permission-policy.sh"
