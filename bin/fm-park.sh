@@ -924,9 +924,13 @@ cmd_tick() {
     [[ "$line" =~ $close_line ]] || continue
     id=${BASH_REMATCH[1]}
     pr=${BASH_REMATCH[2]}
-    fm_pr_task_id_valid "$id" && fm_pr_url_parse "$pr" || continue
+    if ! fm_pr_task_id_valid "$id" || ! fm_pr_url_parse "$pr"; then
+      continue
+    fi
     marker="$STATE/.review-park-closed-$id"
-    [ ! -L "$marker" ] && { [ ! -e "$marker" ] || [ -f "$marker" ]; } || continue
+    if [ -L "$marker" ] || { [ -e "$marker" ] && [ ! -f "$marker" ]; }; then
+      continue
+    fi
     marker_tmp=$(mktemp "$STATE/.review-park.XXXXXX") || continue
     if ! { printf '%s\n' "$FM_PR_URL" > "$marker_tmp" && mv -f -- "$marker_tmp" "$marker"; }; then
       rm -f -- "$marker_tmp"
