@@ -2945,7 +2945,8 @@ test_claude_exclude_tools_leave_the_rest_of_the_launch_unchanged() {
   expect_code 0 "$?" "claude spawn with the file should succeed"$'\n'"$out"
   with_list=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$with_list" "--disallowedTools 'Workflow' --append-system-prompt " "the exclusion flag is missing"
-  assert_contains "$with_list" "--dangerously-skip-permissions" "the permission flag must survive the exclusion flag"
+  assert_contains "$with_list" "--permission-mode auto" "the reviewed permission mode must survive the exclusion flag"
+  assert_not_contains "$with_list" "--dangerously-skip-permissions" "Claude exclusions must not enable bypass"
   assert_contains "$with_list" "--settings " "the settings flag must survive the exclusion flag"
   pass "a Claude exclusion list adds only its own flag to the launch"
 }
