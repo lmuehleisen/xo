@@ -129,3 +129,30 @@ test_agy_mode_captures() {
   pass 'agy Auto and Plan captures preserve idle ambiguity and typed input across capture capabilities'
 }
 test_agy_mode_captures
+
+# Herdr's agy 1.5.10 viewport encodes the same grey hint with an indexed
+# colour and a full reset, rather than tmux's SGR 90/39 representation.
+test_agy_indexed_mode_hint() {
+  local screen plain crlf caps typed hint='Auto mode: edits & safe commands auto-approved (shift+tab to cycle)'
+  screen=$(cat "$ROOT/tests/fixtures/agy-composer/auto-idle-herdr.styled")
+  crlf=${screen//$'\n'/$'\r\n'}$'\r'
+  for caps in "$CAPS_STYLED" "$CAPS_TMUX"; do
+    assert_screen 'agy indexed grey idle' empty "$caps" "$screen" 1
+    assert_screen 'agy indexed grey CRLF idle' empty "$caps" "$crlf" 1
+    [ -z "$(fm_composer_extract_selected_content "$caps" "$crlf")" ] \
+      || fail 'agy indexed grey hint leaked into input extraction'
+    typed=${crlf/"${ESC}[38;5;8m${hint}${ESC}[0m"/'pending command'}
+    assert_screen 'agy indexed capture with typed input' pending "$caps" "$typed" 1
+    [ "$(fm_composer_extract_selected_content "$caps" "$typed")" = 'pending command' ] \
+      || fail 'agy indexed capture lost typed input'
+    typed=${screen/"$hint"/"$hint!"}
+    assert_screen 'agy similar indexed grey text stays pending' pending "$caps" "$typed" 1
+  done
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  assert_screen 'agy indexed hint without styling is ambiguous' unknown "$CAPS_PLAIN" "$plain"
+  assert_screen 'agy styling capability alone cannot prove hint' unknown "$CAPS_STYLED" "$plain"
+  typed=${screen/"${ESC}[38;5;8m${hint}${ESC}[0m"/"${ESC}[32m${hint}${ESC}[0m"}
+  assert_screen 'agy other palette colours stay ambiguous' unknown "$CAPS_STYLED" "$typed"
+  pass 'agy indexed grey mode hint is empty only with its exact styling and composer shape'
+}
+test_agy_indexed_mode_hint

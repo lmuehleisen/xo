@@ -748,7 +748,8 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # FM_COMPOSER_HINTED_IDLE_RE_DEFAULT below. FM_COMPOSER_IDLE_RE overrides for an unverified harness;
 # matching is case-insensitive.
 FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$|^Guide Devin while it works$|^Ask your question\.\.\.$|^Type your message\.\.\.$|^Type to queue message\.\.\.$'
-# Agy 1.5.3 renders these exact mode hints in SGR 90, not dim/truecolor.
+# Agy mode hints use SGR 90/39 in tmux captures (1.5.3) or indexed grey 8
+# with a full reset in Herdr captures (1.5.10), not dim/truecolor.
 # Only remove their styled forms within a proven Agy shape; palette colours
 # in other text or harnesses retain the generic stripper's conservative handling.
 FM_COMPOSER_AGY_HINTS=(
@@ -760,6 +761,9 @@ FM_COMPOSER_AGY_HINTS_STYLED=(
   $'\033[90m'"${FM_COMPOSER_AGY_HINTS[0]}"$'\033[39m'
   $'\033[90m'"${FM_COMPOSER_AGY_HINTS[1]}"$'\033[39m'
   $'\033[90m'"${FM_COMPOSER_AGY_HINTS[2]}"$'\033[39m'
+  $'\033[38;5;8m'"${FM_COMPOSER_AGY_HINTS[0]}"$'\033[0m'
+  $'\033[38;5;8m'"${FM_COMPOSER_AGY_HINTS[1]}"$'\033[0m'
+  $'\033[38;5;8m'"${FM_COMPOSER_AGY_HINTS[2]}"$'\033[0m'
 )
 
 # KIRO ONLY (fm_composer_kiro_scope): idle placeholders that carry a submit hint
