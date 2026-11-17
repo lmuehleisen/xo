@@ -126,7 +126,7 @@ The refusal names the record and the validation reason, so the captain can repai
 ### What `--force` does not lift
 
 `--force` does not lift the deferral, because it authorizes discarding unlanded work, never the captain's question.
-Only `answer` with the captain's words, `answer --actor firstmate` for a firstmate ruling, or evidence-backed `reconcile close` resolves the call, by either closing the question or releasing the gated work.
+The [lifecycle policy](../.agents/skills/captain-hold-lifecycle/SKILL.md#policy) owns the allowed answer and evidence-backed settlement paths.
 `bin/fm-backlog-transition-lib.sh` owns the transition and its record, and `bin/fm-captain-hold.sh --help` owns the predicate's contract.
 
 ## Answer-time resolution through chat
@@ -171,8 +171,22 @@ Both outcomes require a pre-existing durable request and the operator input that
 `reconcile list` is the read-only enumeration of pending requests.
 A successful normal answer also retires any pending request, because an answered call has no remaining re-check obligation.
 Every retirement is checked: if request removal fails after an answer, close, or note is already durable, the durable outcome stands but the command fails and leaves the pending request visible for retry.
-No path here closes a captain call without the captain's words through `answer`, a firstmate ruling through `answer --actor firstmate`, or the evidence through `reconcile close`.
 An Ops board below `answers` creates no request, exposes no reconciliation choice, and invokes no lifecycle mutation; an `answers` board offers the reconcile choice on decision cards, and a selection files the same captured-source request above.
+
+## PR settlement
+
+[PR hold settlement](configuration.md#pr-hold-settlement-confighold-pr-settle) connects the contribution observer to the hold lifecycle without changing cleanup or the merge poll.
+`bin/fm-captain-hold.sh --help` owns the declaration schema, supported events, and settlement commands.
+The observer invokes settlement for both fresh and retained terminal observations.
+It records evidence before applying the declared task transition, under the task's control lock.
+A retry uses that evidence to finish an interrupted transition without writing a second resolution.
+The existing parent channel receives the resolution before the declaration is retired.
+A `release` declaration follows the attended-only rule of [Answer-time resolution](#answer-time-resolution-through-chat): while the home is away or the away-posture record is locked the hold stays unchanged, and a later poll applies the declaration after the captain returns.
+When another command holds the task, for example a captain answer in progress, settlement leaves the declaration unchanged and a later poll applies it.
+Linking a follow-up PR to the held task keeps its declaration valid.
+A declaration that can no longer settle is removed, and the observer prints one diagnostic line when the question changed or the PR ended in the other terminal state.
+A successful settlement prints nothing, so it causes no wake.
+`tests/fm-contributions.test.sh` exercises merged and unmerged closure, default-off behavior, unrelated work, superseded declarations, away deferral, busy-task deferral, follow-up links, closure reports for a task with two closed PRs, and interrupted settlement.
 
 ## Card hygiene: a landed subject is not a live call
 
@@ -241,7 +255,9 @@ The away-posture restriction on queued merges and its residual limits are owned 
 ## Record divergence
 
 A captain call can have two records, and closing one does not close the other.
-A `resolved [key=...]` line closes the status-log fold; the structured captain-held task closes only through `answer`.
+The status-log fold is the open-decision set `bin/fm-classify-lib.sh` reads from a task's status log, where a keyed `needs-decision` or `blocked` line opens a decision.
+A `resolved [key=...]` line closes the status-log fold.
+The structured captain-held task settles only through the [lifecycle policy's answer or evidence paths](../.agents/skills/captain-hold-lifecycle/SKILL.md#policy).
 Until this guard existed, closing on the status side alone left no trace of the disagreement: the fold went quiet, the durable record kept saying the captain owed an answer, and nothing warned.
 
 `bin/fm-captain-hold.sh diverged` is the read-only report of that state, and `bin/fm-wake-drain.sh` prints it as a bounded `RECORD DIVERGENCE` section beside OPEN DECISIONS on every drain.

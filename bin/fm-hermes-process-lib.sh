@@ -11,7 +11,6 @@ fm_hermes_process_matches() {  # <args> [pid]
   else
     read -r -a words <<< "$args"
   fi
-  # Bash 3.2 set -u rejects "${words[@]}" when the array is empty.
   for word in ${words[@]+"${words[@]}"}; do
     if [ "$first" = 1 ]; then
       first=0
