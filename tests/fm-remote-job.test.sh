@@ -502,25 +502,21 @@ assert_absent "$JOB_DIR" "reap retained a completed job record"
 assert_absent "$FAKE_PERL_LOG" "the worker invoked an unavailable Perl runtime"
 pass "the worker preserves bounded argv and stdin in an empty environment"
 
-# A worker without USER or LOGNAME must not invent them: the child gets neither
-# variable, rather than empty strings a macOS credential lookup would misread.
-# The fixture runs as its own bash process, so the job library's variables never
-# enter this shell and the surrounding top-level assertions stay unaffected.
+# The child must see a missing login identity as unset, not empty strings.
+# As in the cadence fixture, the live test process owns the lane's dispatch.
 IDENTITY_DIR="$TMP_ROOT/identity-unset"
 mkdir -p "$IDENTITY_DIR"
-cat > "$IDENTITY_DIR/run.sh" <<'SH'
-set -u
-. "$ROOT/bin/fm-remote-job-lib.sh"
-fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh </dev/null >/dev/null \
-  || { echo "$FM_REMOTE_JOB_ERROR" >&2; exit 1; }
-HOME="$ACCOUNT_HOME" "$BASH" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --lane "$FM_REMOTE_JOB_ID" || exit 1
-fm_remote_job_wait "$ACCOUNT_HOME" "$FM_REMOTE_JOB_ID" || { echo "$FM_REMOTE_JOB_ERROR" >&2; exit 1; }
-cat "$FM_REMOTE_JOB_STDOUT"
-SH
-IDENTITY_OUT=$(env -u USER -u LOGNAME ROOT="$ROOT" ACCOUNT_HOME="$ACCOUNT_HOME" REMOTE_ROOT="$REMOTE_ROOT" \
-  REMOTE_HOME="$REMOTE_HOME" FM_REMOTE_JOB_STATE_ROOT="$IDENTITY_DIR/state" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
-  FM_REMOTE_JOB_QUEUE_TIMEOUT=60 FM_REMOTE_JOB_TIMEOUT=30 "$BASH" "$IDENTITY_DIR/run.sh") \
-  || fail "the identity-unset job did not complete"
+IDENTITY_OUT=$(
+  # shellcheck disable=SC2030,SC2031 # This case owns a separate queue root and bounds.
+  export FM_REMOTE_JOB_STATE_ROOT="$IDENTITY_DIR/state" FM_REMOTE_JOB_QUEUE_TIMEOUT=60 FM_REMOTE_JOB_TIMEOUT=30
+  fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh </dev/null >/dev/null \
+    || { echo "$FM_REMOTE_JOB_ERROR" >&2; exit 1; }
+  record_lane_owner "$FM_REMOTE_JOB_STATE_ROOT"
+  env -u USER -u LOGNAME "HOME=$ACCOUNT_HOME" "$BASH" "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" \
+    --lane "$FM_REMOTE_JOB_ID" "$$" "$(cat "$FM_REMOTE_JOB_STATE_ROOT/worker.lock/start")" || exit 1
+  fm_remote_job_wait "$ACCOUNT_HOME" "$FM_REMOTE_JOB_ID" || { echo "$FM_REMOTE_JOB_ERROR" >&2; exit 1; }
+  cat "$FM_REMOTE_JOB_STDOUT"
+) || fail "the identity-unset job did not complete"
 assert_contains "$IDENTITY_OUT" 'user=<unset>' "the worker invented USER for the child"
 assert_contains "$IDENTITY_OUT" 'logname=<unset>' "the worker invented LOGNAME for the child"
 pass "the worker passes USER and LOGNAME through only when set"

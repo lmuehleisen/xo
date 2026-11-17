@@ -555,7 +555,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: a remote job lane verifies its serving owner before claiming, while running, and before publishing a result, so a superseded worker stops its own work, and the start path reuses a verified live owner that is still initializing.
 - Class: carried.
 - Seam: lane ownership checks and the guarded state commit in `bin/fm-remote-job-worker.sh` and `bin/fm-remote-job-lib.sh` (shared).
-- Guard: `tests/fm-remote-job.test.sh` delayed-lane, active-lane, and result-publication ownership cases.
+- Guard: `tests/fm-remote-job.test.sh` delayed-lane, active-lane, and result-publication ownership cases; the unset-login-identity fixture passes the same owner proof.
 - Upstream: checks serving ownership at heartbeat (upstream #6431) but its lanes do not verify their serving owner; drop once lanes stop on ownership loss equivalently.
 
 ### herdr-submit-diagnostics
