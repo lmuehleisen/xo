@@ -422,6 +422,7 @@ write_task_meta() {
 
 # Gives the case's copy the remotes origin and backup, both served by
 # fakebin/git-remote-probe, and a named head that no ref outside the copy holds.
+# The origin keeps the PR fixture’s forge identity while using the probe transport.
 # Each fetch appends a line to FM_TEST_REMOTE_LOG, sleeps FM_TEST_REMOTE_SLEEP
 # seconds (default 0), and fails.
 add_probe_remotes() {  # <dir>
@@ -433,8 +434,8 @@ sleep "${FM_TEST_REMOTE_SLEEP:-0}"
 exit 1
 SH
   chmod +x "$dir/fakebin/git-remote-probe"
-  git -C "$dir/wt" remote add origin probe::origin
-  git -C "$dir/wt" remote add backup probe::backup
+  git -C "$dir/wt" remote add origin probe://github.com/o/r
+  git -C "$dir/wt" remote add backup probe://github.com/o/backup
   git -C "$dir/wt" commit -q --allow-empty -m 'named head only in the copy'
 }
 
@@ -1254,7 +1255,7 @@ test_scan_bounds_the_remote_refresh_by_its_budget() {
 
   out=$(FM_CHECK_TIMEOUT=16 FM_TEST_GH_HEAD=unavailable FM_TEST_REMOTE_SLEEP=60 FM_TEST_REMOTE_LOG="$dir/remote.log" \
     run_check_entry "$dir" scan 2> "$dir/stderr") || fail "the scan failed: $(cat "$dir/stderr")"
-  [ -s "$dir/remote.log" ] || fail "the scan's registration did not refresh the copy's remotes"
+  [ -s "$dir/remote.log" ] || fail "the scan's registration did not refresh the copy's remotes: $out"
   [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] || fail "a sweep behind hanging remotes did not report exactly one task: $out"
   case "$out" in
     "task-a reported https://github.com/o/r/pull/9 in a done line, but it was not recorded: named head $sha is unreachable outside the worker copy; could not refresh remote: "*) ;;

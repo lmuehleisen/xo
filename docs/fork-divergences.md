@@ -547,7 +547,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: record a reported pull request only when its repository is the task project's forge origin or an explicitly declared contribution target, so a reachable commit on another repository is not armed.
 - Class: carried.
 - Seam: repository binding in `bin/fm-pr-check.sh` (shared); `docs/architecture.md`, `docs/scripts.md`, and `docs/configuration.md` name it.
-- Guard: `tests/fm-pr-check-security.test.sh` `test_pr_repository_is_bound_to_the_task`.
+- Guard: `tests/fm-pr-check-security.test.sh` `test_pr_repository_is_bound_to_the_task`; the bounded refresh fixture uses an origin that matches the reported PR.
 - Upstream: records any canonical URL whose commit is reachable; drop once upstream refuses a mismatched repository before recording.
 
 ### remote-job-ownership
