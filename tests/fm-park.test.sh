@@ -903,7 +903,7 @@ test_failed_relaunch_keeps_record_and_stops_retrying() {
 }
 
 test_closed_pr_is_reported_once() {
-  local w out
+  local w out replacement
   w=$(make_world closed "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
   gh_fixture "$w/gh.1.json" state=CLOSED
   out=$(run_park "$w" tick 2>&1)
@@ -920,6 +920,15 @@ test_closed_pr_is_reported_once() {
   : > "$w/config/auto-land"
   out=$(run_park "$w" tick 2>&1)
   [ "$out" = "closed lane: PR $GL_URL was closed without merging; the lane needs a decision" ] || fail "closed-unparked: $out"
+
+  replacement="${GL_URL%/*}/8"
+  sed "s|^pr=.*|pr=$replacement|" "$w/state/lane.meta" > "$w/state/replacement.meta"
+  mv "$w/state/replacement.meta" "$w/state/lane.meta"
+  out=$(run_park "$w" tick 2>&1)
+  [ "$out" = "closed lane: PR $replacement was closed without merging; the lane needs a decision" ] \
+    || fail "closed-replacement: $out"
+  out=$(run_park "$w" tick 2>&1)
+  [ -z "$out" ] || fail "closed-replacement: reported twice: $out"
 
   w=$(make_world closed-busy "$GL_URL"); gl_fixture "$w" state=closed
   : > "$w/config/auto-land"

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 record_hygiene_report() {
-  local file id output now cutoff archive dir pr seen_prs prior n file_mtime read_timeout read_status exclude
+  local file id output now cutoff archive dir pr seen_prs prior n file_mtime read_timeout read_status exclude lock
   read_timeout=${FM_RECORD_HYGIENE_READ_TIMEOUT:-10}
   case "$read_timeout" in ''|*[!0-9]*|0) read_timeout=10 ;; esac
   seen_prs=

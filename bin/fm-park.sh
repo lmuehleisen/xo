@@ -111,7 +111,8 @@
 #   - with config/auto-land or config/park-on-review, each other idle ship lane
 #     with pr= and an armed merge poll gets one forge read:
 #     a close without merge is reported once (marker
-#     state/.review-park-closed-<id>), and with config/park-on-review a clean
+#     state/.review-park-closed-<id> holds the reported PR URL), and with
+#     config/park-on-review a clean
 #     gate parks it.
 # Relaunch triggers on a parked lane: the head moved, checks failing, changes
 # requested, a merge conflict, any unresolved review thread, or any new
@@ -774,10 +775,15 @@ cmd_run() {
 
 # --- tick ------------------------------------------------------------------
 
-# Prints a close once; the tick writes the marker after recording the wake.
+# The tick writes the reported PR URL after recording the wake. An empty
+# marker from an older version has no identity and cannot suppress a notice.
 closed_once() {  # <id> <pr>
-  [ ! -e "$STATE/.review-park-closed-$1" ] || return 0
-  printf 'closed %s: PR %s was closed without merging; the lane needs a decision\n' "$1" "$2"
+  local marker="$STATE/.review-park-closed-$1"
+  fm_pr_url_parse "$2" || return 0
+  if [ -f "$marker" ] && [ ! -L "$marker" ] && grep -qxF -- "$FM_PR_URL" "$marker"; then
+    return 0
+  fi
+  printf 'closed %s: PR %s was closed without merging; the lane needs a decision\n' "$1" "$FM_PR_URL"
 }
 
 watch_parked() {  # <id>
@@ -913,8 +919,18 @@ cmd_tick() {
   lines=$(printf '%s' "$lines" | grep -v '^$') || return 0
   fm_wake_append check park-on-review "check: park-on-review: $(printf '%s\n' "$lines" | paste -sd ';' - | sed 's/;/; /g')" || return 0
   rm -f -- ${reports[@]+"${reports[@]}"}
+  local marker pr marker_tmp close_line='^closed ([^:]+): PR ([^[:space:]]+) was closed without merging; the lane needs a decision$'
   while IFS= read -r line; do
-    case "$line" in "closed "*:*) line=${line#closed }; : > "$STATE/.review-park-closed-${line%%:*}" ;; esac
+    [[ "$line" =~ $close_line ]] || continue
+    id=${BASH_REMATCH[1]}
+    pr=${BASH_REMATCH[2]}
+    fm_pr_task_id_valid "$id" && fm_pr_url_parse "$pr" || continue
+    marker="$STATE/.review-park-closed-$id"
+    [ ! -L "$marker" ] && { [ ! -e "$marker" ] || [ -f "$marker" ]; } || continue
+    marker_tmp=$(mktemp "$STATE/.review-park.XXXXXX") || continue
+    if ! { printf '%s\n' "$FM_PR_URL" > "$marker_tmp" && mv -f -- "$marker_tmp" "$marker"; }; then
+      rm -f -- "$marker_tmp"
+    fi
   done <<< "$lines"
   printf '%s\n' "$lines"
 }
