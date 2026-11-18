@@ -305,6 +305,34 @@ agy updates itself, so re-run the live guard after any upgrade before trusting t
 
 ### Native Auto workers
 
+Verified on 2026-11-17 with agy 1.5.10: `gemini-4-hydrogen-medium` and `gemini-3.8-flash-high` passed full native admission on Herdr; `gemini-3.8-flash-high` also passed on tmux.
+Each run used fresh scratch state and completed active Auto, an actual random command result, the matching observer pair, accepted Stop, brief handoff, deterministic denial, exact status/inbox effects, production exit and owned-hook retirement.
+No live approval or decline was observed; safe commands completed through native Auto review.
+Refresh each model/backend context with the admission entry point, supplying fresh scratch paths:
+
+```sh
+FM_HOME="$LAB_HOME" FM_STATE_OVERRIDE="$LAB_HOME/state" \
+  FM_AGY_NATIVE_LIVE_STATE_ROOT="$STATE_PARENT" \
+  FM_AGY_NATIVE_LIVE_EVIDENCE_DIR="$EVIDENCE" \
+  bash bin/fm-agy-admission.sh ensure-native "$(command -v agy)" \
+    gemini-4-hydrogen-medium '' native-herdr '' ''
+```
+
+The other tested contexts were `gemini-3.8-flash-high '' native-herdr` and `gemini-3.8-flash-high '' native-tmux`, with the same two empty trailing arguments.
+Observed guard output for each context:
+
+```text
+ok - native Auto: warm activation, actual random command result, observer pair and accepted Stop
+ok - native Auto: exact status append completed through native review
+ok - native Auto: exact status/inbox round trip and accepted Stop
+# native Auto live checks passed (1.5.10, herdr)
+```
+
+The tmux result has the same output with `tmux` in the final line.
+Herdr's captured grey hint uses indexed colour 8 and a full reset; the classifier accepts it alongside the retained SGR 90/39 captures.
+`tests/fm-composer-agy.test.sh` replays the sanitized Herdr composer, preserves the older mode captures and refuses to infer empty input from unstyled hints or other palette colours.
+The admission range and activation requirements are unchanged.
+
 Verified on 2026-11-09 with agy 1.5.3, `gemini-3.8-flash-low`, macOS on Apple silicon, tmux then Herdr.
 Admission accepts the 1.5.x patch family on this evidence.
 
