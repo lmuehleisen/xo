@@ -76,7 +76,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: `config/crew-permissions` (automatic review by default, manual review as an option) replaces upstream's `config/claude-permission-mode` and `config/codex-approval-mode`, so pane-backed Claude and Codex worker launches never bypass permissions, while agy and Devin have their own entries below and other harnesses such as OpenCode, Cursor, Muse, Rovo, Command Code, and Polytoken keep upstream's unattended launch; README "Reviewed worker permissions".
 - Class: intended.
 - Seam: permission resolution and `launch_template` in `bin/fm-spawn.sh`, the omitted upstream bypass-only failover helper and suite, and `docs/configuration.md` (shared).
-- Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
+- Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; `test_claude_exclude_tools_leave_the_rest_of_the_launch_unchanged` checks that tool exclusions keep the reviewed mode; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
 - Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; upstream's separate Codex restricted setting is represented by the fork's existing manual review posture; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
 
 ### codex-reviewed-launch
@@ -249,8 +249,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: a pull request is presented as ready only when every check is green, the review settle window has passed, and unresolved bot review threads have been read, and a finished task whose PR was still pending is rechecked; `AGENTS.md` section 9 and the ship-landing skill.
 - Class: intended.
-- Seam: the readiness hunks in `bin/fm-pr-state.sh`, `bin/fm-pr-check.sh` (`--pending` and the `pr_pending` task-metadata field, which distinguish readiness follow-up from upstream's ready-PR degradation poll, preserve closed-PR terminal wakes in both modes, and preserve legacy readiness polling when absent; upstream's scan registration also uses `--pending`), `bin/fm-pr-poll.sh` (`--validated-readiness`), `bin/fm-pr-lib.sh`, `bin/fm-branch-prompt.sh`, `bin/fm-branch-outcome.sh`, `bin/fm-teardown.sh`, and the watcher, the readiness line in `AGENTS.md`, the ship-landing skill, and the evidence in `docs/verification/supervision.md` (shared).
-- Guard: `tests/fm-pr-state.test.sh` `test_bot_threads_and_settle`; `tests/fm-pr-check-security.test.sh` `test_finished_pr_readiness_followup`, `test_ready_registration_replaces_pending_poll_mode`, and `test_external_merge_transition_retires_only_terminal_poll`; `tests/fm-branch-supervision.test.sh`.
+- Seam: the readiness hunks in `bin/fm-pr-state.sh`, `bin/fm-pr-check.sh` (`--pending` and the `pr_pending` task-metadata field, which distinguish readiness follow-up from upstream's ready-PR degradation poll, preserve closed-PR terminal wakes in both modes, and preserve legacy readiness polling when absent; the scan uses `--pending` for GitHub), `bin/fm-pr-poll.sh` (`--validated-readiness`), `bin/fm-pr-lib.sh`, `bin/fm-branch-prompt.sh`, `bin/fm-branch-outcome.sh`, `bin/fm-teardown.sh`, and the watcher, the PR-specific closure marker in `bin/fm-park.sh`, the readiness line in `AGENTS.md`, the ship-landing skill, and the evidence in `docs/verification/supervision.md` (shared).
+- Guard: `tests/fm-pr-state.test.sh` `test_bot_threads_and_settle`; `tests/fm-pr-check-security.test.sh` `test_finished_pr_readiness_followup`, `test_ready_registration_replaces_pending_poll_mode`, and `test_external_merge_transition_retires_only_terminal_poll`; `tests/fm-branch-supervision.test.sh`; `tests/fm-park.test.sh` covers closure after PR replacement.
 - Upstream: treats green checks as ready without the bot-thread settle window or the pending recheck.
 
 ### away-spend-default
@@ -379,6 +379,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Guard: `tests/fm-claude-stop-autoarm.test.sh`; `tests/fm-turnend-guard.test.sh`; `tests/fm-watch-arm.test.sh`; `tests/fm-daemon.test.sh`; `tests/fm-afk-launch.test.sh`; `tests/fm-backend-tmux-smoke.test.sh`; `tests/fm-tmux-submit-busy.test.sh`; `tests/fm-control-relaunch.test.sh`; `tests/fm-afk-owned-digest-recovery.test.sh`; the opt-in live guards `tests/fm-claude-stopfailure-live-e2e.test.sh` and `tests/fm-afk-claude-long-digest-live-e2e.test.sh`.
 - Upstream: delivers every away escalation to a Claude Code primary as a record-backed doorbell (upstream #5664), which the fork takes without an additional digest-pointer file; only typed-envelope carriers retain the fork's 480-character pointer threshold.
   The Claude live guard verifies complete record-backed payload delivery; upstream's separate 8 KiB digest cap (upstream #5554) remains unapplied to typed-envelope carriers.
+  Upstream's Claude session identity is an optional input alongside the fork's StopFailure outcome and claim token.
   The upstream lost-hand-back notice is retained; the fork resets its failure episode only after a rewake commits, so a failed hand-back keeps the once-per-episode notice.
   The fork takes upstream's second attended-alarm writer and reasoned suppressed continuations, but an actionable close still rewakes after an alarm and ends that episode where upstream suppresses it, so a real wake is never swallowed by a leftover alarm.
   Upstream now registers the same script under `StopFailure` and paces error-ended continuations ([upstream #8134](https://github.com/kunchenguid/firstmate/pull/8134)); the fork's registration passes `--stop-failure`, whose single recovery turn after the limit reset or a bounded backoff owns that edge, and upstream's pacing covers only a payload delivered without that flag.
@@ -440,9 +441,9 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 - Intent: a stopped worker that cannot declare its own bounded wait gets one supervisor operation that writes the pause and retires only the named steering records, without treating that retirement as the worker having read them.
 - Class: carried.
-- Seam: fork-only `bin/fm-park.sh`, the `retired/` inbox disposition in `bin/fm-task-inbox-lib.sh`, the no-ring notices in `bin/fm-send.sh` and `bin/fm-remote-secondmate-control.sh`, the retired snapshot in `bin/fm-procevent.sh`, the bounded-pause hold in `bin/fm-secondmate-liveness-lib.sh`, the supervisor-park step in the stuck-crewmate-recovery skill, and the rows in `docs/scripts.md` and `docs/agent-control.md` (shared).
-- Guard: `tests/fm-park.test.sh`; the bounded-pause cases in `tests/fm-secondmate-liveness.test.sh`.
-- Upstream: no supervisor park; a pause is only the worker's own status line, and moving a steering record into `handled/` is only the worker's acknowledgement.
+- Seam: fork-only `bin/fm-supervisor-park.sh`, the compatibility dispatch in `bin/fm-park.sh`, the `retired/` inbox disposition in `bin/fm-task-inbox-lib.sh`, the no-ring notices in `bin/fm-send.sh` and `bin/fm-remote-secondmate-control.sh`, the retired snapshot in `bin/fm-procevent.sh`, the bounded-pause hold in `bin/fm-secondmate-liveness-lib.sh`, the supervisor-park step in the stuck-crewmate-recovery skill, and the rows in `docs/scripts.md` and `docs/agent-control.md` (shared).
+- Guard: fork-only `tests/fm-supervisor-park.test.sh`; the bounded-pause cases in `tests/fm-secondmate-liveness.test.sh`.
+- Upstream parks review-ready ship lanes using separate subcommands with forge and worktree checks; it does not record a supervisor-declared bounded wait or retire named steering records.
   Drop when upstream records the same bounded park and named retirement.
 
 ### quota-provider-scope
@@ -546,7 +547,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: record a reported pull request only when its repository is the task project's forge origin or an explicitly declared contribution target, so a reachable commit on another repository is not armed.
 - Class: carried.
 - Seam: repository binding in `bin/fm-pr-check.sh` (shared); `docs/architecture.md`, `docs/scripts.md`, and `docs/configuration.md` name it.
-- Guard: `tests/fm-pr-check-security.test.sh` `test_pr_repository_is_bound_to_the_task`.
+- Guard: `tests/fm-pr-check-security.test.sh` `test_pr_repository_is_bound_to_the_task`; the bounded refresh fixture uses an origin that matches the reported PR.
 - Upstream: records any canonical URL whose commit is reachable; drop once upstream refuses a mismatched repository before recording.
 
 ### remote-job-ownership
@@ -554,7 +555,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Intent: a remote job lane verifies its serving owner before claiming, while running, and before publishing a result, so a superseded worker stops its own work, and the start path reuses a verified live owner that is still initializing.
 - Class: carried.
 - Seam: lane ownership checks and the guarded state commit in `bin/fm-remote-job-worker.sh` and `bin/fm-remote-job-lib.sh` (shared).
-- Guard: `tests/fm-remote-job.test.sh` delayed-lane, active-lane, and result-publication ownership cases.
+- Guard: `tests/fm-remote-job.test.sh` delayed-lane, active-lane, and result-publication ownership cases; the unset-login-identity fixture passes the same owner proof.
 - Upstream: checks serving ownership at heartbeat (upstream #6431) but its lanes do not verify their serving owner; drop once lanes stop on ownership loss equivalently.
 
 ### herdr-submit-diagnostics
@@ -685,15 +686,6 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Seam: fork-only `bin/fm-captain-alert.sh` and `tests/fm-captain-alert.test.sh`, its away reach, arm, and return-health calls in `bin/fm-afk-contract.sh`, `bin/fm-afk-launch.sh`, and `bin/fm-afk-return.sh`, and the corresponding afk skill, architecture, configuration, scripts, and wedge-alarm prose (shared).
 - Guard: `tests/fm-captain-alert.test.sh`.
 - Upstream: has no equivalent one-way outcome notifier; drop once the same opt-in delivery, secrecy, failure reporting, and bounded queue behavior is available.
-
-### hermes-empty-argv-bash32
-
-- Intent: Hermes process identity accepts an empty argv under Bash 3.2 `set -u` instead of aborting.
-- Class: carried.
-- Seam: the empty-array expansion in `fm_hermes_process_matches` in `bin/fm-hermes-process-lib.sh`, and the empty-argv case in `tests/fm-hermes-harness.test.sh` (shared).
-- Guard: the empty-argv case in `tests/fm-hermes-harness.test.sh`.
-- Upstream: expands `"${words[@]}"`, which Bash 3.2 with `set -u` treats as an unbound variable when the array is empty.
-  Drop the alternate expansion once upstream's expansion is safe under that shell.
 
 ### captain-answer-task-link
 

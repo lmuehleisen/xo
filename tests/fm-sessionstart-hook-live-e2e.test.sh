@@ -125,6 +125,7 @@ make_lab() {  # <harness> -> echoes lab dir
   ln -sf "$ROOT/bin/fm-session-lock-lib.sh" "$lab/bin/fm-session-lock-lib.sh"
   ln -sf "$ROOT/bin/fm-cursor-lib.sh" "$lab/bin/fm-cursor-lib.sh"
   ln -sf "$ROOT/bin/fm-claude-lib.sh" "$lab/bin/fm-claude-lib.sh"
+  ln -sf "$ROOT/bin/fm-omp-process-lib.sh" "$lab/bin/fm-omp-process-lib.sh"
   cat > "$lab/bin/fm-bootstrap.sh" <<'SH'
 #!/usr/bin/env bash
 # Outlives the hook on purpose: the marker can only appear if the worker was

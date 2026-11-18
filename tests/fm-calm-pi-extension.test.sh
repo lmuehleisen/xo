@@ -593,6 +593,7 @@ function makeHost(session) {
   Object.assign(host, {
     // Pi reads its session through runtimeHost, which a session replacement swaps.
     runtimeHost: { session },
+    pendingBashComponents: [],
     compactionQueuedMessages: [],
     // Pi 1.5.1 redraws pending shell output here; Object.create skips its initializer.
     pendingBashComponents: [],

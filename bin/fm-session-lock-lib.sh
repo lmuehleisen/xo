@@ -27,6 +27,8 @@ _FM_SESSION_LOCK_LIB_DIR=${BASH_SOURCE[0]%/*}
 . "${_FM_SESSION_LOCK_LIB_DIR:-/}/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-claude-lib.sh
 . "${_FM_SESSION_LOCK_LIB_DIR:-/}/fm-claude-lib.sh"
+# shellcheck source=bin/fm-omp-process-lib.sh
+. "${_FM_SESSION_LOCK_LIB_DIR:-/}/fm-omp-process-lib.sh"
 unset _FM_SESSION_LOCK_LIB_DIR
 
 # Known harness command names; extend when a new adapter is verified. omp is
@@ -109,6 +111,8 @@ fm_ps_ppid() {  # <pid> -> parent pid
 #      command path or argv[0], owned by bin/fm-claude-lib.sh.
 #   4. a bare interpreter (node, python) running a harness script path.
 #   5. Cursor's own structural identity, owned by bin/fm-cursor-lib.sh.
+#   6. omp's structural identity, owned by bin/fm-omp-process-lib.sh, which
+#      also covers the bun-package install whose process name is `bun`.
 FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
   local comm=$1 args=$2 base argv0 name
@@ -141,6 +145,7 @@ fm_harness_process_matches() {  # <comm> <args>
   # locate its own harness in the ancestry, so every session start refuses the
   # fleet lock as read-only and the park can never arm.
   fm_cursor_process_matches "$comm" "$args" "$argv0" && return 0
+  fm_omp_process_matches "$comm" "$args" && return 0
   return 1
 }
 

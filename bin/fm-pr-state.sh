@@ -75,6 +75,8 @@ if ! fm_pr_url_parse "$URL" || [ "$FM_PR_PROVIDER" != github ]; then
   die "expected a GitHub pull-request URL"
 fi
 
+PR_OWNER=$FM_PR_OWNER
+PR_REPO=$FM_PR_REPO
 PATH_PART=$FM_PR_PATH
 NUMBER=$FM_PR_NUMBER
 ENDPOINT="/repos/$PATH_PART/pulls/$NUMBER"
