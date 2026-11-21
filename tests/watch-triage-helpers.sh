@@ -8139,6 +8139,7 @@ test_agy_silent_stall_mid_scan_write_stays_visible() {
   checked="$state/.agy-stall-checked-agymidscan-fixture-s9"
   : > "$checked"; set_mtime "$(( $(date +%s) - 300 ))" "$checked"
   real_find=$(command -v find)
+  # shellcheck disable=SC2016 # single quotes are deliberate: the fake find's own variables expand when it runs
   {
     printf '#!/usr/bin/env bash\n'
     printf '%q "$@"; rc=$?\n' "$real_find"
