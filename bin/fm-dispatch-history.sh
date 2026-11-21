@@ -55,10 +55,12 @@ done
 command -v jq >/dev/null 2>&1 || die "jq required"
 start=null
 if [ -n "$since" ]; then
-  start=$(jq -en --arg date "$since" '
+  if ! start=$(jq -en --arg date "$since" '
     select($date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) |
     ($date + "T00:00:00Z" | fromdateiso8601) |
-    select(strftime("%Y-%m-%d") == $date)' 2>/dev/null) || die "--since needs a valid UTC date (YYYY-MM-DD)"
+    select(strftime("%Y-%m-%d") == $date)' 2>/dev/null) || [ -z "$start" ]; then
+    die "--since needs a valid UTC date (YYYY-MM-DD)"
+  fi
 fi
 
 log="$home/state/dispatch-history.jsonl"

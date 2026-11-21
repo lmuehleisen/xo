@@ -3533,9 +3533,16 @@ assert_contains "$report_text" $'2025-01-01T00:00:00Z\texample\troutine\t0.97\tc
   "a spawn at the inclusive cutoff can still pair with an earlier recommendation"
 assert_equals '0' "$(FM_HOME="$TMP_ROOT/empty-report" "$REPORT" report --json | jq -r '.spawns | length')" \
   "a missing history is an empty report"
-if "$REPORT" report --home "$REPORT_HOME" --since 2025-02-30 >/dev/null 2>&1; then
-  fail "an invalid date must not be normalized into a different filter date"
-fi
+# Exercise both jq's normal exit and a successful exit with no emitted value.
+mkdir "$REPORT_HOME/bin"
+printf '#!/bin/sh\nexit 0\n' > "$REPORT_HOME/bin/jq"
+chmod +x "$REPORT_HOME/bin/jq"
+for report_path in "$PATH" "$REPORT_HOME/bin:$PATH"; do
+  report_err=$(PATH="$report_path" "$REPORT" report --home "$REPORT_HOME" --since 2025-02-30 2>&1)
+  expect_code 2 "$?" "an invalid date must be rejected as a usage error"
+  assert_equals 'fm-dispatch-history: --since needs a valid UTC date (YYYY-MM-DD)' "$report_err" \
+    "an invalid date reports the date error rather than a downstream jq error"
+done
 pass "private dispatch report handles legacy rows, every outcome, filters, and bare lane probes"
 
 # --- shared-quota opt-out: no quota call, declared-order pick ----------------

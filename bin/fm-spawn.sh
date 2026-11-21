@@ -3709,6 +3709,10 @@ fm_agy_bypass_validate
 
 case "$DISPATCH_OVERRIDE" in *[![:print:]]*) echo 'error: --dispatch-override must be a printable reason' >&2; exit 1 ;; esac
 DISPATCH_RECORD="$DATA/$ID/dispatch-resolution.json"
+# One snapshot feeds both launch validation and the dispatch history row, so a
+# resolver rerun during launch cannot attribute another record's routing.
+DISPATCH_SNAPSHOT=
+[ ! -f "$DISPATCH_RECORD" ] || DISPATCH_SNAPSHOT=$(cat "$DISPATCH_RECORD" 2>/dev/null) || DISPATCH_SNAPSHOT=
 if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
   if [ ! -e "$DISPATCH_RECORD" ]; then
     echo "error: config/crew-dispatch.json is active and task $ID has no recorded dispatch resolution; run bin/fm-dispatch-resolve.sh $DATA/$ID/brief.md --project <name> first" >&2
@@ -3717,7 +3721,7 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
   dispatch_fields=$(jq -r --arg id "$ID" '
     select(.task == $id and (.status | IN("clear", "ambiguous", "escalate", "error", "off"))
       and (if .status == "clear" then (.profile.harness | type) == "string" and .profile.harness != "" else true end))
-    | .status, (.profile.harness // ""), (.profile.model // ""), (.profile.effort // "")' "$DISPATCH_RECORD" 2>/dev/null) || dispatch_fields=
+    | .status, (.profile.harness // ""), (.profile.model // ""), (.profile.effort // "")' <<<"$DISPATCH_SNAPSHOT" 2>/dev/null) || dispatch_fields=
   { read -r dispatch_status; read -r selected_harness; read -r selected_model; read -r selected_effort; } <<<"$dispatch_fields" || true
   if [ -z "$dispatch_status" ]; then
     echo "error: malformed dispatch resolution $DISPATCH_RECORD for task $ID; rerun bin/fm-dispatch-resolve.sh $DATA/$ID/brief.md --project <name>" >&2
@@ -9428,7 +9432,7 @@ SPAWN_ACCOUNT=
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 if [ "$KIND" != secondmate ]; then
   fm_dispatch_history_spawn "$FM_HOME" "$ID" "$HARNESS" "$MODEL" "$EFFORT" \
-    "$DISPATCH_OVERRIDE" "$DISPATCH_RECORD" || true
+    "$DISPATCH_OVERRIDE" "$DISPATCH_SNAPSHOT" || true
 fi
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the
 # new endpoint now rather than at the next watcher poll; off costs one file test.

@@ -4,7 +4,7 @@
 # fm_dispatch_history_router <home> <brief> <status> <reason> <result-json>
 #                            <evidence-json> <lane> <latency-ms> <model>
 # fm_dispatch_history_spawn <home> <task-id> <harness> <model> <effort>
-#                           <override-reason> <dispatch-record-path>
+#                           <override-reason> <dispatch-record-json>
 #
 # Appends one compact JSON object per call to $home/state/dispatch-history.jsonl,
 # independent of FM_STATE_OVERRIDE. Each entry has kind, time (Unix seconds),
@@ -18,7 +18,8 @@
 # Spawn entries record the final profile and resolver_exists, which means an
 # earlier router entry for that task exists in this home's history (any status).
 # override_reason is the explicit launch override, or null. Lane, class, and
-# confidence come from the matching task's dispatch record, or are null.
+# confidence come from the matching task's dispatch record, passed as the JSON
+# text the caller validated the launch against (not reread), or are null.
 # Only successful ship/scout launches call the spawn helper, including relaunch.
 # No retention or rotation is performed. All logging work runs in a silent
 # subshell and callers ignore failure, preserving their output and exit status.
@@ -66,12 +67,12 @@ fm_dispatch_history_spawn() (
       'any(inputs; .kind == "router" and .task_id == $id)' "$log" >/dev/null; then
     exists=true
   fi
-  if [ -f "$record" ]; then
+  if [ -n "$record" ]; then
     routing=$(jq -cs --arg id "$id" '
       select(length == 1) | .[0] | objects |
       select(.task == $id and (.status | IN("clear", "ambiguous", "escalate", "error", "off"))) |
       {lane: (.lane | strings // null), class: (.class | strings // null),
-       confidence: (.confidence | numbers // null)}' "$record") || routing=''
+       confidence: (.confidence | numbers // null)}' <<<"$record") || routing=''
   fi
   line=$(jq -cn --argjson time "$(date +%s)" --arg id "$id" \
     --arg harness "$harness" --arg model "${model:-default}" \
