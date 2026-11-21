@@ -677,8 +677,9 @@ case "$EVENT" in
         fi
       done
     fi
-    # Only an explicit false keeps a command inside agy's sandbox; routine Git
-    # reads qualify only there.
+    # A call that omits BypassSandbox or sends false runs inside agy's
+    # sandbox; anything else is treated as a bypass. Routine Git qualifies
+    # only inside the sandbox.
     AGY_BYPASS_SANDBOX=true
     if [ "$TOOL" != run_command ] || printf '%s' "$PAYLOAD" \
       | jq -e '.toolCall.args | (has("BypassSandbox") | not) or .BypassSandbox == false' >/dev/null 2>&1; then

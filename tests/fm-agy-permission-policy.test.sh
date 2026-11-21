@@ -865,6 +865,12 @@ test_worker_home_grants_stay_read_only() {
       "$common/hooks" "$common/refs/heads" "$common/worktrees/t1"
     touch "$skills/SKILL.md" "$code/AGENTS.md" "$code/bin/fm-tool.sh" "$instructions" "$sibling/001.msg" "$wt/AGENTS.md" \
       "$common/config" "$common/refs/heads/main" "$common/worktrees/t1/HEAD"
+    # A task-data link whose target walks .. through a linked directory must
+    # be judged by the protected skill it reaches, not an in-data decoy.
+    mkdir -p "$skills/sub"
+    touch "$dir/data/t1/SKILL.md"
+    ln -s "$skills/sub" "$dir/data/t1/jump"
+    ln -s 'jump/../SKILL.md' "$dir/data/t1/escape.md"
     jq --arg posture "$posture" --arg code "$code" --arg instructions "$instructions" \
       --arg data "$dir/data" --arg config "$config" --arg common "$common" \
       '. + {posture:$posture, firstmate_root:$code, instructions:$instructions, home_data:$data, config:$config,
@@ -889,6 +895,7 @@ $sibling/001.msg
 $common/config
 $common/hooks/post-merge
 $common/worktrees/t1/HEAD
+$dir/data/t1/escape.md
 EOF
     while IFS= read -r cmd; do
       TMPDIR="$dir" hook "$policy" pre-tool-use run_command "$cmd"
@@ -901,6 +908,7 @@ chmod u+w '$instructions'
 printf '#!/bin/sh\n' > '$common/hooks/post-merge'
 printf x > '$common/refs/heads/main'
 cp '$wt/AGENTS.md' '$common/config'
+printf x > '$dir/data/t1/escape.md'
 mv '$sibling/001.msg' '$sibling/handled/'
 EOF
     hook "$policy" pre-tool-use write_file "$dir/data/t1/report.md"
@@ -1689,6 +1697,10 @@ PY
   printf 'fetched page\n' > "$brain/.system_generated/steps/22/content.md"
   printf 'other conversation\n' > "$HOME/.gemini/antigravity-cli/brain/c2/content.md"
   ln -s "$HOME/.gemini/antigravity-cli/brain/c2/content.md" "$brain/escape.md"
+  mkdir -p "$HOME/.gemini/antigravity-cli/brain/c2/sub"
+  printf 'decoy\n' > "$brain/content.md"
+  ln -s "$HOME/.gemini/antigravity-cli/brain/c2/sub" "$brain/jump"
+  ln -s 'jump/../content.md' "$brain/dotdot.md"
   printf 'SECRET=1\n' > "$brain/.env"
 
   hook "$policy" pre-tool-use view_file "$brain/.system_generated/steps/22/content.md" 1
@@ -1707,6 +1719,9 @@ PY
   denied "$OUT" || fail "another conversation's brain must stay under read scope: $OUT"
   hook "$policy" pre-tool-use view_file "$brain/escape.md" 5
   denied "$OUT" || fail "a symlink out of the own brain must not carry the exemption: $OUT"
+  [ "$(cat "$brain/dotdot.md")" = 'other conversation' ] || fail 'fixture .. link does not reach the other conversation'
+  hook "$policy" pre-tool-use view_file "$brain/dotdot.md" 44
+  denied "$OUT" || fail "a .. link through a linked directory must not carry the own-brain exemption: $OUT"
   hook "$policy" pre-tool-use view_file "$brain/.env" 6
   denied "$OUT" "held for firstmate" || fail "credential material in the own brain must still hold: $OUT"
   hook "$policy" pre-tool-use view_file "$other" 7

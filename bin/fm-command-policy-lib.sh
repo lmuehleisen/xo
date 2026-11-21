@@ -542,10 +542,19 @@ resolve_symlink_chain() {  # <abs>
   while [ -L "$abs" ] && [ "$hops" -lt 40 ]; do
     link=$(readlink "$abs" 2>/dev/null) || return 1
     case "$link" in
-      /*) abs=$(norm_abs "$link") ;;
-      *) abs=$(norm_abs "${abs%/*}/$link") ;;
+      /*) ;;
+      *) link="${abs%/*}/$link" ;;
     esac
-    resolved=$(physical_target "$abs" '' 0 2>/dev/null) && abs=$resolved
+    # Resolve directory components before any .. so a .. after a linked
+    # directory follows the kernel. Only a target the kernel could not open
+    # either (a missing, dangling or non-directory component) keeps the
+    # lexical form.
+    if resolved=$(physical_target "$link" '' 0 2>/dev/null); then
+      abs=$resolved
+    else
+      abs=$(norm_abs "$link")
+      resolved=$(physical_target "$abs" '' 0 2>/dev/null) && abs=$resolved
+    fi
     hops=$((hops + 1))
   done
   [ ! -L "$abs" ] || return 1
