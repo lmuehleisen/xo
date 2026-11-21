@@ -117,6 +117,17 @@
 #                          classification still reads running resets the timer
 #                          while its latest turn boundary is under
 #                          BUSY_TURN_MAX_SECS old (wedge_defer_t3code_running).
+#   stale: <window> (agy silent stall: task <id> idle <seconds>s after
+#                          firstmate declined <call> - no status, turn or
+#                          worktree progress since; inspect the worker)
+#                          an agy worker stalled on an unsettled native
+#                          decline (state/<task>.agy-permission-pending/
+#                          *.native-declined with its .pending marker still
+#                          standing) and no later progress for
+#                          STALE_ESCALATE_SECS; one wake per stall episode
+#                          (agy_silent_stall_tick). A declared pause, a
+#                          terminal status, a replaced generation, or a
+#                          newer pending prompt keeps its existing path.
 #   stale: <window> (unread firstmate instruction: ...)
 #   stale: <window> (steering-inbox ladder bookkeeping unwritable: ...)
 #   stale: <window> (steering-inbox busy bookkeeping unwritable: ...)
@@ -1159,6 +1170,121 @@ EOF
     fm_wake_secondmate_stall_receipt_write "$task" "$row_key" || return 1
     fm_wake_secondmate_stall_marker_write "$task" "$row_key" || return 1
     wake "$reason"
+  done
+  return 0
+}
+
+# Agy silent stall: a native call firstmate declined records a durable
+# .native-declined copy in the task's permission-pending store, and only a new
+# accepted Stop settles it (fm-agy-native-lib.sh). A worker sandboxed away from
+# its own status channel can sit on that declined call forever: the pane shows
+# an idle composer, the busy record stays busy because no Stop arrived, and
+# nothing writes a status line - so the ordinary stale path, which needs a
+# non-busy pane or a crossed busy-turn bound, says nothing for up to
+# BUSY_TURN_MAX_SECS. The declined record is the strongest evidence that exact
+# state has happened, so this tick reads it directly: an unsettled decline
+# (its .pending marker still stands) with no later progress - no status,
+# turn-end, progress or busy record newer than the decline, and no worktree
+# write since the last probe - for STALE_ESCALATE_SECS wakes once per stall
+# episode, naming the task and the declined call. A declared pause or
+# captain-held wait, a terminal status, a decline from a replaced generation,
+# or a newer pending prompt awaiting its own needs-decision all keep their
+# existing paths and never become a silent stall. The worktree probe runs at
+# most once per threshold per decline, behind the .agy-stall-checked marker.
+agy_silent_stall_tick() {
+  local meta task pending_dir declined slug now anchor mtime f
+  local reported checked probe_anchor window call reason age verb gen
+  for meta in "$STATE"/*.meta; do
+    [ -e "$meta" ] || continue
+    [ "$(fm_meta_get "$meta" harness)" = agy ] || continue
+    task=${meta##*/}; task=${task%.meta}
+    case "$task" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+    pending_dir="$STATE/$task.agy-permission-pending"
+    [ -d "$pending_dir" ] || continue
+    for declined in "$pending_dir"/*.native-declined; do
+      [ -f "$declined" ] || continue
+      slug=${declined##*/}; slug=${slug%.native-declined}
+      case "$slug" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+      # Only an unsettled decline counts: settlement removes the pending
+      # marker, and a settled decline is durable retry denial, not a stall.
+      [ -f "$pending_dir/$slug.pending" ] || continue
+      anchor=$(stat_mtime "$declined" 2>/dev/null || true)
+      case "$anchor" in ''|*[!0-9]*) continue ;; esac
+      fm_epoch_seconds_to now
+      [ $(( now - anchor )) -ge "$STALE_ESCALATE_SECS" ] || continue
+      gen=$(fm_meta_get "$meta" busy_gen)
+      if [ -n "$gen" ] && command -v jq >/dev/null 2>&1; then
+        [ "$(jq -r '.gen // ""' "$declined" 2>/dev/null || true)" = "$gen" ] || continue
+      fi
+      if status_is_paused_or_captain_held "$(status_declared_wait_line "$STATE/$task.status")"; then
+        continue
+      fi
+      verb=$(status_line_verb "$(last_status_line "$STATE/$task.status")")
+      case "$verb" in done|failed) continue ;; esac
+      # A newer prompt awaiting its own decision is progress into the
+      # needs-decision path, not a silent stall on the older decline.
+      for f in "$pending_dir"/*.pending; do
+        [ -f "$f" ] || continue
+        [ "$f" != "$pending_dir/$slug.pending" ] || continue
+        [ -f "${f%.pending}.native-declined" ] && continue
+        mtime=$(stat_mtime "$f" 2>/dev/null || true)
+        case "$mtime" in ''|*[!0-9]*) continue ;; esac
+        [ "$mtime" -lt "$anchor" ] || anchor=-1
+      done
+      [ "$anchor" != -1 ] || continue
+      # No later progress: any status, turn-end, progress or busy record
+      # newer than the decline restarts the stall clock from that record.
+      for f in "$STATE/$task.status" "$STATE/$task.turn-ended" \
+        "$STATE/$task.progress" "$STATE/$task.busy-state"; do
+        [ -f "$f" ] || continue
+        mtime=$(stat_mtime "$f" 2>/dev/null || true)
+        case "$mtime" in ''|*[!0-9]*) continue ;; esac
+        [ "$mtime" -le "$anchor" ] || anchor=$mtime
+      done
+      fm_epoch_seconds_to now
+      age=$(( now - anchor ))
+      [ "$age" -ge "$STALE_ESCALATE_SECS" ] || continue
+      reported="$STATE/.agy-stall-reported-$task-$slug"
+      checked="$STATE/.agy-stall-checked-$task-$slug"
+      if [ -e "$checked" ] && [ "$(age_of "$checked")" -lt "$STALE_ESCALATE_SECS" ]; then
+        continue
+      fi
+      # The previous probe (or the decline itself) bounds this interval. The
+      # next boundary is stamped before the scan and published after it, so a
+      # write landing mid-scan falls inside the next interval, not between.
+      probe_anchor=$declined
+      [ ! -f "$checked" ] || probe_anchor=$checked
+      touch "$checked.next" || return 1
+      if [ "$(cat "$reported" 2>/dev/null || true)" = "$anchor" ]; then
+        # Already reported: a worktree write since the last probe ends the
+        # episode, so a later quiet interval can wake once more.
+        if crew_worktree_written_since "$task" "$STATE" "$probe_anchor"; then
+          rm -f "$reported" || return 1
+          triage_log "ended reported agy silent stall (worktree written since the wake): $task $slug"
+        fi
+        mv -f "$checked.next" "$checked" || return 1
+        continue
+      fi
+      if crew_worktree_written_since "$task" "$STATE" "$probe_anchor"; then
+        mv -f "$checked.next" "$checked" || return 1
+        triage_log "absorbed agy silent stall (worktree written since the decline): $task $slug"
+        continue
+      fi
+      mv -f "$checked.next" "$checked" || return 1
+      call=''
+      if command -v jq >/dev/null 2>&1; then
+        call=$(jq -r '.args.CommandLine // .args.Path // .args.AbsolutePath // ""' "$declined" 2>/dev/null | head -n 1 || true)
+      fi
+      [ -n "$call" ] || call=$(sed -n '2p' "$pending_dir/$slug.pending" 2>/dev/null || true)
+      [ -n "$call" ] || call="agy-permission-$slug"
+      call=$(printf '%s' "$call" | tr '\n\r\t' '   ' | cut -c 1-160)
+      window=$(fm_backend_target_of_meta "$meta")
+      [ -n "$window" ] || window=$task
+      reason="stale: $window (agy silent stall: task $task idle ${age}s after firstmate declined $call - no status, turn or worktree progress since; inspect the worker)"
+      fm_wake_append stale "$window" "$reason" || return 1
+      printf '%s' "$anchor" > "$reported" || return 1
+      wake "$reason"
+    done
   done
   return 0
 }
@@ -4189,6 +4315,14 @@ while :; do
   # the parent without consuming or rewriting the receiving home's record.
   secondmate_wake_stall_tick || {
     echo "watcher: secondmate wake-loop observation failed" >&2
+    exit 1
+  }
+
+  # An agy worker stalled on an unsettled native decline writes no status
+  # and keeps its busy record, so no signal or stale path below can see it;
+  # the declined record itself is the evidence (agy_silent_stall_tick).
+  agy_silent_stall_tick || {
+    echo "watcher: agy silent-stall check failed" >&2
     exit 1
   }
 
