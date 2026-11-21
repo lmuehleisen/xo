@@ -107,6 +107,8 @@ Each effective `FM_HOME` contains private operational directories.
 
 - Task metadata, append-only status events, and endpoint signals.
 - Private dispatch call history in `state/dispatch-history.jsonl` (`bin/fm-dispatch-history-lib.sh` owns its format and best-effort writes).
+  Use [`bin/fm-dispatch-history.sh report`](../bin/fm-dispatch-history.sh) to compare recommendations with actual launches and see outcome counts.
+  Override reasons are stored in this private log beyond task cleanup, so keep them free of secrets and brief text.
 - Watcher and wake-queue coordination, away-mode state, and generated Relay artifacts.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
 - Enabled extension working namespaces under `state/extensions/`.
@@ -2485,7 +2487,7 @@ Firstmate passes its profile line unless it states a reason to override, such as
 **Task record (data/<id>/dispatch-resolution.json)**
 
 For a brief at `data/<id>/brief.md`, or `<FM_DATA_OVERRIDE>/<id>/brief.md` when that override is set, each run first removes that task's `dispatch-resolution.json`, so a decision never outlives a later run.
-Every outcome that exits 0, including off, then writes one JSON object there: `task` (the `<id>`), `status` (`clear`, `ambiguous`, `escalate`, `error`, or `off`), and `profile`.
+Every outcome that exits 0, including off, then writes a task record with the decision and available router evidence, as defined in the [`fm-dispatch-resolve.sh` header](../bin/fm-dispatch-resolve.sh).
 On `clear`, `profile` holds `harness`, `model`, and `effort`, each `null` when the chosen profile leaves it unset; otherwise `profile` is `null`.
 A usage or configuration error (exit 2) writes no record.
 `fm-spawn.sh` reads this record as the task's decision, as "Per-launch overrides and inherited defaults" describes.

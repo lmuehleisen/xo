@@ -224,7 +224,9 @@ test_dispatch_spawn_history() {
     tail -n 1 "$history" | jq -e --arg id "$id" --argjson paired "$([ "$kind" = ship ] && echo true || echo false)" '
       .kind == "spawn" and .task_id == $id and (.time | type) == "number" and
       .harness == "claude" and .model == "sonnet" and .effort == "high" and
-      .resolver_exists == $paired' >/dev/null || fail "spawn history lost the final profile or pairing"
+      .resolver_exists == $paired and
+      {override_reason, lane, class, confidence} == {override_reason: null, lane: null, class: null, confidence: null}' \
+      >/dev/null || fail "spawn history lost the final profile, pairing, or null routing fields"
     expected="spawned $id harness=claude kind=$kind"
     [ "$kind" != ship ] || expected="$expected mode=direct-PR yolo=off"
     expected="$expected window=firstmate:fm-$id worktree=$WT_DIR"
@@ -601,12 +603,13 @@ test_recorded_dispatch_selection_allows_matching_flags() {
 }
 
 test_recorded_dispatch_selection_allows_recorded_override() {
-  local rec id out status
+  local rec id out status record
   id=profile-selected-override-z13
   rec=$(make_spawn_case profile-selected-override claude "$id")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
-  record_dispatch "$HOME_DIR" "$id" clear claude opus high
+  record="$HOME_DIR/data/$id/dispatch-resolution.json"
+  printf '%s\n' '{"task":"profile-selected-override-z13","status":"clear","profile":{"harness":"claude","model":"opus","effort":"high"},"lane":"review","class":"deep","confidence":0.94}' > "$record"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high \
@@ -615,6 +618,10 @@ test_recorded_dispatch_selection_allows_recorded_override() {
   expect_code 0 "$status" "a recorded task override should permit a different launch: $out"
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report the overridden Codex launch"
   assert_grep 'dispatch_override=authorized account test' "$HOME_DIR/state/$id.meta" "task record omitted the override reason"
+  jq -e '{harness, model, effort, override_reason, lane, class, confidence} ==
+    {harness: "codex", model: "gpt-5", effort: "high", override_reason: "authorized account test",
+     lane: "review", class: "deep", confidence: 0.94}' "$HOME_DIR/state/dispatch-history.jsonl" >/dev/null \
+    || fail "spawn history lost the override or receipt telemetry"
   pass "a task override with its reason permits a different launch and is recorded"
 }
 

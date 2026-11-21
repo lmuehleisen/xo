@@ -9427,7 +9427,8 @@ SPAWN_ACCOUNT=
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 if [ "$KIND" != secondmate ]; then
-  fm_dispatch_history_spawn "$FM_HOME" "$ID" "$HARNESS" "$MODEL" "$EFFORT" || true
+  fm_dispatch_history_spawn "$FM_HOME" "$ID" "$HARNESS" "$MODEL" "$EFFORT" \
+    "$DISPATCH_OVERRIDE" "$DISPATCH_RECORD" || true
 fi
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the
 # new endpoint now rather than at the next watcher poll; off costs one file test.

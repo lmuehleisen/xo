@@ -4,6 +4,7 @@
 # fm_dispatch_history_router <home> <brief> <status> <reason> <result-json>
 #                            <evidence-json> <lane> <latency-ms> <model>
 # fm_dispatch_history_spawn <home> <task-id> <harness> <model> <effort>
+#                           <override-reason> <dispatch-record-path>
 #
 # Appends one compact JSON object per call to $home/state/dispatch-history.jsonl,
 # independent of FM_STATE_OVERRIDE. Each entry has kind, time (Unix seconds),
@@ -16,6 +17,8 @@
 # synthetic policy scores. Legacy snapshots retain their spendPriority key.
 # Spawn entries record the final profile and resolver_exists, which means an
 # earlier router entry for that task exists in this home's history (any status).
+# override_reason is the explicit launch override, or null. Lane, class, and
+# confidence come from the matching task's dispatch record, or are null.
 # Only successful ship/scout launches call the spawn helper, including relaunch.
 # No retention or rotation is performed. All logging work runs in a silent
 # subshell and callers ignore failure, preserving their output and exit status.
@@ -57,16 +60,27 @@ fm_dispatch_history_router() (
 
 fm_dispatch_history_spawn() (
   local home=$1 id=$2 harness=$3 model=$4 effort=$5 exists=false line
+  local override=$6 record=$7 routing=''
   local log="$home/state/dispatch-history.jsonl"
   if [ -f "$log" ] && jq -en --arg id "$id" \
       'any(inputs; .kind == "router" and .task_id == $id)' "$log" >/dev/null; then
     exists=true
   fi
+  if [ -f "$record" ]; then
+    routing=$(jq -cs --arg id "$id" '
+      select(length == 1) | .[0] | objects |
+      select(.task == $id and (.status | IN("clear", "ambiguous", "escalate", "error", "off"))) |
+      {lane: (.lane | strings // null), class: (.class | strings // null),
+       confidence: (.confidence | numbers // null)}' "$record") || routing=''
+  fi
   line=$(jq -cn --argjson time "$(date +%s)" --arg id "$id" \
     --arg harness "$harness" --arg model "${model:-default}" \
-    --arg effort "${effort:-default}" --argjson exists "$exists" '
+    --arg effort "${effort:-default}" --argjson exists "$exists" \
+    --arg override "$override" --argjson routing "${routing:-null}" '
     {kind: "spawn", time: $time, task_id: $id, harness: $harness,
-     model: $model, effort: $effort, resolver_exists: $exists}
+     model: $model, effort: $effort, resolver_exists: $exists,
+     override_reason: ($override | select(. != "") // null),
+     lane: $routing.lane, class: $routing.class, confidence: $routing.confidence}
   ') || return 0
   umask 077
   mkdir -p "$home/state" || return 0
