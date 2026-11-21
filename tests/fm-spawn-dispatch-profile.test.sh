@@ -624,12 +624,10 @@ test_recorded_dispatch_selection_allows_recorded_override() {
     || fail "spawn history lost the override or receipt telemetry"
   # The helper records the snapshot it is handed, never a later rewrite of the record.
   printf '%s\n' '{"task":"profile-selected-override-z13","status":"clear","lane":"other","class":"fast","confidence":0.1}' > "$record"
-  (
-    # shellcheck source=bin/fm-dispatch-history-lib.sh
-    . "$ROOT/bin/fm-dispatch-history-lib.sh"
-    fm_dispatch_history_spawn "$HOME_DIR" "$id" codex gpt-5 high '' \
-      '{"task":"profile-selected-override-z13","status":"clear","lane":"review","class":"deep","confidence":0.94}'
-  )
+  # shellcheck disable=SC2016 # expanded by the child shell
+  bash -c '. "$1"; shift; fm_dispatch_history_spawn "$@"' _ "$ROOT/bin/fm-dispatch-history-lib.sh" \
+    "$HOME_DIR" "$id" codex gpt-5 high '' \
+    '{"task":"profile-selected-override-z13","status":"clear","lane":"review","class":"deep","confidence":0.94}'
   tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '{lane, class, confidence} ==
     {lane: "review", class: "deep", confidence: 0.94}' >/dev/null \
     || fail "spawn history read the record again instead of the validated snapshot"
@@ -721,7 +719,7 @@ test_batch_checks_each_task_against_its_own_record() {
 test_lane_route_records_model_family() {
   local rec id out status lanes
   lanes='{"classes":{"sol-high":{"family":"gpt","routes":[{"harness":"codex","model":"gpt-5","effort":"high"}]}},"rules":[{"lane":"standard","when":"ordinary work","classes":["sol-high"]}]}'
-  id=lane-family-z15
+  id='lane-family-z15'
   rec=$(make_spawn_case lane-family claude "$id")
   read_case_record "$rec"
   printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
@@ -732,7 +730,7 @@ test_lane_route_records_model_family() {
   expect_code 0 "$status" "a lane route spawn should succeed"$'\n'"$out"
   assert_grep 'model_family=gpt' "$HOME_DIR/state/$id.meta" "a lane route did not record its class family"
 
-  id=lane-unlisted-z16
+  id='lane-unlisted-z16'
   rec=$(make_spawn_case lane-unlisted claude "$id")
   read_case_record "$rec"
   printf '%s\n' "$lanes" > "$HOME_DIR/config/crew-dispatch.json"
