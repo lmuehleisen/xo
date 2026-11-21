@@ -1245,18 +1245,30 @@ agy_silent_stall_tick() {
       age=$(( now - anchor ))
       [ "$age" -ge "$STALE_ESCALATE_SECS" ] || continue
       reported="$STATE/.agy-stall-reported-$task-$slug"
-      [ "$(cat "$reported" 2>/dev/null || true)" != "$anchor" ] || continue
       checked="$STATE/.agy-stall-checked-$task-$slug"
       if [ -e "$checked" ] && [ "$(age_of "$checked")" -lt "$STALE_ESCALATE_SECS" ]; then
         continue
       fi
+      # The previous probe (or the decline itself) bounds this interval; the
+      # marker advances only after the comparison so no write is skipped.
       probe_anchor=$declined
       [ ! -f "$checked" ] || probe_anchor=$checked
-      touch "$checked" || return 1
+      if [ "$(cat "$reported" 2>/dev/null || true)" = "$anchor" ]; then
+        # Already reported: a worktree write since the last probe ends the
+        # episode, so a later quiet interval can wake once more.
+        if crew_worktree_written_since "$task" "$STATE" "$probe_anchor"; then
+          rm -f "$reported" || return 1
+          triage_log "ended reported agy silent stall (worktree written since the wake): $task $slug"
+        fi
+        touch "$checked" || return 1
+        continue
+      fi
       if crew_worktree_written_since "$task" "$STATE" "$probe_anchor"; then
+        touch "$checked" || return 1
         triage_log "absorbed agy silent stall (worktree written since the decline): $task $slug"
         continue
       fi
+      touch "$checked" || return 1
       call=''
       if command -v jq >/dev/null 2>&1; then
         call=$(jq -r '.args.CommandLine // .args.Path // .args.AbsolutePath // ""' "$declined" 2>/dev/null | head -n 1 || true)

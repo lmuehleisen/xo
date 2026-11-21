@@ -8050,3 +8050,68 @@ test_agy_pending_prompt_stays_on_needs_decision_path() {
   unset FM_FAKE_CREW_STATE
   pass "a pending agy permission prompt stays on the needs-decision path and never becomes a silent stall"
 }
+
+
+test_agy_silent_stall_probe_keeps_prior_interval() {
+  local dir state fakebin out capture_file window key pane_hash gen old pid
+  local checked reported anchor
+  dir=$(make_case agy-silent-stall-probe); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-agyprobe"
+  printf 'User declined the tool call\n>\n? for shortcuts    auto - Gemini\n' > "$capture_file"
+  gen=$(agy_declined_fixture "$dir" agyprobe "$window" "git rev-parse --git-common-dir")
+  old=$(( $(date +%s) - 900 ))
+  set_mtime "$old" "$state/agyprobe.agy-permission-pending/fixture-s9.native-declined"
+  set_mtime "$old" "$state/agyprobe.agy-permission-pending/fixture-s9.pending"
+  set_mtime "$old" "$state/agyprobe.agy-permission-pending/fixture-s9.candidate"
+  set_mtime "$old" "$state/agyprobe.busy-state"
+  set_mtime "$old" "$state/agyprobe.status"
+  set_mtime "$old" "$state/agyprobe.meta"
+  anchor=$old
+  # An earlier probe absorbed the stall 300s ago; the worker wrote a file
+  # 100s ago, between that probe and this one.
+  checked="$state/.agy-stall-checked-agyprobe-fixture-s9"
+  : > "$checked"; set_mtime "$(( $(date +%s) - 300 ))" "$checked"
+  : > "$dir/wt/edit.txt"; set_mtime "$(( $(date +%s) - 100 ))" "$dir/wt/edit.txt"
+  printf '%s' "$(seen_sig "$state/agyprobe.status")" > "$state/.seen-agyprobe_status"
+  key=$(watch_window_key "$window")
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown - source: none - fake default'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "a write between probes did not defer the agy silent-stall wake: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a write between probes printed a silent-stall wake: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a write between probes queued a silent-stall wake"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the deferred probe cycle"
+
+  # A reported stall whose worker wrote again since the last probe ends that
+  # episode, so a later quiet interval can wake once more.
+  reported="$state/.agy-stall-reported-agyprobe-fixture-s9"
+  printf '%s' "$anchor" > "$reported"
+  set_mtime "$(( $(date +%s) - 300 ))" "$checked"
+  : > "$dir/wt/edit2.txt"; set_mtime "$(( $(date +%s) - 100 ))" "$dir/wt/edit2.txt"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "a resumed reported stall woke immediately: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a resumed reported stall printed a wake: $(cat "$out")"
+  [ ! -e "$reported" ] || fail "a worktree write did not end the reported stall episode"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the resumed-episode cycle"
+  unset FM_FAKE_CREW_STATE
+  pass "agy silent-stall probes compare against the previous probe and end a reported episode on new writes"
+}
