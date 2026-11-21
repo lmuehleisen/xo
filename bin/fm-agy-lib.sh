@@ -202,11 +202,12 @@ fm_agy_worker_instructions_path() {  # <physical-state-dir> <id>
   printf '%s/%s.agy-hooks/firstmate-AGENTS.md' "$1" "$2"
 }
 
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the brief note.
 fm_agy_worker_brief_note() {  # <physical-state-dir> <id>
   printf '\nIf you need Firstmate'\''s own AGENTS.md, read its launch-time copy at `%s`.\n' \
     "$(fm_agy_worker_instructions_path "$1" "$2")"
   printf 'For steering, list `%s/%s.inbox` with list_dir, use read_file for each message, and acknowledge with the brief'\''s literal mv using that physical path.\n' "$1" "$2"
-  printf 'For status, use a plain single-line echo append to `%s/%s.status` instead of the fleet-ledger compound below; the watcher picks up the line.\n' "$1" "$2"
+  printf 'For status, use a plain single-line echo append to `%s/%s.status` instead of the fleet-ledger compound below, with BypassSandbox set to true: the status file is outside your granted directories, and Firstmate allows exactly that append without review. The watcher picks up the line.\n' "$1" "$2"
 }
 
 # This short-circuits in the pane immediately before the native invocation,
@@ -373,10 +374,10 @@ fm_agy_meta_lines() {
 fm_agy_spawn_wire() {
   [ "$RAW_LAUNCH" -eq 0 ] || return 0
   local wt reason policy grants_sha config instructions posture=manual version=''
-  command -v jq >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || {
+  if ! command -v jq >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
     echo 'error: agy worker policy requires jq and Node.js' >&2
     exit 1
-  }
+  fi
   wt=$(cd "$WT" && pwd -P) || exit 1
   if ! reason=$(fm_agy_native_project_compatible "$wt"); then
     echo "error: $reason" >&2

@@ -14,19 +14,37 @@
 #   - list_dir, ls, read_file/view_file or cat of its own status file and its
 #     own task data folder (writes keep the policy's ordinary write rules);
 #   - <code-root>/bin/fm-publish-gate.sh policy, with no redirection;
-#   - sandboxed git rev-parse, status, log, diff, show or branch
+#   - native Auto's sandboxed git rev-parse, status, log, diff, show or branch
 #     --show-current whose cwd or -C target is the task worktree, with only
-#     the listed read-only options and revision or in-worktree path operands.
+#     the listed read-only options and revision or in-worktree path operands;
+#     under brief read exclusions, log only without a patch and diff or show
+#     only as a summary, so file contents keep their scope review.
 # Commands are literal: no variables, globs, substitutions, heredocs, braces,
 # background jobs or wrappers, and other executables must resolve to
 # /bin, /usr/bin, /usr/local/bin or Homebrew.
 # A compound joined by &&, ; or the one find | sort pipe is allowed only when
 # every segment is.
 
+# Each link target is joined unnormalized and resolved component by component,
+# so a .. after a linked directory follows the kernel rather than the lexical
+# path an approval would otherwise name.
+agy_routine_physical() {  # <path> <cwd>
+  local abs link hops=0
+  abs=$(physical_target "$1" "$2" 0) || return 1
+  while [ -L "$abs" ]; do
+    [ "$hops" -lt 40 ] || return 1
+    link=$(readlink "$abs") || return 1
+    case "$link" in /*) ;; *) link="${abs%/*}/$link" ;; esac
+    abs=$(physical_target "$link" '' 0) || return 1
+    hops=$((hops + 1))
+  done
+  [ -e "$abs" ] || return 1
+  printf '%s' "$abs"
+}
+
 agy_routine_read_path() {  # <path> <cwd> <file|dir>
   local abs root
-  abs=$(physical_target "$1" "$2" 0) || return 1
-  abs=$(resolve_symlink_chain "$abs") || return 1
+  abs=$(agy_routine_physical "$1" "$2") || return 1
   case "$3" in
     dir) [ -d "$abs" ] || return 1 ;;
     file) [ -f "$abs" ] || return 1 ;;
@@ -49,11 +67,12 @@ agy_routine_read_path() {  # <path> <cwd> <file|dir>
 }
 
 agy_routine_git() {  # <physical or absolute cwd>; subsequent arguments are literal git operands
-  local cwd=$1 sub arg pathspec=0
+  local cwd=$1 sub arg pathspec=0 patch=0 summary=0
   shift
-  # Outside-sandbox Git could execute configured diff, filter or monitor
-  # programs outside the worktree even for otherwise read-only subcommands.
-  [ "$AGY_BYPASS_SANDBOX" = false ] || return 1
+  # Only native Auto runs a call without a bypass request inside agy's
+  # sandbox; Manual has none. Unsandboxed Git could execute configured diff,
+  # filter or monitor programs even for otherwise read-only subcommands.
+  [ "$NATIVE_AUTO" = 1 ] && [ "$AGY_BYPASS_SANDBOX" = false ] || return 1
   while [ "$#" -gt 0 ]; do
     case "$1" in
       -C) [ "$#" -ge 2 ] && [ -n "$2" ] || return 1
@@ -75,7 +94,7 @@ agy_routine_git() {  # <physical or absolute cwd>; subsequent arguments are lite
   while [ "$#" -gt 0 ]; do
     arg=$1; shift
     if [ "$pathspec" = 1 ]; then
-      arg=$(physical_target "$arg" "$cwd" 0) && arg=$(resolve_symlink_chain "$arg") || return 1
+      arg=$(agy_routine_physical "$arg" "$cwd") || return 1
       strictly_inside "$arg" "$WORKTREE" || return 1
       continue
     fi
@@ -90,8 +109,9 @@ agy_routine_git() {  # <physical or absolute cwd>; subsequent arguments are lite
     case "$sub" in
       log|diff|show)
         case "$arg" in
-          --oneline|--stat|--shortstat|--numstat|--name-only|--name-status|--abbrev-commit|\
-          --cached|--staged|--no-ext-diff|--no-textconv|--check|--no-patch|-p|--patch|\
+          --stat|--shortstat|--numstat|--name-only|--name-status|--no-patch) summary=1; continue ;;
+          -p|--patch|--check) patch=1; continue ;;
+          --oneline|--abbrev-commit|--cached|--staged|--no-ext-diff|--no-textconv|\
           --format=*|--pretty=*) continue ;;
           -n) [ "$#" -gt 0 ] && [[ $1 =~ ^[0-9]+$ ]] || return 1; shift; continue ;;
         esac
@@ -102,6 +122,16 @@ agy_routine_git() {  # <physical or absolute cwd>; subsequent arguments are lite
     case "/$arg/" in */../*|*//*) return 1 ;; esac
     [ "$sub" != status ] && [[ $arg =~ ^[[:alnum:]][[:alnum:]_./~^-]*$ ]] || return 1
   done
+  # Brief read exclusions cover file contents, not Git metadata: under them
+  # only content-free forms qualify (log without a patch; diff and show only
+  # as a summary).
+  if [ "${AGY_ROUTINE_READ_LIMITED:-0}" = 1 ]; then
+    case "$sub" in
+      log) [ "$patch" = 0 ] || return 1 ;;
+      diff|show) [ "$patch" = 0 ] && [ "$summary" = 1 ] || return 1 ;;
+    esac
+  fi
+  return 0
 }
 
 agy_routine_segment() {  # <cwd> <redir> <target> <command> [args...]
@@ -119,7 +149,7 @@ agy_routine_segment() {  # <cwd> <redir> <target> <command> [args...]
       fi
       # Reject project-local lookalikes even when only a basename is typed.
       path=$(type -P "$1" 2>/dev/null) || return 1
-      path=$(physical_target "$path" "$CWD" 0) && path=$(resolve_symlink_chain "$path") || return 1
+      path=$(agy_routine_physical "$path" "$CWD") || return 1
       case "$path" in
         /bin/"$cmd"|/usr/bin/"$cmd"|/usr/local/bin/"$cmd"|/opt/homebrew/Cellar/*/"$cmd"|\
         /usr/local/Cellar/*/"$cmd"|/opt/homebrew/bin/"$cmd") ;;
@@ -145,14 +175,17 @@ agy_routine_segment() {  # <cwd> <redir> <target> <command> [args...]
     cat)
       [ "${1-}" != -- ] || shift
       [ "$#" -gt 0 ] || return 1
-      for arg in "$@"; do [[ $arg != -* ]] && agy_routine_read_path "$arg" "$CWD" file || return 1; done ;;
+      for arg in "$@"; do
+        [[ $arg != -* ]] || return 1
+        agy_routine_read_path "$arg" "$CWD" file || return 1
+      done ;;
     ls)
       while [[ ${1-} =~ ^-[1aAdFhl]+$ ]]; do shift; done
       [ "${1-}" != -- ] || shift
       [ "$#" -gt 0 ] || return 1
       for arg in "$@"; do
-        [[ $arg != -* ]] && { agy_routine_read_path "$arg" "$CWD" dir ||
-          agy_routine_read_path "$arg" "$CWD" file; } || return 1
+        [[ $arg != -* ]] || return 1
+        agy_routine_read_path "$arg" "$CWD" dir || agy_routine_read_path "$arg" "$CWD" file || return 1
       done ;;
     find)
       [ -n "$INBOX" ] && [ "$#" = 5 ] && [ "$2:$3:$4:$5" = '-maxdepth:1:-name:*.msg' ] \

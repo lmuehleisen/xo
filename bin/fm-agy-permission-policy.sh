@@ -686,6 +686,8 @@ case "$EVENT" in
     fi
     if [ -z "$NEVER_APPROVE" ] && [ -z "$CREDENTIAL_HOLD" ] && [ -z "$SENSITIVE_HIT" ]; then
       routine=0
+      AGY_ROUTINE_READ_LIMITED=0
+      [ -z "$(brief_read_constraints)" ] || AGY_ROUTINE_READ_LIMITED=1
       case "$TOOL" in
         run_command) if agy_routine_command; then routine=1; fi ;;
         read_file|view_file)

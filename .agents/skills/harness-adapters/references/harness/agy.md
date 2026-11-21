@@ -71,7 +71,8 @@ Manual remains an explicit native-review choice, but both worker modes refuse pr
 Secondmates retain their separate primary integration.
 
 [`fm-agy-permission-policy.sh`](../../../../../bin/fm-agy-permission-policy.sh) owns exact task roots, protected wiring/instructions, credential metadata, force/publication and brief-scope constraints.
-[`fm-agy-routine-lib.sh`](../../../../../bin/fm-agy-routine-lib.sh) owns the exact routine allowance the policy answers with `allow`: own-task status, steering and data operations, the home's read-only publication-policy print, and sandboxed read-only Git in the worktree, even under brief read exclusions.
+[`fm-agy-routine-lib.sh`](../../../../../bin/fm-agy-routine-lib.sh) owns the exact routine allowance the policy answers with `allow`: own-task status, steering and data operations, the home's read-only publication-policy print, and native Auto's sandboxed read-only Git in the worktree, whose metadata forms stay routine under brief read exclusions while file contents keep their scope review.
+agy instructs its model to try every command inside the sandbox first, and the status file lies outside every grant, so the worker's launch brief directs `BypassSandbox` for the status append; the allowance covers that exact append.
 Every segment of a compound must qualify.
 Other calls retain review without a Firstmate worker judge or reusable judge approval; foreign home paths, publication commands and other sandbox overrides do not inherit the allowance.
 Static command analysis cannot establish what every opaque program will do and is not an OS security boundary.

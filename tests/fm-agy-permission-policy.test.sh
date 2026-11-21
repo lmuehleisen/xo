@@ -497,8 +497,12 @@ cat README.md
 bin/fm-lint.sh
 mkdir -p build/out
 EOF
+  # agy's tool contract defaults BypassSandbox to false, so a native Auto call
+  # that omits it runs inside the sandbox just like an explicit false.
   hook "$policy" pre-tool-use run_command 'git log --oneline -5'
   allowed "$OUT" || fail "worktree git log must receive the exact routine allow, got rc=$RC out=$OUT"
+  hook "$policy" pre-tool-use run_command 'git log --oneline -5' 2 '{"BypassSandbox":false}'
+  allowed "$OUT" || fail "an explicit sandboxed git log must receive the exact routine allow, got rc=$RC out=$OUT"
   pass "fm-agy-permission-policy: read-and-build commands reach native review or the exact routine allow"
 }
 
@@ -865,7 +869,8 @@ test_worker_home_grants_stay_read_only() {
       --arg data "$dir/data" --arg config "$config" --arg common "$common" \
       '. + {posture:$posture, firstmate_root:$code, instructions:$instructions, home_data:$data, config:$config,
         git_dirs:[$common]}' \
-      "$policy" > "$dir/policy.new" && mv "$dir/policy.new" "$policy" || fail 'could not configure home-grant fixture'
+      "$policy" > "$dir/policy.new" || fail 'could not configure home-grant fixture'
+    mv "$dir/policy.new" "$policy"
 
     # Even here, where private state is physically inside a scratch base, a
     # native file tool must not treat a workspace grant as a write grant.
@@ -1482,7 +1487,8 @@ test_routine_task_operations() {
   printf 'working [at=1]: foreign\n' > "$dir/state/t2.status"
   touch "$inbox/001.msg" "$outbox/001.msg" "$data/report.md" "$dir/data/t2/report.md" "$config/setting"
   jq --arg data "$dir/data" --arg config "$config" '. + {home_data:$data,config:$config}' \
-    "$policy" > "$dir/policy.new" && mv "$dir/policy.new" "$policy" || fail 'could not configure routine fixture'
+    "$policy" > "$dir/policy.new" || fail 'could not configure routine fixture'
+  mv "$dir/policy.new" "$policy"
   cp "$data/brief.md" "$dir/plain-brief"
   sed 's/Keep the change narrow\./Do not read unrelated source files./' "$data/brief.md" > "$dir/new-brief"
   mv "$dir/new-brief" "$data/brief.md"
@@ -1514,6 +1520,32 @@ EOF
   allowed "$OUT" || fail "exact outside-sandbox status append must be allowed: $OUT"
   hook "$policy" pre-tool-use run_command "git -C '$wt' status --short" 53 '{"BypassSandbox":true}'
   ! allowed "$OUT" || fail "outside-sandbox Git must not borrow the sandboxed read allowance: $OUT"
+  # Read exclusions keep Git file contents under scope review; content-free
+  # metadata forms stay routine.
+  printf 'restricted\n' > "$wt/restricted.txt"
+  step=400
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    ! allowed "$OUT" || fail "content-producing Git must keep its scope review under read exclusions: $cmd => $OUT"
+  done <<EOF
+git show HEAD -- restricted.txt
+git show HEAD
+git diff -- restricted.txt
+git diff
+git diff --stat -p
+git diff --check
+git log -p -- restricted.txt
+EOF
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step" '{"BypassSandbox":false}'
+    allowed "$OUT" || fail "content-free Git must stay routine under read exclusions: $cmd => $OUT"
+  done <<EOF
+git diff --stat -- restricted.txt
+git log --oneline -- restricted.txt
+git show --name-only HEAD
+EOF
   # Held neighbours keep their existing hold or native review; none may
   # receive the routine allow, whether or not the brief has read exclusions.
   neighbours=$(cat <<EOF
@@ -1548,6 +1580,37 @@ EOF
   done
   hook "$policy" pre-tool-use run_command "cat '$status'; cat '$outbox/001.msg'" 300
   ! allowed "$OUT" || fail "mixed compound must not auto-allow even without a sandbox override: $OUT"
+  # The brief is now free of read exclusions, so content-producing Git in the
+  # worktree is routine again.
+  step=500
+  for cmd in 'git show HEAD -- restricted.txt' 'git diff'; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    allowed "$OUT" || fail "without read exclusions, worktree Git reads stay routine: $cmd => $OUT"
+  done
+  # A link whose target walks .. through a linked directory names the file the
+  # kernel opens, not a lexically collapsed decoy inside the task data.
+  mkdir -p "$dir/elsewhere/sub"
+  printf 'outside\n' > "$dir/elsewhere/blocked.txt"
+  printf 'decoy\n' > "$data/blocked.txt"
+  ln -s "$dir/elsewhere/sub" "$data/jump"
+  ln -s 'jump/../blocked.txt' "$data/escape.txt"
+  ln -s report.md "$data/alias.md"
+  [ "$(cat "$data/escape.txt")" = outside ] || fail 'fixture link does not reach the outside file'
+  hook "$policy" pre-tool-use run_command "cat '$data/escape.txt'" 510
+  ! allowed "$OUT" || fail "a .. link out of the task data must not get the routine allow: $OUT"
+  hook "$policy" pre-tool-use read_file "$data/escape.txt" 511
+  ! allowed "$OUT" || fail "a file-tool read through a .. link must not get the routine allow: $OUT"
+  hook "$policy" pre-tool-use run_command "cat '$data/alias.md'" 512
+  allowed "$OUT" || fail "an in-folder link must keep the routine allow: $OUT"
+  # Manual runs without agy's sandbox, so its Git keeps review while the exact
+  # status allowance still applies.
+  jq '.posture = "manual"' "$policy" > "$dir/policy.new" || fail 'could not switch posture'
+  mv "$dir/policy.new" "$policy"
+  hook "$policy" pre-tool-use run_command 'git status --short' 520 '{"BypassSandbox":false}'
+  ! allowed "$OUT" || fail "Manual Git must keep its review: $OUT"
+  hook "$policy" pre-tool-use run_command "echo 'working [at=3]: manual' >> '$status'" 521
+  allowed "$OUT" || fail "Manual must keep the exact status allowance: $OUT"
   pass 'fm-agy-permission-policy: only exact own-task commands and all-allowed compounds get native allow'
 }
 
