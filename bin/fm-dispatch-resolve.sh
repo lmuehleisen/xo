@@ -730,17 +730,15 @@ while IFS= read -r h; do
       agy_permission_mode=${agy_permission_mode%"${agy_permission_mode##*[![:space:]]}"}
       case "$agy_permission_mode" in auto|manual) ;; *) die "invalid config/crew-permissions (expected auto or manual)" ;; esac
     fi
-    if [ "$agy_permission_mode" = auto ]; then
-      case "$PROJECT" in
-        projects/*) agy_project="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/${PROJECT#projects/}" ;;
-        /*|./*|../*|*/*) agy_project=$PROJECT ;;
-        *)
-          agy_project="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/$PROJECT"
-          if [ ! -d "$agy_project" ] && [ "$PROJECT" = "$(basename "$FM_ROOT")" ]; then agy_project=$FM_ROOT; fi ;;
-      esac
-      if [ -d "$agy_project" ]; then
-        AGY_PROJECT_REASON=$(fm_agy_native_project_compatible "$agy_project") || true
-      fi
+    case "$PROJECT" in
+      projects/*) agy_project="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/${PROJECT#projects/}" ;;
+      /*|./*|../*|*/*) agy_project=$PROJECT ;;
+      *)
+        agy_project="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/$PROJECT"
+        if [ ! -d "$agy_project" ] && [ "$PROJECT" = "$(basename "$FM_ROOT")" ]; then agy_project=$FM_ROOT; fi ;;
+    esac
+    if [ -d "$agy_project" ]; then
+      AGY_PROJECT_REASON=$(fm_agy_native_project_compatible "$agy_project") || true
     fi
   fi
 done < <(jq -r "$FM_DISPATCH_LANES_JQ"'

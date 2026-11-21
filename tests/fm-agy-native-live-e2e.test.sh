@@ -124,7 +124,8 @@ mkdir -p "$WORKSPACE" "$SCRATCH" "$DATA" "$STATE/$ID.inbox/handled"
 git init -q "$WORKSPACE"
 printf 'Disposable native Auto canary; follow only the supplied harmless check.\n' > "$WORKSPACE/AGENTS.md"
 printf '# Disposable brief\n' > "$DATA/brief.md"
-printf 'Move only this exact message to handled.\n' > "$STATE/$ID.inbox/001.msg"
+steer_token=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+printf '%s\n' "$steer_token" > "$STATE/$ID.inbox/001.msg"
 GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$STATE" "$ID")
 jq -n --arg wt "$WORKSPACE" --arg state "$STATE" --arg id "$ID" --arg gen "$GEN" \
   --arg data "$DATA" --arg tmp "$SCRATCH" --arg config "$LAB_HOME/config" \
@@ -174,6 +175,7 @@ launch=$(printf '%q ' env -u CLAUDECODE -u CODEX_THREAD_ID -u PI_CODING_AGENT -u
   -u FM_PI_HARNESS -u FM_OMP_HARNESS -u JETSKI_APP_DATA_DIR -u NO_COLOR \
   AGY_CLI_DISABLE_AUTO_UPDATE=1 "$AGY_BIN" --mode auto --sandbox "${MODEL_FLAGS[@]}" \
   --add-dir "$WORKSPACE" --add-dir "$SCRATCH" --add-dir "$DATA" \
+  --add-dir "$STATE/$ID.inbox" \
   --add-dir "$STATE/$ID.agy-hooks" --log-file "$LAB/native.log" \
   --prompt-interactive "$(fm_agy_readiness_prompt)")
 launch="$launch; native_rc=\$?; printf '%s\\n' \"\$native_rc\" > $(fm_agy_native_quote "$LAB/native-exit")"
@@ -250,30 +252,27 @@ ask_command() {
 }
 ask_command "/usr/bin/printf '%s\\n' NATIVE_STATUS_OK >> $(fm_agy_native_quote "$STATE/$ID.status")"
 key=$(wait_decision auto)
-if [ "$key" != native-complete ]; then
-  [ "$(fm_agy_native_seq "$STATE" "$ID" idle 2>/dev/null || true)" = '' ] || fail 'pending native prompt manufactured idle'
-  "$ROOT/bin/fm-agy-permission-policy.sh" approve "$POLICY" "$key" </dev/null || fail 'exact one-shot native approval failed'
-  LIVE_APPROVAL=1
-fi
-grep -qx NATIVE_STATUS_OK "$STATE/$ID.status" || fail 'approved exact status append did not execute'
-pass 'native Auto: exact status append completed through native review'
+[ "$key" = native-complete ] || fail 'exact status append unexpectedly asked for review'
+grep -qx NATIVE_STATUS_OK "$STATE/$ID.status" || fail 'allowed exact status append did not execute'
+pass 'native Auto: exact status append completed without review'
 seq=$(fm_agy_native_seq "$STATE" "$ID")
 case "$(fm_busy_record_read "$STATE" "$ID")" in 'idle agy-hook stop '*) ;; *)
   fm_agy_native_wait_stop "$STATE" "$ID" "$seq" || fail 'approval failed to settle' ;;
 esac
 
-ask_command "mv $(fm_agy_native_quote "$STATE/$ID.inbox/001.msg") $(fm_agy_native_quote "$STATE/$ID.inbox/handled/")"
-key=$(wait_decision auto)
-if [ "$key" != native-complete ]; then
-  "$ROOT/bin/fm-agy-permission-policy.sh" approve "$POLICY" "$key" </dev/null || fail 'exact inbox approval failed'
-  LIVE_APPROVAL=1
-fi
-[ ! -e "$STATE/$ID.inbox/001.msg" ] && [ -f "$STATE/$ID.inbox/handled/001.msg" ] \
-  && [ "$(cat "$STATE/$ID.inbox/handled/001.msg")" = 'Move only this exact message to handled.' ] || fail 'exact inbox acknowledgment failed'
-seq=$(fm_agy_native_seq "$STATE" "$ID")
-case "$(fm_busy_record_read "$STATE" "$ID")" in 'idle agy-hook stop '*) ;; *)
-  fm_agy_native_wait_stop "$STATE" "$ID" "$seq" || fail 'inbox approval failed to settle' ;;
-esac
+# No approval is sent in this turn: it must read the message and acknowledge
+# it inside the exact inbox grant, then return the token it actually read.
+record="$STATE/$ID.inbox/001.msg"
+handled="$STATE/$ID.inbox/handled/"
+turn "Use read_file on $record. Then run exactly: mv $(fm_agy_native_quote "$record") $(fm_agy_native_quote "$handled"). Use no other tools. Reply exactly with the token read from the message."
+fm_agy_native_screen "$BACKEND" "$TARGET" "$ID" > "$LAB/inbox.capture"
+grep -Eq "^ *$steer_token *$" "$LAB/inbox.capture" || fail 'granted inbox token was not read and returned'
+[ ! -e "$record" ] && [ -f "${handled}001.msg" ] \
+  && [ "$(cat "${handled}001.msg")" = "$steer_token" ] || fail 'granted inbox acknowledgment failed'
+jq -es --arg path "$record" --arg gen "$GEN" --arg session "$session" '
+  any(.gen == $gen and .session_id == $session and .event == "post-tool-use"
+    and (.tool == "read_file" or .tool == "view_file") and .input == $path and .error == "")
+' "$STATE/agy-permission-log.jsonl" >/dev/null || fail 'real read_file observation missing'
 
 case "${FM_AGY_NATIVE_LIVE_DECLINE_PROBE:-none}" in
   none) ;;

@@ -37,20 +37,23 @@ credential_held() {
 credential_allowed() {
   case "${POLICY_SH##*/}" in
     fm-devin*) [ "$(printf '%s' "$OUT" | jq -r .decision)" = approve ] ;;
-    *) abstained "$OUT" ;;
+    # agy abstains to native review, or allows an exact routine task operation.
+    *) abstained "$OUT" || [ "$(printf '%s' "$OUT" | jq -r .decision 2>/dev/null)" = allow ] ;;
   esac
 }
 
 test_policy_decision_metadata() {
-  local policy dir log command expected fields step=7000
+  local policy dir log command expected reason fields step=7000
   policy=$(new_case decision-metadata)
   dir=$(case_dir "$policy")
   log=$(jq -r .log "$policy")
   while IFS='|' read -r command expected; do
     credential_exec "$policy" "$command" "$step"; step=$((step + 1))
     credential_allowed || fail "metadata fixture must retain static approval: $command => $OUT"
-    tail -1 "$log" | jq -e --arg rule "$expected" '
-      .decision=="approve" and .decider=="policy" and .reason=="read-and-build set"
+    reason='read-and-build set'
+    [ "$(printf '%s' "$OUT" | jq -r .decision 2>/dev/null)" != allow ] || reason='exact routine task operation'
+    tail -1 "$log" | jq -e --arg rule "$expected" --arg reason "$reason" '
+      .decision=="approve" and .decider=="policy" and .reason==$reason
       and .rule_id==$rule and (.policy_revision|test("^[0-9a-f]{64}$"))
       and .credential_category=="ordinary" and .approval_provenance=="static-policy"
       and has("tool_use_id") and has("judge_attempts")' >/dev/null \

@@ -33,7 +33,7 @@ GUARDS = {
 INTEGRATION = [
     "bin/fm-agy-admission.py", "bin/fm-agy-admission.sh",
     "bin/fm-agy-lib.sh", "bin/fm-spawn.sh", "bin/fm-agy-hook.sh",
-    "bin/fm-agy-permission-policy.sh", "bin/fm-command-policy-lib.sh",
+    "bin/fm-agy-permission-policy.sh", "bin/fm-agy-routine-lib.sh", "bin/fm-command-policy-lib.sh",
     "bin/fm-agy-native.py", "bin/fm-agy-native-lib.sh", "bin/fm-watch.sh",
     "bin/fm-backend.sh", "bin/backends/tmux.sh", "bin/backends/herdr.sh",
     "bin/fm-credential-access.mjs", "bin/fm-credential-access-lib.sh",

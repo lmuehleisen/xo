@@ -33,8 +33,8 @@
 # hooks.json before installing it, so every hook it writes, including the
 # turn-end pair, is one agy will load.
 #
-# With a <policy-file> argument install-worker also wires the native/legacy
-# permission adapter bin/fm-agy-permission-policy.sh beside the observer: an
+# With a <policy-file> argument install-worker also wires the deterministic
+# worker policy bin/fm-agy-permission-policy.sh beside the observer: an
 # armed heartbeat on PreInvocation and Stop, and the decision as a second
 # PreToolUse hook (after the observer, with a timeout above the judge
 # budget). The merge is validated the same way, so the busy-state groups

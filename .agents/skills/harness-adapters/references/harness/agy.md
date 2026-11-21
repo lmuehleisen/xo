@@ -12,7 +12,7 @@ agy updates itself often and without asking, so treat every version-scoped fact 
 |---|---|
 | Binary | Absolute `agy` from `PATH`, resolved once and refused if absent. A single self-updating Go binary; the installed path is the real executable, not a launcher. |
 | Launch | Native Auto uses `--prompt-interactive` for a synthetic readiness turn, then verifies activation before delivering the task brief; manual launches retain `-i`; headless `-p` is never a worker route. |
-| Directory grants | `--add-dir`, repeatable, and MANDATORY - see "The worktree grant" below. |
+| Directory grants | `--add-dir`, repeatable and mandatory - see "Worker directory grants". |
 | Approvals | New Auto workers use verified native Auto plus deterministic task constraints. Manual retains native review. See "Approvals" below. |
 | Busy state | `agy-hook`: PreInvocation opens; fullyIdle Stop closes. The worker binds its generation and main conversation; interruption emits no Stop and conservatively leaves busy. |
 | Spawn start | Native Auto must prove activation and a real harmless result before receiving the brief, then prove a later worker invocation accepted the brief. `../../../../../bin/fm-agy-lib.sh` owns the gates and bounds. |
@@ -34,9 +34,9 @@ agy shares the `~/.gemini` configuration root with Google's separate `gemini` ad
 Detection keeps them apart on their own markers: agy publishes `JETSKI_APP_DATA_DIR=antigravity-cli` and no `GEMINI_CLI`, and the value is the CLI's exact app-data directory, which the Antigravity IDE does not share (the IDE keeps state under `~/.gemini/antigravity`).
 `JETSKI_APP_DATA_DIR` is tested before the `CLAUDECODE` line because whether agy scrubs an inherited Claude marker was NOT verified; ordering it first is correct either way, and the launch clears the foreign markers as defense in depth.
 
-## The worktree grant
+## Worker directory grants
 
-Every launch must pass `--add-dir` for the task worktree, and every granted path must be PHYSICALLY RESOLVED.
+Every worker launch must grant the task worktree with `--add-dir`, and every directory grant uses the physical path.
 
 Both halves are load-bearing, and each fails in its own quiet way:
 
@@ -48,23 +48,32 @@ A resolved grant also keeps agy's workspace-trust dialog off the launch path ent
 That dialog is not merely an extra keystroke: accepting it appends the path to `trustedWorkspaces` in the operator's own global settings, so a launch that raises it grows a file Firstmate does not own, once per task worktree, forever.
 Trust is not inherited from a parent directory, so every fresh worktree would raise it.
 
-`../../../../../bin/fm-spawn.sh` owns the resolved directory grants, including the worker hook directory.
+`../../../../../bin/fm-spawn.sh` prepares and resolves the grants selected by `../../../../../bin/fm-agy-lib.sh`.
+Auto and Manual workers receive their own steering inbox with `handled/` already present, plus the code root's `.agents/skills`.
+For the code root's `AGENTS.md`, the launch brief points to a read-only snapshot in the granted worker hook directory: granting the whole code root would also expose private home directories and load supervisor hooks.
+A linked worktree, which every Treehouse slot is, keeps its Git metadata in the project clone: its own `.git/worktrees/<name>` entry and the common `.git` directory with the shared objects, refs and config.
+Without a grant, sandboxed Git in a native Auto worker cannot reach either and exits 128, even for status; workers therefore also receive the physical common Git directory, which contains the worktree's own entry, and a Git directory outside both the worktree and that common directory is granted separately.
+agy grants are directory-only, so that grant spans the whole common directory, including other worktrees' entries, hooks and config.
+The policy refuses direct shell and file-tool writes anywhere in it; Git itself updates it through commit, fetch and other Git commands, which keep their existing review, so an approved Git configuration change or a sandboxed opaque program can still write there.
+The inbox and instruction grants do not confer write authority beyond the exact task acknowledgements and the worker's existing write scope.
 
 ## Approvals
 
 The [worker permission setting](../../../../../docs/configuration.md#worker-permission-mode-configcrew-permissions) owns the `auto`/`manual` mapping.
-New Auto workers use native sandboxing and command review with Firstmate's deterministic constraints.
+New Auto workers use native sandboxing and command review; both worker modes enforce Firstmate's deterministic constraints.
 Cold mode requests did not qualify on agy 1.4.7 or the 1.4.12 cold probe, so neither the requested flag nor headless exit 0 proves activation.
 [`fm-agy-native-lib.sh`](../../../../../bin/fm-agy-native-lib.sh) owns the supported warm transition and real-result launch proof.
 The readiness prompt replaces the separately submitted warm-up; the bounded Shift+Tab transition remains.
 [`fm-agy-admission.sh`](../../../../../bin/fm-agy-admission.sh) owns the single native qualification guard and exact receipt reuse; every launch still proves activation and its armed generation.
 Standalone observer and accept-edits signals guards remain upgrade and legacy verification, outside native admission.
 The verified native route supports tmux and Herdr; other backends refuse it instead of silently selecting prompted review or bypass.
-Manual remains an explicit native-review choice, and secondmates retain their separate primary integration.
+Manual remains an explicit native-review choice, but both worker modes refuse project hooks that could take precedence over the owned policy hook.
+Secondmates retain their separate primary integration.
 
 [`fm-agy-permission-policy.sh`](../../../../../bin/fm-agy-permission-policy.sh) owns exact task roots, protected wiring/instructions, credential metadata, force/publication and brief-scope constraints.
-Ordinary residue goes to the vendor's native reviewer without a Firstmate worker judge or reusable judge approval.
-An outside-sandbox command can still be approved by native Auto; the deterministic constraints and the separate publication gate continue to apply.
+[`fm-agy-routine-lib.sh`](../../../../../bin/fm-agy-routine-lib.sh) owns the exact routine allowance the policy answers with `allow`: own-task status, steering and data operations, the home's read-only publication-policy print, and sandboxed read-only Git in the worktree, even under brief read exclusions.
+Every segment of a compound must qualify.
+Other calls retain review without a Firstmate worker judge or reusable judge approval; foreign home paths, publication commands and other sandbox overrides do not inherit the allowance.
 Static command analysis cannot establish what every opaque program will do and is not an OS security boundary.
 
 ### Native pending decisions
@@ -88,7 +97,7 @@ Shared command-policy and judge-tier code also remains available to Devin and ex
 
 ### Prompted review
 
-Manual review can require approval for file edits and shell commands, including status appends and inbox acknowledgments.
+Manual retains native review outside the same exact routine task allowance.
 Recorded `accept-edits` launches approve in-workspace file edits but still require shell review.
 The operator's allow rules can affect whether any particular native call prompts.
 Firstmate does not change global settings or install persistent allow rules on the operator's behalf.

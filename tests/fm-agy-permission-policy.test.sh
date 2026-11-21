@@ -103,6 +103,8 @@ denied() {  # <out> [reason-fragment]
 
 abstained() { [ -z "$1" ]; }
 
+allowed() { [ "$(printf '%s' "$1" | jq -r .decision 2>/dev/null)" = allow ]; }
+
 statically_approved() {  # <output> <policy>
   abstained "$1" && tail -1 "$(case_dir "$2")/state/agy-permission-log.jsonl" \
     | jq -e '.decision == "approve" and .decider == "policy"' >/dev/null
@@ -492,11 +494,12 @@ git push -u origin fm/x
 command -v sudo
 grep -n sudo README.md
 cat README.md
-git log --oneline -5
 bin/fm-lint.sh
 mkdir -p build/out
 EOF
-  pass "fm-agy-permission-policy: read-and-build commands abstain so the call reaches native review"
+  hook "$policy" pre-tool-use run_command 'git log --oneline -5'
+  allowed "$OUT" || fail "worktree git log must receive the exact routine allow, got rc=$RC out=$OUT"
+  pass "fm-agy-permission-policy: read-and-build commands reach native review or the exact routine allow"
 }
 
 test_non_command_tool_mapping() {
@@ -602,7 +605,6 @@ EOF
       fail "installed tools and ordinary package runners must retain static approval: $cmd => $OUT"
     fi
   done <<'EOF'
-/usr/bin/git status
 /usr/bin/bash -c pwd
 /usr/bin/find .
 /usr/bin/gh pr view
@@ -611,6 +613,15 @@ uv run pytest
 uv run /usr/bin/pytest
 rg marker sample.txt
 EOF
+  # A sandboxed worktree status through the installed Git is an exact
+  # routine read; the project-local ./git above is not.
+  step=$((step + 1))
+  hook "$policy" pre-tool-use run_command '/usr/bin/git status' "$step"
+  if [ -x /usr/bin/git ]; then
+    allowed "$OUT" || fail "installed Git status in the worktree must receive the routine allow: $OUT"
+  else
+    statically_approved "$OUT" "$policy" || fail "installed Git status must retain static approval: $OUT"
+  fi
   for cmd in 'rg --pre ./helper' 'rg --pre ./helper marker sample.txt'; do
     step=$((step + 1))
     hook "$policy" pre-tool-use run_command "$cmd" "$step"
@@ -831,6 +842,71 @@ EOF
   denied "$OUT" "~ path" \
     || fail "a ~ file-tool path must be refused under bypass, got: $OUT"
   pass "fm-agy-permission-policy: file-tool writes refuse .agents/.git and the adapter's own wiring"
+}
+
+test_worker_home_grants_stay_read_only() {
+  local posture policy dir code skills instructions shared_data config sibling wt target cmd common
+  for posture in native-auto manual; do
+    policy=$(new_case "home-grants-$posture")
+    dir=$(case_dir "$policy")
+    wt=$(jq -r .worktree "$policy")
+    code="$dir/code"
+    skills="$code/.agents/skills/example"
+    instructions="$dir/state/t1.agy-hooks/firstmate-AGENTS.md"
+    shared_data="$dir/data/sibling"
+    config="$dir/config"
+    sibling="$dir/state/sibling.inbox"
+    common="$dir/project.git"
+    mkdir -p "$skills" "${instructions%/*}" "$shared_data" "$config" "$sibling/handled" "$code/bin" \
+      "$common/hooks" "$common/refs/heads" "$common/worktrees/t1"
+    touch "$skills/SKILL.md" "$code/AGENTS.md" "$code/bin/fm-tool.sh" "$instructions" "$sibling/001.msg" "$wt/AGENTS.md" \
+      "$common/config" "$common/refs/heads/main" "$common/worktrees/t1/HEAD"
+    jq --arg posture "$posture" --arg code "$code" --arg instructions "$instructions" \
+      --arg data "$dir/data" --arg config "$config" --arg common "$common" \
+      '. + {posture:$posture, firstmate_root:$code, instructions:$instructions, home_data:$data, config:$config,
+        git_dirs:[$common]}' \
+      "$policy" > "$dir/policy.new" && mv "$dir/policy.new" "$policy" || fail 'could not configure home-grant fixture'
+
+    # Even here, where private state is physically inside a scratch base, a
+    # native file tool must not treat a workspace grant as a write grant.
+    while IFS= read -r target; do
+      TMPDIR="$dir" hook "$policy" pre-tool-use write_file "$target"
+      denied "$OUT" || fail "$posture allowed a native write to $target: $OUT"
+    done <<EOF
+$skills/SKILL.md
+$code/AGENTS.md
+$code/bin/fm-tool.sh
+$instructions
+$config/setting
+$config/declared-credentials.json
+$shared_data/notes.md
+$sibling/001.msg
+$common/config
+$common/hooks/post-merge
+$common/worktrees/t1/HEAD
+EOF
+    while IFS= read -r cmd; do
+      TMPDIR="$dir" hook "$policy" pre-tool-use run_command "$cmd"
+      denied "$OUT" || fail "$posture allowed a shell write: $cmd => $OUT"
+    done <<EOF
+printf x > '$skills/SKILL.md'
+cp '$wt/AGENTS.md' '$code/'
+printf x >> '$code/bin/fm-tool.sh'
+chmod u+w '$instructions'
+printf '#!/bin/sh\n' > '$common/hooks/post-merge'
+printf x > '$common/refs/heads/main'
+cp '$wt/AGENTS.md' '$common/config'
+mv '$sibling/001.msg' '$sibling/handled/'
+EOF
+    hook "$policy" pre-tool-use write_file "$dir/data/t1/report.md"
+    abstained "$OUT" || fail "$posture refused the worker's own task data: $OUT"
+    # Git itself still maintains the granted metadata through classified commands.
+    for cmd in 'git commit -m fixture' 'git fetch origin'; do
+      hook "$policy" pre-tool-use run_command "$cmd"
+      abstained "$OUT" || fail "$posture refused ordinary Git through its granted metadata: $cmd => $OUT"
+    done
+  done
+  pass 'fm-agy-permission-policy: both worker modes keep instructions, Git metadata, private state, config and sibling data out of direct write scope'
 }
 
 test_unlisted_tool_escalates_to_firstmate() {
@@ -1357,6 +1433,20 @@ test_exact_shell_inbox_acknowledgements() {
   hook "$policy" pre-tool-use run_command "mkdir -p '$inbox/handled'; mv '$inbox/003.msg' '$inbox/handled/' 2>&1"
   abstained "$OUT" || fail "normal compound shell ack must pass: $OUT"
   mkdir -p "$dir/state/sibling.inbox/handled" "$dir/escape"
+  sed 's/Keep the change narrow\./Do not read unrelated source files./' "$dir/data/t1/brief.md" > "$dir/new-brief"
+  mv "$dir/new-brief" "$dir/data/t1/brief.md"
+  printf 'three\n' > "$inbox/006.msg"
+  printf 'foreign\n' > "$dir/state/sibling.inbox/001.msg"
+  hook "$policy" pre-tool-use list_dir '' 8 "{\"DirectoryPath\":\"$inbox\"}"
+  allowed "$OUT" || fail "read scope must not block listing the task's own inbox: $OUT"
+  hook "$policy" pre-tool-use read_file "$inbox/006.msg" 9
+  allowed "$OUT" || fail "read scope must not block a task's own steer: $OUT"
+  hook "$policy" pre-tool-use read_file "$dir/state/sibling.inbox/001.msg" 10
+  denied "$OUT" 'held for firstmate' || fail "another task's steer must not inherit the read-scope exemption: $OUT"
+  cmd="mv '$inbox/006.msg' '$inbox/handled/'"
+  hook "$policy" pre-tool-use run_command "$cmd" 11
+  allowed "$OUT" || fail "read scope must not block an exact own-inbox acknowledgement: $OUT"
+  bash -c "$cmd" && [ -f "$inbox/handled/006.msg" ] || fail 'exact acknowledgement did not move the message'
   while IFS= read -r cmd; do
     hook "$policy" pre-tool-use run_command "$cmd"
     denied "$OUT" || native_review "$OUT" "$policy" || fail "non-ack inbox operation must refuse or receive native review: $cmd => $OUT"
@@ -1377,6 +1467,88 @@ CASES
   hook "$policy" pre-tool-use run_command "mkdir -p '$inbox/handled' && mv '$inbox/004.msg' '$inbox/handled/'"
   denied "$OUT" || native_review "$OUT" "$policy" || fail "handled symlink must refuse or receive native review: $OUT"
   pass "fm-agy-permission-policy: exact inbox acknowledgements pass; other moves require native review or refuse"
+}
+
+test_routine_task_operations() {
+  local policy dir wt inbox config outbox status data cmd neighbours exclusions bypass target step=30
+  policy=$(new_case routine-task)
+  dir=$(case_dir "$policy")
+  wt=$(jq -r .worktree "$policy")
+  inbox="$dir/state/t1.inbox" outbox="$dir/state/t2.inbox"
+  status="$dir/state/t1.status" data="$dir/data/t1" config="$dir/config"
+  fm_git_init_commit "$wt"
+  mkdir -p "$outbox/handled" "$dir/data/t2" "$config"
+  printf 'working [at=1]: fixture\n' > "$status"
+  printf 'working [at=1]: foreign\n' > "$dir/state/t2.status"
+  touch "$inbox/001.msg" "$outbox/001.msg" "$data/report.md" "$dir/data/t2/report.md" "$config/setting"
+  jq --arg data "$dir/data" --arg config "$config" '. + {home_data:$data,config:$config}' \
+    "$policy" > "$dir/policy.new" && mv "$dir/policy.new" "$policy" || fail 'could not configure routine fixture'
+  cp "$data/brief.md" "$dir/plain-brief"
+  sed 's/Keep the change narrow\./Do not read unrelated source files./' "$data/brief.md" > "$dir/new-brief"
+  mv "$dir/new-brief" "$data/brief.md"
+  while IFS= read -r cmd; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use run_command "$cmd" "$step"
+    allowed "$OUT" || fail "exact operation must be allow, including under read exclusions: $cmd => $OUT"
+  done <<EOF
+echo 'working [at=2]: fixture' >> '$status'
+/usr/bin/printf '%s\n' 'done [at=2]: fixture' >> '$status'
+find '$inbox' -maxdepth 1 -name '*.msg' 2>/dev/null | sort -V
+cat '$inbox/001.msg'
+mkdir -p '$inbox/handled' && mv '$inbox/001.msg' '$inbox/handled/'
+cat '$status' && ls -la '$data'
+cat '$data/report.md'
+'$ROOT/bin/fm-publish-gate.sh' policy
+git -C '$wt' rev-parse --show-toplevel
+git status --short
+git log -1 --oneline
+git diff --stat
+git show --stat HEAD
+git branch --show-current
+EOF
+  hook "$policy" pre-tool-use read_file "$status" 50
+  allowed "$OUT" || fail "own status file tool read must be allowed: $OUT"
+  hook "$policy" pre-tool-use list_dir '' 51 "{\"DirectoryPath\":\"$data\"}"
+  allowed "$OUT" || fail "own task data listing must be allowed: $OUT"
+  hook "$policy" pre-tool-use run_command "echo 'done [at=2]: fixture' >> '$status'" 52 '{"BypassSandbox":true}'
+  allowed "$OUT" || fail "exact outside-sandbox status append must be allowed: $OUT"
+  hook "$policy" pre-tool-use run_command "git -C '$wt' status --short" 53 '{"BypassSandbox":true}'
+  ! allowed "$OUT" || fail "outside-sandbox Git must not borrow the sandboxed read allowance: $OUT"
+  # Held neighbours keep their existing hold or native review; none may
+  # receive the routine allow, whether or not the brief has read exclusions.
+  neighbours=$(cat <<EOF
+cat '$outbox/001.msg'
+mv '$outbox/001.msg' '$outbox/handled/'
+echo 'working [at=2]: foreign' >> '$dir/state/t2.status'
+cat '$dir/data/t2/report.md'
+cat '$config/setting'
+echo x > '$ROOT/bin/fm-new.sh'
+git push -u origin HEAD
+gh pr create --fill
+git -C '$dir' status --short
+git diff --output='$wt/new.txt'
+echo 'working [at=2]: fixture' >> '$status' && cat '$outbox/001.msg'
+git -C '$wt' status --short && git push -u origin HEAD
+EOF
+)
+  for exclusions in yes no; do
+    [ "$exclusions" = yes ] || cp "$dir/plain-brief" "$data/brief.md"
+    while IFS= read -r cmd; do
+      for bypass in true false; do
+        step=$((step + 1))
+        hook "$policy" pre-tool-use run_command "$cmd" "$step" "{\"BypassSandbox\":$bypass}"
+        ! allowed "$OUT" || fail "neighbour outside the allowlist must stay held (exclusions=$exclusions): $cmd => $OUT"
+      done
+    done <<<"$neighbours"
+  done
+  for target in "$outbox/001.msg" "$dir/data/t2/report.md" "$dir/state/t2.status"; do
+    step=$((step + 1))
+    hook "$policy" pre-tool-use read_file "$target" "$step"
+    ! allowed "$OUT" || fail "file-tool read of another task's record must stay held: $target => $OUT"
+  done
+  hook "$policy" pre-tool-use run_command "cat '$status'; cat '$outbox/001.msg'" 300
+  ! allowed "$OUT" || fail "mixed compound must not auto-allow even without a sandbox override: $OUT"
+  pass 'fm-agy-permission-policy: only exact own-task commands and all-allowed compounds get native allow'
 }
 
 test_read_constraints_and_interpreter_routing() {
@@ -1599,7 +1771,7 @@ test_review_read_boundaries_and_nonread_exclusions() {
   printf '# Task\n## Captain\047s intent\nFix the build.\n## Firstmate spec\nExclude generated files from the diff output.\n# Setup\n' > "$dir/data/t1/brief.md"
   for cmd in 'git status' 'npm test' 'node -v'; do
     hook "$policy" pre-tool-use run_command "$cmd"
-    abstained "$OUT" || fail "diff-only exclusions must not force scope review: $cmd => $OUT"
+    abstained "$OUT" || allowed "$OUT" || fail "diff-only exclusions must not force scope review: $cmd => $OUT"
   done
   # Positive restrictions beyond the bounded excerpt must still reach a
   # judge, which can approve precisely named sources and hold broader reads.
@@ -1887,6 +2059,7 @@ test_shell_writes_resolve_effective_targets
 test_file_tool_writes_resolve_physically
 test_fetch_dest_writes_resolve_physically
 test_file_tool_protected_and_config_paths
+test_worker_home_grants_stay_read_only
 test_unlisted_tool_escalates_to_firstmate
 test_held_call_retry_dedupes
 test_post_tool_use_closes_the_marker_that_ran
@@ -1906,6 +2079,7 @@ test_install_worker_merges_and_validates
 test_observer_and_turnend_survive_the_merge
 
 test_exact_shell_inbox_acknowledgements
+test_routine_task_operations
 test_read_constraints_and_interpreter_routing
 test_own_brain_and_directed_reads_skip_read_scope
 test_credential_read_holds_beside_other_arguments

@@ -1442,11 +1442,11 @@ Auto requests Claude's classifier-backed permission mode and Codex's automatic a
 New agy crewmates and scouts in Auto use verified native Auto with sandboxing and a deterministic Firstmate hook.
 The task brief is withheld until active mode, a real harmless result and native lifecycle hooks are proven; startup fallback refuses dispatch rather than silently changing permissions.
 The native worker route supports tmux and Herdr; unsupported backends refuse Auto, while Manual remains an explicit native-review choice.
-Manual leaves agy's default review prompts in place; local secondmates retain their separate primary integration.
+Manual keeps agy's default reviewer outside the exact task allowance; local secondmates retain their separate primary integration.
 The [agy adapter reference](../.agents/skills/harness-adapters/references/harness/agy.md) owns operating facts and the live-decline verification limit.
 [`bin/fm-agy-lib.sh`](../bin/fm-agy-lib.sh) owns launch prerequisites, exact physical grants, bounds and failure cleanup.
 
-The Firstmate hook retains task-root, protected-wiring, credential-metadata, force/publication and brief-scope constraints; ordinary residue goes to native review without a Firstmate worker judge.
+The Firstmate hook retains task-root, protected-wiring, credential-metadata, force/publication and brief-scope constraints; its [exact task allowance](../.agents/skills/harness-adapters/references/harness/agy.md#approvals) does not change ordinary native review.
 Native pending command approvals use the existing keyed decision lifecycle through [`bin/fm-agy-permission-policy.sh`](../bin/fm-agy-permission-policy.sh).
 A native outside-sandbox call may execute automatically or request a one-shot decision, so tests must verify actual effects rather than assuming every harmless call prompts.
 Live native No and cancellation reconciliation were verified on agy 1.4.7 through Herdr; the [verification owner](verification/runtime-backends-fork.md#native-auto-workers) records the context and limits.
@@ -1454,7 +1454,7 @@ Live native No and cancellation reconciliation were verified on agy 1.4.7 throug
 Recorded agy workers keep their existing posture on relaunch, including legacy judge/bypass or prompted accept-edits tasks; their pending decisions are preserved until ordinary retirement.
 The deprecated new-worker `--agy-bypass`, `--no-agy-bypass` and `--agy-judge` flags refuse rather than selecting a different permission route.
 Both modes preserve the separate project delivery and merge-approval rules.
-Native agy workers grant their physical worktree, task data/scratch and owned hook directory, without granting the shared state directory.
+For the exact grants in both agy worker modes, see [Worker directory grants](../.agents/skills/harness-adapters/references/harness/agy.md#worker-directory-grants).
 Other adapter-specific state grants remain governed by their launch owners; the shared state layout is not a per-task security boundary.
 Every pane-backed Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.
 Claude Code path-checks its Read, Glob, and Grep tools against its working directories, and since 2.1.257 the first outside read in auto mode parks the pane on a one-time question, so the grant keeps those channels readable without that question.
