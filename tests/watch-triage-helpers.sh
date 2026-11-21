@@ -7878,3 +7878,175 @@ test_undated_pause_overdue_bound() {
   unset FM_PAUSE_UNDATED_MAX_SECS FM_PAUSE_RESURFACE_SECS
   pass "undated pauses stay quiet through the bound and close their overdue decision on resume"
 }
+
+
+# Synthetic agy worker whose native call firstmate declined: the decline left
+# the busy record busy (no reconciliation Stop ever arrived), the pane sits on
+# an idle composer, and the worker wrote no status line. <state> is populated;
+# the caller backdates or freshens the records each case needs.
+agy_declined_fixture() {  # <dir> <id> <window> <denied-command>
+  local dir=$1 id=$2 window=$3 cmd=$4 state gen wt pending
+  state="$dir/state"; wt="$dir/wt"; pending="$state/$id.agy-permission-pending"
+  mkdir -p "$wt" "$pending" "$dir/data" "$dir/tmp" "$dir/config"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$id")
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" "$id" busy --gen "$gen" \
+    --source agy-hook --event pre-invocation >/dev/null
+  fm_write_meta "$state/$id.meta" "window=$window" "kind=ship" "harness=agy" \
+    "backend=tmux" "busy_gen=$gen" "agy_posture=native-auto" "worktree=$wt"
+  jq -n --arg task "$id" --arg gen "$gen" --arg wt "$wt" --arg root "$dir" \
+    '{task:$task,posture:"native-auto",gen:$gen,worktree:$wt,
+      status:($root+"/state/"+$task+".status"),inbox:($root+"/state/"+$task+".inbox"),
+      data:($root+"/data"),tasktmp:($root+"/tmp"),brief:($root+"/data/brief.md"),
+      log:($root+"/state/agy-permission-log.jsonl"),config:($root+"/config")}' \
+    > "$state/$id.agy-permission.json"
+  jq -n --arg gen "$gen" --arg cmd "$cmd" --arg wt "$wt" \
+    '{gen:$gen,session:"fixture",step:9,tool:"run_command",
+      args:{CommandLine:$cmd,Cwd:$wt}}' > "$pending/fixture-s9.candidate"
+  cp "$pending/fixture-s9.candidate" "$pending/fixture-s9.native-declined"
+  printf 'agy-permission-fixture-s9\n%s\n\nnative\n' "$cmd" > "$pending/fixture-s9.pending"
+  printf 'panel\n' > "$pending/fixture-s9.native"
+  printf 'decline\n' > "$pending/fixture-s9.native.sent"
+  printf 'needs-decision [at=1] [key=agy-permission-fixture-s9]: agy native review awaits one-shot approve or decline\n' \
+    > "$state/$id.status"
+  printf '%s\n' "$gen"
+}
+
+
+test_agy_silent_stall_declined_wakes_once() {
+  local dir state fakebin out drain_out capture_file window key pane_hash gen old
+  dir=$(make_case agy-silent-stall); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-agystalled"
+  printf 'User declined the tool call\n>\n? for shortcuts    auto - Gemini\n' > "$capture_file"
+  gen=$(agy_declined_fixture "$dir" agystalled "$window" "git rev-parse --git-common-dir")
+  # No later progress: every record of the stalled turn is older than the
+  # stale threshold, and the status log holds no line from the worker itself
+  # beyond the supervisor-written decision the decline superseded.
+  old=$(( $(date +%s) - 500 ))
+  set_mtime "$old" "$state/agystalled.agy-permission-pending/fixture-s9.native-declined"
+  set_mtime "$old" "$state/agystalled.agy-permission-pending/fixture-s9.pending"
+  set_mtime "$old" "$state/agystalled.agy-permission-pending/fixture-s9.candidate"
+  set_mtime "$old" "$state/agystalled.busy-state"
+  set_mtime "$old" "$state/agystalled.status"
+  set_mtime "$old" "$state/agystalled.meta"
+  printf '%s' "$(seen_sig "$state/agystalled.status")" > "$state/.seen-agystalled_status"
+  key=$(watch_window_key "$window")
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown - source: none - fake default'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  local pid=$!
+  wait_for_exit "$pid" 100 || fail "watcher did not wake for an agy worker stalled after a native decline"
+  grep -F "stale: $window" "$out" >/dev/null || fail "silent-stall wake did not name the window: $(cat "$out")"
+  grep -F "agystalled" "$out" >/dev/null || fail "silent-stall wake did not name the task: $(cat "$out")"
+  grep -F "git rev-parse --git-common-dir" "$out" >/dev/null \
+    || fail "silent-stall wake did not name the declined call: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the silent-stall wake failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null \
+    || fail "silent-stall wake was not queued"
+
+  # The same stall must not wake again: a restarted watcher absorbs it.
+  ack_stopped_cycle "$state" || fail "could not acknowledge the silent-stall wake"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher exited again for the same agy silent stall: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "the same agy silent stall printed a second wake"
+  [ ! -s "$state/.wake-queue" ] || fail "the same agy silent stall queued a second wake"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the absorbed silent-stall cycle"
+  unset FM_FAKE_CREW_STATE
+  pass "an agy worker stalled after a native decline wakes once, naming the task and the declined call"
+}
+
+
+test_agy_silent_stall_paused_worker_stays_quiet() {
+  local dir state fakebin out capture_file window gen old
+  dir=$(make_case agy-silent-stall-paused); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-agypaused"
+  printf 'idle, waiting on CI\n>\n? for shortcuts    auto - Gemini\n' > "$capture_file"
+  gen=$(agy_declined_fixture "$dir" agypaused "$window" "git rev-parse --git-common-dir")
+  old=$(( $(date +%s) - 500 ))
+  set_mtime "$old" "$state/agypaused.agy-permission-pending/fixture-s9.native-declined"
+  set_mtime "$old" "$state/agypaused.agy-permission-pending/fixture-s9.pending"
+  # The worker declared its CI wait after the decline; that declaration is
+  # the newest progress and the reason the quiet pane is not a stall.
+  printf 'paused: waiting for CI on the PR checks\n' > "$state/agypaused.status"
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" agypaused idle --gen "$gen" \
+    --source agy-hook --event stop >/dev/null
+  printf '%s' "$(seen_sig "$state/agypaused.status")" > "$state/.seen-agypaused_status"
+  local key pane_hash
+  key=$(watch_window_key "$window")
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: paused - source: status-log - waiting for CI'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  local pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher woke for an agy worker waiting on CI after a declared pause: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a paused agy worker printed a wake: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a paused agy worker queued a wake"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the paused agy cycle"
+  unset FM_FAKE_CREW_STATE
+  pass "an agy worker that declared a CI pause after a decline does not wake as a silent stall"
+}
+
+
+test_agy_pending_prompt_stays_on_needs_decision_path() {
+  local dir state fakebin out capture_file window gen pending
+  dir=$(make_case agy-pending-prompt); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-agypending"
+  printf 'tool approval panel\n>\n? for shortcuts    auto - Gemini\n' > "$capture_file"
+  gen=$(agy_declined_fixture "$dir" agypending "$window" "git rev-parse --git-common-dir")
+  pending="$state/agypending.agy-permission-pending"
+  # A live prompt awaiting the supervisor: no decline was ever sent, the
+  # decision is open, and the turn is still open (busy, freshly invoked).
+  rm -f "$pending/fixture-s9.native-declined" "$pending/fixture-s9.native.sent"
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" agypending busy --gen "$gen" \
+    --source agy-hook --event pre-invocation >/dev/null
+  printf '%s' "$(seen_sig "$state/agypending.status")" > "$state/.seen-agypending_status"
+  local key pane_hash
+  key=$(watch_window_key "$window")
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown - source: none - fake default'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  local pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher woke for a live agy permission prompt: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a live agy permission prompt printed a stall wake: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a live agy permission prompt queued a stall wake"
+  [ ! -e "$pending/native-unbound.pending" ] || fail "a bound live prompt was rewritten as unbound"
+  status_open_decisions "$state/agypending.status" | grep -Fq 'agy-permission-fixture-s9' \
+    || fail "the live prompt lost its open needs-decision"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the pending-prompt cycle"
+  unset FM_FAKE_CREW_STATE
+  pass "a pending agy permission prompt stays on the needs-decision path and never becomes a silent stall"
+}
