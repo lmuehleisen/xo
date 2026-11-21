@@ -2402,12 +2402,12 @@ test_agy_project_hooks() (
     assert_contains "$out" "not eligible: $reason" 'explicit nested project checks through the git root'
     printf ' manual \n' > "$HOME_DIR/config/crew-permissions"
     TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project agy-project
-    assert_not_contains "$out" 'project hooks exist' 'explicit manual review does not inherit the native Auto constraint'
-    if ! printf '%s\n' "$out" | grep 'candidate: agy:' | grep -q -- '-> eligible'; then fail 'manual agy candidate lost eligibility'; fi
-    rm "$HOME_DIR/config/crew-permissions" "$project_root/.agents/hooks.json"
+    assert_contains "$out" "not eligible: $reason" 'manual review must still be able to enforce the task write boundary'
+    rm "$project_root/.agents/hooks.json"
     TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project agy-project
-    assert_not_contains "$out" 'project hooks exist' 'hook-free project keeps the native Auto route'
-    if ! printf '%s\n' "$out" | grep 'candidate: agy:' | grep -q -- '-> eligible'; then fail 'hook-free agy candidate lost eligibility'; fi
+    assert_not_contains "$out" 'project hooks exist' 'hook-free project keeps the manual route'
+    if ! printf '%s\n' "$out" | grep 'candidate: agy:' | grep -q -- '-> eligible'; then fail 'hook-free manual agy candidate lost eligibility'; fi
+    rm "$HOME_DIR/config/crew-permissions"
     printf '{}\n' > "$project_root/.agents/hooks.json"
   done
   TYPESAFE_API_KEY=$KEY FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" run code out err "$BRIEF" --project projects/agy-project
@@ -2428,7 +2428,7 @@ JSON
   expect_code 0 "$code" "self-repository project-hook resolution exits normally: $err"
   assert_contains "$out" "project hooks exist at $self_root/.agents/hooks.json" 'the code-root name resolves self-repository hook eligibility'
   rm "$project_root/.agents/hooks.json"
-  pass 'resolver: native Auto and launcher share the project-hook refusal; manual and hook-free routes stay eligible'
+  pass 'resolver: Auto and Manual share the launcher project-hook refusal; hook-free projects stay eligible'
 )
 test_agy_project_hooks || exit 1
 

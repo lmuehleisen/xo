@@ -70,7 +70,7 @@ def spawn(args):
         result = subprocess.run([str(root / "bin/fm-agy-permission-policy.sh"), policy_event,
                                  str(policy_path)], input=json.dumps(payload), text=True,
                                 stdout=subprocess.PIPE, check=True)
-        if name == "PreToolUse" and result.stdout:
+        if name == "PreToolUse" and result.stdout and json.loads(result.stdout).get("decision") != "allow":
             raise ValueError("fixture tool call was refused by the real policy: " + result.stdout)
 
     if args[0] == "spawn-start":

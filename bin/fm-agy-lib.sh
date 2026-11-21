@@ -6,12 +6,16 @@
 # The task brief is withheld until fm-agy-native-lib.sh proves active Auto,
 # a real harmless tool result and generation-bound Stop; the task's own later
 # PreInvocation must then prove brief delivery. No default-review/bypass
-# fallback is allowed. Manual retains native review; secondmates and explicit
-# raw commands remain outside the worker policy layer.
+# fallback is allowed. Manual retains native review with the same deterministic
+# task constraints; secondmates and raw commands stay outside the worker policy.
 #
-# Native workers grant only the physical worktree, task data/scratch and
-# owned hooks, never the shared state directory. The policy independently
-# enforces exact task writes, protected wiring, credentials and publication.
+# Workers grant the physical worktree, task data/scratch, exact steering inbox,
+# Firstmate skills, owned hooks and a linked worktree's Git metadata (Git
+# cannot run in the sandbox without it). agy's grant is directory-only, so the
+# hook directory carries a read-only copy of AGENTS.md instead of granting the
+# code root (which can contain private state and Firstmate's supervisor hooks).
+# The policy independently enforces task writes, protected wiring/instructions,
+# credentials and publication.
 # fm-agy-admission.sh owns executable/model/effort/backend compatibility proof.
 # jq, Python 3, owned hook wiring and readable per-task policy are required.
 # Project .agents/hooks.json files refuse a policy-layer launch.
@@ -75,7 +79,7 @@ fm_agy_default_posture() {  # <harness> <kind>
   AGY_BYPASS_POSTURE_SET=1
 }
 
-# Shared native Auto eligibility gate for launch and dispatch resolution.
+# Shared worker eligibility gate for launch and dispatch resolution.
 # Prints the refusal reason on stdout; success is silent. Resolve physically
 # and stop at the git root, including dangling project-hook symlinks. An
 # unreachable git root refuses instead of walking the filesystem root forever.
@@ -149,39 +153,61 @@ fm_agy_bypass_validate() {
   fi
 }
 
-# agy resolves a path physically before testing it against the granted
-# workspace, so every grant must be handed over already resolved. Verified
-# on agy 1.2.0: granting an unresolved path whose parent is a symlink (the
-# /var -> /private/var case every mktemp -d lab hits) made agy treat a write
-# inside its OWN worktree as non-workspace access and park on an "Allow
-# creation of this file? Reason: outside workspace" prompt. The worktree is
-# granted here rather than through __WORKTREE__ so it is resolved the same
-# way as the other two, and so cursor's --workspace and omp's --cwd keep
-# taking the recorded path unchanged.
+# agy checks the physically resolved target against these directories. Passing
+# an unresolved alias kept tools at an outside-workspace prompt on agy 1.2.0.
 fm_agy_permission_dirs() {
-  local permission_dirs
-  permission_dirs="--add-dir $(shell_quote "$(cd "$WT" && pwd -P)") --add-dir $(shell_quote "$(cd "$(dirname "$BRIEF")" && pwd -P)") "
-  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
-    permission_dirs="$permission_dirs--add-dir $(shell_quote "$(cd "$TASK_TMP" && pwd -P)") "
+  local d physical out=''
+  local dirs=("$WT" "${BRIEF%/*}")
+  if [ "$KIND" = secondmate ]; then
+    dirs+=("$STATE_REAL")
   else
-    permission_dirs="$permission_dirs--add-dir $(shell_quote "$STATE_REAL") "
+    dirs+=("$TASK_TMP" "$STATE_REAL/$ID.agy-hooks" "$STATE_REAL/$ID.inbox" "$AGY_SKILLS_DIR")
+    while IFS= read -r d; do [ -z "$d" ] || dirs+=("$d"); done <<<"${AGY_GIT_DIRS:-}"
   fi
-  if [ "$KIND" != secondmate ] && [ "$RAW_LAUNCH" -eq 0 ]; then
-    permission_dirs="$permission_dirs--add-dir $(shell_quote "$STATE_REAL/$ID.agy-hooks") "
-  fi
-  printf '%s' "$permission_dirs"
+  for d in "${dirs[@]}"; do
+    physical=$(CDPATH='' cd -P -- "$d" && pwd -P) || return 1
+    case "$d" in
+      "$STATE_REAL/$ID.inbox"|"$STATE_REAL/$ID.agy-hooks"|"${AGY_SKILLS_DIR:-}")
+        [ "$physical" = "$d" ] || return 1 ;;
+    esac
+    case $'\n'"${AGY_GIT_DIRS:-}"$'\n' in *$'\n'"$d"$'\n'*) [ "$physical" = "$d" ] || return 1 ;; esac
+    out="$out--add-dir $(shell_quote "$physical") "
+  done
+  printf '%s' "$out"
 }
 
-fm_agy_spawn_wire() {
-  [ "$RAW_LAUNCH" -eq 0 ] || return 0
-  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
-    fm_agy_native_wire
-    return
-  fi
-  "$FM_ROOT/bin/fm-agy-hook.sh" install-worker "$STATE_REAL" "$ID" "$BUSY_GEN" "$WT" || {
-    echo "error: could not install agy worker hooks for $ID" >&2
-    exit 1
-  }
+# A linked worktree (every Treehouse slot) keeps its Git metadata outside the
+# worktree: its own <common>/worktrees/<name> entry plus the common directory
+# with the shared objects, refs and config. agy's sandbox cannot reach either
+# without a grant, so Git exits 128 even for status. Print the physical
+# directories Git needs, one per line, omitting any inside the worktree and an
+# own entry already covered by the common directory.
+fm_agy_worktree_git_dirs() {  # <worktree>
+  local wt git_dir common
+  wt=$(CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
+  git_dir=$(fm_agy_git_path "$wt" --git-dir) || return 1
+  common=$(fm_agy_git_path "$wt" --git-common-dir) || return 1
+  case "$common/" in "$wt"/*) ;; *) printf '%s\n' "$common" ;; esac
+  case "$git_dir/" in "$wt"/*|"$common"/*) ;; *) printf '%s\n' "$git_dir" ;; esac
+}
+
+fm_agy_git_path() {  # <physical-worktree> <rev-parse option>
+  local path
+  path=$(CDPATH='' cd -P -- "$1" 2>/dev/null &&
+    env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git rev-parse "$2" 2>/dev/null) && [ -n "$path" ] || return 1
+  (CDPATH='' cd -P -- "$1" 2>/dev/null && CDPATH='' cd -P -- "$path" 2>/dev/null && pwd -P)
+}
+
+fm_agy_worker_instructions_path() {  # <physical-state-dir> <id>
+  printf '%s/%s.agy-hooks/firstmate-AGENTS.md' "$1" "$2"
+}
+
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the brief note.
+fm_agy_worker_brief_note() {  # <physical-state-dir> <id>
+  printf '\nIf you need Firstmate'\''s own AGENTS.md, read its launch-time copy at `%s`.\n' \
+    "$(fm_agy_worker_instructions_path "$1" "$2")"
+  printf 'For steering, list `%s/%s.inbox` with list_dir, use read_file for each message, and acknowledge with the brief'\''s literal mv using that physical path.\n' "$1" "$2"
+  printf 'For status, use a plain single-line echo append to `%s/%s.status` instead of the fleet-ledger compound below, with BypassSandbox set to true: the status file is outside your granted directories, and Firstmate allows exactly that append without review. The watcher picks up the line.\n' "$1" "$2"
 }
 
 # This short-circuits in the pane immediately before the native invocation,
@@ -316,6 +342,10 @@ fm_agy_spawn_ready_gate() {
     agy_spawn_fail "agy did not report starting its brief through its worker hook in window $T"
     exit 1
   fi
+  if ! agy_wait_for_armed; then
+    agy_spawn_fail "agy manual review started without its deterministic permission hook in window $T"
+    exit 1
+  fi
 }
 
 # Only current postures are emitted; historical fields remain audit input.
@@ -339,36 +369,52 @@ fm_agy_meta_lines() {
   fi
 }
 
-# Native admission has its own context and coverage; legacy judge receipts
-# cannot authorize this launch. Exact task roots stay in the deterministic
-# policy, while ordinary residue goes to the vendor's native reviewer.
-fm_agy_native_wire() {
-  local wt reason policy task_data grants_sha config
-  command -v jq >/dev/null 2>&1 || { echo 'error: agy native policy requires jq' >&2; exit 1; }
+# Both worker modes need owned hooks because directory grants are not read-only.
+# Only Auto performs native admission; Manual retains the CLI's own review.
+fm_agy_spawn_wire() {
+  [ "$RAW_LAUNCH" -eq 0 ] || return 0
+  local wt reason policy grants_sha config instructions posture=manual version=''
+  if ! command -v jq >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
+    echo 'error: agy worker policy requires jq and Node.js' >&2
+    exit 1
+  fi
   wt=$(cd "$WT" && pwd -P) || exit 1
   if ! reason=$(fm_agy_native_project_compatible "$wt"); then
     echo "error: $reason" >&2
     exit 1
   fi
-  AGY_JUDGE_TIER="native-$BACKEND" AGY_JUDGE_MODEL='' AGY_JUDGE_BIN=''
-  AGY_ADMISSION_RECEIPT=$("$SCRIPT_DIR/fm-agy-admission.sh" ensure-native "$AGY_BIN" "${MODEL:-}" \
-    "$(agy_effort_level "${EFFORT:-}" "${MODEL:-}")" "$AGY_JUDGE_TIER" '' '') || exit 1
+  if [ "${AGY_NATIVE_AUTO:-0}" = 1 ]; then
+    AGY_JUDGE_TIER="native-$BACKEND" AGY_JUDGE_MODEL='' AGY_JUDGE_BIN=''
+    AGY_ADMISSION_RECEIPT=$("$SCRIPT_DIR/fm-agy-admission.sh" ensure-native "$AGY_BIN" "${MODEL:-}" \
+      "$(agy_effort_level "${EFFORT:-}" "${MODEL:-}")" "$AGY_JUDGE_TIER" '' '') || exit 1
+    posture=native-auto
+    version=$(jq -r .binding.version "$AGY_ADMISSION_RECEIPT") || exit 1
+  fi
   policy="$STATE_REAL/$ID.agy-permission.json"
-  task_data=$(cd "$(dirname "$BRIEF")" && pwd -P) || exit 1
+  instructions=$(fm_agy_worker_instructions_path "$STATE_REAL" "$ID")
   grants_sha=$("$SCRIPT_DIR/fm-agy-permission-policy.sh" grants-digest "$BRIEF") || exit 1
   config=${CONFIG:-${FM_HOME:-}/config}
   jq -n --arg task "$ID" --arg worktree "$wt" --arg status "$STATE_REAL/$ID.status" \
-    --arg inbox "$STATE_REAL/$ID.inbox" --arg data "$task_data" --arg tasktmp "$TASK_TMP" \
-    --arg brief "$BRIEF" --arg log "$STATE_REAL/agy-permission-log.jsonl" --arg agy "$AGY_BIN" \
-    --arg version "$(jq -r .binding.version "$AGY_ADMISSION_RECEIPT")" --arg gen "$BUSY_GEN" \
+    --arg inbox "$STATE_REAL/$ID.inbox" --arg data "$BRIEF_DIR_REAL" --arg tasktmp "$TASK_TMP" \
+    --arg brief "$BRIEF_REAL" --arg log "$STATE_REAL/agy-permission-log.jsonl" --arg agy "$AGY_BIN" \
+    --arg version "$version" --arg gen "$BUSY_GEN" --arg posture "$posture" \
+    --arg firstmate_root "$AGY_CODE_ROOT" --arg instructions "$instructions" --arg home_data "$DATA" \
+    --arg git_dirs "${AGY_GIT_DIRS:-}" \
     --arg grants_sha "$grants_sha" --arg config "$config" --arg credential_home "$HOME" \
     --argjson registry_required "$( [ -e "$config/declared-credentials.json" ] && printf true || printf false )" \
-    '{posture:"native-auto", task:$task, worktree:$worktree, status:$status, inbox:$inbox,
+    '{posture:$posture, task:$task, worktree:$worktree, status:$status, inbox:$inbox,
       data:$data, tasktmp:$tasktmp, brief:$brief, log:$log, agy:$agy, gen:$gen,
       agy_version:$version, grants_sha:$grants_sha, config:$config,
+      firstmate_root:$firstmate_root, instructions:$instructions, home_data:$home_data,
+      git_dirs:($git_dirs | split("\n") | map(select(length > 0))),
       credential_user_home:$credential_home, credential_registry_required:$registry_required}' > "$policy" || exit 1
   "$SCRIPT_DIR/fm-agy-permission-policy.sh" register-credentials "$policy" </dev/null || exit 1
   "$SCRIPT_DIR/fm-agy-hook.sh" install-worker "$STATE_REAL" "$ID" "$BUSY_GEN" "$WT" "$policy" || exit 1
+  if ! (umask 077; set -C; cat -- "$AGY_CODE_ROOT/AGENTS.md" > "$instructions") ||
+    ! chmod 400 "$instructions"; then
+    echo "error: could not stage the read-only Firstmate instructions for $ID" >&2
+    exit 1
+  fi
 }
 
 # The policy owner's retire closes every pending escalation as not-run

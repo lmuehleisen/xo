@@ -606,8 +606,8 @@
 #   config/crew-permissions: absent or auto
 #   uses Claude's --permission-mode auto / Codex's --approve-for-me
 #   (workspace-write with automatic review); manual uses Claude manual / Codex
-#   on-request with human review. New agy workers use verified native Auto
-#   plus deterministic constraints; manual retains default native review.
+#   on-request with human review. agy workers use verified native Auto or
+#   Manual's default native review, both with deterministic task constraints.
 #   bin/fm-agy-lib.sh owns agy's staged launch, exact grants and legacy rules.
 #   The file is resolved once, before any mutation, on every spawn: surrounding
 #   whitespace (including a CRLF ending) is trimmed, proven absence means auto,
@@ -4697,6 +4697,20 @@ claude_add_dirs_flag() {  # <kind> <state-dir> <data-dir> <code-root> <task-id>
   printf '%s' "$out"
 }
 
+# The inbox is lazily created by the first steer. Provision it before agy
+# snapshots its directory grants, without following a link into another task.
+agy_worker_grant_dirs() {
+  local inbox="$STATE_REAL/$ID.inbox"
+  AGY_CODE_ROOT=$(CDPATH='' cd -P -- "$FM_ROOT" && pwd -P) || return 1
+  AGY_SKILLS_DIR=$(CDPATH='' cd -P -- "$AGY_CODE_ROOT/.agents/skills" && pwd -P) || return 1
+  AGY_GIT_DIRS=$(fm_agy_worktree_git_dirs "$WT") || return 1
+  [ "$AGY_SKILLS_DIR" = "$AGY_CODE_ROOT/.agents/skills" ] &&
+    [ -f "$AGY_CODE_ROOT/AGENTS.md" ] && [ ! -L "$AGY_CODE_ROOT/AGENTS.md" ] || return 1
+  [ ! -L "$inbox" ] && [ ! -L "$inbox/handled" ] &&
+    mkdir -p -- "$inbox/handled" &&
+    [ "$(CDPATH='' cd -P -- "$inbox/handled" && pwd -P)" = "$inbox/handled" ]
+}
+
 resolved_existing_dir() {
   local path=$1
   [ -d "$path" ] || {
@@ -5130,8 +5144,15 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   SOURCE_BRIEF=$BRIEF
   BRIEF="$DATA/$ID/launch-brief.md"
   BRIEF_TMP="$DATA/$ID/.launch-brief.md.${BASHPID:-$$}"
+  if [ "$HARNESS" = agy ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+    mkdir -p -- "$STATE" || exit 1
+    AGY_BRIEF_STATE=$(CDPATH='' cd -P -- "$STATE" && pwd -P) || exit 1
+  fi
   {
     fm_brief_worker_role "$STATE" "$ID" "$FM_ROOT" &&
+      if [ "$HARNESS" = agy ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+        fm_agy_worker_brief_note "$AGY_BRIEF_STATE" "$ID"
+      fi &&
       printf '\n' &&
       cat "$SOURCE_BRIEF" &&
       # Raw commands only record their leading executable as the harness; this
@@ -7442,6 +7463,10 @@ BUSY_GEN=
   esac
   case "$WIRING_HARNESS" in
   agy)
+    agy_worker_grant_dirs || {
+      echo "error: could not prepare agy grants for $ID: expected an owned inbox, the code root's instruction files and the worktree's Git metadata" >&2
+      exit 1
+    }
     fm_agy_spawn_wire
     ;;
   claude*)
@@ -8645,7 +8670,11 @@ claude | codex)
   LAUNCH=${LAUNCH//__PERMISSIONDIRS__/$permission_dirs}
   ;;
 agy)
-  LAUNCH=${LAUNCH//__PERMISSIONDIRS__/$(fm_agy_permission_dirs)}
+  permission_dirs=$(fm_agy_permission_dirs) || {
+    echo "error: could not resolve the directories for $ID's agy --add-dir grants" >&2
+    exit 1
+  }
+  LAUNCH=${LAUNCH//__PERMISSIONDIRS__/$permission_dirs}
   ;;
 esac
 # A record-backed launch brief is published into the state dir of the pane

@@ -7,13 +7,14 @@
 #         register-credentials
 # Queries: grants-digest <brief> | --help
 #
-# A policy with posture=native-auto retains physical write-root, protected
+# Both current worker postures retain physical write-root, protected
 # wiring/instruction, metadata-only credential, force/publication and brief
 # scope constraints. Refusals emit deny. Firstmate-specific questions deny
 # with a durable held-call decision; only an exact one-shot approval permits
-# their retry. Ordinary residue abstains to native Auto without a Firstmate
-# judge or reusable judge approval. Native execution remains independently
-# reviewed by the vendor. This static layer is not an OS security boundary.
+# their retry. Only the exact routine task operations owned by
+# fm-agy-routine-lib.sh emit allow. Other calls go to native review without a
+# Firstmate judge or reusable judge approval. This static layer is not an OS
+# security boundary.
 #
 # native-poll inspects only the recorded worker's live viewport and binds an
 # answerable command panel to exactly one outstanding native hook input.
@@ -36,10 +37,11 @@
 # Hook JSON uses conversationId, stepIdx, workspacePaths and toolCall.name/args.
 # run_command uses CommandLine/Cwd; read_file, write_file and edit_file use
 # absolute Path. Legacy file names remain mapped too. Observer/log input
-# excludes file contents. A conversation's own brain outputs, native Auto's
-# exact staged brief and explicitly directed skills have read-scope exceptions
-# after credential checks. Literal worktree directory listings, exact agy
-# version queries and the bound own-task completion attestation read no source.
+# excludes file contents. A conversation's own brain outputs, the staged
+# instructions, its own inbox and explicitly directed skills have read-scope
+# exceptions after credential checks. Literal worktree directory listings,
+# exact agy version queries and the bound own-task completion attestation read
+# no source.
 # Regular tracked-file reads can also prove scope against complete, simple
 # exclusions of the form "Do not read `<path>`."; ambiguous restrictions,
 # final symlinks and multiline paths still hold.
@@ -47,7 +49,10 @@
 # pinning; fm-credential-access.mjs owns credential metadata and use grants.
 #
 # The firstmate-owned policy declares task, worktree, status, inbox, data,
-# tasktmp, brief, log, gen, config and optional agy_version/credential fields.
+# tasktmp, brief, log, gen, config, firstmate_root (the instruction source),
+# instructions (the AGENTS.md snapshot), home_data, git_dirs (a linked
+# worktree's granted Git metadata, protected from direct writes) and
+# credential fields.
 # <policy-without-.json>-pending/ holds exact pending calls and native decline
 # records; -cache/ holds exact one-shot Firstmate constraints. Historical
 # stores remain protected wiring until they retire with the task.
@@ -65,6 +70,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # judge skeleton, verdict cache, pending markers).
 # shellcheck source=bin/fm-command-policy-lib.sh
 . "$SCRIPT_DIR/fm-command-policy-lib.sh"
+# shellcheck source=bin/fm-agy-routine-lib.sh
+. "$SCRIPT_DIR/fm-agy-routine-lib.sh"
 
 FM_POLICY_EXEC_TOOL=run_command
 FM_POLICY_COMMAND_FIELD=CommandLine
@@ -143,6 +150,7 @@ PAYLOAD=
 case "$EVENT" in retire|repin-grants|register-credentials|approve|decline|native-poll|resume) ;; *) PAYLOAD=$(cat) ;; esac
 
 TASK='' WORKTREE='' STATUS='' INBOX='' DATA_DIR='' TASKTMP='' BRIEF='' LOG='' GRANTS_SHA='' CONFIG_DIR='' GEN=''
+FIRSTMATE_ROOT='' INSTRUCTIONS='' HOME_DATA='' GIT_DIRS=''
 if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
   {
     IFS= read -r -d '' TASK
@@ -156,14 +164,19 @@ if [ -n "$POLICY" ] && [ -r "$POLICY" ]; then
     IFS= read -r -d '' GRANTS_SHA
     IFS= read -r -d '' CONFIG_DIR
     IFS= read -r -d '' GEN
-  } < <(jq -j '[.task, .worktree, .status, .inbox, .data, .tasktmp, .brief, .log, .grants_sha, .config, .gen]
+    IFS= read -r -d '' FIRSTMATE_ROOT
+    IFS= read -r -d '' INSTRUCTIONS
+    IFS= read -r -d '' HOME_DATA
+    IFS= read -r -d '' GIT_DIRS
+  } < <(jq -j '[.task, .worktree, .status, .inbox, .data, .tasktmp, .brief, .log, .grants_sha, .config, .gen,
+    .firstmate_root, .instructions, .home_data, ((.git_dirs // []) | map(tostring) | join("\n"))]
     | map((. // "") | tostring | gsub("\u0000"; "")) | join("\u0000") + "\u0000"' "$POLICY" 2>/dev/null)
 fi
 NATIVE_AUTO=0
 JUDGE_TIER=native JUDGE_MODEL=''
 if jq -e '.posture == "native-auto"' "$POLICY" >/dev/null 2>&1; then
   NATIVE_AUTO=1
-elif [ "$EVENT" != retire ]; then
+elif [ "$EVENT" != retire ] && ! jq -e '.posture == "manual"' "$POLICY" >/dev/null 2>&1; then
   if [ "$EVENT" = pre-tool-use ] && { [ -z "$POLICY" ] || [ ! -r "$POLICY" ]; }; then
     deny 'firstmate agy permission policy: per-task policy file is missing or unreadable'
   fi
@@ -212,10 +225,29 @@ if [ -n "$POLICY" ]; then
   [ -n "$TASK" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"${POLICY%/*}/$TASK.agy-hooks"
   [ -n "$LOG" ] && POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$LOG"
 fi
-if [ "$NATIVE_AUTO" = 1 ] && [ -n "$WORKTREE" ]; then
+if [ -n "$WORKTREE" ]; then
   # Shell writers must preserve the same agent/Git wiring boundary as native
   # file tools, including a hooks file that does not exist at launch yet.
   POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$WORKTREE/.agents"$'\n'"$WORKTREE/.git"
+fi
+# A linked worktree's granted Git metadata changes only through Git commands
+# the policy classifies, never through a direct shell or file-tool write.
+while IFS= read -r git_meta; do
+  [ -z "$git_meta" ] || POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$git_meta"
+done <<<"$GIT_DIRS"
+if [ -n "$FIRSTMATE_ROOT" ]; then
+  POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$FIRSTMATE_ROOT/.agents"$'\n'"$FIRSTMATE_ROOT/AGENTS.md"$'\n'"$FIRSTMATE_ROOT/bin"
+fi
+if [ -n "$CONFIG_DIR" ]; then
+  config_protected=$(physical_target "$CONFIG_DIR" '' 1) || config_protected=$CONFIG_DIR
+  POLICY_PROTECTED="$POLICY_PROTECTED"$'\n'"$config_protected"
+fi
+# A temp-hosted Firstmate home must not make fleet state or shared data
+# ordinary scratch space. The exact status/inbox exceptions are separate.
+POLICY_RESERVED_WRITE_DIRS="${STATUS%/*}"
+if [ -n "$HOME_DATA" ]; then
+  home_data_real=$(physical_target "$HOME_DATA" '' 1) || home_data_real=$HOME_DATA
+  POLICY_RESERVED_WRITE_DIRS="$POLICY_RESERVED_WRITE_DIRS"$'\n'"$home_data_real"
 fi
 credential_policy
 
@@ -316,7 +348,7 @@ native_control_boundary() {
   # invocation must not become ordinary vendor-reviewed residue. Plain
   # read-and-build inspection of these public scripts stays allowed.
   local i path leaf
-  [ "$NATIVE_AUTO" = 1 ] && [ "$TOOL" = run_command ] && [ -n "$NOT_APPROVABLE" ] || return 0
+  [ "$TOOL" = run_command ] && [ -n "$NOT_APPROVABLE" ] || return 0
   tokenize "$CMD"
   for ((i=0; i<${#T_TXT[@]}; i++)); do
     [ "${T_KIND[i]}" = w ] || continue
@@ -430,14 +462,11 @@ declined_key_file() {  # cache entry marking a call firstmate declined
   printf '%s/%s.declined' "$CACHE_DIR" "$k"
 }
 
-# 0 when this file-tool read targets the worker's own brain directory, native
-# Auto's staged brief or a skill the brief directs it to read. The brain holds
-# only what this conversation's own reviewed calls fetched; the brief and
-# directed skills are instructions. The target is resolved physically, so a
-# symlink out of those paths cannot carry the read-scope exemption with
-# it; the credential checks in evaluate_tool still run first.
+# The target is resolved physically, so a symlink out of the task's own
+# outputs or instruction channels cannot carry the read-scope exemption.
+# Credential checks in evaluate_tool still run first.
 own_read() {
-  local target abs d brief_path
+  local target abs d instruction_path inbox_root
   case "$TOOL" in
     read_file|view_file) target=$FILE_PATH ;;
     list_dir) target=$(printf '%s' "$PAYLOAD" | jq -r '.toolCall.args.DirectoryPath // ""' 2>/dev/null) ;;
@@ -450,13 +479,25 @@ own_read() {
     [ "$abs" = "$FM_POLICY_OWN_OUTPUT_DIR" ] && return 0
     strictly_inside "$abs" "$FM_POLICY_OWN_OUTPUT_DIR" && return 0
   fi
-  case "$TOOL" in read_file|view_file) ;; *) return 1 ;; esac
-  if [ "$NATIVE_AUTO" = 1 ] && [ -n "$BRIEF" ]; then
-    # Keep the recorded final component literal: replacing the staged brief
-    # with a symlink must not exempt a different file from read exclusions.
-    brief_path=$(physical_target "$BRIEF" '' 0 2>/dev/null) || brief_path=''
-    [ -n "$brief_path" ] && [ "$abs" = "$brief_path" ] && return 0
+  if [ -n "$INBOX" ]; then
+    inbox_root=$(norm_abs "$INBOX")
+    case "$TOOL:$abs" in
+      "list_dir:$inbox_root"|"list_dir:$inbox_root/handled") return 0 ;;
+      read_file:*|view_file:*)
+        case "${abs%/*}" in
+          "$inbox_root"|"$inbox_root/handled")
+            if [ -f "$abs" ] && [[ ${abs##*/} =~ ^[0-9]+\.msg$ ]]; then return 0; fi ;;
+        esac ;;
+    esac
   fi
+  case "$TOOL" in read_file|view_file) ;; *) return 1 ;; esac
+  for d in "$BRIEF" "$INSTRUCTIONS"; do
+    [ -n "$d" ] || continue
+    # Keep the recorded final component literal: a replaced instruction
+    # file must not exempt its symlink target from read exclusions.
+    instruction_path=$(physical_target "$d" '' 0 2>/dev/null) || continue
+    [ "$abs" = "$instruction_path" ] && return 0
+  done
   while IFS= read -r d; do
     [ -n "$d" ] && [ "$d" = "$abs" ] && return 0
   done <<<"$(brief_directed_reads)"
@@ -500,6 +541,8 @@ source_free_command() {
       [ "${#T_TXT[@]}" = 2 ] && { [ "${T_TXT[1]}" = --version ] || [ "${T_TXT[1]}" = -v ]; }
       return $? ;;
     FM_HOME=*) own_task_completion_home_binding; return $? ;;
+    mv|/bin/mv|/usr/bin/mv)
+      case ",$STATIC_RULE_IDS," in *,inbox-ack,*) return 0 ;; *) return 1 ;; esac ;;
     ls|/bin/ls|/usr/bin/ls) ;;
     *) return 1 ;;
   esac
@@ -601,7 +644,6 @@ case "$EVENT" in
       evaluate_tool
     fi
     native_control_boundary
-    apply_read_constraints
     # The armed line is written even for a call about to be denied: any hook
     # invocation proves this launch's wiring is live, and the canary watches
     # the observer log only.
@@ -623,11 +665,9 @@ case "$EVENT" in
     fi
     [ -n "$POLICY" ] && [ -r "$POLICY" ] \
       || deny "firstmate agy permission policy: per-task policy file is missing or unreadable"
-    if [ "$NATIVE_AUTO" = 1 ]; then
-      case "$GEN" in ''|*[!A-Za-z0-9._-]*) deny 'firstmate agy native policy has no valid generation' ;; esac
-      [ "$(cat "${POLICY%/*}/$TASK.busy-gen" 2>/dev/null)" = "$GEN" ] \
-        || deny 'firstmate agy native policy generation is stale or unavailable'
-    fi
+    case "$GEN" in ''|*[!A-Za-z0-9._-]*) deny 'firstmate agy worker policy has no valid generation' ;; esac
+    [ "$(cat "${POLICY%/*}/$TASK.busy-gen" 2>/dev/null)" = "$GEN" ] \
+      || deny 'firstmate agy worker policy generation is stale or unavailable'
     if [ "$NATIVE_AUTO" = 1 ] && [ "$TOOL" = run_command ]; then
       for declined in "$PENDING_DIR"/*.native-declined; do
         [ -f "$declined" ] || continue
@@ -637,6 +677,33 @@ case "$EVENT" in
         fi
       done
     fi
+    # A call that omits BypassSandbox or sends false runs inside agy's
+    # sandbox; anything else is treated as a bypass. Routine Git qualifies
+    # only inside the sandbox.
+    AGY_BYPASS_SANDBOX=true
+    if [ "$TOOL" != run_command ] || printf '%s' "$PAYLOAD" \
+      | jq -e '.toolCall.args | (has("BypassSandbox") | not) or .BypassSandbox == false' >/dev/null 2>&1; then
+      AGY_BYPASS_SANDBOX=false
+    fi
+    if [ -z "$NEVER_APPROVE" ] && [ -z "$CREDENTIAL_HOLD" ] && [ -z "$SENSITIVE_HIT" ]; then
+      routine=0
+      AGY_ROUTINE_READ_LIMITED=0
+      [ -z "$(brief_read_constraints)" ] || AGY_ROUTINE_READ_LIMITED=1
+      case "$TOOL" in
+        run_command) if agy_routine_command; then routine=1; fi ;;
+        read_file|view_file)
+          case "$FILE_PATH" in /*) if agy_routine_read_path "$FILE_PATH" '' file; then routine=1; fi ;; esac ;;
+        list_dir)
+          target=$(printf '%s' "$PAYLOAD" | jq -r '.toolCall.args.DirectoryPath // ""')
+          case "$target" in /*) if agy_routine_read_path "$target" '' dir; then routine=1; fi ;; esac ;;
+      esac
+      if [ "$routine" = 1 ]; then
+        log_record approve policy 'exact routine task operation'
+        printf '{"decision":"allow"}\n'
+        exit 0
+      fi
+    fi
+    apply_read_constraints
     if [ -z "$NOT_APPROVABLE" ]; then
       native_abstain || deny 'firstmate agy native policy could not retain exact call identity'
       log_record approve policy "read-and-build set"
@@ -684,14 +751,13 @@ case "$EVENT" in
       # Historical reusable verdicts confer no authority.
       escalate_reason=$NOT_APPROVABLE escalate_source='firstmate policy'
       log_record escalate policy "$NOT_APPROVABLE"
-    elif [ "$NATIVE_AUTO" = 1 ] && [ -z "$READ_CONSTRAINTS" ]; then
+    elif [ -z "$READ_CONSTRAINTS" ]; then
       native_abstain || deny 'firstmate agy native policy could not retain exact call identity'
-      log_record native-review native "ordinary command review delegated to native Auto"
+      log_record native-review native "ordinary command review delegated to agy"
       exit 0
-    elif [ "$NATIVE_AUTO" = 1 ]; then
+    else
       escalate_reason=$NOT_APPROVABLE escalate_source='firstmate scope policy'
       log_record escalate policy "$NOT_APPROVABLE"
-
     fi
     slug=$(tool_slug)
     key="agy-permission-$slug"

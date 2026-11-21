@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Behavior tests for the agy (Antigravity CLI) harness adapter: harness
 # detection, the approval-mode mapping and its refusals, the mandatory
-# worktree grant, the effort ceiling and the model-id/--effort conflict, the
+# task directory grants, the effort ceiling and the model-id/--effort conflict, the
 # secondmate launch, native hook transports, and the control mechanics.
 #
 # The facts pinned here are the ones an Antigravity release could silently
@@ -516,7 +516,7 @@ run_agy_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
   if [ "${FM_FAKE_AGY_NATIVE:-0}" = 1 ]; then
     fm_agy_fixture_receipt "$home" "$fakebin/agy" gemini-3.8-flash-low '' native-tmux '' '' || return 1
   fi
-  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+  FM_ROOT_OVERRIDE="${FM_AGY_TEST_CODE_ROOT:-}" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
@@ -586,10 +586,10 @@ EOF
   pass "fm-spawn.sh: an invalid permission setting refuses the agy launch"
 }
 
-# --- the mandatory worktree grant -------------------------------------------
+# --- the mandatory task grants ----------------------------------------------
 
-test_agy_launch_grants_the_task_worktree() {
-  local fields case_dir home proj wt fakebin id launch wt_real state_real brief_real
+test_agy_launch_grants_exact_task_channels() {
+  local fields case_dir home proj wt fakebin id launch wt_real state_real brief_real skills_real instructions git_common git_entry
   fields=$(make_spawn_case adddir)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $fields
@@ -606,29 +606,46 @@ EOF
   wt_real=$(cd "$wt" && pwd -P)
   state_real=$(cd "$home/state" && pwd -P)
   brief_real=$(cd "$home/data/$id" && pwd -P)
+  skills_real=$(cd "$ROOT/.agents/skills" && pwd -P)
+  instructions="$state_real/$id.agy-hooks/firstmate-AGENTS.md"
   case "$launch" in
     *"--add-dir '$wt_real'"*) ;;
     *) fail "the agy launch must grant the resolved task worktree, got: $launch" ;;
   esac
   case "$launch" in
-    *"--add-dir '$state_real'"*) ;;
-    *) fail "the agy launch must grant this home's resolved state directory, got: $launch" ;;
+    *"--add-dir '$state_real'"*|*"--add-dir '${skills_real%/.agents/skills}'"*)
+      fail "an agy worker must not grant shared state or the entire code root: $launch" ;;
   esac
   case "$launch" in
     *"--add-dir '$brief_real'"*) ;;
     *) fail "the agy launch must grant the brief's resolved directory, got: $launch" ;;
   esac
+  assert_contains "$launch" "--add-dir '$state_real/$id.inbox'" 'manual worker gets only its own inbox'
+  assert_contains "$launch" "--add-dir '$skills_real'" 'manual worker gets the Firstmate skills'
+  assert_contains "$launch" "--add-dir '${instructions%/*}'" 'instructions are inside the owned hook grant'
+  # The task copy is a linked worktree, so Git needs its metadata under the
+  # project clone: the common directory, which holds this copy's own entry.
+  git_common=$(cd "$wt" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  git_entry=$(cd "$wt" && cd "$(git rev-parse --git-dir)" && pwd -P)
+  case "$git_entry" in "$git_common"/worktrees/*) ;; *) fail "fixture is not a linked worktree: $git_entry" ;; esac
+  assert_contains "$launch" "--add-dir '$git_common'" 'linked worktree Git metadata is granted physically'
+  [ "$(jq -c .git_dirs "$state_real/$id.agy-permission.json")" = "[\"$git_common\"]" ] \
+    || fail 'the policy must record exactly the granted Git metadata'
+  [ -d "$state_real/$id.inbox/handled" ] || fail 'the exact inbox and handled directory must exist before launch'
+  cmp -s "$ROOT/AGENTS.md" "$instructions" || fail 'worker did not get the source AGENTS.md content'
+  grep -Fq -- "$instructions" "$brief_real/launch-brief.md" || fail 'brief did not point to the instruction snapshot'
+  [ "$(jq -r .posture "$state_real/$id.agy-permission.json")" = manual ] || fail 'manual worker launch lacks a deterministic policy'
   # -i keeps the interactive session after the opening prompt; -p would run one
   # headless turn and exit, leaving no pane to supervise or steer.
   case "$launch" in
     *' -i '*) ;;
     *) fail "the agy launch must use -i to keep the session, got: $launch" ;;
   esac
-  pass "fm-spawn.sh: an agy launch grants the worktree, state, and brief directories"
+  pass "fm-spawn.sh: agy Manual grants exact task channels, Firstmate instructions and linked Git metadata"
 }
 
-test_agy_grants_resolve_a_symlinked_worktree() {
-  local fields case_dir home proj wt fakebin id launch link wt_real
+test_agy_grants_resolve_symlinked_paths() {
+  local fields case_dir home proj wt fakebin id launch link wt_real state_real home_link code_link
   fields=$(make_spawn_case adddir-symlink)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $fields
@@ -641,21 +658,49 @@ EOF
   # outside workspace" (verified on agy 1.2.0). The two paths must genuinely
   # differ, or this case proves nothing.
   link="$case_dir/wt-link"
+  home_link="$case_dir/home-link"
+  code_link="$case_dir/code-link"
   ln -s "$wt" "$link"
+  ln -s "$home" "$home_link"
+  ln -s "$ROOT" "$code_link"
   wt_real=$(cd "$wt" && pwd -P)
+  state_real=$(cd "$home/state" && pwd -P)
   [ "$link" != "$wt_real" ] \
     || fail "the symlink case needs a path that differs from the resolved worktree"
-  run_agy_spawn "$home" "$proj" "$link" "$fakebin" "$id" --scout >/dev/null
+  FM_AGY_TEST_CODE_ROOT="$code_link" run_agy_spawn "$home_link" "$proj" "$link" "$fakebin" "$id" --scout >/dev/null
   launch=$(cat "$home/launch.log")
   case "$launch" in
     *"--add-dir '$wt_real'"*) ;;
     *) fail "a symlinked worktree must be granted resolved, got: $launch" ;;
   esac
   case "$launch" in
-    *"--add-dir '$link'"*)
-      fail "the unresolved symlink path must never be the grant: $launch" ;;
+    *"--add-dir '$link'"*|*"--add-dir '$home_link/"*|*"--add-dir '$code_link/"*)
+      fail "unresolved symlink paths must never be grants: $launch" ;;
   esac
-  pass "fm-spawn.sh: agy grants a symlinked worktree by its resolved path"
+  assert_contains "$launch" "--add-dir '$state_real/$id.inbox'" 'physical inbox, not its home alias'
+  assert_contains "$launch" "--add-dir '$(cd "$ROOT/.agents/skills" && pwd -P)'" 'physical skills, not its code-root alias'
+  pass "fm-spawn.sh: agy grants symlinked worktree, inbox and skills paths by their physical names"
+}
+
+test_agy_refuses_inbox_symlinks() {
+  local variant fields case_dir home proj wt fakebin id out link
+  for variant in inbox handled; do
+    fields=$(make_spawn_case "linked-$variant")
+    IFS='|' read -r case_dir home proj wt fakebin id <<<"$fields"
+    link="$home/state/$id.inbox"
+    mkdir -p "$home/state/sibling.inbox/handled"
+    if [ "$variant" = handled ]; then
+      mkdir "$link"
+      link="$link/handled"
+    fi
+    ln -s "$home/state/sibling.inbox" "$link"
+    if out=$(run_agy_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --scout); then
+      fail "a linked $variant must not expand this task's grant"
+    fi
+    assert_contains "$out" 'could not prepare agy grants' 'the unsafe inbox fails closed'
+    [ ! -s "$home/launch.log" ] || fail 'unsafe inbox reached the worker launch'
+  done
+  pass 'fm-spawn.sh: agy refuses symlinked inbox and handled directories'
 }
 
 # --- effort -----------------------------------------------------------------
@@ -1011,15 +1056,17 @@ test_agy_native_mapping_and_grants() (
   [ -z "$(fm_agy_permission_flags manual)" ] || fail 'manual must preserve default native review'
   WT="$TMP_ROOT/native-grants/worktree" STATE_REAL="$TMP_ROOT/native-grants/state"
   BRIEF="$TMP_ROOT/native-grants/data/brief.md" TASK_TMP="$TMP_ROOT/native-grants/tmp" ID=t1 KIND=ship RAW_LAUNCH=0
-  mkdir -p "$WT" "$STATE_REAL/$ID.agy-hooks" "${BRIEF%/*}" "$TASK_TMP"
-  flags=$(fm_agy_permission_dirs)
-  python3 - "$flags" "$STATE_REAL" "$TASK_TMP" <<'PY' || fail 'native directory grants differ from the exact task roots'
+  AGY_SKILLS_DIR="$ROOT/.agents/skills" AGY_GIT_DIRS="$TMP_ROOT/native-grants/project.git"
+  mkdir -p "$WT" "$STATE_REAL/$ID.agy-hooks" "$STATE_REAL/$ID.inbox/handled" "${BRIEF%/*}" "$TASK_TMP" "$AGY_GIT_DIRS"
+  flags=$(fm_agy_permission_dirs) || fail 'existing native task directories did not resolve'
+  python3 - "$flags" "$WT" "${BRIEF%/*}" "$TASK_TMP" "$STATE_REAL/$ID.agy-hooks" \
+    "$STATE_REAL/$ID.inbox" "$AGY_SKILLS_DIR" "$AGY_GIT_DIRS" <<'PY' || fail 'native directory grants differ from the exact task roots'
 import shlex, sys
 from pathlib import Path
 flags = shlex.split(sys.argv[1])
-grants = [flags[i + 1] for i in range(0, len(flags), 2) if flags[i] == "--add-dir"]
-assert str(Path(sys.argv[2]).resolve()) not in grants
-assert str(Path(sys.argv[3]).resolve()) in grants
+expected = [str(Path(path).resolve(strict=True)) for path in sys.argv[2:]]
+assert flags[::2] == ["--add-dir"] * len(expected)
+assert sorted(flags[1::2]) == sorted(expected)
 PY
   pass 'agy native mapping and minimal physical grants'
 )
@@ -1083,6 +1130,12 @@ SH
         || fail 'native startup sent the task before activation or enabled bypass'
       state_real=$(cd "$home/state" && pwd -P)
       ! grep -Fq -- "--add-dir '$state_real' " "$home/launch.log" || fail 'native launch granted shared state'
+      grep -Fq -- "--add-dir '$state_real/$id.inbox' " "$home/launch.log" && [ -d "$state_real/$id.inbox/handled" ] \
+        || fail 'native launch did not provision and grant its exact inbox'
+      grep -Fq -- "--add-dir '$(cd "$ROOT/.agents/skills" && pwd -P)' " "$home/launch.log" \
+        || fail 'native launch did not grant the resolved Firstmate skills'
+      grep -Fq -- "--add-dir '$(cd "$wt" && cd "$(git rev-parse --git-common-dir)" && pwd -P)' " "$home/launch.log" \
+        || fail 'native launch did not grant the linked worktree Git metadata'
     elif [ "$variant" != seq ] && [ "$variant" != brief ]; then
       local no_auto=0 kill_fails=0 start_kind=valid
       case "$variant" in
@@ -1126,7 +1179,7 @@ test_agy_native_refuses_project_hooks() {
   mkdir -p "$wt/.agents" "$wt/nested/work"
   ln -s "$wt/missing-hooks.json" "$wt/.agents/hooks.json"
   if reason=$(fm_agy_native_project_compatible "$wt/nested/work"); then fail 'native project gate accepted ancestor hook symlink'; fi
-  if out=$(WT="$wt" fm_agy_native_wire 2>&1); then fail 'native wiring accepted project hooks'; fi
+  if out=$(WT="$wt" RAW_LAUNCH=0 fm_agy_spawn_wire 2>&1); then fail 'native wiring accepted project hooks'; fi
   assert_contains "$out" "$reason" 'native wiring uses the shared project-hook refusal'
   rm "$wt/.agents/hooks.json"
   mkdir -p "$dir/.agents"
@@ -1503,8 +1556,9 @@ test_herdr_lone_unregistered_pane_is_agent_free
 test_herdr_malformed_and_failed_reads_stay_unknown
 test_agy_manual_reviews_everything_and_never_bypass
 test_agy_invalid_setting_refuses_without_bypass
-test_agy_launch_grants_the_task_worktree
-test_agy_grants_resolve_a_symlinked_worktree
+test_agy_launch_grants_exact_task_channels
+test_agy_grants_resolve_symlinked_paths
+test_agy_refuses_inbox_symlinks
 test_agy_effort_caps_at_high
 test_agy_effort_passes_supported_levels_through
 test_agy_suffixed_model_id_suppresses_the_effort_flag

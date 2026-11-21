@@ -429,7 +429,8 @@ The admission entry point is `bin/fm-agy-admission.sh ensure-native`; its header
 A production-hook native file write into a synthetic foreign-task root was denied, and the target stayed absent.
 
 Live one-shot command approval produced the exact status append and closed the same keyed decision through PostToolUse.
-Native Auto also approved harmless outside-sandbox calls itself, including an exact inbox acknowledgment.
+Before workers received an exact inbox directory grant, native Auto also approved harmless outside-sandbox calls itself, including an exact inbox acknowledgment.
+The current `tests/fm-agy-native-live-e2e.test.sh` guard instead expects the exact status append, and a read and acknowledgment of a synthetic message inside the inbox grant, to complete without an approval action; that expectation has no live result yet.
 Harmless outside-sandbox calls can auto-complete, so ordinary calls need not produce a prompt.
 Live decline/reconciliation passed on agy 1.4.7 with `gemini-3.8-flash-high` through Herdr.
 A recursive permission change on a newly created disposable directory outside all native grants and system temporary storage reached the native approval panel.

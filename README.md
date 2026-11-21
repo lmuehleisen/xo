@@ -37,7 +37,7 @@ Use this repository when cloning for these changes; the upstream project overvie
 - **No required `no-mistakes`:** workers run relevant tests and lint directly, then deliver through `direct-PR` or `local-only`; legacy no-mistakes delivery tokens map to `direct-PR` unless a home opts in through `config/no-mistakes`, so local work needs no pipeline.
 - **Reviewed worker permissions:** Pane-backed Claude and Codex launches default to automatic permission review, with a manual-review option, instead of bypassing permissions or the sandbox; see [worker permission modes](docs/configuration.md#worker-permission-mode-configcrew-permissions).
   Explicit T3 Code threads use [upstream full-access behavior](docs/t3code-backend.md#active-limits).
-  agy Auto workers use verified native review with deterministic task constraints; Manual retains native review prompts.
+  agy Auto workers use verified native review and Manual retains native review prompts, both with deterministic task constraints.
   Devin workers stay in reviewed mode behind their own hook, never in bypass.
 - **Direct Kiro workers:** installed `kiro-cli` runs interactive V2 crewmates and scouts with isolated configuration and native busy-state hooks.
 - **Remote-less local work:** explicit `local-only` ship tasks can start from local `main` or `master` without a remote, while rejecting dirty or divergent task bases.

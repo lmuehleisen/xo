@@ -542,10 +542,19 @@ resolve_symlink_chain() {  # <abs>
   while [ -L "$abs" ] && [ "$hops" -lt 40 ]; do
     link=$(readlink "$abs" 2>/dev/null) || return 1
     case "$link" in
-      /*) abs=$(norm_abs "$link") ;;
-      *) abs=$(norm_abs "${abs%/*}/$link") ;;
+      /*) ;;
+      *) link="${abs%/*}/$link" ;;
     esac
-    resolved=$(physical_target "$abs" '' 0 2>/dev/null) && abs=$resolved
+    # Resolve directory components before any .. so a .. after a linked
+    # directory follows the kernel. Only a target the kernel could not open
+    # either (a missing, dangling or non-directory component) keeps the
+    # lexical form.
+    if resolved=$(physical_target "$link" '' 0 2>/dev/null); then
+      abs=$resolved
+    else
+      abs=$(norm_abs "$link")
+      resolved=$(physical_target "$abs" '' 0 2>/dev/null) && abs=$resolved
+    fi
     hops=$((hops + 1))
   done
   [ ! -L "$abs" ] || return 1
@@ -1539,10 +1548,18 @@ inside_scratch_tmp() {  # <abs>
 
 # Write targets that are in scope without being inside the worktree: the task's
 # own data directory and temp root, any granted write directory, and /tmp or
-# $TMPDIR scratch files.
+# $TMPDIR scratch files. Adapter-reserved namespaces never inherit scratch
+# permissions just because a home lives under a temporary directory.
 inside_scratch_write_roots() {  # <abs>
-  strictly_inside "$1" "$DATA_DIR" || strictly_inside "$1" "$TASKTMP" \
-    || inside_grant_write_dirs "$1" || inside_scratch_tmp "$1"
+  if strictly_inside "$1" "$DATA_DIR" || strictly_inside "$1" "$TASKTMP"; then return 0; fi
+  if [ -n "${POLICY_RESERVED_WRITE_DIRS:-}" ]; then
+    local root
+    while IFS= read -r root; do
+      [ -n "$root" ] || continue
+      if [ "$1" = "$(norm_abs "$root")" ] || strictly_inside "$1" "$root"; then return 1; fi
+    done <<<"$POLICY_RESERVED_WRITE_DIRS"
+  fi
+  inside_grant_write_dirs "$1" || inside_scratch_tmp "$1"
 }
 
 # 0 when <abs> is a directory files may be created in, or a path inside one.
@@ -2298,6 +2315,7 @@ analyze_segment() {
     ln) refuse_brief_operands all 0; refuse_bypass_outroot_operands last ;;
     dd|truncate|tee) refuse_brief_operands all 0; refuse_bypass_outroot_operands all ;;
     touch|mkdir) refuse_brief_operands all 0 ;;
+    chmod|chown|chgrp) refuse_brief_operands all 1 ;;
     patch|split) refuse_brief_operands all 0 ;;
   esac
   [ -n "$REFUSE_REASON" ] && return 0
