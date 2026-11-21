@@ -160,9 +160,10 @@
 #   Task record: for <data>/<id>/brief.md, where <data> is FM_DATA_OVERRIDE,
 #   else $FM_HOME/data, every run first removes
 #   <data>/<id>/dispatch-resolution.json, then every outcome except exit 2 writes
-#   {"task", "status" (clear, ambiguous, escalate, error, or off), "profile"}
-#   there; profile holds harness, model, and effort on clear and is null
-#   otherwise. fm-spawn.sh reads it as the task's dispatch decision.
+#   {"task", "status" (clear, ambiguous, escalate, error, or off), "profile",
+#    "lane", "class", "confidence"} there; unavailable fields are null.
+#   Profile holds harness, model, and effort on clear and is null otherwise.
+#   fm-spawn.sh reads it as the task's dispatch decision.
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
 #   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie
@@ -309,7 +310,11 @@ die() { HISTORY_REASON='usage or configuration error'; printf 'error: %s\n' "$1"
 record_task() {
   [ -n "$TASK_RECORD" ] || return 0
   if ! { jq -cn --arg task "$TASK_ID" --arg status "$1" --argjson profile "${2:-null}" \
-      '{task: $task, status: $status, profile: $profile}' > "$TASK_RECORD.tmp.$$" \
+      --arg lane "$LANE" --argjson evidence "$HISTORY_EVIDENCE" --argjson result "$RESULT" '
+      ($evidence + $result) as $r |
+      {task: $task, status: $status, profile: $profile,
+       lane: ($r.lane // ($lane | select(. != "")) // null),
+       class: $r.chosen.class, confidence: $r.confidence}' > "$TASK_RECORD.tmp.$$" \
       && mv -f -- "$TASK_RECORD.tmp.$$" "$TASK_RECORD"; } 2>/dev/null; then
     rm -f -- "$TASK_RECORD.tmp.$$"
     echo "dispatch-resolve: could not write $TASK_RECORD" >&2

@@ -1580,6 +1580,9 @@ assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-m
 assert_equals '{"task":"pager-fix","status":"clear","profile":{"harness":"cursor","model":"cursor-grok-4.6-medium","effort":null}}' \
   "$(jq -c '{task, status, profile: (.profile | {harness, model, effort})}' "$TASK_RECORD")" \
   "a clear run records the task, status, and the printed profile with an unset effort as null"
+assert_equals '{"lane":null,"class":null,"confidence":0.9}' \
+  "$(jq -c '{lane, class, confidence}' "$TASK_RECORD")" \
+  "the task record preserves confidence even when there is no lane or class"
 reset_log
 write_response "$RESPONSE" rule_4 0.41
 TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
@@ -1589,6 +1592,9 @@ reset_log
 run code out err "$TASK_BRIEF" --project pager
 assert_contains "$err" 'dispatch-resolve: off (' "the keyless run is off"
 assert_equals 'off null' "$(jq -r '"\(.status) \(.profile)"' "$TASK_RECORD")" "an off run records off so fm-spawn accepts the manual intake"
+assert_equals '{"lane":null,"class":null,"confidence":null}' \
+  "$(jq -c '{lane, class, confidence}' "$TASK_RECORD")" \
+  "an off run does not retain the earlier confidence"
 mv "$RULES" "$RULES.keep"
 printf '{"broken":\n' > "$RULES"
 TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
@@ -3450,14 +3456,16 @@ assert_not_contains "$(tail -n 1 "$HISTORY")" "$KEY" "HTTP body cannot leak keys
 # Explicit lane output is deterministic, so compare complete stdout and stderr
 # with a working log, an unwritable log destination, and a non-directory state.
 printf '%s\n' '{"classes":{"local":{"family":"local","unmetered":true,"routes":[{"harness":"claude","model":"sonnet"}]}},"rules":[{"when":"Routine","lane":"routine","order":"ordered","classes":["local"]}]}' > "$RULES"
-run_lane code out err "$HISTORY_BRIEF" --lane routine
+run_lane code out err "$TASK_BRIEF" --lane routine
 expect_code 0 "$code" "baseline named lane succeeds"
 baseline_out=$out baseline_err=$err
 tail -n 1 "$HISTORY" | jq -e '.lane == "routine" and .candidates[0].class == "local" and
   .candidates[0].spendPriority == 0' >/dev/null || fail "lane history lost the class"
+assert_equals '{"lane":"routine","class":"local"}' "$(jq -c '{lane, class}' "$TASK_RECORD")" \
+  "a lane decision records its lane and chosen class for spawn history"
 mv "$HISTORY" "$TMP_ROOT/saved-history"
 mkdir "$HISTORY"
-run_lane code out err "$HISTORY_BRIEF" --lane routine
+run_lane code out err "$TASK_BRIEF" --lane routine
 expect_code 0 "$code" "unwritable history does not fail routing"
 assert_equals "$baseline_out" "$out" "failed history write leaves stdout byte-for-byte unchanged"
 assert_equals "$baseline_err" "$err" "failed history write stays silent"
@@ -3465,21 +3473,78 @@ rmdir "$HISTORY"
 mv "$TMP_ROOT/saved-history" "$HISTORY"
 mv "$HOME_DIR/state" "$HOME_DIR/saved-state"
 printf 'not a directory\n' > "$HOME_DIR/state"
-run_lane code out err "$HISTORY_BRIEF" --lane routine
+run_lane code out err "$TASK_BRIEF" --lane routine
 expect_code 0 "$code" "unusable state directory does not fail routing"
 assert_equals "$baseline_out" "$out" "unusable state leaves stdout unchanged"
 assert_equals "$baseline_err" "$err" "unusable state leaves stderr unchanged"
 # Nonzero configuration exits also survive a logging failure unchanged.
-run_lane code out err "$HISTORY_BRIEF" --lane missing
+run_lane code out err "$TASK_BRIEF" --lane missing
 expect_code 2 "$code" "logging failure preserves the configuration-error exit"
 rm "$HOME_DIR/state"
 mv "$HOME_DIR/saved-state" "$HOME_DIR/state"
 good_out='' good_err=''
-run_lane code good_out good_err "$HISTORY_BRIEF" --lane missing
+run_lane code good_out good_err "$TASK_BRIEF" --lane missing
 expect_code 2 "$code" "working history preserves the configuration-error exit"
 assert_equals "$good_out" "$out" "logging cannot alter error stdout"
 assert_equals "$good_err" "$err" "logging cannot alter error stderr"
 pass "private router history covers every outcome and silently tolerates write failures"
+
+# Report against a standalone home: legacy rows, repeated calls and launches,
+# and a bare lane probe with the same inferred id as a real task.
+REPORT="$ROOT/bin/fm-dispatch-history.sh"
+REPORT_HOME="$TMP_ROOT/report home"
+mkdir -p "$REPORT_HOME/state"
+cat > "$REPORT_HOME/state/dispatch-history.jsonl" <<'JSONL'
+{"kind":"router","time":1735689598,"task_id":"example","status":"off","brief_path":"data/example/brief.md"}
+{"kind":"router","time":1735689599,"task_id":"example","status":"clear","brief_path":"data/example/brief.md","lane":"routine","confidence":0.97,"suggested_profile":{"harness":"claude","model":"sonnet","effort":null}}
+{"kind":"spawn","time":1735689599,"task_id":"example","harness":"claude","model":"sonnet","effort":"low"}
+{"broken":
+{"kind":"spawn","time":1735689600,"task_id":"example","harness":"claude","model":"sonnet","effort":"default","override_reason":"Different account"}
+{"kind":"spawn","time":1735689600,"task_id":"example","harness":"codex","model":"default","effort":"default"}
+{"kind":"router","time":1735689600,"task_id":"dev","status":"clear","brief_path":"/dev/null","lane":"probe","suggested_profile":{"harness":"claude"}}
+{"kind":"spawn","time":1735689600,"task_id":"dev","harness":"claude","model":"default","effort":"default","resolver_exists":true}
+{"kind":"router","time":1735689600,"task_id":"manual","status":"ambiguous","reason":"confidence below floor","confidence":0.4}
+{"kind":"spawn","time":1735689600,"task_id":"manual","harness":"codex","model":"default","effort":"high"}
+[]
+{"kind":"router","time":1735689600,"task_id":"example","status":"off"}
+{"kind":"spawn","time":1735689600,"task_id":"example","harness":"codex","model":"default","effort":"high"}
+JSONL
+FM_HOME="$TMP_ROOT/wrong" FM_STATE_OVERRIDE="$TMP_ROOT/wrong/state" \
+  "$REPORT" report --home "$REPORT_HOME" --json > "$TMP_ROOT/report.json" 2> "$TMP_ROOT/report.err" \
+  || fail "the history report must succeed despite malformed lines"
+jq -e '
+  .summary == {followed: 1, overridden: 2, router_not_clear: 2, no_router_call: 1} and
+  .spawns[0] == {time: 1735689599, task_id: "example", lane: "routine", confidence: 0.97,
+    router_status: "clear", recommended_profile: {harness: "claude", model: "sonnet", effort: null},
+    used_profile: {harness: "claude", model: "sonnet", effort: "low"}, outcome: "followed", reason: null} and
+  .spawns[1].outcome == "overridden" and .spawns[1].reason == "Different account" and
+  .spawns[2].outcome == "overridden" and .spawns[2].reason == null and
+  .spawns[3].outcome == "no_router_call" and .spawns[3].lane == null and
+  .spawns[4].outcome == "router_not_clear" and .spawns[4].router_status == "ambiguous" and
+  .spawns[4].reason == "confidence below floor" and .spawns[5].router_status == "off"
+' "$TMP_ROOT/report.json" >/dev/null || fail "history report did not pair each spawn with the latest preceding non-probe call"
+assert_equals $'fm-dispatch-history: skipping malformed line 4\nfm-dispatch-history: skipping malformed line 11' \
+  "$(cat "$TMP_ROOT/report.err")" "malformed lines are reported by number without echoing their content"
+report_text=$(FM_HOME="$REPORT_HOME" "$REPORT" report --since 2025-01-01 --task example 2> "$TMP_ROOT/report.err") \
+  || fail "the filtered text report must succeed"
+assert_contains "$report_text" 'Spawns: 3 (followed: 0, overridden: 2, router not clear: 1, no router call: 0)' \
+  "task and UTC date filters count only the matching spawns"
+assert_contains "$report_text" $'2025-01-01T00:00:00Z\texample\troutine\t0.97\tclaude/sonnet/-\tclaude/sonnet/default\toverridden\tDifferent account' \
+  "a spawn at the inclusive cutoff can still pair with an earlier recommendation"
+assert_equals '0' "$(FM_HOME="$TMP_ROOT/empty-report" "$REPORT" report --json | jq -r '.spawns | length')" \
+  "a missing history is an empty report"
+# Exercise both jq's normal exit and a successful exit with no emitted value.
+mkdir "$REPORT_HOME/bin"
+printf '#!/bin/sh\nexit 0\n' > "$REPORT_HOME/bin/jq"
+chmod +x "$REPORT_HOME/bin/jq"
+for report_path in "$PATH" "$REPORT_HOME/bin:$PATH"; do
+  report_err=$(PATH="$report_path" "$REPORT" report --home "$REPORT_HOME" --since 2025-02-30 2>&1)
+  expect_code 2 "$?" "an invalid date must be rejected as a usage error"
+  assert_equals 'fm-dispatch-history: --since needs a valid UTC date (YYYY-MM-DD)' "$report_err" \
+    "an invalid date reports the date error rather than a downstream jq error"
+done
+pass "private dispatch report handles legacy rows, every outcome, filters, and bare lane probes"
+
 # --- shared-quota opt-out: no quota call, declared-order pick ----------------
 cp "$BASE_RULES" "$RULES"
 jq '.shared_quota = true' "$BASE_RULES" > "$RULES"
