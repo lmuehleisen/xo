@@ -147,4 +147,5 @@ fm_test_run \
   test_agy_silent_stall_paused_worker_stays_quiet \
   test_agy_pending_prompt_stays_on_needs_decision_path \
   test_agy_silent_stall_probe_keeps_prior_interval \
+  test_agy_silent_stall_mid_scan_write_stays_visible \
   test_closed_exit_picker_drops_saved_dialog_name

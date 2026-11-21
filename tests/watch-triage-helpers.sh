@@ -8115,3 +8115,60 @@ test_agy_silent_stall_probe_keeps_prior_interval() {
   unset FM_FAKE_CREW_STATE
   pass "agy silent-stall probes compare against the previous probe and end a reported episode on new writes"
 }
+
+
+test_agy_silent_stall_mid_scan_write_stays_visible() {
+  local dir state fakebin out capture_file window key pane_hash gen old pid real_find
+  local checked reported
+  dir=$(make_case agy-silent-stall-midscan); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-agymidscan"
+  printf 'User declined the tool call\n>\n? for shortcuts    auto - Gemini\n' > "$capture_file"
+  gen=$(agy_declined_fixture "$dir" agymidscan "$window" "git rev-parse --git-common-dir")
+  old=$(( $(date +%s) - 900 ))
+  set_mtime "$old" "$state/agymidscan.agy-permission-pending/fixture-s9.native-declined"
+  set_mtime "$old" "$state/agymidscan.agy-permission-pending/fixture-s9.pending"
+  set_mtime "$old" "$state/agymidscan.agy-permission-pending/fixture-s9.candidate"
+  set_mtime "$old" "$state/agymidscan.busy-state"
+  set_mtime "$old" "$state/agymidscan.status"
+  set_mtime "$old" "$state/agymidscan.meta"
+  # Reported stall, quiet worktree since the last probe: this probe keeps the
+  # episode, but the worker writes a file just after the scan passes it.
+  reported="$state/.agy-stall-reported-agymidscan-fixture-s9"
+  printf '%s' "$old" > "$reported"
+  checked="$state/.agy-stall-checked-agymidscan-fixture-s9"
+  : > "$checked"; set_mtime "$(( $(date +%s) - 300 ))" "$checked"
+  real_find=$(command -v find)
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '%q "$@"; rc=$?\n' "$real_find"
+    printf 'if [ "${1:-}" = %q ] && [ ! -e %q ]; then\n' "$dir/wt" "$dir/late.done"
+    printf '  : > %q; sleep 1; : > %q; sleep 1\n' "$dir/late.done" "$dir/wt/late.txt"
+    printf 'fi\nexit $rc\n'
+  } > "$fakebin/find"
+  chmod +x "$fakebin/find"
+  printf '%s' "$(seen_sig "$state/agymidscan.status")" > "$state/.seen-agymidscan_status"
+  key=$(watch_window_key "$window")
+  pane_hash=$(hash_text "$(cat "$capture_file")")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown - source: none - fake default'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "a reported quiet stall woke again: $(cat "$out")"
+  fi
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the mid-scan cycle"
+  [ -e "$dir/late.done" ] || fail "the worktree scan never ran"
+  [ -e "$reported" ] || fail "a quiet interval ended the reported stall episode"
+  [ ! -e "$checked.next" ] || fail "the staged probe boundary was not published"
+  [ "$dir/wt/late.txt" -nt "$checked" ] \
+    || fail "the probe boundary advanced past a write that landed after the scan"
+  unset FM_FAKE_CREW_STATE
+  pass "an agy silent-stall probe keeps a write that lands mid-scan inside the next interval"
+}
