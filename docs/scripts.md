@@ -139,6 +139,7 @@ The retained compatibility gate lifecycle boundary for fleet lifecycle entrypoin
 | `fm-quota-axi-lib.sh`    | Shared `quota-axi` compatibility floor and quota snapshot schema validation           |
 | `fm-codex-catalog-lib.sh` | Shared installed Codex model-catalog lookup for `max` and `ultra` reasoning-effort support |
 | `fm-dispatch-lanes-lib.sh` | Single owner of crew-dispatch lane, model-class, and data-policy structure checks, plus the model-family lookup `fm-spawn.sh` records |
+| `fm-dispatch-check-lib.sh` | Single owner of the top-lane check's guided prompt, bounded checker call, and answer parsing, plus the never-send matching `fm-dispatch-resolve.sh` shares |
 | `fm-credential-source-lib.sh` | Single owner of the declared credential-source schema and its adapters, read by `fm-dispatch-resolve.sh` and checked by `fm-bootstrap.sh` |
 | `fm-quota-choose.sh`     | Choose the first candidate with known positive quota from an ordered harness:model list |
 | `fm-vendor-auth-probe.sh`| Run one hard-bounded, non-destructive authentication probe of a named vendor CLI and report the fact |

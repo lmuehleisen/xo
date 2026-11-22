@@ -186,6 +186,8 @@ When `config/crew-dispatch.json` declares lane rules, the configuration chooses 
 - Pass one `--data-tag` for each data tag the task carries, so a class's data policy admits or refuses it in code; when the task's data is unclear, pass no allow tag and let the policy refuse.
 - An allow tag reserved for one-off exceptions is passed only on the captain's word for that task.
 - A `clear` lane result has applied eligibility, floors, and runway to every route, but the reasoning-class gate above remains yours.
+- When the rules declare a [top-lane check](../../../docs/configuration.md#top-lane-check-lane_check), take the lane the resolver reports after its `lane_check:` line, including a demotion from a top lane.
+  Route your own top-lane pick, such as one after an unsure result, through `--lane` so the check covers it, and keep a top lane against the check only with `--keep-lane <reason>` on the resolver, for example the captain's explicit lane or model choice for that task, never by a bare `--dispatch-override` at spawn.
 - A lane gated by `approval` escalates with its candidates; launch it only on the captain's word for that task.
 - For a second opinion, read `model_family=` from the originating task's `state/<id>.meta` and resolve the same lane with `--exclude-family <family>`; when the origin recorded no family, ask rather than guess one.
 - A chosen class marked `experiment` is a trial route: note it in the backlog item, and flag the trial when relaying its result so the comparison stays visible.

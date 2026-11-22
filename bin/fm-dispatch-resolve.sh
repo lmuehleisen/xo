@@ -5,6 +5,7 @@
 # Usage:
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>] [--completion-horizon <seconds>]
 #                          [--lane <name>] [--exclude-family <family>] [--data-tag <tag>]...
+#                          [--keep-lane <reason>]
 #   fm-dispatch-resolve.sh --supports-credential-source <source>
 #
 # Opt-in gate: FM_DISPATCH_PROVIDER and FM_DISPATCH_MODEL select the provider
@@ -120,13 +121,34 @@
 #   class, for a second opinion; it needs a lane, so a `use` rule or the
 #   default escalates.
 #   --lane <name> resolves that lane rule directly: no Choice request, so no
-#   API key, curl, or never-send check is needed; it still reads the
-#   one quota snapshot.
+#   router API key or curl is needed. The configured checker still applies
+#   the never-send list, and the resolver reads the one quota snapshot.
 #   Prefer additive spendPressure once per snapshot when any scope publishes it;
 #   otherwise use legacy spendPriority. Missing selected scores stay unranked.
 #   Candidate output labels name the selected metric; unmetered policy scores
 #   retain their configured values. Planning overrides adjust whichever
 #   metric the snapshot selects.
+#
+# Top-lane check: when the rules declare lane_check, every resolve (router or
+#   --lane, including a shadow-only second opinion) starts one guided checker call
+#   (bin/fm-dispatch-check-lib.sh owns the prompt, call, bound, and answer)
+#   beside the router request and quota read, sends it the same task text,
+#   and waits for it within its timeout_seconds. Its pick is always recorded
+#   as the shadow. It acts only when the selected lane is one of
+#   lane_check.top_lanes - the router's lane after any floor fallback, a
+#   --lane, or the raw top option of an ambiguous result - and the pick is a
+#   declared lane outside top_lanes that needs no captain approval: the lane
+#   becomes the pick and resolves normally, so an ambiguous result can become
+#   clear. It never acts on a lane outside top_lanes, so standard never drops
+#   to scoped. --keep-lane <reason> keeps the selected lane and records the
+#   reason; the pick is still recorded. A check that did not run (no
+#   lane_check, harness not installed, never-send match, nonzero exit,
+#   timeout, or no declared lane in the answer) leaves the selected lane
+#   standing and says so. A brief at <data>/<id>/brief.md caches a successful
+#   pick in <data>/<id>/dispatch-check.json for reuse on an unchanged prompt.
+#   Output adds "lane_check: <action>" and, with a pick, "lane_check_reason:".
+#   Actions: demoted <from> -> <pick>, kept <from> by --keep-lane, agreed,
+#   not lower, shadow, or not run.
 #
 # Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
 #   exists, the endpoint URL and every string value of the final
@@ -161,7 +183,9 @@
 #   else $FM_HOME/data, every run first removes
 #   <data>/<id>/dispatch-resolution.json, then every outcome except exit 2 writes
 #   {"task", "status" (clear, ambiguous, escalate, error, or off), "profile",
-#    "lane", "class", "confidence"} there; unavailable fields are null.
+#    "lane", "class", "confidence", "resolution_id", "lane_check"} there;
+#   unavailable fields are null. resolution_id also keys this run's history
+#   row, and lane_check holds {action, pick, from} when the check applied.
 #   Profile holds harness, model, and effort on clear and is null otherwise.
 #   fm-spawn.sh reads it as the task's dispatch decision.
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
@@ -173,7 +197,8 @@
 #   existing unreadable rules file, malformed rules, missing jq, an unknown
 #   provider, invalid credential sources, a non-typesafe provider without a
 #   model, an invalid TYPESAFE_BASE, systemone without a valid base URL, an
-#   unknown --lane, or an undeclared --exclude-family or --data-tag), which is
+#   unknown --lane, an empty or unprintable --keep-lane reason, or an
+#   undeclared --exclude-family or --data-tag), which is
 #   actionable, never selected around.
 #
 # Private call history: bin/fm-dispatch-history-lib.sh owns the append-only
@@ -276,20 +301,27 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-dispatch-history-lib.sh
 . "$SCRIPT_DIR/fm-dispatch-history-lib.sh"
+# shellcheck source=bin/fm-dispatch-check-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-check-lib.sh"
 
 HISTORY_STATUS=error HISTORY_REASON=''
 HISTORY_EVIDENCE='{}' HISTORY_MODEL=''
 BRIEF='' LANE='' LAT_MS=null RESULT='{}'
+KEEP_LANE='' CHECK_PID='' CHECK_OUT='' CHECK_CFG='' CHECK_JSON=null
+ROUTER_OFF_REASON=''
+RESOLUTION_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM:-0}"
 # The exit handler owns only temporaries created by this invocation, never
 # paths inherited from the caller through generic environment variable names.
 RULES='' RESP_FILE='' QUOTA='' TASK_TEXT='' SEND_TEXT=''
 # shellcheck disable=SC2329 # Registered by the EXIT trap below.
 dispatch_exit() {
   local rc=$?
+  # A check still running on an early exit is bounded by its own timeout.
+  [ -z "${CHECK_PID:-}" ] || kill "$CHECK_PID" 2>/dev/null || true
   fm_dispatch_history_router "$FM_HOME" "$BRIEF" "$HISTORY_STATUS" "$HISTORY_REASON" \
-    "$RESULT" "$HISTORY_EVIDENCE" "$LANE" "$LAT_MS" "$HISTORY_MODEL" || true
-  if [ -n "${RULES:-}${RESP_FILE:-}${QUOTA:-}${TASK_TEXT:-}${SEND_TEXT:-}" ]; then
-    rm -f "${RULES:-}" "${RESP_FILE:-}" "${QUOTA:-}" "${TASK_TEXT:-}" "${SEND_TEXT:-}"
+    "$RESULT" "$HISTORY_EVIDENCE" "$LANE" "$LAT_MS" "$HISTORY_MODEL" "$RESOLUTION_ID" || true
+  if [ -n "${RULES:-}${RESP_FILE:-}${QUOTA:-}${TASK_TEXT:-}${SEND_TEXT:-}${CHECK_OUT:-}" ]; then
+    rm -f "${RULES:-}" "${RESP_FILE:-}" "${QUOTA:-}" "${TASK_TEXT:-}" "${SEND_TEXT:-}" "${CHECK_OUT:-}"
   fi
   return "$rc"
 }
@@ -310,11 +342,12 @@ die() { HISTORY_REASON='usage or configuration error'; printf 'error: %s\n' "$1"
 record_task() {
   [ -n "$TASK_RECORD" ] || return 0
   if ! { jq -cn --arg task "$TASK_ID" --arg status "$1" --argjson profile "${2:-null}" \
-      --arg lane "$LANE" --argjson evidence "$HISTORY_EVIDENCE" --argjson result "$RESULT" '
+      --arg lane "$LANE" --arg id "$RESOLUTION_ID" --argjson evidence "$HISTORY_EVIDENCE" --argjson result "$RESULT" '
       ($evidence + $result) as $r |
       {task: $task, status: $status, profile: $profile,
        lane: ($r.lane // ($lane | select(. != "")) // null),
-       class: $r.chosen.class, confidence: $r.confidence}' > "$TASK_RECORD.tmp.$$" \
+       class: $r.chosen.class, confidence: $r.confidence, resolution_id: $id,
+       lane_check: (if $r.lane_check then $r.lane_check | {action, pick, from} else null end)}' > "$TASK_RECORD.tmp.$$" \
       && mv -f -- "$TASK_RECORD.tmp.$$" "$TASK_RECORD"; } 2>/dev/null; then
     rm -f -- "$TASK_RECORD.tmp.$$"
     echo "dispatch-resolve: could not write $TASK_RECORD" >&2
@@ -340,6 +373,11 @@ emit_error() {
   # HTTP diagnostics may include an arbitrary response body; retain only the
   # error category in history so a server cannot echo secrets into the log.
   HISTORY_STATUS=error HISTORY_REASON=${reason%%: *} RESULT='{}'
+  if [ -n "$CHECK_PID" ]; then
+    collect_lane_check
+    RESULT=$(jq -cn --argjson c "$CHECK_JSON" '{lane_check: ($c +
+      {from: null, action: (if $c.ran then "shadow" else "not run" end)})}')
+  fi
   record_task error || true
   echo "dispatch-resolve: error ($reason)" >&2
   printf 'dispatch-resolve:\n  status: error\n  reason: %s\n' "$reason"
@@ -361,6 +399,10 @@ CRED_PATH="$CONFIG/dispatch-credential-sources.json"
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane) [ $# -ge 2 ] && [ -n "$2" ] || die "--lane needs a lane name"; LANE=$2; shift 2 ;;
+    --keep-lane)
+      [ $# -ge 2 ] && [[ "$2" == *[![:space:]]* ]] || die "--keep-lane needs a reason"
+      case "$2" in *[![:print:]]*) die "--keep-lane needs a printable one-line reason" ;; esac
+      KEEP_LANE=$2; shift 2 ;;
     --exclude-family) [ $# -ge 2 ] && [ -n "$2" ] || die "--exclude-family needs a family"; EXCLUDE_FAMILY=$2; shift 2 ;;
     --data-tag)
       [ $# -ge 2 ] && [ -n "$2" ] || die "--data-tag needs a tag"
@@ -457,13 +499,24 @@ declared_key() {
 # key is the environment copy already in the variable, else KEY_NAME in
 # $FM_HOME/.env, else the source declared for the provider. With none of them
 # the tool is off, exactly as it was before declarations existed.
+router_key_absent() {
+  HISTORY_REASON='API key absent'
+  # A separately configured checker can still record a shadow on a real brief.
+  # Leave the early, silent off path intact for homes using only the router.
+  if [ -f "$BRIEF" ] && [ -s "$BRIEF" ] && [ -r "$RULES_PATH" ] &&
+      jq -e '.lane_check | objects' "$RULES_PATH" >/dev/null 2>&1; then
+    ROUTER_OFF_REASON=$1
+  else
+    resolver_off "$1"
+  fi
+}
+
 select_key() {
   local provider=$1 name=$2 var=$3
   [ -n "${!var}" ] || printf -v "$var" '%s' "$(fmx_env_get "$name" "$FM_HOME/.env")"
   [ -n "${!var}" ] || declared_key "$provider" "$var"
   if [ -z "${!var}" ]; then
-    HISTORY_REASON='API key absent'
-    resolver_off "$name absent from the environment and $FM_HOME/.env"
+    router_key_absent "$name absent from the environment and $FM_HOME/.env"
   fi
 }
 
@@ -521,8 +574,7 @@ case "$DISPATCH_PROVIDER" in
       DISPATCH_MODEL='~typesafe/jev-latest'
     fi
     if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
-      HISTORY_REASON='API key absent'
-      resolver_off "TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback"
+      router_key_absent "TYPESAFE_API_KEY absent from the environment and home .env; OPENROUTER_API_KEY absent from home .env for implicit fallback"
     fi
     ;;
   typesafe)
@@ -551,8 +603,7 @@ case "$DISPATCH_PROVIDER" in
     [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openai"
     [ -n "$OPENAI_API_KEY_PRIVATE" ] || OPENAI_API_KEY_PRIVATE=$(fmx_env_get OPENAI_API_KEY "$FM_HOME/.env")
     if [ -z "$OPENAI_API_KEY_PRIVATE" ]; then
-      HISTORY_REASON='API key absent'
-      resolver_off "OPENAI_API_KEY absent from the environment and $FM_HOME/.env"
+      router_key_absent "OPENAI_API_KEY absent from the environment and $FM_HOME/.env"
     fi
     ;;
   *) die "unknown FM_DISPATCH_PROVIDER: $DISPATCH_PROVIDER (expected typesafe, openrouter, systemone, or openai)" ;;
@@ -793,7 +844,7 @@ never_send_off() {
 # text reaches the network unchecked. grep's own stderr is discarded because
 # it can echo the pattern.
 never_send_check() {
-  local list value n=0 rc
+  local n rc
   [ -e "$NEVER_SEND_PATH" ] || [ -L "$NEVER_SEND_PATH" ] || return 0
   { [ -f "$NEVER_SEND_PATH" ] && [ -r "$NEVER_SEND_PATH" ]; } \
     || never_send_off "$NEVER_SEND_PATH is not a readable regular file"
@@ -803,22 +854,14 @@ never_send_check() {
     $endpoint, (.. | strings | ., (try (fromjson | .. | strings) catch empty))
     | gsub("\\s+"; " ")' <<<"$BODY" > "$SEND_TEXT" 2>/dev/null \
     || never_send_off "could not extract the request text to check"
-  list=$(jq -Rr 'gsub("\\s+"; " ")' "$NEVER_SEND_PATH" 2>/dev/null) \
-    || never_send_off "could not read $NEVER_SEND_PATH"
-  while IFS= read -r value; do
-    n=$((n + 1))
-    value=${value# }
-    value=${value% }
-    case "$value" in
-      ''|'#'*) continue ;;
-    esac
-    grep -qiF -e "$value" "$SEND_TEXT" 2>/dev/null; rc=$?
-    case "$rc" in
-      0) never_send_off "brief text matches $NEVER_SEND_PATH line $n" ;;
-      1) ;;
-      *) never_send_off "could not check the request text against $NEVER_SEND_PATH line $n" ;;
-    esac
-  done <<<"$list"
+  n=$(fm_dispatch_never_send_scan "$NEVER_SEND_PATH" "$SEND_TEXT"); rc=$?
+  case "$rc" in
+    0) ;;
+    1) never_send_off "brief text matches $NEVER_SEND_PATH line $n" ;;
+    *)
+      [ "$n" != 0 ] || never_send_off "could not read $NEVER_SEND_PATH"
+      never_send_off "could not check the request text against $NEVER_SEND_PATH line $n" ;;
+  esac
 }
 
 # Send Jev only the task-specific sections bin/fm-brief.sh scaffolds, plus a
@@ -845,11 +888,40 @@ else
   cp "$BRIEF" "$TASK_TEXT" || die "could not read brief: $BRIEF"
 fi
 LAT_MS=null
+# The top-lane check runs beside the router request and quota read; its output
+# goes to a file so the caller's stdout never waits on it.
+CHECK_CFG=$(fm_dispatch_check_config "$RULES")
+CHECK_CACHE=''
+[ -z "$TASK_RECORD" ] || CHECK_CACHE="${TASK_RECORD%/*}/dispatch-check.json"
+start_lane_check() {
+  [ -n "$CHECK_CFG" ] && [ -s "$TASK_TEXT" ] || return 0
+  CHECK_OUT=$(mktemp) || return 0
+  fm_dispatch_check_run "$RULES" "$TASK_TEXT" "$PROJECT" "$NEVER_SEND_PATH" "$CHECK_CACHE" \
+    > "$CHECK_OUT" 2>/dev/null < /dev/null &
+  CHECK_PID=$!
+}
+collect_lane_check() {
+  if [ -n "$CHECK_PID" ]; then
+    wait "$CHECK_PID" 2>/dev/null || true
+    CHECK_PID=''
+    CHECK_JSON=$(jq -cse 'select(length == 1) | .[0] | objects' "$CHECK_OUT" 2>/dev/null) \
+      || CHECK_JSON='{"ran":false,"not_run":"the check produced no result"}'
+  else
+    CHECK_JSON='{"ran":false,"not_run":"no task text or checker result available"}'
+  fi
+}
+if [ -n "$ROUTER_OFF_REASON" ]; then
+  start_lane_check
+  collect_lane_check
+  RESULT=$(jq -cn --argjson c "$CHECK_JSON" '{lane_check: ($c +
+    {from: null, action: (if $c.ran then "shadow" else "not run" end)})}')
+  resolver_off "$ROUTER_OFF_REASON; lane_check: $(jq -r '.pick // .not_run' <<<"$CHECK_JSON")"
+fi
 if [ -n "$LANE" ]; then
   jq -n --arg choice "$DIRECT_CHOICE" '{answers: {rule: {choice: $choice, confidence: 1, probabilities: {}}}}' > "$RESP_FILE" \
     || die "could not prepare the lane selection"
+  start_lane_check
 else
-  command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
   REQUEST=$(jq -n --rawfile brief "$TASK_TEXT" --arg project "$PROJECT" --arg model "$DISPATCH_MODEL" \
     --arg none_criterion "$DEFAULT_WHEN" --slurpfile rules "$RULES" '
     ($rules[0]) as $cfg |
@@ -880,6 +952,8 @@ else
     BODY=$REQUEST
   fi
   never_send_check
+  start_lane_check
+  command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
   HISTORY_MODEL=$DISPATCH_MODEL
   T0=$(fm_timing_now_ms)
   if [ -n "$KEY_PRIVATE" ]; then
@@ -1018,9 +1092,13 @@ LIVE_TASKS=$(
 ) || emit_error "live task snapshot failed"
 
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
+# resolve_once <check-choice>: an empty choice resolves the router's (or the
+# --lane) selection; a rule id resolves that rule instead, as the top-lane
+# check's demotion, while every raw router field stays recorded.
 DIRECT=false
 [ -z "$LANE" ] || DIRECT=true
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson sq "$SQ" --argjson installed "$INSTALLED" --arg agy_project_reason "$AGY_PROJECT_REASON" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
+resolve_once() {
+  jq -n --arg check_choice "$1" --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" --argjson sq "$SQ" --argjson installed "$INSTALLED" --arg agy_project_reason "$AGY_PROJECT_REASON" --argjson agy_ids "$AGY_IDS" --argjson agy_levels "$AGY_LEVELS" --argjson devin_ids "$DEVIN_IDS" --argjson horizon "$COMPLETION_HORIZON" \
   --argjson direct "$DIRECT" --arg exclude "$EXCLUDE_FAMILY" --argjson tags "$DATA_TAGS" --arg project "$PROJECT" --argjson sample "$SAMPLE" --argjson live_tasks "$LIVE_TASKS" \
   --argjson planning "$PLANNING_JSON" --argjson planning_present "$PLANNING_PRESENT" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_QUOTA_PLANNING_JQ$FM_QUOTA_AGY_JQ$FM_QUOTA_DEVIN_JQ$FM_DISPATCH_LANES_JQ"'
@@ -1261,7 +1339,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
      elif ($ok | length) > 1 and $ok[1].value == $ok[0].value then {below: true, why: "runner-up tie"}
      else {below: true, to: $ok[0].key, p: $ok[0].value, to_floor: confidence_floor($ok[0].key)} end
    end) as $fb |
-  (if $fb.to then $fb.to else $picked end) as $choice |
+  (if $check_choice != "" then $check_choice elif $fb.to then $fb.to else $picked end) as $choice |
   (rule_at($choice)) as $rule |
   (if $sq or $rule == null then "none" else floor_state($rule.floor; $rule.floor.provider; "") end) as $rule_floor_state |
   (if $choice != "default" and $rule == null then []
@@ -1288,19 +1366,23 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     direct: $direct, spendMetric: $metric,
     rule: $picked,
     rule_when: when_of($picked),
-    confidence: $a.confidence, probabilities: $a.probabilities
+    confidence: $a.confidence, probabilities: $a.probabilities,
+    rule_lane: (rule_at($picked).lane // null),
+    rule_probability: (if $direct then null else ($a.probabilities[$picked] // null) end),
+    floor: (if $direct then null elif $fb.below then "fail" else "pass" end),
+    fallback_lane: (if $fb.to then (rule_at($fb.to).lane // $fb.to) else null end)
   }
   + (if $answer_lane != null and $sel.source != "default" then
        {lane: $answer_lane.lane, order: $answer_lane.order, experiments: $answer_lane.experiments}
      else {} end)
   + (if $exclude != "" then {exclude_family: $exclude} else {} end)
   + (if ($tags | length) > 0 then {data_tags: $tags} else {} end)
-  + (if $fb.to then {fallback: "\($choice) (\(when_of($choice))) probability \($fb.p) clears its floor \($fb.to_floor); \($picked) probability \($a.probabilities[$picked]) is below its floor \($picked_floor)"} else {} end)
+  + (if $fb.to and $check_choice == "" then {fallback: "\($choice) (\(when_of($choice))) probability \($fb.p) clears its floor \($fb.to_floor); \($picked) probability \($a.probabilities[$picked]) is below its floor \($picked_floor)"} else {} end)
   as $ev |
   if $sel.invalid then $ev + {status: "error", reason: $sel.invalid}
-  elif $fb.below and $fb.global then
+  elif $check_choice == "" and $fb.below and $fb.global then
     $ev + {status: "ambiguous", reason: "confidence \($a.confidence) below floor \($floor)", candidates: $answer_cands}
-  elif $fb.below and ($fb.to | not) then
+  elif $check_choice == "" and $fb.below and ($fb.to | not) then
     $ev + {status: "ambiguous", reason: "\($picked) probability \($a.probabilities[$picked]) below its floor \($picked_floor); \($fb.why)", candidates: $answer_cands}
   elif $sel.escalate then
     $ev + {status: "escalate", reason: $sel.escalate, candidates: $answer_cands}
@@ -1338,7 +1420,41 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
            else {} end)
       end
     end
-  end') || emit_error "resolution failed"
+  end'
+}
+RESULT=$(resolve_once '') || emit_error "resolution failed"
+
+# ---- top-lane check: record the shadow pick, act only on a top lane -----------
+LANE_CHECK=null
+if [ -n "$CHECK_CFG" ]; then
+  collect_lane_check
+  LANE_CHECK=$(jq -cn --argjson c "$CHECK_JSON" --argjson r "$RESULT" --arg keep "$KEEP_LANE" --arg exclude "$EXCLUDE_FAMILY" --slurpfile rules "$RULES" '
+    ($rules[0]) as $cfg |
+    ($cfg.lane_check.top_lanes // []) as $top |
+    ($r.lane // null) as $from |
+    ($c.pick // null) as $pick |
+    ($exclude == "" and $from != null and ($top | index($from)) != null and
+      all($cfg.rules[]; .lane != $from or .approval != "captain")) as $gated |
+    ($pick != null and ($top | index($pick)) == null
+      and any(($cfg.rules // [])[]; type == "object" and has("classes") and .lane == $pick and (.approval // "") != "captain")) as $lower |
+    {ran: ($c.ran == true), pick: $pick, reason: ($c.reason // null), not_run: ($c.not_run // null),
+     checker: ($c.checker // null), latency_ms: ($c.latency_ms // null), cached: ($c.cached // false), digest: $c.digest,
+     from: $from, gated: $gated, keep_reason: ($keep | select(. != "") // null),
+     action: (if $c.ran != true then "not run"
+              elif ($gated | not) then "shadow"
+              elif $pick == $from then "agreed"
+              elif ($lower | not) then "not lower"
+              elif $keep != "" then "kept"
+              else "demoted" end)}') || LANE_CHECK=null
+  if [ "$(jq -r '.action // ""' <<<"$LANE_CHECK")" = demoted ]; then
+    CHECK_CHOICE=$(jq -r --arg lane "$(jq -r '.pick' <<<"$LANE_CHECK")" '
+      [(.rules // []) | to_entries[] | select(.value.lane == $lane) | "rule_" + ((.key + 1) | tostring)] | first // empty' "$RULES")
+    [ -z "$CHECK_CHOICE" ] || RESULT=$(resolve_once "$CHECK_CHOICE") || emit_error "resolution failed"
+  fi
+fi
+RESULT=$(jq -c --argjson lc "$LANE_CHECK" --arg keep "$KEEP_LANE" '
+  . + (if $lc == null then {} else {lane_check: $lc} end)
+    + (if $keep == "" then {} else {keep_lane_reason: $keep} end)' <<<"$RESULT") || emit_error "resolution failed"
 
 TEXT=$(jq -r '
   def flat: tostring | gsub("[\t\r\n]"; " ");
@@ -1363,6 +1479,17 @@ TEXT=$(jq -r '
   (if .direct then empty
    else "  probabilities: \([.probabilities | to_entries[] | "\(.key | flat)=\(.value | flat)"] | join(" "))" end),
   (if .lane then "  lane: \(.lane | flat)  order=\(.order | flat)" else empty end),
+  (if .lane_check then
+     (.lane_check as $c | ("\(show($c.checker))" + (if $c.cached then ", cached" else "" end)) as $by |
+      "  lane_check: " + (
+        if $c.action == "demoted" then "demoted \($c.from | flat) -> \($c.pick | flat) (\($by))"
+        elif $c.action == "kept" then "kept \($c.from | flat) by --keep-lane (\($c.keep_reason | flat)); checker pick \($c.pick | flat) (\($by))"
+        elif $c.action == "agreed" then "agreed: checker pick \($c.pick | flat) (\($by))"
+        elif $c.action == "not lower" then "not lower: checker pick \($c.pick | flat); \($c.from | flat) stands (\($by))"
+        elif $c.action == "shadow" then "shadow pick \($c.pick | flat); selected lane \(show($c.from)) stands (\($by))"
+        else "not run (\(show($c.not_run))); " + (if $c.from then "selected lane \($c.from | flat) stands" else "no lane selected" end) end)),
+     (if .lane_check.reason then "  lane_check_reason: \(.lane_check.reason | flat)" else empty end)
+   else empty end),
   (if .exclude_family then "  exclude_family: \(.exclude_family | flat)" else empty end),
   (if .data_tags then "  data_tags: \(.data_tags | map(flat) | join(", "))" else empty end),
   (.experiments[]? | "  experiment: \(.class | flat)  share=\(.share)  bucket=\(.bucket) -> \(.state | flat)"),

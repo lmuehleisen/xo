@@ -1337,7 +1337,7 @@ runner.write_text(new)
 PY
     out=$(bash "$repo/bin/fm-test-run.sh" --check-coverage 2>&1) && rc=0 || rc=$?
     if [ "$weight" -eq 1200000 ]; then
-      expect_code 0 "$rc" "packing exactly at the budget must be accepted"
+      expect_code 0 "$rc" "packing exactly at the budget must be accepted: $out"
       assert_contains "$out" "FM_TEST_COVERAGE ok" "boundary coverage did not pass"
       assert_contains "$out" "serial_max_ms=1200000" "fixture did not pack exactly at the budget"
       assert_contains "$out" "serial_budget_ms=1200000" "fixture changed the packing budget"

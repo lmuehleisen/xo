@@ -27,6 +27,9 @@
 # automatic backend without compatible tasks-axi refuses before cleanup.
 # None of this loosens the landed-work gates below: the transition runs only on
 # the paths that already proceed to remove the record.
+# A completed ship or scout cleanup then appends one best-effort routing
+# outcome entry to the private dispatch history; bin/fm-dispatch-history-lib.sh
+# owns its fields and its single bounded PR read, and a failure changes nothing.
 # The close - and only the close - is replaced by `tasks-axi reopen` with the
 # deliverable recorded while the backlog item is still an open captain call
 # (bin/fm-captain-hold.sh `open` owns that predicate), because the policy holds
@@ -426,6 +429,7 @@ for _teardown_source in \
   fm-cursor-lib.sh \
   fm-nm-run-lib.sh \
   fm-dod-lib.sh \
+  fm-dispatch-history-lib.sh \
   fm-wake-lib.sh \
   fm-path-lib.sh \
   fm-lease-lib.sh
@@ -469,6 +473,8 @@ unset _teardown_source
 # The bounded remote-ref refresh is shared with the done-claim gate.
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-dispatch-history-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-history-lib.sh"
 # Archive paths live only in teardown; presentation/wake readers stay unaware.
 teardown_archive_directory() {  # <directory>
   if [ -L "$1" ] || { [ -e "$1" ] && [ ! -d "$1" ]; }; then
@@ -4133,6 +4139,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
+teardown_outcome=unknown
 if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
@@ -4145,6 +4152,7 @@ if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]
       exit 1
     fi
   fi
+  teardown_outcome=landed
 fi
 
 # A Herdr close may reposition shared workspace order, so the whole
@@ -4626,6 +4634,16 @@ else
     echo "error: $ID's endpoint and local copy are cleaned up, but its task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
     exit 1
   fi
+fi
+# Best-effort routing outcome for the private dispatch history
+# (bin/fm-dispatch-history-lib.sh owns the row and its one bounded PR read).
+if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ "$KIND" != secondmate ]; then
+  if [ "$FORCE" = --force ]; then
+    teardown_outcome=discarded
+  elif [ "$KIND" = scout ]; then
+    teardown_outcome=delivered
+  fi
+  fm_dispatch_history_outcome "$FM_HOME" "$ID" "$KIND" "$teardown_outcome" "${PR_URL:-}" || true
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0

@@ -9461,7 +9461,7 @@ SPAWN_ACCOUNT=
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 if [ "$KIND" != secondmate ]; then
   fm_dispatch_history_spawn "$FM_HOME" "$ID" "$HARNESS" "$MODEL" "$EFFORT" \
-    "$DISPATCH_OVERRIDE" "$DISPATCH_SNAPSHOT" || true
+    "$DISPATCH_OVERRIDE" "$DISPATCH_SNAPSHOT" "$RELAUNCH" || true
 fi
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the
 # new endpoint now rather than at the next watcher poll; off costs one file test.

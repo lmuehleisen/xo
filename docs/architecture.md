@@ -378,6 +378,7 @@ Crewmate and scout dispatch can stay on the static crewmate harness resolved by 
 [`AGENTS.md` section 4](../AGENTS.md) owns firstmate's dispatch decision boundary, and [`quota-array-dispatch`](../.agents/skills/quota-array-dispatch/SKILL.md) owns its profile-array selection procedure.
 The optional typed resolver's rule matching and deterministic profile selection are owned by [configuration.md](configuration.md#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model).
 A [lane rule](configuration.md#lanes-and-model-classes) names model classes instead of profiles: once the lane is chosen, that resolver picks each class's provider route from quota, so the configuration chooses the model and code chooses the provider.
+An optional [top-lane check](configuration.md#top-lane-check-lane_check) puts one guided strong-model call beside that choice: it can only move a top-lane selection down, and its pick is recorded on every dispatch so the router can be judged against it on fresh work.
 The session-start bootstrap step keeps valid dispatch configuration silent unless verbose facts are enabled and surfaces a concise invalid-config line when validation fails.
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
 Secondmate launches are exempt because they resolve the secondmate harness and any optional secondmate model or effort tokens instead.

@@ -609,7 +609,7 @@ test_recorded_dispatch_selection_allows_recorded_override() {
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
   record="$HOME_DIR/data/$id/dispatch-resolution.json"
-  printf '%s\n' '{"task":"profile-selected-override-z13","status":"clear","profile":{"harness":"claude","model":"opus","effort":"high"},"lane":"review","class":"deep","confidence":0.94}' > "$record"
+  printf '%s\n' '{"task":"profile-selected-override-z13","status":"clear","profile":{"harness":"claude","model":"opus","effort":"high"},"lane":"review","class":"deep","confidence":0.94,"resolution_id":"R-z13"}' > "$record"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high \
@@ -618,19 +618,19 @@ test_recorded_dispatch_selection_allows_recorded_override() {
   expect_code 0 "$status" "a recorded task override should permit a different launch: $out"
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report the overridden Codex launch"
   assert_grep 'dispatch_override=authorized account test' "$HOME_DIR/state/$id.meta" "task record omitted the override reason"
-  jq -e '{harness, model, effort, override_reason, lane, class, confidence} ==
+  jq -e '{harness, model, effort, override_reason, lane, class, confidence, resolution_id, relaunch} ==
     {harness: "codex", model: "gpt-5", effort: "high", override_reason: "authorized account test",
-     lane: "review", class: "deep", confidence: 0.94}' "$HOME_DIR/state/dispatch-history.jsonl" >/dev/null \
-    || fail "spawn history lost the override or receipt telemetry"
+     lane: "review", class: "deep", confidence: 0.94, resolution_id: "R-z13", relaunch: false}' "$HOME_DIR/state/dispatch-history.jsonl" >/dev/null \
+    || fail "spawn history lost the override, receipt telemetry, resolution id, or fresh-launch flag"
   # The helper records the snapshot it is handed, never a later rewrite of the record.
   printf '%s\n' '{"task":"profile-selected-override-z13","status":"clear","lane":"other","class":"fast","confidence":0.1}' > "$record"
   # shellcheck disable=SC2016 # expanded by the child shell
   bash -c '. "$1"; shift; fm_dispatch_history_spawn "$@"' _ "$ROOT/bin/fm-dispatch-history-lib.sh" \
     "$HOME_DIR" "$id" codex gpt-5 high '' \
-    '{"task":"profile-selected-override-z13","status":"clear","lane":"review","class":"deep","confidence":0.94}'
-  tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '{lane, class, confidence} ==
-    {lane: "review", class: "deep", confidence: 0.94}' >/dev/null \
-    || fail "spawn history read the record again instead of the validated snapshot"
+    '{"task":"profile-selected-override-z13","status":"clear","lane":"review","class":"deep","confidence":0.94}' 1
+  tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '{lane, class, confidence, resolution_id, relaunch} ==
+    {lane: "review", class: "deep", confidence: 0.94, resolution_id: null, relaunch: true}' >/dev/null \
+    || fail "spawn history read the record again instead of the validated snapshot, or lost the relaunch flag"
   pass "a task override with its reason permits a different launch and is recorded"
 }
 

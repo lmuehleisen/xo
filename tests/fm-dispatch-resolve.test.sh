@@ -1026,7 +1026,7 @@ assert_absent "$LOG/security.argv" "missing jq never reaches the Keychain"
 # expect_unavailable <label> <reason>: a declared source that cannot supply the key
 expect_unavailable() {
   local label=$1 reason=$2
-  expect_code 0 "$code" "$label exits 0"
+  expect_code 0 "$code" "$label exits 0: $err"
   assert_contains "$out" '  status: error' "$label is a structured error outcome"
   assert_contains "$out" "  reason: $reason" "$label names the source and why on stdout"
   assert_contains "$err" "dispatch-resolve: error ($reason)" "$label reports the same reason on stderr"
@@ -2526,7 +2526,9 @@ run_lane() {
   printf -v "$__out" '%s' "$_out"
   printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
 }
-TEMPLATE="$ROOT/docs/examples/crew-dispatch-lanes.json"
+TEMPLATE="$TMP_ROOT/quota-lanes.json"
+# These fixtures replace entire lane sets. The checker has its own cases below.
+jq 'del(.lane_check)' "$ROOT/docs/examples/crew-dispatch-lanes.json" > "$TEMPLATE"
 cp "$TEMPLATE" "$RULES"
 
 # A named lane needs no key and sends nothing; code picks the route.
@@ -3513,10 +3515,14 @@ FM_HOME="$TMP_ROOT/wrong" FM_STATE_OVERRIDE="$TMP_ROOT/wrong/state" \
   "$REPORT" report --home "$REPORT_HOME" --json > "$TMP_ROOT/report.json" 2> "$TMP_ROOT/report.err" \
   || fail "the history report must succeed despite malformed lines"
 jq -e '
-  .summary == {followed: 1, overridden: 2, router_not_clear: 2, no_router_call: 1} and
-  .spawns[0] == {time: 1735689599, task_id: "example", lane: "routine", confidence: 0.97,
+  (.summary | {followed, overridden, router_not_clear, no_router_call}) == {followed: 1, overridden: 2, router_not_clear: 2, no_router_call: 1} and
+  .summary.lane_check == {} and .summary.outcomes == {} and
+  .summary.agreement.router_vs_shadow == {compared: 0, same: 0} and
+  .spawns[0] == {time: 1735689599, task_id: "example", lane: "routine", final_lane: "routine", confidence: 0.97,
     router_status: "clear", recommended_profile: {harness: "claude", model: "sonnet", effort: null},
-    used_profile: {harness: "claude", model: "sonnet", effort: "low"}, outcome: "followed", reason: null} and
+    used_profile: {harness: "claude", model: "sonnet", effort: "low"}, outcome: "followed", reason: null,
+    resolution_id: null, relaunch: null, router_lane: null, shadow_lane: null, check_action: null,
+    keep_lane_reason: null, result: null, pr_state: null, relaunches: null, review_rounds: null} and
   .spawns[1].outcome == "overridden" and .spawns[1].reason == "Different account" and
   .spawns[2].outcome == "overridden" and .spawns[2].reason == null and
   .spawns[3].outcome == "no_router_call" and .spawns[3].lane == null and
@@ -3544,6 +3550,332 @@ for report_path in "$PATH" "$REPORT_HOME/bin:$PATH"; do
     "an invalid date reports the date error rather than a downstream jq error"
 done
 pass "private dispatch report handles legacy rows, every outcome, filters, and bare lane probes"
+
+# Shadow agreement and outcome joins: a resolution id pairs a launch with its
+# exact router call even when a later call for the same task exists.
+SHADOW_HOME="$TMP_ROOT/shadow report"
+mkdir -p "$SHADOW_HOME/state"
+cat > "$SHADOW_HOME/state/dispatch-history.jsonl" <<'JSONL'
+{"kind":"router","time":1735689600,"task_id":"a","status":"ambiguous","brief_path":"data/a/brief.md","resolution_id":"R-a1","model":"jev","rule":"rule_2","rule_lane":"deep","lane":"deep","lane_check":{"ran":true,"pick":"standard","action":"shadow","digest":"a1"}}
+{"kind":"router","time":1735689601,"task_id":"a","status":"clear","brief_path":"data/a/brief.md","resolution_id":"R-a2","intended_lane":"deep","model":null,"rule":"rule_2","rule_lane":"deep","lane":"standard","lane_check":{"ran":true,"pick":"standard","action":"demoted","from":"deep","digest":"a1"},"suggested_profile":{"harness":"codex","model":"gpt-6.1-sol","effort":"high"}}
+{"kind":"router","time":1735689602,"task_id":"a","status":"ambiguous","brief_path":"data/a/brief.md","resolution_id":"R-a3","model":"jev","rule_lane":"scoped","lane_check":{"digest":"a2"}}
+{"kind":"spawn","time":1735689603,"task_id":"a","harness":"codex","model":"gpt-6.1-sol","effort":"high","resolution_id":"R-a2","relaunch":false,"lane":"standard"}
+{"kind":"spawn","time":1735689604,"task_id":"a","harness":"codex","model":"gpt-6.1-sol","effort":"high","resolution_id":"R-a2","relaunch":true,"lane":"standard"}
+{"kind":"router","time":1735689605,"task_id":"b","status":"clear","brief_path":"data/b/brief.md","resolution_id":"R-b1","model":"jev","rule":"rule_3","rule_lane":"standard","lane":"standard","lane_check":{"ran":true,"pick":"scoped","action":"shadow"},"suggested_profile":{"harness":"codex","model":"gpt-6.1-sol","effort":"high"}}
+{"kind":"spawn","time":1735689606,"task_id":"b","harness":"codex","model":"gpt-6.1-sol","effort":"high","resolution_id":"R-b1","relaunch":false,"lane":"standard"}
+{"kind":"outcome","time":1735689607,"task_id":"a","task_kind":"ship","result":"landed","relaunches":1,"review_rounds":2}
+{"kind":"outcome","time":1735689608,"task_id":"b","task_kind":"scout","result":"delivered","relaunches":0,"review_rounds":null}
+JSONL
+"$REPORT" report --home "$SHADOW_HOME" --json > "$TMP_ROOT/shadow-report.json" 2> "$TMP_ROOT/shadow-report.err" \
+  || fail "the shadow report must succeed"
+assert_equals '' "$(cat "$TMP_ROOT/shadow-report.err")" "outcome rows are valid history rows"
+jq -e '
+  .spawns[0] | .router_status == "clear" and .lane == "standard" and .resolution_id == "R-a2" and
+    .outcome == "followed" and .router_lane == "deep" and .shadow_lane == "standard" and
+    .check_action == "demoted" and .result == "landed" and .relaunches == 1 and .review_rounds == 2' \
+  "$TMP_ROOT/shadow-report.json" >/dev/null || fail "a launch did not pair with its resolution and outcome: $(jq -c '.spawns[0]' "$TMP_ROOT/shadow-report.json")"
+jq -e '
+  .summary.lane_check == {demoted: 1, shadow: 1} and
+  .summary.agreement == {router_vs_shadow: {compared: 2, same: 0}, shadow_vs_final: {compared: 2, same: 1},
+    router_vs_final: {compared: 2, same: 1}} and
+  .summary.outcomes == {standard: {tasks: 2, landed: 1, delivered: 1, discarded: 0, relaunches: 1, review_rounds: 2}}' \
+  "$TMP_ROOT/shadow-report.json" >/dev/null || fail "the summary lost agreement or outcomes: $(jq -c .summary "$TMP_ROOT/shadow-report.json")"
+shadow_text=$("$REPORT" report --home "$SHADOW_HOME")
+assert_contains "$shadow_text" 'Lane check: demoted 1, shadow 1' "the text summary counts check actions"
+assert_contains "$shadow_text" 'Agreement: router vs shadow 0/2, shadow vs final 1/2, router vs final 1/2' "the text summary shows agreement"
+assert_contains "$shadow_text" 'Outcomes standard: tasks 2 (landed 1, delivered 1, discarded 0), relaunches 1, review rounds 2' "the text summary joins outcomes by final lane"
+assert_contains "$shadow_text" $'\ta\tstandard\t-\tcodex/gpt-6.1-sol/high\tcodex/gpt-6.1-sol/high\tfollowed\t-\tdeep\tstandard\tdemoted\tlanded\t1\t2' \
+  "the table shows router, shadow, check, and outcome columns"
+pass "the report joins launches to their resolution, the shadow pick, and cleanup outcomes"
+
+# A recorded id is authoritative even when its matching row is missing.
+cat >> "$SHADOW_HOME/state/dispatch-history.jsonl" <<'JSONL'
+{"kind":"spawn","time":1735689608,"task_id":"a","harness":"claude","resolution_id":"missing","relaunch":false}
+{"kind":"outcome","time":1735689608,"task_id":"a","result":"discarded","relaunches":0}
+JSONL
+"$REPORT" report --home "$SHADOW_HOME" --json | jq -e '
+  .spawns[-1].router_status == null and .spawns[-1].relaunch == false and
+  .spawns[-1].result == "discarded" and .spawns[0].result == "landed" and
+  .summary.outcomes["-"].discarded == 1' >/dev/null || fail "a reused task id borrowed another decision or outcome"
+pass "same-second task reuse and missing decision ids preserve attribution"
+
+# --- top-lane check: the shadow pick, acting only on top lanes -------------------
+# A fake claude stands in for the checker: it records argv and the prompt and
+# answers FAKE_CHECK_LANE as structured output (nothing when unset, like the
+# exit-0 fake it replaces). A fake codex answers through its -o file.
+cat > "$FAKEBIN/claude" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ -n "${FAKE_CHECK_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$FAKE_CHECK_LOG/claude.argv"
+  cat > "$FAKE_CHECK_LOG/claude.prompt"
+  env | grep -q 'test-key-9f1c2d3e' && printf 'claude:secret-present\n' >> "$FAKE_CHECK_LOG/claude.argv"
+else
+  cat > /dev/null
+fi
+[ -z "${FAKE_CHECK_SLEEP:-}" ] || sleep "$FAKE_CHECK_SLEEP"
+[ -z "${FAKE_CHECK_EXIT:-}" ] || exit "$FAKE_CHECK_EXIT"
+[ -n "${FAKE_CHECK_LANE:-}" ] || exit 0
+printf '{"type":"result","is_error":false,"structured_output":{"lane":"%s","reason":"Fake\\nchecker reason."}}\n' "$FAKE_CHECK_LANE"
+SH
+cat > "$FAKEBIN/codex" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${1:-}" = exec ] || exit 0
+out=''
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out=$2; shift 2 ;; *) shift ;; esac
+done
+if [ -n "${FAKE_CHECK_LOG:-}" ]; then cat > "$FAKE_CHECK_LOG/codex.prompt"; else cat > /dev/null; fi
+[ -n "${FAKE_CHECK_LANE:-}" ] && [ -n "$out" ] || exit 0
+printf '{"lane":"%s","reason":"Codex fake reason."}\n' "$FAKE_CHECK_LANE" > "$out"
+SH
+chmod +x "$FAKEBIN/claude" "$FAKEBIN/codex"
+CHECK_LOG="$TMP_ROOT/check-log"
+CHECK_BRIEF="$HOME_DIR/data/lane-check/brief.md"
+CHECK_RECORD="$HOME_DIR/data/lane-check/dispatch-resolution.json"
+CHECK_CACHE="$HOME_DIR/data/lane-check/dispatch-check.json"
+mkdir -p "${CHECK_BRIEF%/*}"
+cat > "$CHECK_BRIEF" <<'MD'
+# Task
+## Captain's intent
+Fix the pager ordering so the newest page is listed first.
+
+## Firstmate spec
+Reuse the existing pager lock and derive a stable order while holding it.
+MD
+cat > "$RULES" <<'JSON'
+{"lane_check":{"top_lanes":["judgment","deep"],"harness":"claude","model":"claude-opus-5-5","effort":"medium","timeout_seconds":5},
+ "classes":{
+  "strong":{"family":"claude","unmetered":true,"routes":[{"harness":"claude","model":"fable","effort":"high"}]},
+  "mid":{"family":"gpt","unmetered":true,"routes":[{"harness":"codex","model":"gpt-6.1-sol","effort":"high"}]},
+  "cheap":{"family":"grok","unmetered":true,"routes":[{"harness":"grok","model":"grok-4.7","effort":"high"}]}},
+ "rules":[
+  {"lane":"judgment","when":"Consequential design calls.","min_confidence":0.55,"classes":["strong"],"why":"SECRET-LANE-WHY"},
+  {"lane":"deep","when":"Intricate cross-process work.","min_confidence":0.55,"classes":["strong"]},
+  {"lane":"standard","when":"Ordinary substantive fixes.","min_confidence":0.2,"classes":["mid"]},
+  {"lane":"scoped","when":"Small mechanical edits.","classes":["cheap"]},
+  {"lane":"long","when":"Multi-hour builds.","approval":"captain","classes":["strong"]}]}
+JSON
+CHECK_RULES_BASE="$TMP_ROOT/check-rules.json"
+cp "$RULES" "$CHECK_RULES_BASE"
+lane_quota codex=0.1
+# check_lane <lane-or-empty> <exit-var> <out-var> <err-var> [args...]: one resolve
+# with the fake checker answering <lane>, a fresh check log, and no cached pick.
+check_lane() {
+  local answer=$1
+  shift
+  rm -rf "$CHECK_LOG" "$CHECK_CACHE"
+  mkdir -p "$CHECK_LOG"
+  FAKE_CHECK_LOG="$CHECK_LOG" FAKE_CHECK_LANE="$answer" run_lane "$@"
+}
+fstrong="profile: --harness 'claude' --model 'fable' --effort 'high'"
+fmid="profile: --harness 'codex' --model 'gpt-6.1-sol' --effort 'high'"
+fcheap="profile: --harness 'grok' --model 'grok-4.7' --effort 'high'"
+
+check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo
+expect_code 0 "$code" "a demoted --lane resolves: $err"
+assert_contains "$out" 'status: clear' "a demotion still resolves clear"
+assert_contains "$out" 'lane: standard  order=pool' "a top --lane lower-picked by the check takes the lower lane"
+assert_contains "$out" 'lane_check: demoted deep -> standard (claude:claude-opus-5-5:medium)' "the demotion names both lanes and the checker"
+assert_contains "$out" 'lane_check_reason: Fake checker reason.' "the checker reason is one line"
+assert_contains "$out" "$fmid" "the demoted lane's route is the profile"
+assert_contains "$(cat "$CHECK_LOG/claude.argv")" '-p --model claude-opus-5-5 --effort medium --tools  --no-session-persistence' \
+  "the checker runs the configured model and effort with no tools or session"
+assert_contains "$(cat "$CHECK_LOG/claude.argv")" '"enum":["judgment","deep","standard","scoped","long"]' \
+  "the checker answer is constrained to the declared lanes"
+prompt=$(cat "$CHECK_LOG/claude.prompt")
+assert_contains "$prompt" 'Apply each lane'"'"'s own "When" text and its "Not ..." exclusions literally.' "the prompt carries the guided instructions"
+assert_contains "$prompt" $'## deep\nWhen: Intricate cross-process work.\nModel classes: strong' "the prompt lists each lane's text and classes"
+assert_contains "$prompt" $'## long\nWhen: Multi-hour builds.\nModel classes: strong\nRequires captain approval.' "the prompt marks approval-gated lanes"
+assert_contains "$prompt" 'The top lanes, judgment and deep, use the strongest' "the prompt names the top lanes"
+assert_contains "$prompt" 'Project: xo' "the prompt names the project"
+assert_contains "$prompt" 'Reuse the existing pager lock' "the prompt carries the task text"
+assert_not_contains "$prompt" 'SECRET-LANE-WHY' "the prompt never carries why text"
+assert_not_contains "$prompt" 'gpt-6.1-sol' "the prompt never carries routes"
+assert_not_contains "$(cat "$CHECK_LOG/claude.argv")" 'secret-present' "the checker never sees a router key"
+jq -e '.status == "clear" and .lane == "standard" and .profile.harness == "codex" and
+  .lane_check == {action: "demoted", pick: "standard", from: "deep"} and (.resolution_id | type) == "string"' \
+  "$CHECK_RECORD" >/dev/null || fail "the task record lost the demotion: $(cat "$CHECK_RECORD")"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e --arg id "$(jq -r .resolution_id "$CHECK_RECORD")" '
+  .resolution_id == $id and .intended_lane == "deep" and .rule_lane == "deep" and .floor == null and
+  .rule_probability == null and .lane == "standard" and .suggested_profile.harness == "codex" and
+  .lane_check.ran == true and .lane_check.pick == "standard" and .lane_check.from == "deep" and
+  .lane_check.action == "demoted" and .lane_check.reason == "Fake checker reason." and
+  .lane_check.checker == "claude:claude-opus-5-5:medium" and .lane_check.cached == false' >/dev/null \
+  || fail "history lost the attributable demotion: $(tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl")"
+jq -e '.ran == true and .pick == "standard" and (.digest | type) == "string"' "$CHECK_CACHE" >/dev/null \
+  || fail "a task brief caches its successful pick"
+pass "a top --lane that the check picks lower resolves the lower lane, recorded and attributable"
+
+check_lane deep code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: agreed: checker pick deep' "an agreeing check is reported"
+assert_contains "$out" "$fstrong" "an agreeing check keeps the top lane"
+check_lane judgment code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: not lower: checker pick judgment; deep stands' "another top lane is not lower"
+assert_contains "$out" "$fstrong" "a pick of another top lane keeps the selected lane"
+check_lane long code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: not lower: checker pick long; deep stands' "an approval-gated pick is never a demotion"
+assert_contains "$out" "$fstrong" "an approval-gated pick keeps the selected lane"
+pass "the check acts only when it picks a lower lane"
+
+check_lane scoped code out err "$CHECK_BRIEF" --lane standard --project xo
+assert_contains "$out" 'lane_check: shadow pick scoped; selected lane standard stands' "a non-top lane only records the shadow"
+assert_contains "$out" "$fmid" "standard never drops to scoped"
+assert_equals 'shadow standard' "$(jq -r '"\(.lane_check.action) \(.lane)"' "$CHECK_RECORD")" "the record keeps standard"
+check_lane deep code out err "$CHECK_BRIEF" --lane scoped --project xo
+assert_contains "$out" 'lane_check: shadow pick deep; selected lane scoped stands' "a higher pick is shadow only"
+assert_contains "$out" "$fcheap" "the check never raises a lane"
+pass "the check never acts on a lane outside top_lanes, so standard never drops to scoped"
+
+check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo --keep-lane 'cross-process ownership invariant'
+assert_contains "$out" 'lane_check: kept deep by --keep-lane (cross-process ownership invariant); checker pick standard' "the override keeps the lane and names the pick"
+assert_contains "$out" "$fstrong" "the override keeps the top lane's route"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '.lane == "deep" and .lane_check.action == "kept" and
+  .lane_check.keep_reason == "cross-process ownership invariant" and
+  .keep_lane_reason == "cross-process ownership invariant" and .lane_check.pick == "standard"' >/dev/null \
+  || fail "history lost the override reason"
+run_lane code out err "$CHECK_BRIEF" --lane deep --keep-lane ''
+expect_code 2 "$code" "an empty override reason is a usage error"
+assert_contains "$err" '--keep-lane needs a reason' "the empty reason is named"
+run_lane code out err "$CHECK_BRIEF" --lane deep --keep-lane '   '
+expect_code 2 "$code" "a whitespace-only override gives no reason"
+pass "--keep-lane keeps the selected lane with its reason logged"
+
+FAKE_CHECK_EXIT=3 check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: not run (claude exited 3); selected lane deep stands' "a failing checker leaves the lane"
+assert_contains "$out" "$fstrong" "a failing checker never blocks the top lane"
+assert_absent "$CHECK_CACHE" "a failed check is not cached"
+check_lane bogus code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: not run (the answer named no declared lane); selected lane deep stands' "an undeclared lane is not a pick"
+lane_check_rules=$(jq -c '.lane_check.timeout_seconds = 1' "$CHECK_RULES_BASE")
+printf '%s\n' "$lane_check_rules" > "$RULES"
+started=$SECONDS
+FAKE_CHECK_SLEEP=20 check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo
+[ $((SECONDS - started)) -lt 10 ] || fail "a hung checker delayed dispatch beyond its bound: $((SECONDS - started))s"
+assert_contains "$out" 'lane_check: not run (timed out after 1s); selected lane deep stands' "a hung checker times out"
+assert_contains "$out" "$fstrong" "a timed-out checker leaves the lane"
+cp "$CHECK_RULES_BASE" "$RULES"
+no_claude_path=$(fm_test_base_path_sans "$FAKEBIN:$BASE_PATH" claude) || fail "could not build a PATH without claude"
+rm -rf "$CHECK_CACHE"
+out=$(PATH="$no_claude_path" FM_HOME="$HOME_DIR" CODEX_HOME="$LANE_CODEX_HOME" QUOTA_AXI_FIXTURE="$LANE_QUOTA" \
+  "$TOOL" "$CHECK_BRIEF" --lane deep --project xo 2> "$TMP_ROOT/stderr")
+expect_code 0 "$?" "a missing checker exits 0: $(cat "$TMP_ROOT/stderr")"
+assert_contains "$out" 'lane_check: not run (claude not installed on this host); selected lane deep stands' "a host without the checker says so"
+assert_contains "$out" 'lane: deep  order=pool' "a host without the checker keeps the selected lane"
+pass "a checker that cannot run leaves the selected lane standing, bounded and reported"
+
+printf 'existing pager lock\n' > "$HOME_DIR/config/dispatch-never-send"
+check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: not run (task text matches the never-send list line 1; nothing sent); selected lane deep stands' \
+  "a never-send match withholds the checker prompt"
+assert_absent "$CHECK_LOG/claude.prompt" "nothing reaches the checker on a never-send match"
+printf '%s\n' '"When"' > "$HOME_DIR/config/dispatch-never-send"
+check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_absent "$CHECK_LOG/claude.prompt" "a quoted never-send literal matches raw prompt text"
+rm -f "$HOME_DIR/config/dispatch-never-send"
+check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo --exclude-family claude
+assert_contains "$out" 'lane_check: shadow pick standard; selected lane deep stands' "a second opinion keeps the originating lane"
+assert_present "$CHECK_LOG/claude.prompt" "a second opinion also gets a shadow pick"
+pass "the never-send list withholds matching prompts and second opinions retain their lanes"
+
+check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo
+FAKE_CHECK_LOG="$CHECK_LOG" FAKE_CHECK_LANE=deep run_lane code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: demoted deep -> standard (claude:claude-opus-5-5:medium, cached)' "an unchanged brief reuses its cached pick"
+assert_equals 1 "$(wc -l < "$CHECK_LOG/claude.argv" | tr -d ' ')" "a cached pick makes no second call"
+printf '\nAlso tidy one comment.\n' >> "$CHECK_BRIEF"
+FAKE_CHECK_LOG="$CHECK_LOG" FAKE_CHECK_LANE=deep run_lane code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: agreed: checker pick deep' "a changed brief asks the checker again"
+pass "an unchanged prompt reuses its cached pick and a changed one asks again"
+
+jq '.lane_check.harness = "codex" | .lane_check.model = "gpt-6.2-sol" | del(.lane_check.effort)' "$CHECK_RULES_BASE" > "$RULES"
+check_lane standard code out err "$CHECK_BRIEF" --lane deep --project xo
+assert_contains "$out" 'lane_check: demoted deep -> standard (codex:gpt-6.2-sol)' "a Sol checker is selectable by configuration"
+assert_contains "$(cat "$CHECK_LOG/codex.prompt")" 'Intricate cross-process work.' "the codex checker reads the same prompt"
+cp "$CHECK_RULES_BASE" "$RULES"
+pass "the checker harness, model, and effort come from configuration"
+
+reset_log
+check_lane standard code out err "$CHECK_BRIEF" --project xo
+assert_contains "$err" 'dispatch-resolve: off' "a missing router key still leaves routing manual"
+assert_absent "$LOG/argv" "a keyless shadow makes no router request"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '
+  .status == "off" and .lane == null and .lane_check.pick == "standard" and .lane_check.action == "shadow"' >/dev/null \
+  || fail "a keyless dispatch lost its independent shadow"
+
+jq '.rules[1].approval = "captain"' "$CHECK_RULES_BASE" > "$RULES"
+check_lane scoped code out err "$CHECK_BRIEF" --lane deep
+assert_contains "$out" 'status: escalate' "a shadow cannot waive required lane approval"
+assert_contains "$out" 'lane_check: shadow pick scoped; selected lane deep stands' "the approval-gated lane keeps its shadow"
+cp "$CHECK_RULES_BASE" "$RULES"
+pass "shadow picks survive router absence and preserve explicit approval gates"
+
+# Router mode: the check runs beside the router request and acts on its pick.
+write_check_response() {  # <choice> <confidence> <p1> <p2> <p3> <p4> <p5> <default>
+  cat > "$RESPONSE" <<JSON
+{ "model": "jev-1.14.0", "answers": { "rule": { "type": "choice", "choice": "$1", "confidence": $2,
+  "probabilities": { "rule_1": $3, "rule_2": $4, "rule_3": $5, "rule_4": $6, "rule_5": $7, "default": $8 } } },
+  "usage": { "input_tokens": 900, "output_tokens": 70 } }
+JSON
+}
+reset_log
+write_check_response rule_2 0.9 0.02 0.9 0.02 0.02 0.02 0.02
+TYPESAFE_API_KEY=$KEY check_lane standard code out err "$CHECK_BRIEF" --project xo
+assert_contains "$out" 'rule: rule_2 (Intricate cross-process work.)   confidence: 0.9' "the router's raw pick is still shown"
+assert_contains "$out" 'lane_check: demoted deep -> standard' "a clear router top lane is checked"
+assert_contains "$out" "$fmid" "the router's top lane is demoted to the pick"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '.rule == "rule_2" and .rule_lane == "deep" and
+  .rule_probability == 0.9 and .floor == "pass" and .fallback_lane == null and .intended_lane == null and
+  .lane == "standard" and .lane_check.action == "demoted" and .model == "jev-1.14.0"' >/dev/null \
+  || fail "history lost the router evidence beside the demotion"
+
+write_check_response rule_2 0.5 0.1 0.5 0.1 0.1 0.1 0.1
+TYPESAFE_API_KEY=$KEY check_lane standard code out err "$CHECK_BRIEF" --project xo
+assert_contains "$out" 'status: clear' "an unsure router result with a top lane in contention resolves the lower pick"
+assert_contains "$out" 'lane_check: demoted deep -> standard' "the contended top lane is checked"
+assert_contains "$out" "$fmid" "the lower pick's route is the profile"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '.floor == "fail" and .rule_lane == "deep" and .status == "clear"' >/dev/null \
+  || fail "history lost the failed floor behind the resolved demotion"
+TYPESAFE_API_KEY=$KEY check_lane deep code out err "$CHECK_BRIEF" --project xo
+assert_contains "$out" 'status: ambiguous' "an agreeing check leaves the unsure result for the supervisor"
+assert_contains "$out" 'lane_check: agreed: checker pick deep' "the agreement is shown on the unsure result"
+TYPESAFE_API_KEY=$KEY check_lane '' code out err "$CHECK_BRIEF" --project xo
+assert_contains "$out" 'status: ambiguous' "a check without an answer leaves the unsure result"
+assert_contains "$out" 'lane_check: not run (the answer named no declared lane); selected lane deep stands' "the missing answer is reported"
+
+write_check_response rule_2 0.5 0.05 0.5 0.3 0.05 0.05 0.05
+TYPESAFE_API_KEY=$KEY check_lane scoped code out err "$CHECK_BRIEF" --project xo
+assert_contains "$out" 'fallback: rule_3' "the floor fallback still applies"
+assert_contains "$out" 'lane_check: shadow pick scoped; selected lane standard stands' "a fallback below the top lanes is only shadowed"
+assert_contains "$out" "$fmid" "the fallback lane stands"
+tail -n 1 "$HOME_DIR/state/dispatch-history.jsonl" | jq -e '.floor == "fail" and .fallback_lane == "standard" and
+  .rule_lane == "deep" and .lane == "standard" and .lane_check.pick == "scoped"' >/dev/null \
+  || fail "history lost the fallback lane"
+pass "router picks, unsure top-lane results, and fallbacks are checked and recorded"
+
+jq '.lane_check.top_lanes = ["deep", "missing"]' "$CHECK_RULES_BASE" > "$RULES"
+run_lane code out err "$CHECK_BRIEF" --lane deep
+expect_code 2 "$code" "an undeclared top lane is a configuration error"
+assert_contains "$err" 'lane_check top_lanes names an undeclared lane: missing' "the undeclared top lane is named"
+jq '.lane_check.harness = "pi"' "$CHECK_RULES_BASE" > "$RULES"
+run_lane code out err "$CHECK_BRIEF" --lane deep
+expect_code 2 "$code" "an unsupported checker harness is a configuration error"
+assert_contains "$err" 'lane_check harness must be claude or codex' "the harness rule is named"
+jq '.lane_check.timeout_seconds = 0' "$CHECK_RULES_BASE" > "$RULES"
+run_lane code out err "$CHECK_BRIEF" --lane deep
+expect_code 2 "$code" "a zero timeout is a configuration error"
+jq '.lane_check.reviewer = "x"' "$CHECK_RULES_BASE" > "$RULES"
+run_lane code out err "$CHECK_BRIEF" --lane deep
+expect_code 2 "$code" "an unknown lane_check field is a configuration error"
+assert_contains "$err" 'unknown lane_check field: reviewer' "the unknown field is named"
+jq 'del(.lane_check)' "$CHECK_RULES_BASE" > "$RULES"
+rm -rf "$CHECK_LOG"; mkdir -p "$CHECK_LOG"
+FAKE_CHECK_LOG="$CHECK_LOG" FAKE_CHECK_LANE=standard run_lane code out err "$CHECK_BRIEF" --lane deep
+assert_not_contains "$out" 'lane_check' "a home without lane_check runs no check"
+assert_absent "$CHECK_LOG/claude.argv" "a home without lane_check makes no checker call"
+assert_equals null "$(jq -c .lane_check "$CHECK_RECORD")" "a home without lane_check records no check"
+cp "$BASE_RULES" "$RULES"
+pass "lane_check configuration is validated, and absent means no check"
 
 # --- shared-quota opt-out: no quota call, declared-order pick ----------------
 cp "$BASE_RULES" "$RULES"

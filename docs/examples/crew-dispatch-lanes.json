@@ -1,4 +1,12 @@
 {
+  "lane_check": {
+    "top_lanes": ["judgment", "technical-deep"],
+    "harness": "claude",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "timeout_seconds": 15,
+    "why": "A fresh guided strong-model call checks every top-lane dispatch and records a shadow pick on every other one."
+  },
   "classes": {
     "opus-xhigh": {
       "family": "claude",
@@ -117,29 +125,29 @@
   "rules": [
     {
       "lane": "judgment",
-      "when": "Design or architecture decisions, product and taste calls such as creative or marketing work, ambiguous investigations, or an important final review of a risky, cross-cutting, security-sensitive, or money-touching change.",
+      "when": "The decision itself is the hard part: a consequential architecture, security-model, data-isolation, or vendor choice with real trade-offs and no clear best answer, where a wrong call is costly to reverse, including a design investigation that compares such options and recommends one, even when the brief names the options and criteria and holds the final call for review; a high-stakes positioning or brand-defining creative call; an investigation whose question is still ill-defined; or an independent final review that decides whether a risky, cross-cutting, security-sensitive, or money-touching change ships. Not product, interface, or presentation design for end users, even with several concepts or wide latitude (high-quality lanes). Not an empirical evaluation, model or prompt comparison, benchmark, or prototype whose answer comes from running a stated protocol or budget, an investigation with a clear question that existing evidence answers, or detailing an option already chosen (standard). Not a bounded choice with an obvious best option. Security, safety, or credential wording, safety fences, and long instructions do not by themselves make a task this hard.",
       "order": "ordered",
       "classes": ["opus-xhigh", "astra-xhigh"]
     },
     {
       "lane": "technical-deep",
-      "when": "Difficult debugging whose cause is still unknown after a first look, or work crossing concurrency, security, or process-state boundaries that needs intricate systems or code reasoning.",
+      "when": "Work crossing concurrency, process-lifetime, security, or durability boundaries that needs intricate systems or code reasoning, where the worker must itself design how the pieces interleave safely: lock or ownership handoff between processes, ordering across concurrent or asynchronous writers, idempotency and retries around external calls inside transactions, isolating credentials or data across systems, or changing how permission or sandbox enforcement itself decides what agents may do. Also a first security review of a whole codebase, debugging that has already defeated a standard-lane attempt, or work the captain calls out as hard. Not a fix to a known finding whose direction the brief states, ordinary bug triage that starts from a stack trace or error report, rerunning an established tool or evaluation, or a one-line or configuration change, even when the subject is security; those go to standard or scoped. Security or permission words, safety fences, and long instructions do not by themselves make a task belong here.",
       "order": "ordered",
       "classes": ["opus-xhigh", "sol-max", "astra-xhigh"]
     },
     {
       "lane": "high-quality-standard",
-      "when": "Ordinary substantive implementation whose output quality materially matters because customers or the public see it, or it is judged by taste rather than tests.",
+      "when": "Substantive work whose output end users see directly or judge by taste, where that quality materially matters: a product feature or flow with real interface, interaction, and copy decisions; a page or screen redesign; product, interface, or presentation design that compares concepts or prototypes; marketing copy or published writing. Not merely code that lives in a public repository; a single well-specified component, layout fix, or copy change is high-quality-scoped.",
       "classes": ["opus-high", "sol-xhigh"]
     },
     {
       "lane": "high-quality-scoped",
-      "when": "A narrow, clearly bounded task whose polish, taste, or customer-facing quality materially matters, such as a well-specified user interface component.",
+      "when": "A narrow, clearly bounded task whose polish, taste, or customer-facing quality materially matters: a well-specified interface component, a layout, spacing, alignment, or styling fix, placement options for one control, or a bounded copy change.",
       "classes": ["sol-high", "opus-medium", "muse-spark"]
     },
     {
       "lane": "standard",
-      "when": "Ordinary substantive features or fixes that need meaningful implementation judgment.",
+      "when": "Ordinary substantive features, fixes, and investigations that need meaningful implementation judgment, including a fix to a known finding whose direction the brief states, diagnosis that starts from an error report or reproduction, a schema change or new table, release preparation with an inventory and risk summary, detailing an option already chosen, and an empirical evaluation or prototype run to a stated protocol or budget. A short brief or a small-sounding ask is not by itself a reason to go lower.",
       "classes": [
         "sol-high",
         "opus-medium",
@@ -152,17 +160,17 @@
     },
     {
       "lane": "scoped",
-      "when": "A narrow, clearly bounded implementation or one specific review question whose outcome is easy to verify and that the model should complete without struggling.",
+      "when": "A narrow, clearly bounded implementation or one specific review question whose outcome is easy to verify and that the model should complete without struggling, such as a one-line or configuration change, a dependency or action pin, or a contained fix in one place whose exact change the brief states, such as adding a header, a guard, or a filter. Not when the task also asks for diagnosis, an inventory or risk review, a design choice, a schema change, behavior across several surfaces, or an evaluation that adds new models, arms, or measurements, however short the brief or small the ask sounds; those are at least standard.",
       "classes": ["luna-max", "gemini-flash-high", "muse-spark", "swe-2"]
     },
     {
       "lane": "bulk",
-      "when": "Repetitive cheap units of work such as reruns, bulk edits, or mechanical migrations.",
+      "when": "Repetitive cheap units of work done to an already fixed recipe: reruns, including rerunning an established evaluation with one setting changed and reporting the comparison; bulk edits; renames, code moves, or other mechanical code migrations across files; or one slice of a batch of identical tasks. A database schema change or data migration is not bulk work.",
       "classes": ["luna-max", "swe-2", "gemini-flash-high", "muse-spark"]
     },
     {
       "lane": "long-horizon",
-      "when": "Prolonged independent execution over hours that needs its own decomposition, recovery, or subagents.",
+      "when": "Large or genuinely hard work that cannot be split up front, where the worker itself must keep re-planning, delegating to its own subagents, and recovering over many hours, such as an open-ended build or a multi-system migration. Work that can be divided into independent pieces before starting does not belong here; each piece is routed on its own. Long or detailed instructions alone do not make work long-horizon.",
       "approval": "captain",
       "classes": ["opus-ultracode", "sol-ultra"]
     }
