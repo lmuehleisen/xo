@@ -316,8 +316,10 @@ RULES='' RESP_FILE='' QUOTA='' TASK_TEXT='' SEND_TEXT=''
 # shellcheck disable=SC2329 # Registered by the EXIT trap below.
 dispatch_exit() {
   local rc=$?
-  # A check still running on an early exit is bounded by its own timeout.
-  [ -z "${CHECK_PID:-}" ] || kill "$CHECK_PID" 2>/dev/null || true
+  if [ -n "$CHECK_PID" ]; then
+    kill "$CHECK_PID" 2>/dev/null || true
+    wait "$CHECK_PID" 2>/dev/null || true
+  fi
   fm_dispatch_history_router "$FM_HOME" "$BRIEF" "$HISTORY_STATUS" "$HISTORY_REASON" \
     "$RESULT" "$HISTORY_EVIDENCE" "$LANE" "$LAT_MS" "$HISTORY_MODEL" "$RESOLUTION_ID" || true
   if [ -n "${RULES:-}${RESP_FILE:-}${QUOTA:-}${TASK_TEXT:-}${SEND_TEXT:-}${CHECK_OUT:-}" ]; then
@@ -345,7 +347,7 @@ record_task() {
       --arg lane "$LANE" --arg id "$RESOLUTION_ID" --argjson evidence "$HISTORY_EVIDENCE" --argjson result "$RESULT" '
       ($evidence + $result) as $r |
       {task: $task, status: $status, profile: $profile,
-       lane: ($r.lane // ($lane | select(. != "")) // null),
+       lane: (if $r | has("lane") then $r.lane else ($lane | select(. != "") // null) end),
        class: $r.chosen.class, confidence: $r.confidence, resolution_id: $id,
        lane_check: (if $r.lane_check then $r.lane_check | {action, pick, from} else null end)}' > "$TASK_RECORD.tmp.$$" \
       && mv -f -- "$TASK_RECORD.tmp.$$" "$TASK_RECORD"; } 2>/dev/null; then
@@ -896,8 +898,11 @@ CHECK_CACHE=''
 start_lane_check() {
   [ -n "$CHECK_CFG" ] && [ -s "$TASK_TEXT" ] || return 0
   CHECK_OUT=$(mktemp) || return 0
-  fm_dispatch_check_run "$RULES" "$TASK_TEXT" "$PROJECT" "$NEVER_SEND_PATH" "$CHECK_CACHE" \
-    > "$CHECK_OUT" 2>/dev/null < /dev/null &
+  (
+    dir='' checker_pid=''
+    trap 'fm_dispatch_check_cancel' TERM INT HUP
+    fm_dispatch_check_run "$RULES" "$TASK_TEXT" "$PROJECT" "$NEVER_SEND_PATH" "$CHECK_CACHE"
+  ) > "$CHECK_OUT" 2>/dev/null < /dev/null &
   CHECK_PID=$!
 }
 collect_lane_check() {
@@ -1374,6 +1379,7 @@ resolve_once() {
   }
   + (if $answer_lane != null and $sel.source != "default" then
        {lane: $answer_lane.lane, order: $answer_lane.order, experiments: $answer_lane.experiments}
+     elif $answer_lane != null then {lane: null, fallback_lane: "default"}
      else {} end)
   + (if $exclude != "" then {exclude_family: $exclude} else {} end)
   + (if ($tags | length) > 0 then {data_tags: $tags} else {} end)
@@ -1437,7 +1443,7 @@ if [ -n "$CHECK_CFG" ]; then
       all($cfg.rules[]; .lane != $from or .approval != "captain")) as $gated |
     ($pick != null and ($top | index($pick)) == null
       and any(($cfg.rules // [])[]; type == "object" and has("classes") and .lane == $pick and (.approval // "") != "captain")) as $lower |
-    {ran: ($c.ran == true), pick: $pick, reason: ($c.reason // null), not_run: ($c.not_run // null),
+    {ran: ($c.ran == true), pick: $pick, reason: ($c.reason // null), history_reason: $c.history_reason, not_run: ($c.not_run // null),
      checker: ($c.checker // null), latency_ms: ($c.latency_ms // null), cached: ($c.cached // false), digest: $c.digest,
      from: $from, gated: $gated, keep_reason: ($keep | select(. != "") // null),
      action: (if $c.ran != true then "not run"

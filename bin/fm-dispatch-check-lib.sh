@@ -21,10 +21,12 @@
 #
 # fm_dispatch_check_run <rules-file> <task-text-file> <project> <never-send-list> [<cache-file>]
 #   Runs one check and prints one compact JSON object, always exiting 0:
-#     {ran: true, pick, reason, checker, latency_ms, cached, digest}
+#     {ran: true, pick, reason, history_reason, checker, latency_ms, cached, digest}
 #     {ran: false, not_run, checker, latency_ms, cached: false, digest}
 #   checker is <harness>:<model>[:<effort>]. The pick is a declared lane name
-#   and reason is one line of at most 300 characters. not_run names why no
+#   and reason is one line of at most 300 characters. Only the model's choice
+#   from the fixed history_reason vocabulary is kept in the history and cache.
+#   not_run names why no
 #   pick exists: the harness is not installed on this host, the never-send list
 #   matched or could not be read (nothing sent), the harness exited nonzero
 #   (missing login or quota surface here), the timeout_seconds bound (default
@@ -48,7 +50,7 @@
 FM_DISPATCH_CHECK_DEFAULT_TIMEOUT=15
 _FM_DISPATCH_CHECK_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=bin/fm-timeout-lib.sh
-declare -F fm_run_timed >/dev/null 2>&1 || . "$_FM_DISPATCH_CHECK_DIR/fm-timeout-lib.sh"
+declare -F fm_exec_timed >/dev/null 2>&1 || . "$_FM_DISPATCH_CHECK_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-timing-lib.sh
 declare -F fm_timing_now_ms >/dev/null 2>&1 || . "$_FM_DISPATCH_CHECK_DIR/fm-timing-lib.sh"
 
@@ -59,9 +61,10 @@ You are rating which dispatch lane a task should be routed to. Below are the lan
 TXT
 )
 FM_DISPATCH_CHECK_ANSWER=$(cat <<'TXT'
-Answer with a JSON object only: {"lane": "<one lane name from # Lanes>", "reason": "<one sentence>"}. Do not run any commands or read any files; everything you need is above.
+Answer with a JSON object only: {"lane": "<one lane name from # Lanes>", "reason": "<one sentence>", "history_reason": "<the closest reason from the response schema>"}. Do not run any commands or read any files; everything you need is above.
 TXT
 )
+FM_DISPATCH_CHECK_REASONS='["A bounded mechanical change is specified.","The implementation direction is known.","The task requires investigation or integration.","The task requires reasoning about an invariant across boundaries.","The task requires a consequential design decision.","The work requires sustained execution.","Other declared lane criteria apply."]'
 
 fm_dispatch_check_config() {  # <rules-file>
   jq -c '.lane_check // empty | objects' "$1" 2>/dev/null || true
@@ -120,10 +123,21 @@ _fm_dispatch_check_result() {  # <checker> <digest> <latency-ms|null> <fields>
       digest: ($digest | select(. != "") // null)} + $f'
 }
 
+# The asynchronous caller installs this handler in the shell that owns the
+# scratch directory and timed checker. Both variables are local to that call.
+fm_dispatch_check_cancel() {
+  if [ -n "${checker_pid:-}" ]; then
+    kill -TERM "$checker_pid" 2>/dev/null || true
+    wait "$checker_pid" 2>/dev/null || true
+  fi
+  [ -z "${dir:-}" ] || rm -rf -- "$dir"
+  exit 143
+}
+
 fm_dispatch_check_run() {  # <rules-file> <task-text-file> <project> <never-send-list> [<cache-file>]
   local rules=$1 task=$2 project=$3 never=$4 cache=${5:-}
   local cfg harness='' model='' effort='' timeout=$FM_DISPATCH_CHECK_DEFAULT_TIMEOUT checker
-  local dir='' digest='' exe rc n t0 latency=null answer='' lanes why=''
+  local dir='' digest='' exe rc n t0 latency=null answer='' lanes why='' checker_pid=''
   cfg=$(fm_dispatch_check_config "$rules")
   if [ -n "$cfg" ]; then
     harness=$(jq -r '.harness // ""' <<<"$cfg")
@@ -139,7 +153,7 @@ fm_dispatch_check_run() {  # <rules-file> <task-text-file> <project> <never-send
   elif ! fm_dispatch_check_prompt "$rules" "$task" "$project" > "$dir/prompt" 2>/dev/null; then
     why="could not build the prompt"
   else
-    { printf '%s\n' "$checker"; cat "$dir/prompt"; } > "$dir/prompt.key"
+    { printf '%s\n' "$checker" "$FM_DISPATCH_CHECK_REASONS"; cat "$dir/prompt"; } > "$dir/prompt.key"
     digest=$(_fm_dispatch_check_sha256 "$dir/prompt.key")
     if [ -e "$never" ] || [ -L "$never" ]; then
       if ! { [ -f "$never" ] && [ -r "$never" ]; }; then
@@ -156,11 +170,11 @@ fm_dispatch_check_run() {  # <rules-file> <task-text-file> <project> <never-send
       fi
     fi
     if [ -z "$why" ] && [ -n "$cache" ] && [ -n "$digest" ] && [ -f "$cache" ] \
-      && answer=$(jq -cse --arg d "$digest" --slurpfile cfg "$rules" '
+      && answer=$(jq -cse --arg d "$digest" --argjson reasons "$FM_DISPATCH_CHECK_REASONS" --slurpfile cfg "$rules" '
         select(length == 1) | .[0] |
-        select(.digest == $d and .ran == true and (.reason | type == "string" and test("\\S")) and
+        select(.digest == $d and .ran == true and (.history_reason as $why | $reasons | index($why) != null) and
           (.pick as $l | any($cfg[0].rules[]; has("classes") and .lane == $l))) |
-        . + {cached: true, latency_ms: 0}' "$cache" 2>/dev/null); then
+        . + {reason: .history_reason, cached: true, latency_ms: 0}' "$cache" 2>/dev/null); then
       printf '%s\n' "$answer"
       rm -rf "$dir"
       return 0
@@ -175,27 +189,39 @@ fm_dispatch_check_run() {  # <rules-file> <task-text-file> <project> <never-send
     return 0
   fi
   lanes=$(jq -c '[(.rules // [])[] | objects | select(has("classes")) | .lane]' "$rules")
-  jq -cn --argjson lanes "$lanes" '{type: "object", additionalProperties: false, required: ["lane", "reason"],
-    properties: {lane: {type: "string", enum: $lanes}, reason: {type: "string"}}}' > "$dir/schema.json"
+  jq -cn --argjson lanes "$lanes" --argjson reasons "$FM_DISPATCH_CHECK_REASONS" '{
+    type: "object", additionalProperties: false, required: ["lane", "reason", "history_reason"],
+    properties: {lane: {type: "string", enum: $lanes}, reason: {type: "string"}, history_reason: {type: "string", enum: $reasons}}}' > "$dir/schema.json"
   t0=$(fm_timing_now_ms)
+  (
+    cd "$dir/cwd" || exit 1
+    case "$harness" in
+    claude)
+      unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
+      export DISABLE_AUTOUPDATER=1
+      fm_exec_timed "$timeout" 1 "$exe" -p --model "$model" ${effort:+--effort "$effort"} --tools "" --no-session-persistence \
+          --setting-sources "" --strict-mcp-config --output-format json --json-schema "$(cat "$dir/schema.json")" \
+          > "$dir/out"
+      ;;
+    codex)
+      fm_exec_timed "$timeout" 1 "$exe" exec -m "$model" ${effort:+-c "model_reasoning_effort=$effort"} \
+        --disable shell_tool --disable unified_exec --disable apps --disable plugins --disable multi_agent \
+        -c web_search=disabled \
+        -s read-only --skip-git-repo-check --ephemeral --ignore-user-config -c project_doc_max_bytes=0 \
+        --output-schema "$dir/schema.json" -o "$dir/out" -
+      ;;
+    *) exit 1 ;;
+    esac
+  ) < "$dir/prompt" > /dev/null 2>&1 &
+  checker_pid=$!
+  wait "$checker_pid"; rc=$?
+  checker_pid=''
   case "$harness" in
     claude)
-      ( cd "$dir/cwd" && fm_run_timed "$timeout" env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT DISABLE_AUTOUPDATER=1 \
-          "$exe" -p --model "$model" ${effort:+--effort "$effort"} --tools "" --no-session-persistence \
-          --setting-sources "" --strict-mcp-config --output-format json --json-schema "$(cat "$dir/schema.json")" \
-          < "$dir/prompt" > "$dir/out" 2> /dev/null )
-      rc=$?
       answer=$(jq -c 'select(.is_error != true) | (.structured_output // (.result | strings | fromjson?)) | objects' \
         "$dir/out" 2>/dev/null) || answer=''
       ;;
     codex)
-      ( cd "$dir/cwd" && fm_run_timed "$timeout" "$exe" exec -m "$model" ${effort:+-c "model_reasoning_effort=$effort"} \
-          --disable shell_tool --disable unified_exec --disable apps --disable plugins --disable multi_agent \
-          -c web_search=disabled \
-          -s read-only --skip-git-repo-check --ephemeral --ignore-user-config -c project_doc_max_bytes=0 \
-          --output-schema "$dir/schema.json" -o "$dir/out" - \
-          < "$dir/prompt" > /dev/null 2>&1 )
-      rc=$?
       answer=$(jq -c 'objects' "$dir/out" 2>/dev/null) || answer=''
       ;;
     *) rc=1 why="unsupported checker harness $harness" ;;
@@ -207,13 +233,14 @@ fm_dispatch_check_run() {  # <rules-file> <task-text-file> <project> <never-send
     why="timed out after ${timeout}s"
   elif [ "$rc" -ne 0 ]; then
     why="$harness exited $rc"
-  elif ! answer=$(jq -cse --argjson lanes "$lanes" '
+  elif ! answer=$(jq -cse --argjson lanes "$lanes" --argjson reasons "$FM_DISPATCH_CHECK_REASONS" '
       select(length == 1) | .[0] |
       select((.lane | type) == "string" and (.lane as $l | $lanes | index($l)) != null)
       | select(.reason | type == "string" and test("\\S"))
-      | {ran: true, pick: .lane, reason: (.reason | gsub("[[:cntrl:]\\s]+"; " ") | .[0:300])}' \
+      | select(.history_reason as $why | $reasons | index($why) != null)
+      | {ran: true, pick: .lane, history_reason, reason: (.reason | gsub("[[:cntrl:]\\s]+"; " ") | .[0:300])}' \
       <<<"$answer" 2>/dev/null); then
-    why="the answer named no declared lane"
+    why="the answer lacked a valid lane or reason"
   fi
   rm -rf "$dir"
   if [ -n "$why" ]; then
@@ -222,7 +249,7 @@ fm_dispatch_check_run() {  # <rules-file> <task-text-file> <project> <never-send
   fi
   answer=$(_fm_dispatch_check_result "$checker" "$digest" "$latency" "$answer")
   if [ -n "$cache" ] && [ -n "$digest" ]; then
-    ( umask 077; printf '%s\n' "$answer" > "$cache.tmp.$$" && mv -f -- "$cache.tmp.$$" "$cache" ) 2>/dev/null \
+    ( umask 077; jq -c 'del(.reason)' <<<"$answer" > "$cache.tmp.$$" && mv -f -- "$cache.tmp.$$" "$cache" ) 2>/dev/null \
       || rm -f -- "$cache.tmp.$$" 2>/dev/null
   fi
   printf '%s\n' "$answer"

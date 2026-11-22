@@ -2389,6 +2389,8 @@ read_worktree_dirt() {
 
 validate_worktree_teardown_safety() {
   local dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
+  teardown_outcome=unknown
+  teardown_outcome_head=''
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   case "$KIND" in
@@ -2441,6 +2443,7 @@ validate_worktree_teardown_safety() {
       echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
+    teardown_outcome=landed
   elif [ -n "$dirty" ]; then
     echo "REFUSED: worktree $WT has uncommitted changes." >&2
     report_worktree_dirt "$dirty"
@@ -2464,6 +2467,13 @@ validate_worktree_teardown_safety() {
       echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
+    teardown_outcome=landed
+  elif [ "$MODE" = local-only ] && [ -f "$FM_HOME/state/dispatch-history.jsonl" ] &&
+       DEFAULT=$(default_branch) && git -C "$WT" merge-base --is-ancestor HEAD "$DEFAULT" 2>/dev/null; then
+    teardown_outcome=landed
+  fi
+  if [ -f "$FM_HOME/state/dispatch-history.jsonl" ] && [ "$teardown_outcome" = unknown ]; then
+    teardown_outcome_head=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || teardown_outcome_head=''
   fi
 }
 
@@ -4140,6 +4150,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
 fi
 
 teardown_outcome=unknown
+teardown_outcome_head=''
 if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
@@ -4152,7 +4163,6 @@ if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]
       exit 1
     fi
   fi
-  teardown_outcome=landed
 fi
 
 # A Herdr close may reposition shared workspace order, so the whole
@@ -4643,7 +4653,7 @@ if [ "$TEARDOWN_RECORD_ONLY" != 1 ] && [ "$KIND" != secondmate ]; then
   elif [ "$KIND" = scout ]; then
     teardown_outcome=delivered
   fi
-  fm_dispatch_history_outcome "$FM_HOME" "$ID" "$KIND" "$teardown_outcome" "${PR_URL:-}" || true
+  fm_dispatch_history_outcome "$FM_HOME" "$ID" "$KIND" "$teardown_outcome" "${PR_URL:-}" "${teardown_outcome_head:-}" || true
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0

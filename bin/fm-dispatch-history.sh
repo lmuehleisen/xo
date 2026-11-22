@@ -132,13 +132,13 @@ jq -nRr --arg task "$task" --argjson start "$start" --argjson json "$json" '
       if $row.task_id == "" or ($row.brief_path | IN("", "/dev/null")) then .
       else
         $row.lane_check.digest as $digest |
-        (if $row.model != null then
-           .jev[$row.task_id] = {digest: $digest, lane: $row.rule_lane}
+        (if $row.model != null and ($digest | nonempty) and ($row.rule_lane | nonempty) then
+           .jev[$row.task_id][$digest] = $row.rule_lane
          else . end) |
         ($row + {router_lane:
           (if $row.model != null then $row.rule_lane
-           elif $row.intended_lane != null and $digest != null and $digest == .jev[$row.task_id].digest
-           then .jev[$row.task_id].lane else null end)}) as $decision |
+           elif $row.intended_lane != null and ($digest | nonempty)
+           then .jev[$row.task_id][$digest] else null end)}) as $decision |
         .routers[$row.task_id] = $decision |
         if ($row.resolution_id | type) == "string" then .by_id[$row.task_id][$row.resolution_id] = $decision else . end
       end
@@ -151,7 +151,7 @@ jq -nRr --arg task "$task" --argjson start "$start" --argjson json "$json" '
       (if $row.relaunch == false then del(.pending[$row.task_id]) else . end) |
       if $start != null and $row.time < $start then . else
       (if ($row.resolution_id | type) == "string" then .by_id[$row.task_id][$row.resolution_id]
-       else .routers[$row.task_id] end) as $router |
+       elif ($row | has("resolution_id") | not) then .routers[$row.task_id] else null end) as $router |
       ($row | decision($router) + {result: null, pr_state: null, relaunches: null, review_rounds: null}) as $spawn |
       .pending[$row.task_id] += [(.spawns | length)] |
       .spawns += [$spawn] | .summary[$spawn.outcome] += 1

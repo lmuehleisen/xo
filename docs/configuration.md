@@ -2333,7 +2333,7 @@ An optional top-level `lane_check` names the lanes that need a second look befor
 
 ```json
 "lane_check": {
-  "top_lanes": ["expert-judgment", "technical-deep"],
+  "top_lanes": ["judgment", "technical-deep"],
   "harness": "claude",
   "model": "claude-opus-5-5",
   "effort": "medium",
@@ -2359,11 +2359,12 @@ Bootstrap and the resolver report an invalid block like any other malformed lane
   [`bin/fm-dispatch-check-lib.sh`](../bin/fm-dispatch-check-lib.sh) owns that prompt, the bounded call, and the answer it accepts.
 - The history records the shadow even if the router lacks a key or its request fails.
   Agreement counts include only pairs with an attributable pick from each side.
+  A fresh answer shows the checker's one-sentence explanation. The cache and history retain its chosen reason from a fixed list, so an explanation quoting the brief stays out of both files.
 - It acts only when the selected lane is in `top_lanes`: the router's lane after any floor fallback, a supervisor's `--lane`, or the top option of an unsure (`ambiguous`) result.
   When both lanes are free of approval requirements and its pick is a declared lane outside `top_lanes`, that lane resolves instead, so an unsure result with a top lane in contention can come back `clear`.
-- It never acts on any other lane, so standard never drops to scoped, and a pick above the selected lane, the other top lane, or an approval-gated lane changes nothing.
+- Include every lane that needs top-tier protection in `top_lanes`. A pick inside that set or requiring approval leaves the selection in place. Every ungated lane outside the set counts as lower, regardless of its position in the rules. A selection outside the set keeps its lane, including standard when the shadow picks scoped.
 - `--keep-lane <reason>` keeps the selected lane and records the reason beside the pick; a captain's explicit lane or model choice for the task is such a reason.
-- A check that cannot run leaves the selected lane standing and says why: the harness is not installed on this host, the never-send list below matched (nothing sent), the harness exited nonzero (for example a missing login or exhausted quota), the timeout passed, or the answer named no declared lane.
+- A check that cannot run leaves the selected lane standing and says why: the harness is not installed on this host, the never-send list below matched (nothing sent), the harness exited nonzero (for example a missing login or exhausted quota), the timeout passed, or the answer lacked a valid lane or reason.
   Dispatch never waits longer than `timeout_seconds` for it and is never blocked by it.
 - A successful pick for a `data/<id>/brief.md` brief is cached in `data/<id>/dispatch-check.json` under a digest of the checker and the whole prompt, so the `--lane` rerun after an unsure result reuses it, and any change to the brief or lane text asks again.
 
@@ -2394,7 +2395,7 @@ The selected provider needs a non-empty key from the environment, else `.env`, e
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 A declared credential source that cannot supply its key is not off; see "Credential source declaration" below.
-A named `--lane` sends no request and runs without a provider key.
+A named `--lane` skips the router request and runs without a router key. A configured checker can still receive the task text after its never-send scan.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared top-level, rule, and profile fields it applies.
 
 Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFIG_OVERRIDE` selects the config directory for tests and specialized setup like the other scripts.

@@ -5,7 +5,7 @@
 #                            <evidence-json> <lane> <latency-ms> <model> [<resolution-id>]
 # fm_dispatch_history_spawn <home> <task-id> <harness> <model> <effort>
 #                           <override-reason> <dispatch-record-json> [<relaunch 0|1>]
-# fm_dispatch_history_outcome <home> <task-id> <task-kind> <result> [<pr-url>]
+# fm_dispatch_history_outcome <home> <task-id> <task-kind> <result> [<pr-url> [<worktree-head>]]
 #
 # Appends one compact JSON object per call to $home/state/dispatch-history.jsonl,
 # independent of FM_STATE_OVERRIDE. Each entry has kind, time (Unix seconds),
@@ -20,7 +20,7 @@
 # the task record carries to the launch), rule (the router's raw pick, or the
 # --lane rule), rule_lane and rule_probability for that pick, floor (pass or
 # fail on that pick's confidence floor, null for --lane), fallback_lane (the
-# runner-up a failed floor fell to), intended_lane (the --lane given), lane
+# runner-up a failed confidence floor fell to, or default after a quota floor), intended_lane (the --lane given), lane
 # (the final lane), lane_check ({ran, pick, reason, not_run, checker,
 # latency_ms, cached, digest, from, action, keep_reason} from the top-lane check, or
 # null when none is configured), and keep_lane_reason (the --keep-lane reason).
@@ -41,7 +41,7 @@
 # and, for a PR, reviews and review_rounds (submitted reviews and the distinct
 # commits they reviewed, from one gh call bounded at 10 seconds, else null).
 # pr_state is the forge's OPEN, CLOSED, or MERGED verdict when available;
-# landed records the cleanup worktree proof, which also accepts pushed work.
+# landed requires a landing proof or a merged PR at the inspected worktree HEAD.
 # No brief text, review text, or secret is stored.
 # No retention or rotation is performed. All logging work runs in a silent
 # subshell and callers ignore failure, preserving their output and exit status.
@@ -71,7 +71,7 @@ fm_dispatch_history_router() (
      intended_lane: ($lane | select(. != "") // null),
      lane: ($r.lane | select(. != "") // null),
      lane_check: (if ($r.lane_check | type) == "object" then $r.lane_check
-       | {ran, pick, reason, not_run, checker, latency_ms, cached, digest, from, action, keep_reason} else null end),
+       | {ran, pick, reason: .history_reason, not_run, checker, latency_ms, cached, digest, from, action, keep_reason} else null end),
      keep_lane_reason: ($r.keep_lane_reason // null),
      reason: ($r.reason | select(. != "") // $r.note // null),
      suggested_profile: (if $r.status == "clear" then
@@ -126,6 +126,7 @@ fm_dispatch_history_spawn() (
 
 fm_dispatch_history_outcome() (
   local home=$1 id=$2 kind=$3 result=$4 pr=${5:-} relaunches=null reviews=null rounds=null counts line pr_state=''
+  local head=${6:-} counts_pattern=$'^(OPEN|CLOSED|MERGED)\t([0-9]+)\t([0-9]+)\t([[:xdigit:]]+|-)$'
   local log="$home/state/dispatch-history.jsonl"
   # Only a task this history recorded a launch for gets an outcome to join.
   [ -f "$log" ] || return 0
@@ -139,12 +140,15 @@ fm_dispatch_history_outcome() (
   if ! declare -F fm_pr_url_parse >/dev/null || ! fm_pr_url_parse "$pr"; then
     pr=''
   elif [ "$FM_PR_PROVIDER" = github ] && command -v gh >/dev/null 2>&1 && declare -F fm_run_timed >/dev/null 2>&1; then
-    counts=$(fm_run_timed 10 gh pr view "$pr" --json state,reviews \
-      --jq '[.state, (.reviews | length), ([.reviews[] | .commit.oid // empty] | unique | length)] | @tsv' 2>/dev/null) || counts=''
-    if [[ "$counts" =~ ^(OPEN|CLOSED|MERGED)$'\t'([0-9]+)$'\t'([0-9]+)$ ]]; then
+    counts=$(fm_run_timed 10 gh pr view "$pr" --json state,reviews,headRefOid \
+      --jq '[.state, (.reviews | length), ([.reviews[] | .commit.oid // empty] | unique | length), (.headRefOid // "-")] | @tsv' 2>/dev/null) || counts=''
+    if [[ "$counts" =~ $counts_pattern ]]; then
       pr_state=${BASH_REMATCH[1]}
       reviews=${BASH_REMATCH[2]}
       rounds=${BASH_REMATCH[3]}
+      if [ "$result" = unknown ] && [ "$pr_state" = MERGED ] && [ "${BASH_REMATCH[4]}" = "$head" ]; then
+        result=landed
+      fi
     fi
   fi
   line=$(jq -cn --argjson time "$(date +%s)" --arg id "$id" --arg kind "$kind" --arg result "$result" \
