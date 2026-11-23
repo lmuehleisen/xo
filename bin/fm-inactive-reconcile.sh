@@ -8,10 +8,12 @@
 #
 # This is an adjunct to the existing watcher poll loop and session-start path,
 # not a watcher, daemon, PR poll, or forge client of its own.
-# Each poll also stamps an existing ship or scout report when the worker's
-# latest declared event is a complete `done:` line. Under the task meta lock,
-# append one Written by line using the recorded launch harness, model, and
-# effort. Teardown's `report` entry point retries before retiring that record.
+# After outcome reconciliation each poll gives report stamping a separate
+# one-second budget. The report cursor resumes after the last attempted task
+# if a read stalls or a batch exhausts that budget. A complete worker `done:`
+# event lets the pass append one Written by line using the recorded launch
+# harness, model, and effort under the task meta lock. Teardown's `report`
+# entry point retries before retiring that record.
 #
 # In a secondmate home every `scan` invocation, which is every watcher poll,
 # first runs the LEDGER-FIRST parent delivery: a direct child whose status
@@ -135,6 +137,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 OUTCOME_DIR="$STATE/terminal-outcomes"
 SCAN_MARKER="$STATE/.inactive-outcome-reconcile"
 SCAN_LOCK="$STATE/.inactive-outcome-reconcile.lock"
+REPORT_CURSOR="$STATE/.report-author-cursor"
 CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 
 # shellcheck source=bin/fm-wake-lib.sh
@@ -535,10 +538,13 @@ stamp_completed_report_locked() { # <id> <meta>
   spawn_epoch=$(fm_meta_get "$meta" spawn_gen)
   spawn_epoch=${spawn_epoch#s}
   spawn_epoch=${spawn_epoch%%.*}
-  case "$spawn_epoch" in
-    ''|*[!0-9]*) ;;
+  done_epoch=$(status_line_at_epoch "$last") || done_epoch=''
+  case "$spawn_epoch$done_epoch" in
+    *[!0-9]*) ;;
     *)
-      if done_epoch=$(status_line_at_epoch "$last") && [ "$spawn_epoch" -gt "$done_epoch" ]; then
+      if [ -n "$spawn_epoch" ] && [ -n "$done_epoch" ] \
+        && [ "${#spawn_epoch}" -le 12 ] && [ "${#done_epoch}" -le 12 ] \
+        && [ "$spawn_epoch" -gt "$done_epoch" ]; then
         return 0
       fi
       ;;
@@ -577,6 +583,44 @@ stamp_completed_report_locked() { # <id> <meta>
   printf '%sWritten by: %s %s (%s)\n' "$separator" "$model" "$effort" "$harness" >> "$report"
 }
 
+stamp_report_with_notice() { # <id> <meta>, caller holds task meta lock
+  stamp_completed_report_locked "$1" "$2" && return 0
+  printf 'fm-inactive-reconcile: could not stamp the author on %s/report.md\n' "$1" >&2
+  publish_actionable "inactive-reconcile:report-author:$1" "could not stamp the author on $1/report.md" || true
+  return 1
+}
+
+# Checkpoint before touching a report, so the next poll can reach later tasks
+# even when the hard timeout cut this one off. Reaching the end wraps the pass.
+stamp_report_pass() {
+  local cursor='' meta id lock tmp
+  [ ! -d "$REPORT_CURSOR" ] || return 1
+  if [ -f "$REPORT_CURSOR" ] && [ ! -L "$REPORT_CURSOR" ]; then
+    IFS= read -r cursor < "$REPORT_CURSOR" || cursor=''
+    valid_id "$cursor" || cursor=''
+  fi
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    id=${meta##*/}
+    id=${id%.meta}
+    valid_id "$id" && [[ "$id" > "$cursor" ]] && [ -f "$DATA/$id/report.md" ] || continue
+    tmp=$(mktemp "$REPORT_CURSOR.XXXXXX") || return 1
+    if ! printf '%s\n' "$id" > "$tmp" || ! mv -f -- "$tmp" "$REPORT_CURSOR"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+    lock=$(fm_meta_lock_path "$meta") || continue
+    fm_lock_try_acquire "$lock" || continue
+    REPORT_META_LOCK=$lock
+    if [ -f "$meta" ] && [ ! -L "$meta" ]; then
+      stamp_report_with_notice "$id" "$meta" || true
+    fi
+    fm_lock_release "$lock"
+    REPORT_META_LOCK=''
+  done
+  rm -f -- "$REPORT_CURSOR"
+}
+
 # Claim one already-delivered inactive fallback as the delivery of this ledger
 # event. Both reconciliation paths hold the child's meta lock, so this receipt
 # update serializes their decision even though the child appends its ledger
@@ -604,16 +648,10 @@ claim_inactive_report_for_ledger() { # <task> <incarnation> <state> <ledger-fing
 }
 
 # The ledger-first parent delivery for one direct child, for a caller holding
-# the child's meta lock. Returns 0 when reconciliation is complete or nothing
-# is owed, and 1 when the author stamp or parent delivery needs a retry.
-report_child_ledger_locked() { # <id> <meta> <deliver-to-parent>
+# the child's meta lock. Returns 0 when delivery is complete or nothing is
+# owed, and 1 when the parent channel needs a retry.
+report_child_ledger_locked() { # <id> <meta>
   local id=$1 meta=$2 status last previous state note pr mode yolo incarnation fingerprint predecessor_head outcome_key line
-  if ! stamp_completed_report_locked "$id" "$meta"; then
-    printf 'fm-inactive-reconcile: could not stamp the author on %s/report.md\n' "$id" >&2
-    publish_actionable "inactive-reconcile:report-author:$id" "could not stamp the author on $id/report.md" || true
-    return 1
-  fi
-  [ "$3" = 1 ] || return 0
   status="$STATE/$id.status"
   last=$(child_terminal_ledger_line "$status") || return 0
   state=$(status_line_verb "$last")
@@ -659,16 +697,15 @@ report_child_ledger_locked() { # <id> <meta> <deliver-to-parent>
   return 1
 }
 
-# Every direct child's ledger under its meta lock in a secondmate home, or
-# only tasks with a report in the main home. Failures queue their own notice.
-ledger_pass() { # <deliver-to-parent>
+# Every direct child's ledger under its meta lock in a secondmate home.
+# Delivery failures queue their own notice.
+ledger_pass() {
   local meta id lock
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     id=${meta##*/}
     id=${id%.meta}
     valid_id "$id" || continue
-    [ "$1" = 1 ] || [ -f "$DATA/$id/report.md" ] || continue
     [ "$(meta_field "$meta" kind)" != secondmate ] || continue
     lock=$(fm_meta_lock_path "$meta") || continue
     fm_lock_try_acquire "$lock" || continue
@@ -677,7 +714,7 @@ ledger_pass() { # <deliver-to-parent>
       fm_lock_release "$lock"
       continue
     fi
-    report_child_ledger_locked "$id" "$meta" "$1" || true
+    report_child_ledger_locked "$id" "$meta" || true
     fm_lock_release "$lock"
   done
 }
@@ -697,7 +734,9 @@ report_child() { # <id>
   meta="$STATE/$id.meta"
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   [ "$(meta_field "$meta" kind)" != secondmate ] || return 0
-  report_child_ledger_locked "$id" "$meta" "$deliver"
+  stamp_report_with_notice "$id" "$meta" || return 1
+  [ "$deliver" = 1 ] || return 0
+  report_child_ledger_locked "$id" "$meta"
 }
 
 task_holds_live_work() { # <id> <meta> <timeout> <last-status-line>; 0 when the verdict must be withheld, 3 on timeout
@@ -843,11 +882,10 @@ scan() {
   [ ! -L "$OUTCOME_DIR" ] || return 1
   if self=$(home_secondmate_id); then
     # The ledger-first delivery is per poll, not per cadence.
-    ledger_pass 1
+    ledger_pass
   else
     marker_rc=$?
     self=''
-    [ "$marker_rc" -ne 1 ] || ledger_pass 0
   fi
   if [ "$startup" != 1 ] && [ "$(scan_marker_age)" -lt "$FM_INACTIVE_RECONCILE_SECS" ]; then
     return 0
@@ -912,12 +950,31 @@ case "$mode" in
     elif [ "$?" -ne 124 ]; then
       exit 1
     fi
+    # Only launch the separately timed pass when an active record has a report.
+    for meta in "$STATE"/*.meta; do
+      [ -f "$meta" ] || continue
+      id=${meta##*/}
+      [ -f "$DATA/${id%.meta}/report.md" ] || continue
+      if fm_run_timed 1 "$0" _stamp-locked; then
+        :
+      elif [ "$?" -ne 124 ]; then
+        exit 1
+      fi
+      break
+    done
     ;;
   _scan-locked)
     [ "$#" -eq 2 ] || exit 2
     fm_lock_acquire_wait "$SCAN_LOCK" || exit 1
     trap 'fm_lock_release "$SCAN_LOCK"' EXIT
     scan "$2"
+    ;;
+  _stamp-locked)
+    fm_lock_try_acquire "$REPORT_CURSOR.lock" || exit 0
+    REPORT_META_LOCK=''
+    trap '[ -z "$REPORT_META_LOCK" ] || fm_lock_release "$REPORT_META_LOCK"; fm_lock_release "$REPORT_CURSOR.lock"' EXIT
+    trap 'exit 143' TERM
+    stamp_report_pass
     ;;
   report)
     if [ "$#" -ne 2 ] || ! valid_id "$2"; then

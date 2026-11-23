@@ -776,7 +776,7 @@ test_main_completed_reports_are_stamped_once() {
 }
 
 test_report_ignores_done_from_previous_launch() {
-  local report
+  local report at
   make_world report-after-relaunch
   mkdir -p "$MAIN/data/child"
   report="$MAIN/data/child/report.md"
@@ -791,7 +791,57 @@ test_report_ignores_done_from_previous_launch() {
   run_report "$MAIN" child || fail 'teardown-side stamping failed'
   printf '\nWritten by: provider/model-id default effort (pi-signed)\n' >> "$WORLD/initial-report"
   cmp -s "$report" "$WORLD/initial-report" || fail 'teardown reconciliation did not stamp the current launch'
+
+  for at in '' invalid 999999999999999999999999; do
+    printf '# Report\n' > "$report"
+    printf 'done [at=%s]: current launch completed\n' "$at" > "$MAIN/state/child.status"
+    run_report "$MAIN" child 2> "$WORLD/stamp.err" || fail 'a malformed completion time caused stamping to fail'
+    [ ! -s "$WORLD/stamp.err" ] || fail "a malformed completion time produced a diagnostic: $(cat "$WORLD/stamp.err")"
+    cmp -s "$report" "$WORLD/initial-report" || fail 'an unknown completion time suppressed attribution'
+  done
+  printf '# Report\n' > "$report"
+  printf 'spawn_gen=s999999999999999999999999.1.2\n' >> "$MAIN/state/child.meta"
+  printf 'done [at=2000000001]: current launch completed\n' > "$MAIN/state/child.status"
+  run_report "$MAIN" child 2> "$WORLD/stamp.err" || fail 'an out-of-range launch time caused stamping to fail'
+  [ ! -s "$WORLD/stamp.err" ] || fail "an out-of-range launch time produced a diagnostic: $(cat "$WORLD/stamp.err")"
+  cmp -s "$report" "$WORLD/initial-report" || fail 'an unknown launch time suppressed attribution'
   pass 'a relaunched worker must finish before its report can be attributed'
+}
+
+test_stalled_report_stamp_preserves_outcome_scan_and_resumes() {
+  local real_grep
+  make_world stamp-budget
+  write_child "$MAIN" outcome 'done: green'
+  write_child "$MAIN" x-stalled 'done: report complete'
+  write_child "$MAIN" z-ready 'done: report complete'
+  mkdir -p "$MAIN/data/"{x-stalled,z-ready}
+  printf 'Written by: Existing author\n' > "$MAIN/data/x-stalled/report.md"
+  printf '# Findings\n' > "$MAIN/data/z-ready/report.md"
+  real_grep=$(command -v grep)
+  cat > "$WORLD/fakebin/grep" <<'SH'
+#!/usr/bin/env bash
+case "${@: -1}" in
+  */x-stalled/report.md)
+    : > "$FM_STAMP_STALL_LOG"
+    sleep 30
+    ;;
+esac
+exec "$FM_STAMP_REAL_GREP" "$@"
+SH
+  chmod +x "$WORLD/fakebin/grep"
+
+  FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" \
+    FM_INACTIVE_RECONCILE_BUDGET_SECS=1 FM_FAKE_CREW_STATE=done run_reconcile "$MAIN" --startup \
+    || fail 'the first scan failed'
+  [ -f "$WORLD/stamp-stalled" ] || fail 'the report-read delay was not exercised'
+  grep -Fq 'child=outcome state=done' "$MAIN/state/.wake-queue" \
+    || fail 'the report pass prevented the inactive outcome scan'
+  FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" \
+    FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" \
+    || fail 'the follow-up scan failed'
+  grep -Fxq 'Written by: unrecorded model unrecorded effort (Codex)' "$MAIN/data/z-ready/report.md" \
+    || fail 'the report pass did not resume after the stalled read'
+  pass 'bounded report stamps preserve outcome reconciliation and resume after a stalled read'
 }
 
 # The remote route delivers the same line into this home's parent-replies
@@ -1130,7 +1180,10 @@ test_watcher_poll_delivers_child_ledger_line_to_parent() {
   i=0
   while [ "$i" -lt 100 ]; do
     kill -0 "$pid" 2>/dev/null || break
-    grep -q 'child-outcome-child-done' "$MAIN/state/mate.status" 2>/dev/null && break
+    if grep -q 'child-outcome-child-done' "$MAIN/state/mate.status" 2>/dev/null \
+      && grep -Fxq 'Written by: GPT-6.2 Sol high (Codex)' "$MATE/data/child/report.md"; then
+      break
+    fi
     sleep 0.1
     i=$((i + 1))
   done
@@ -1576,6 +1629,7 @@ test_long_terminal_lines_have_distinct_receipts
 test_secondmate_partial_ledger_line_waits_for_newline
 test_main_completed_reports_are_stamped_once
 test_report_ignores_done_from_previous_launch
+test_stalled_report_stamp_preserves_outcome_scan_and_resumes
 test_secondmate_remote_route_ledger_delivery
 test_report_subcommand_delivers_and_refuses
 test_pending_ledger_done_is_delivered_after_worktree_removal
