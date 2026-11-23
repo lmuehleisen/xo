@@ -797,7 +797,7 @@ SH
   FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
     || fail "teardown could not retry the stamp: $(cat "$case_dir/stderr")"
   grep -Fxq 'Written by: GPT-6.2 Sol high (Codex)' "$report" || fail 'the retry lost the recorded launch'
-  [ "$(backlog_row_state "$case_dir")" = done ] || fail 'the successful retry did not close the backlog'
+  [ "$(backlog_row_state "$case_dir")" = 'done' ] || fail 'the successful retry did not close the backlog'
   pass 'teardown preserves launch metadata until attribution succeeds and then closes the backlog'
 }
 

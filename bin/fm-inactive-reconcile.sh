@@ -530,7 +530,7 @@ stamp_completed_report_locked() { # <id> <meta>
   [ -f "$report" ] && [ ! -L "$report" ] && [ ! -L "$dir" ] || return 0
   case "$(fm_meta_get "$meta" kind)" in ship|scout) ;; *) return 0 ;; esac
   last=$(child_terminal_ledger_line "$status" worker) || return 0
-  [ "$(status_line_verb "$last")" = done ] || return 0
+  [ "$(status_line_verb "$last")" = 'done' ] || return 0
 
   # A relaunch can leave the previous worker's done in the status log.
   # Same-second timestamps cannot establish that done followed the launch.
