@@ -8,6 +8,11 @@
 #
 # This is an adjunct to the existing watcher poll loop and session-start path,
 # not a watcher, daemon, PR poll, or forge client of its own.
+# Each poll also stamps an existing ship or scout report when the worker's
+# latest declared event is a complete `done:` line. Under the task meta lock,
+# append one Written by line using the recorded launch harness, model, and
+# effort. Teardown's `report` entry point retries before retiring that record.
+#
 # In a secondmate home every `scan` invocation, which is every watcher poll,
 # first runs the LEDGER-FIRST parent delivery: a direct child whose status
 # ledger ends in a whole `done:` or `failed:` line has stated its own outcome,
@@ -126,6 +131,7 @@ export LC_ALL=C
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 OUTCOME_DIR="$STATE/terminal-outcomes"
 SCAN_MARKER="$STATE/.inactive-outcome-reconcile"
 SCAN_LOCK="$STATE/.inactive-outcome-reconcile.lock"
@@ -494,10 +500,14 @@ notice_parent_report_failed() { # <record> <fingerprint> <payload>
 # selected through the shared latest-event reader, so the ledger path owns a
 # terminal record whose continuation prose trails it, and an unfinished line of
 # ordinary prose withholds nothing.
-child_terminal_ledger_line() { # <status>
+child_terminal_ledger_line() { # <status> [worker]
   local status=$1 snapshot last marker='__FM_LEDGER_SNAPSHOT_END__'
   [ -f "$status" ] && [ ! -L "$status" ] && [ -s "$status" ] || return 1
-  last=$(last_status_line "$status")
+  if [ "${2:-}" = worker ]; then
+    last=$(last_crew_status_line "$status")
+  else
+    last=$(last_status_line "$status")
+  fi
   case "$(status_line_verb "$last")" in done|failed) ;; *) return 1 ;; esac
   snapshot=$(cat "$status"; printf '%s' "$marker") || return 1
   case "$snapshot" in
@@ -505,6 +515,66 @@ child_terminal_ledger_line() { # <status>
     "$last$marker"|*$'\n'"$last$marker") return 2 ;;
   esac
   printf '%s\n' "$last"
+}
+
+stamp_completed_report_locked() { # <id> <meta>
+  local id=$1 meta=$2 dir="$DATA/$1" report="$DATA/$1/report.md"
+  local status="$STATE/$1.status" last spawn_epoch done_epoch harness model effort separator=''
+  case "$id" in .|..) return 0 ;; esac
+  [ -f "$report" ] && [ ! -L "$report" ] && [ ! -L "$dir" ] || return 0
+  case "$(fm_meta_get "$meta" kind)" in ship|scout) ;; *) return 0 ;; esac
+  if grep -Eiq '^[[:blank:]]*([-*+][[:blank:]]+)?(Written by:|\*\*Written by:\*\*|\*\*Written by\*\*:)' "$report"; then
+    return 0
+  elif [ "$?" -ne 1 ]; then
+    return 1
+  fi
+  last=$(child_terminal_ledger_line "$status" worker) || return 0
+  [ "$(status_line_verb "$last")" = done ] || return 0
+
+  # A relaunch can leave the previous worker's done in the status log.
+  spawn_epoch=$(fm_meta_get "$meta" spawn_gen)
+  spawn_epoch=${spawn_epoch#s}
+  spawn_epoch=${spawn_epoch%%.*}
+  case "$spawn_epoch" in
+    ''|*[!0-9]*) ;;
+    *)
+      if done_epoch=$(status_line_at_epoch "$last") && [ "$spawn_epoch" -gt "$done_epoch" ]; then
+        return 0
+      fi
+      ;;
+  esac
+
+  harness=$(fm_meta_get "$meta" harness)
+  model=$(fm_meta_get "$meta" model)
+  effort=$(fm_meta_get "$meta" effort)
+  case "$harness" in
+    '') harness='unrecorded harness' ;;
+    default) harness='default harness' ;;
+    codex) harness=Codex ;;
+    claude) harness='Claude Code' ;;
+    kiro) harness=Kiro ;;
+  esac
+  case "$model" in
+    '') model='unrecorded model' ;;
+    default) model='default model' ;;
+    gpt-6.2-sol) model='GPT-6.2 Sol' ;;
+    claude-opus-5-5|claude-opus-5.5) model='Claude Opus 5.5' ;;
+  esac
+  case "$effort" in
+    '') effort='unrecorded effort' ;;
+    default) effort='default effort' ;;
+  esac
+  if [ -s "$report" ]; then
+    separator=$(tail -c 1 -- "$report") || return 1
+    if [ -n "$separator" ]; then
+      separator=$'\n\n'
+    else
+      separator=$'\n'
+    fi
+  fi
+  [ "$(last_crew_status_line "$status")" = "$last" ] || return 0
+  # Keep the worker's bytes and file in place, including on a retry.
+  printf '%sWritten by: %s %s (%s)\n' "$separator" "$model" "$effort" "$harness" >> "$report"
 }
 
 # Claim one already-delivered inactive fallback as the delivery of this ledger
@@ -534,11 +604,16 @@ claim_inactive_report_for_ledger() { # <task> <incarnation> <state> <ledger-fing
 }
 
 # The ledger-first parent delivery for one direct child, for a caller holding
-# the child's meta lock. Returns 0 when the line is delivered, already
-# delivered, or nothing is owed, and 1 when it is owed but the parent channel
-# could not be written (the notice is queued once per record).
-report_child_ledger_locked() { # <id> <meta>
-  local id=$1 meta=$2 status last previous state note pr mode yolo data incarnation fingerprint predecessor_head outcome_key line
+# the child's meta lock. Returns 0 when reconciliation is complete or nothing
+# is owed, and 1 when the author stamp or parent delivery needs a retry.
+report_child_ledger_locked() { # <id> <meta> <deliver-to-parent>
+  local id=$1 meta=$2 status last previous state note pr mode yolo incarnation fingerprint predecessor_head outcome_key line
+  if ! stamp_completed_report_locked "$id" "$meta"; then
+    printf 'fm-inactive-reconcile: could not stamp the author on %s/report.md\n' "$id" >&2
+    publish_actionable "inactive-reconcile:report-author:$id" "could not stamp the author on $id/report.md" || true
+    return 1
+  fi
+  [ "$3" = 1 ] || return 0
   status="$STATE/$id.status"
   last=$(child_terminal_ledger_line "$status") || return 0
   state=$(status_line_verb "$last")
@@ -568,12 +643,11 @@ report_child_ledger_locked() { # <id> <meta>
   note=$(clean_field "$(status_line_note "$last")")
   mode=$(clean_field "$(meta_field "$meta" mode)")
   yolo=$(clean_field "$(meta_field "$meta" yolo)")
-  data="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
   line="$state [key=$outcome_key]: child $id $state: $note"
   [ -z "$pr" ] || line="$line pr=$pr"
   [ -z "$mode" ] || line="$line mode=$mode"
   [ -z "$yolo" ] || line="$line yolo=$yolo"
-  if [ -f "$data/$id/report.md" ] && [ ! -L "$data/$id/report.md" ]; then
+  if [ -f "$DATA/$id/report.md" ] && [ ! -L "$DATA/$id/report.md" ]; then
     line="$line report=data/$id/report.md"
   fi
   if fm_parent_channel_report "$FM_HOME" "$STATE" "$line"; then
@@ -585,16 +659,16 @@ report_child_ledger_locked() { # <id> <meta>
   return 1
 }
 
-# Every direct child's ledger, under its meta lock. File reads, plus a local
-# git reachability check for a ship done: with no delivery record yet, so it
-# runs on every poll in a secondmate home; a delivery failure is already queued as a
-# notice and never fails the scan.
-ledger_pass() {
+# Every direct child's ledger under its meta lock in a secondmate home, or
+# only tasks with a report in the main home. Failures queue their own notice.
+ledger_pass() { # <deliver-to-parent>
   local meta id lock
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
-    id=$(basename "$meta" .meta)
+    id=${meta##*/}
+    id=${id%.meta}
     valid_id "$id" || continue
+    [ "$1" = 1 ] || [ -f "$DATA/$id/report.md" ] || continue
     [ "$(meta_field "$meta" kind)" != secondmate ] || continue
     lock=$(fm_meta_lock_path "$meta") || continue
     fm_lock_try_acquire "$lock" || continue
@@ -603,21 +677,27 @@ ledger_pass() {
       fm_lock_release "$lock"
       continue
     fi
-    report_child_ledger_locked "$id" "$meta" || true
+    report_child_ledger_locked "$id" "$meta" "$1" || true
     fm_lock_release "$lock"
   done
 }
 
 # The `report <task-id>` entry point: the caller holds the child's meta lock.
 report_child() { # <id>
-  local id=$1 meta rc=0
+  local id=$1 meta deliver=1 rc=0
   mkdir -p "$STATE" "$OUTCOME_DIR" || return 1
   [ ! -L "$OUTCOME_DIR" ] || return 1
-  home_secondmate_id >/dev/null || { rc=$?; [ "$rc" -eq 1 ] && return 0; return 1; }
+  if home_secondmate_id >/dev/null; then
+    :
+  else
+    rc=$?
+    [ "$rc" -eq 1 ] || return 1
+    deliver=0
+  fi
   meta="$STATE/$id.meta"
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   [ "$(meta_field "$meta" kind)" != secondmate ] || return 0
-  report_child_ledger_locked "$id" "$meta"
+  report_child_ledger_locked "$id" "$meta" "$deliver"
 }
 
 task_holds_live_work() { # <id> <meta> <timeout> <last-status-line>; 0 when the verdict must be withheld, 3 on timeout
@@ -763,10 +843,11 @@ scan() {
   [ ! -L "$OUTCOME_DIR" ] || return 1
   if self=$(home_secondmate_id); then
     # The ledger-first delivery is per poll, not per cadence.
-    ledger_pass
+    ledger_pass 1
   else
     marker_rc=$?
     self=''
+    [ "$marker_rc" -ne 1 ] || ledger_pass 0
   fi
   if [ "$startup" != 1 ] && [ "$(scan_marker_age)" -lt "$FM_INACTIVE_RECONCILE_SECS" ]; then
     return 0

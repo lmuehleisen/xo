@@ -729,16 +729,86 @@ test_secondmate_partial_ledger_line_waits_for_newline() {
   pass "a ledger line still being appended waits for its newline"
 }
 
+test_main_completed_reports_are_stamped_once() {
+  local report absence
+  make_world report-authors
+  mkdir -p "$MAIN/data/"{scout,existing,legacy,missing,archived}
+  report="$MAIN/data/scout/report.md"
+  printf '# Findings\n\nA report without a closing newline' > "$report"
+  fm_write_meta "$MAIN/state/scout.meta" \
+    'kind=scout' 'harness=codex' 'model=gpt-6.2-sol' 'effort=high'
+  printf 'working: editing\n' > "$MAIN/state/scout.status"
+  cp "$report" "$WORLD/initial-report"
+  run_reconcile "$MAIN" || fail 'scan failed before completion'
+  cmp -s "$report" "$WORLD/initial-report" || fail 'a working report was changed'
+  printf 'done: report written' >> "$MAIN/state/scout.status"
+  run_reconcile "$MAIN" || fail 'scan failed during a partial event'
+  cmp -s "$report" "$WORLD/initial-report" || fail 'an incomplete done event allowed stamping'
+  printf '\nresolved [key=review]: reviewed\n' >> "$MAIN/state/scout.status"
+
+  fm_write_meta "$MAIN/state/legacy.meta" 'kind=ship' 'model=default'
+  printf 'done: report written\n' > "$MAIN/state/legacy.status"
+  printf '# Legacy report\n' > "$MAIN/data/legacy/report.md"
+  fm_write_meta "$MAIN/state/existing.meta" 'kind=scout' 'model=other-model'
+  printf 'done: report written\n' > "$MAIN/state/existing.status"
+  printf '# Existing report\n\n- **Written by:** Existing author\n' > "$MAIN/data/existing/report.md"
+  cp "$MAIN/data/existing/report.md" "$WORLD/existing-report"
+  fm_write_meta "$MAIN/state/missing.meta" 'kind=ship'
+  printf 'done: no report\n' > "$MAIN/state/missing.status"
+  printf '# Archived report\n' > "$MAIN/data/archived/report.md"
+  cp "$MAIN/data/archived/report.md" "$WORLD/archived-report"
+
+  run_reconcile "$MAIN" || fail 'scan failed on completed reports'
+  printf '\n\nWritten by: GPT-6.2 Sol high (Codex)\n' >> "$WORLD/initial-report"
+  cmp -s "$report" "$WORLD/initial-report" || fail 'the scout report did not gain its recorded author'
+  grep -Fxq 'Written by: default model unrecorded effort (unrecorded harness)' "$MAIN/data/legacy/report.md" \
+    || fail 'a legacy launch did not distinguish default from unrecorded fields'
+  cmp -s "$MAIN/data/existing/report.md" "$WORLD/existing-report" || fail 'an existing author was changed'
+  cmp -s "$MAIN/data/archived/report.md" "$WORLD/archived-report" || fail 'an archived report was backfilled'
+  absence="$MAIN/data/missing/report.md"
+  assert_absent "$absence" 'a completion without a report created one'
+
+  printf 'model=other-model\n' >> "$MAIN/state/scout.meta"
+  run_reconcile "$MAIN" || fail 'repeated scan failed'
+  run_report "$MAIN" scout || fail 'teardown-side reconciliation failed'
+  cmp -s "$report" "$WORLD/initial-report" || fail 'a retry rewrote or duplicated the attribution'
+  pass 'completed main-home reports gain one launch attribution and preserve existing content'
+}
+
+test_report_ignores_done_from_previous_launch() {
+  local report
+  make_world report-after-relaunch
+  mkdir -p "$MAIN/data/child"
+  report="$MAIN/data/child/report.md"
+  fm_write_meta "$MAIN/state/child.meta" 'kind=ship' 'harness=pi-signed' \
+    'model=provider/model-id' 'effort=default' 'spawn_gen=s2000000000.1.2'
+  printf '# Report\n' > "$report"
+  cp "$report" "$WORLD/initial-report"
+  printf 'done [at=1999999999]: earlier launch completed\n' > "$MAIN/state/child.status"
+  run_reconcile "$MAIN" || fail 'scan failed on an earlier launch event'
+  cmp -s "$report" "$WORLD/initial-report" || fail 'an earlier launch event allowed stamping'
+  printf 'done [at=2000000001]: current launch completed\n' >> "$MAIN/state/child.status"
+  run_report "$MAIN" child || fail 'teardown-side stamping failed'
+  printf '\nWritten by: provider/model-id default effort (pi-signed)\n' >> "$WORLD/initial-report"
+  cmp -s "$report" "$WORLD/initial-report" || fail 'teardown reconciliation did not stamp the current launch'
+  pass 'a relaunched worker must finish before its report can be attributed'
+}
+
 # The remote route delivers the same line into this home's parent-replies
 # input, once.
 test_secondmate_remote_route_ledger_delivery() {
   make_world remote-ledger; bind_secondmate remote
   write_child "$MATE" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  printf 'harness=kiro\nmodel=claude-opus-5.5\neffort=xhigh\n' >> "$MATE/state/child.meta"
+  mkdir -p "$MATE/data/child"
+  printf '# Findings\n\n## Metadata\n' > "$MATE/data/child/report.md"
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
   [ "$(grep -c 'child-outcome-child-done' "$MATE/state/parent-replies.status")" = 1 ] \
     || fail "remote ledger delivery was not once-only: $(cat "$MATE/state/parent-replies.status" 2>/dev/null)"
-  pass "the remote route carries a child's ledger line once"
+  printf '# Findings\n\n## Metadata\n\nWritten by: Claude Opus 5.5 xhigh (Kiro)\n' > "$WORLD/expected-report"
+  cmp -s "$MATE/data/child/report.md" "$WORLD/expected-report" || fail 'the remote-home report was not stamped once'
+  pass "the remote route stamps the report and carries a child's ledger line once"
 }
 
 # A ship done: the gate accepted stays owed while its parent write is pending.
@@ -1047,6 +1117,9 @@ test_watcher_poll_delivers_child_ledger_line_to_parent() {
   local pid i key
   make_world watcher-ledger; bind_secondmate local
   write_child "$MATE" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  printf 'model=gpt-6.2-sol\neffort=high\n' >> "$MATE/state/child.meta"
+  mkdir -p "$MATE/data/child"
+  printf '# Findings\n' > "$MATE/data/child/report.md"
   prime_seen "$MATE/state" "$MATE/state/child.status"
   PATH="$WORLD/fakebin:$PATH" FM_HOME="$MATE" FM_STATE_OVERRIDE="$MATE/state" FM_DATA_OVERRIDE="$MATE/data" \
     FM_CONFIG_OVERRIDE="$MATE/config" FM_INACTIVE_RECONCILE_SECS=60 \
@@ -1063,10 +1136,12 @@ test_watcher_poll_delivers_child_ledger_line_to_parent() {
   done
   reap "$pid"
   key=$(reported_outcome_key "$MATE" child 'done') || fail "watcher ledger receipt key missing"
-  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
+  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off report=data/child/report.md" \
     || fail "the watcher poll did not deliver the child's ledger line to the parent: $(cat "$MAIN/state/mate.status" 2>/dev/null; cat "$WORLD/mate-watch.out")"
+  grep -Fxq 'Written by: GPT-6.2 Sol high (Codex)' "$MATE/data/child/report.md" \
+    || fail "the watcher poll did not stamp the local secondmate report"
   [ ! -s "$WORLD/forge.log" ] || fail "ledger delivery invoked a forge command"
-  pass "the real watcher poll delivers a child's terminal ledger line to the parent channel"
+  pass "the real watcher poll stamps the report and delivers the child's terminal ledger line"
 }
 
 # A stalled authoritative state read consumes only the aggregate scan budget.
@@ -1499,6 +1574,8 @@ test_terminal_line_after_inactive_delivery_is_not_reported_twice
 test_progress_after_inactive_delivery_starts_a_new_event
 test_long_terminal_lines_have_distinct_receipts
 test_secondmate_partial_ledger_line_waits_for_newline
+test_main_completed_reports_are_stamped_once
+test_report_ignores_done_from_previous_launch
 test_secondmate_remote_route_ledger_delivery
 test_report_subcommand_delivers_and_refuses
 test_pending_ledger_done_is_delivered_after_worktree_removal
