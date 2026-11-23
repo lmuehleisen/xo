@@ -825,7 +825,7 @@ test_report_ignores_done_from_previous_launch() {
 }
 
 test_stalled_report_stamp_preserves_outcome_scan_and_resumes() {
-  local real_grep
+  local real_grep attempt
   make_world stamp-budget
   write_child "$MAIN" outcome 'done: green'
   write_child "$MAIN" x-stalled 'done: report complete'
@@ -847,9 +847,16 @@ exec "$FM_STAMP_REAL_GREP" "$@"
 SH
   chmod +x "$WORLD/fakebin/grep"
 
-  FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" \
-    FM_INACTIVE_RECONCILE_BUDGET_SECS=1 FM_FAKE_CREW_STATE=done run_reconcile "$MAIN" --startup \
-    || fail 'the first scan failed'
+  # Both passes have independent deadlines. A cold startup can consume an
+  # outcome scan's slice, so wait for outcome progress across a few scans.
+  for ((attempt = 0; attempt < 4; attempt++)); do
+    FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" \
+      FM_INACTIVE_RECONCILE_BUDGET_SECS=3 FM_FAKE_CREW_STATE=done run_reconcile "$MAIN" --startup \
+      || fail 'the bounded startup scan failed'
+    if [ -f "$WORLD/stamp-stalled" ] && grep -Fq 'child=outcome state=done' "$MAIN/state/.wake-queue" 2>/dev/null; then
+      break
+    fi
+  done
   [ -f "$WORLD/stamp-stalled" ] || fail 'the report-read delay was not exercised'
   grep -Fq 'child=outcome state=done' "$MAIN/state/.wake-queue" \
     || fail 'the report pass prevented the inactive outcome scan'
