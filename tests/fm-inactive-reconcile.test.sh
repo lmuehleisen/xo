@@ -841,6 +841,7 @@ case "${@: -1}" in
     : > "$FM_STAMP_STALL_LOG"
     sleep 30
     ;;
+  */z-ready/report.md) sleep 2 ;;
 esac
 exec "$FM_STAMP_REAL_GREP" "$@"
 SH
@@ -857,7 +858,7 @@ SH
     || fail 'the report pass did not reach the ready report after the stalled read'
   grep -Fxq 'Written by: unrecorded model unrecorded effort (Codex)' "$MAIN/data/z-ready/report.md" \
     || fail 'the report pass did not resume after the stalled read'
-  pass 'bounded report stamps preserve outcome reconciliation and resume after a stalled read'
+  pass 'bounded report stamps preserve outcome reconciliation and allow a slow first read to finish'
 }
 
 test_failed_worker_does_not_read_its_report() {

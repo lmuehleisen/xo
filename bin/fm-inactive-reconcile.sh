@@ -9,9 +9,11 @@
 #
 # This is an adjunct to the existing watcher poll loop and session-start path,
 # not a watcher, daemon, PR poll, or forge client of its own.
-# After outcome reconciliation each poll gives report stamping a separate
-# one-second budget. The report cursor resumes after the last attempted task
-# if a read stalls or a batch exhausts that budget. A complete worker `done:`
+# After outcome reconciliation, report stamping starts one attempt before
+# the one-second batch limit applies. The separate processing timeout is the
+# configured reconciliation budget with a minimum of ten seconds, so a stalled
+# report cannot block a poll. The cursor resumes after the last attempted task
+# when either limit is reached. A complete worker `done:`
 # event lets the pass append one Written by line using the recorded launch
 # harness, model, and effort under the task meta lock. Teardown's `stamp`
 # entry point requires that lock and retries before committing backlog close.
@@ -595,7 +597,7 @@ stamp_report_with_notice() { # <id> <meta>, caller holds task meta lock
 # Checkpoint before touching a report, so the next poll can reach later tasks
 # even when the hard timeout cut this one off. Reaching the end wraps the pass.
 stamp_report_pass() {
-  local cursor='' meta id lock tmp
+  local cursor='' meta id lock tmp attempted=0 started=$SECONDS
   [ ! -d "$REPORT_CURSOR" ] || return 1
   if [ -f "$REPORT_CURSOR" ] && [ ! -L "$REPORT_CURSOR" ]; then
     IFS= read -r cursor < "$REPORT_CURSOR" || cursor=''
@@ -606,11 +608,15 @@ stamp_report_pass() {
     id=${meta##*/}
     id=${id%.meta}
     valid_id "$id" && [[ "$id" > "$cursor" ]] && [ -f "$DATA/$id/report.md" ] || continue
+    if [ "$attempted" = 1 ] && [ "$((SECONDS - started))" -ge 1 ]; then
+      return 0
+    fi
     tmp=$(mktemp "$REPORT_CURSOR.XXXXXX") || return 1
     if ! printf '%s\n' "$id" > "$tmp" || ! mv -f -- "$tmp" "$REPORT_CURSOR"; then
       rm -f -- "$tmp"
       return 1
     fi
+    attempted=1
     lock=$(fm_meta_lock_path "$meta") || continue
     fm_lock_try_acquire "$lock" || continue
     REPORT_META_LOCK=$lock
@@ -949,7 +955,9 @@ case "$mode" in
       [ -f "$meta" ] || continue
       id=${meta##*/}
       [ -f "$DATA/${id%.meta}/report.md" ] || continue
-      if fm_run_timed 1 "$0" _stamp-locked; then
+      stamp_timeout=$FM_INACTIVE_RECONCILE_BUDGET_SECS
+      [ "$stamp_timeout" -ge 10 ] || stamp_timeout=10
+      if fm_run_timed "$stamp_timeout" "$0" _stamp-locked; then
         :
       elif [ "$?" -ne 124 ]; then
         exit 1
