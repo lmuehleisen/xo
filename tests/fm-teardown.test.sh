@@ -780,14 +780,24 @@ test_teardown_attribution_failure_leaves_no_close_marker() {
   real_grep=$(command -v grep)
   cat > "$case_dir/fakebin/grep" <<'SH'
 #!/usr/bin/env bash
-case "${@: -1}" in */task-x1/report.md) exit 2 ;; esac
+case "${@: -1}" in
+  */task-x1/report.md)
+    : > "$FM_STAMP_TEST_START"
+    sleep 30
+    : > "$FM_STAMP_TEST_END"
+    exit 2
+    ;;
+esac
 exec "$FM_STAMP_REAL_GREP" "$@"
 SH
   chmod +x "$case_dir/fakebin/grep"
 
-  FM_HOME="$case_dir" FM_STAMP_REAL_GREP="$real_grep" run_teardown "$case_dir" \
+  FM_HOME="$case_dir" FM_STAMP_REAL_GREP="$real_grep" FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    FM_STAMP_TEST_START="$case_dir/stamp-start" FM_STAMP_TEST_END="$case_dir/stamp-end" run_teardown "$case_dir" \
     > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  expect_code 1 "$rc" "a failed report stamp should stop teardown: $(cat "$case_dir/stderr")"
+  expect_code 1 "$rc" "a timed-out report stamp should stop teardown: $(cat "$case_dir/stderr")"
+  assert_present "$case_dir/stamp-start" 'teardown did not exercise the stalled read'
+  assert_absent "$case_dir/stamp-end" 'teardown let the stalled read finish instead of timing it out'
   assert_grep 'retaining its task record and backlog item for retry' "$case_dir/stderr" \
     'teardown did not identify attribution as the failure'
   assert_present "$case_dir/state/task-x1.meta" 'the failed stamp removed the launch metadata'

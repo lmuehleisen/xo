@@ -11,8 +11,8 @@
 # not a watcher, daemon, PR poll, or forge client of its own.
 # After outcome reconciliation, report stamping starts one attempt before
 # the one-second batch limit applies. Each stamp runs with the configured
-# reconciliation timeout, with a minimum of ten seconds. The caller holds
-# both locks outside that timeout and advances the cursor past a stalled read.
+# reconciliation timeout, with a minimum of ten seconds. Its caller holds
+# locks outside that timeout, and the poll advances past a stalled read.
 # A complete worker `done:`
 # event lets the pass append one Written by line using the recorded launch
 # harness, model, and effort under the task meta lock. Teardown's `stamp`
@@ -587,10 +587,16 @@ stamp_completed_report_locked() { # <id> <meta>
   printf '%sWritten by: %s %s (%s)\n' "$separator" "$model" "$effort" "$harness" >> "$report"
 }
 
+stamp_report() { # <id>, caller holds task meta lock
+  local timeout=$FM_INACTIVE_RECONCILE_BUDGET_SECS
+  [ "$timeout" -ge 10 ] || timeout=10
+  fm_run_timed "$timeout" "$0" _stamp "$1"
+}
+
 # Checkpoint before touching a report so a timeout cannot starve later tasks.
 # Only the report I/O runs in the timed process group.
-stamp_report_pass() ( # <stamp-timeout>
-  local timeout=$1 cursor='' meta id lock tmp attempted=0 started=$SECONDS
+stamp_report_pass() (
+  local cursor='' meta id lock tmp attempted=0 started=$SECONDS
   fm_lock_try_acquire "$REPORT_CURSOR.lock" || return 0
   trap 'fm_lock_release "$REPORT_CURSOR.lock"' EXIT
   [ ! -d "$REPORT_CURSOR" ] || return 1
@@ -614,7 +620,7 @@ stamp_report_pass() ( # <stamp-timeout>
     attempted=1
     lock=$(fm_meta_lock_path "$meta") || continue
     fm_lock_try_acquire "$lock" || continue
-    fm_run_timed "$timeout" "$0" stamp "$id" || true
+    stamp_report "$id" || true
     fm_lock_release "$lock"
   done
   rm -f -- "$REPORT_CURSOR"
@@ -946,9 +952,7 @@ case "$mode" in
       [ -f "$meta" ] || continue
       id=${meta##*/}
       [ -f "$DATA/${id%.meta}/report.md" ] || continue
-      stamp_timeout=$FM_INACTIVE_RECONCILE_BUDGET_SECS
-      [ "$stamp_timeout" -ge 10 ] || stamp_timeout=10
-      stamp_report_pass "$stamp_timeout" || exit 1
+      stamp_report_pass || exit 1
       break
     done
     ;;
@@ -958,10 +962,14 @@ case "$mode" in
     trap 'fm_lock_release "$SCAN_LOCK"' EXIT
     scan "$2"
     ;;
-  stamp)
+  stamp|_stamp)
     if [ "$#" -ne 2 ] || ! valid_id "$2"; then
       printf 'usage: fm-inactive-reconcile.sh stamp <task-id>\n' >&2
       exit 2
+    fi
+    if [ "$mode" = stamp ]; then
+      stamp_report "$2"
+      exit "$?"
     fi
     meta="$STATE/$2.meta"
     [ -f "$meta" ] && [ ! -L "$meta" ] || exit 0
