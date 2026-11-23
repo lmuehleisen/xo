@@ -106,8 +106,8 @@ Each effective `FM_HOME` contains private operational directories.
 `state/` holds runtime records:
 
 - Task metadata, append-only status events, and endpoint signals.
-- Private dispatch call history in `state/dispatch-history.jsonl` (`bin/fm-dispatch-history-lib.sh` owns its format and best-effort writes).
-  Use [`bin/fm-dispatch-history.sh report`](../bin/fm-dispatch-history.sh) to compare recommendations with actual launches and see outcome counts.
+- Private dispatch call history in `state/dispatch-history.jsonl` (`bin/fm-dispatch-history-lib.sh` owns its format and best-effort writes, including the routing outcome a completed cleanup appends).
+  Use [`bin/fm-dispatch-history.sh report`](../bin/fm-dispatch-history.sh) to compare recommendations with actual launches, see outcome counts, and compare router, [top-lane check](#top-lane-check-lane_check), and final lanes against cleanup outcomes.
   Override reasons are stored in this private log beyond task cleanup, so keep them free of secrets and brief text.
 - Watcher and wake-queue coordination, away-mode state, and generated Relay artifacts.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
@@ -2324,6 +2324,53 @@ Every class route is evaluated like a profile, with a class's `unmetered` flag r
 `fm-spawn.sh` records `model_family=` in task meta when the launched harness and model match a class route, which is the family a later second opinion excludes; a launch outside every class records none and is never refused for it.
 Experiments such as evaluation runs or calibration arms are exempt from lanes and launch with explicit `--harness`, `--model`, and `--effort` flags.
 
+<a id="top-lane-check-lane_check"></a>
+
+### Top-lane check (lane_check)
+
+An optional top-level `lane_check` names the lanes that need a second look before a task enters them, and the strong model that gives it.
+[`docs/examples/crew-dispatch-lanes.json`](examples/crew-dispatch-lanes.json) declares one.
+
+```json
+"lane_check": {
+  "top_lanes": ["judgment", "technical-deep"],
+  "harness": "claude",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "timeout_seconds": 15
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `top_lanes` | Required non-empty list of declared lane names the check gates. |
+| `harness` | Required; `claude` or `codex`. |
+| `model` | Required model id for that harness, such as `claude-opus-5-5`, or `gpt-6.2-sol` with `codex`. |
+| `effort` | Optional; `low`, `medium`, `high`, or `xhigh`, plus `max` for `claude`; omitted means the harness default. |
+| `timeout_seconds` | Optional whole number from 1 through 30; default 15. |
+| `why` | Optional rationale string. |
+
+Bootstrap and the resolver report an invalid block like any other malformed lane.
+
+**What the check does**
+
+- Every [typed dispatch resolution](#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model) run, router or `--lane`, starts one checker call beside the router request and quota read; a second opinion also records its shadow and keeps the originating lane.
+- The checker sees the same task text the router sees, the project name, and each lane's name, `when` text, model class names, and captain-approval flag, under fixed guided instructions; it never sees quota, routes, `why` text, or data policies.
+  [`bin/fm-dispatch-check-lib.sh`](../bin/fm-dispatch-check-lib.sh) owns that prompt, the bounded call, and the answer it accepts.
+- The history records the shadow even if the router lacks a key or its request fails.
+  Agreement counts include only pairs with an attributable pick from each side.
+  A fresh answer shows the checker's one-sentence explanation. The cache and history retain its chosen reason from a fixed list, so an explanation quoting the brief stays out of both files.
+- It acts only when the selected lane is in `top_lanes`: the router's lane after any floor fallback, a supervisor's `--lane`, or the top option of an unsure (`ambiguous`) result.
+  When both lanes are free of approval requirements and its pick is a declared lane outside `top_lanes`, that lane resolves instead, so an unsure result with a top lane in contention can come back `clear`.
+- Include every lane that needs top-tier protection in `top_lanes`. A pick inside that set or requiring approval leaves the selection in place. Every ungated lane outside the set counts as lower, regardless of its position in the rules. A selection outside the set keeps its lane, including standard when the shadow picks scoped.
+- `--keep-lane <reason>` keeps the selected lane and records the reason beside the pick; a captain's explicit lane or model choice for the task is such a reason.
+- A check that cannot run leaves the selected lane standing and says why: the harness is not installed on this host, the never-send list below matched (nothing sent), the harness exited nonzero (for example a missing login or exhausted quota), the timeout passed, or the answer lacked a valid lane or reason.
+  Dispatch never waits longer than `timeout_seconds` for it and is never blocked by it.
+- A successful pick for a `data/<id>/brief.md` brief is cached in `data/<id>/dispatch-check.json` under a digest of the checker and the whole prompt, so the `--lane` rerun after an unsure result reuses it, and any change to the brief or lane text asks again.
+
+Each run adds one `lane_check:` line to the resolver output, plus `lane_check_reason:` with a pick; the [resolver header](../bin/fm-dispatch-resolve.sh) owns the line formats, and the task record and dispatch history carry the same decision.
+Secondmate homes inherit `lane_check` with the rest of this file, and each home runs its checker on its own host, so a remote home needs the named harness installed and logged in there; without it the check reports that it did not run and the lane stands.
+
 <a id="typed-dispatch-resolution-env-typesafe_api_key"></a>
 <a id="typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model"></a>
 
@@ -2348,7 +2395,7 @@ The selected provider needs a non-empty key from the environment, else `.env`, e
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 A declared credential source that cannot supply its key is not off; see "Credential source declaration" below.
-A named `--lane` sends no request and runs without a provider key.
+A named `--lane` skips the router request and runs without a router key. A configured checker can still receive the task text after its never-send scan.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared top-level, rule, and profile fields it applies.
 
 Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFIG_OVERRIDE` selects the config directory for tests and specialized setup like the other scripts.
@@ -2389,6 +2436,7 @@ Example Client Ltd
 ```
 
 Before the request is sent, the endpoint URL and every string in the final provider-specific request body are checked, including strings inside JSON text such as OpenAI's `input`: the selected model, the project name, the task text, each rule's `when`, and the fixed question text.
+The [top-lane check](#top-lane-check-lane_check) applies the same list to its whole prompt, and a match there sends nothing to the checker and leaves the selected lane standing.
 A match stops the request: the resolver behaves exactly as when it is off, printing one `dispatch-resolve: off (...; nothing sent)` line on stderr and nothing on stdout, making no network or quota call, and exiting 0, so firstmate dispatches through its existing intake.
 A list that is present but not a readable regular file also stops the request the same way rather than sending unchecked text.
 That one diagnostic names the list line number at most and never prints the listed value or the matching text.
@@ -2452,14 +2500,16 @@ Pools are never summed, so Devin's free SWE-2 routes never bind the paid plan al
 When the picked rule is a lane, code resolves its classes as [Lanes and model classes](#lanes-and-model-classes) describes, from the same quota snapshot and completion horizon.
 
 ```sh
-bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name> --lane <lane> [--data-tag <tag>]... [--exclude-family <family>]
+bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name> --lane <lane> [--data-tag <tag>]... [--exclude-family <family>] [--keep-lane <reason>]
 ```
 
-- `--lane <name>` resolves that lane rule directly, with no Choice request, so it needs no API key, sends nothing, and makes no call besides the one quota read.
+- `--lane <name>` resolves that lane rule directly, with no Choice request, so it needs no router API key.
+  It still reads quota and runs any configured top-lane check.
 - `--data-tag <tag>` names a data tag the task carries, repeatable; a class's data policy admits or refuses the task from the project and these tags.
 - `--exclude-family <family>` asks for a second opinion: it drops every class of that family and every experiment class, and escalates when the resolved rule is not a lane.
 
 Lane output adds a `lane:` line, one `experiment:` line per experiment class with its sampling result, each candidate's class and family, and a `class:` line naming the chosen class, its family, and whether it is an experiment.
+With a [`lane_check`](#top-lane-check-lane_check) declared, a `lane_check:` line follows the `lane:` line, and `--keep-lane <reason>` keeps a top lane the check picked lower.
 A lane's `approval` gate escalates with every candidate printed, so the captain sees the routes before giving the per-task word.
 
 **Outcomes and exit status**
@@ -2488,6 +2538,7 @@ Firstmate passes its profile line unless it states a reason to override, such as
 
 For a brief at `data/<id>/brief.md`, or `<FM_DATA_OVERRIDE>/<id>/brief.md` when that override is set, each run first removes that task's `dispatch-resolution.json`, so a decision never outlives a later run.
 Every outcome that exits 0, including off, then writes a task record with the decision and available router evidence, as defined in the [`fm-dispatch-resolve.sh` header](../bin/fm-dispatch-resolve.sh).
+Its `resolution_id` also keys that run's dispatch history entry, and `fm-spawn.sh` copies it into the launch's history entry, so each launch pairs with the exact resolution it followed.
 On `clear`, `profile` holds `harness`, `model`, and `effort`, each `null` when the chosen profile leaves it unset; otherwise `profile` is `null`.
 A usage or configuration error (exit 2) writes no record.
 `fm-spawn.sh` reads this record as the task's decision, as "Per-launch overrides and inherited defaults" describes.

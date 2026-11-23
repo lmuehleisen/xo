@@ -9,7 +9,8 @@
 #
 # FM_DISPATCH_LANES_JQ is jq program text to prepend to a consumer program:
 #   dispatch_lanes_error      on the config object: the first structural lane,
-#                             class, or data-policy error as a string, or empty.
+#                             class, data-policy, or lane_check error as a
+#                             string, or empty.
 #   dispatch_class_routes     on the config object: every class route profile,
 #                             so a consumer's own harness, effort, provider, and
 #                             floor checks cover class routes too.
@@ -44,6 +45,30 @@ FM_DISPATCH_LANES_JQ='
       or ((.floor.min_percent | type) != "number") or (.floor.min_percent < 0) or (.floor.min_percent > 100)
       or (.floor | has("provider"))));
   def dl_policy_tags($p): (($p.allow_tags // []) + ($p.deny_tags // []));
+  # The optional top-lane check (bin/fm-dispatch-check-lib.sh runs it).
+  def dl_lane_check_error($lane_names):
+    (.lane_check // null) as $c |
+    if has("lane_check") | not then empty
+    elif ($c | type) != "object" then "lane_check must be an object"
+    elif (($c | keys) - ["top_lanes", "harness", "model", "effort", "timeout_seconds", "why"]) | length > 0 then
+      "unknown lane_check field: " + (($c | keys) - ["top_lanes", "harness", "model", "effort", "timeout_seconds", "why"] | join(", "))
+    elif ($c.top_lanes | type) != "array" or ($c.top_lanes | length) == 0 or any($c.top_lanes[]; dl_name | not) then
+      "lane_check top_lanes must be a non-empty array of lane names"
+    elif ($c.top_lanes | length) != ($c.top_lanes | unique | length) then "lane_check top_lanes must not repeat a lane"
+    elif any($c.top_lanes[]; . as $l | $lane_names | index($l) | not) then
+      "lane_check top_lanes names an undeclared lane: " + ([$c.top_lanes[] | . as $l | select($lane_names | index($l) | not)] | join(", "))
+    elif ($c.harness | IN("claude", "codex")) | not then "lane_check harness must be claude or codex"
+    elif ($c.model | type) != "string" or ($c.model | length) == 0 then "lane_check needs a non-empty model"
+    elif ($c | has("effort")) and (
+        ($c.harness == "claude" and ($c.effort | IN("low", "medium", "high", "xhigh", "max") | not))
+        or ($c.harness == "codex" and ($c.effort | IN("low", "medium", "high", "xhigh") | not))) then
+      "lane_check effort must be low, medium, high, xhigh, or (claude only) max"
+    elif ($c | has("timeout_seconds")) and (
+        ($c.timeout_seconds | type) != "number" or $c.timeout_seconds < 1 or $c.timeout_seconds > 30
+        or $c.timeout_seconds != ($c.timeout_seconds | floor)) then
+      "lane_check timeout_seconds must be a whole number from 1 through 30"
+    elif ($c | has("why")) and ($c.why | type) != "string" then "lane_check why must be a string"
+    else empty end;
   def dispatch_lanes_error:
     dl_classes as $classes |
     (.live_cap_groups // {}) as $groups |
@@ -126,7 +151,7 @@ FM_DISPATCH_LANES_JQ='
     elif ([$classes[] | .family as $f | .routes[] | {k: ([.harness, (.model // null)] | @json), f: $f}]
           | group_by(.k) | any(.[]; (map(.f) | unique | length) > 1)) then
       "a harness and model routed by more than one class must keep one family"
-    else empty end;
+    else dl_lane_check_error([$lanes[].lane]) end;
 '
 
 fm_dispatch_model_family() {

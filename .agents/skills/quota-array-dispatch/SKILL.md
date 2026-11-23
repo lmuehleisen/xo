@@ -182,10 +182,12 @@ Never conclude with an unexplained "best quota" label.
 
 When `config/crew-dispatch.json` declares lane rules, the configuration chooses the model class and code chooses the provider route; [Lanes and model classes](../../../docs/configuration.md#lanes-and-model-classes) owns the schema and semantics.
 
-- Choose the lane, never a route: take the lane the resolver's Choice answer matched, or, when the key is off or the lane is already clear, pick the lane by judgment and run `bin/fm-dispatch-resolve.sh <brief> --project <name> --lane <lane>`, which needs no key and sends nothing.
+- Choose the lane from the resolver's Choice answer. When the router key is off or the lane is already clear, pick the lane by judgment and run `bin/fm-dispatch-resolve.sh <brief> --project <name> --lane <lane>`. Direct selection needs no router key. A configured checker can still receive the task text after the never-send scan permits it.
 - Pass one `--data-tag` for each data tag the task carries, so a class's data policy admits or refuses it in code; when the task's data is unclear, pass no allow tag and let the policy refuse.
 - An allow tag reserved for one-off exceptions is passed only on the captain's word for that task.
 - A `clear` lane result has applied eligibility, floors, and runway to every route, but the reasoning-class gate above remains yours.
+- When the rules declare a [top-lane check](../../../docs/configuration.md#top-lane-check-lane_check), read `lane:` for the selected lane and `lane_check:` for the checker's action.
+  Route your own top-lane pick, such as one after an unsure result, through `--lane` so the check covers it, and keep a top lane against the check only with `--keep-lane <reason>` on the resolver, for example the captain's explicit lane or model choice for that task, never by a bare `--dispatch-override` at spawn.
 - A lane gated by `approval` escalates with its candidates; launch it only on the captain's word for that task.
 - For a second opinion, read `model_family=` from the originating task's `state/<id>.meta` and resolve the same lane with `--exclude-family <family>`; when the origin recorded no family, ask rather than guess one.
 - A chosen class marked `experiment` is a trial route: note it in the backlog item, and flag the trial when relaying its result so the comparison stays visible.

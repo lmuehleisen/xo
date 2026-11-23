@@ -767,6 +767,38 @@ test_teardown_closes_the_backlog_item_itself() {
   pass "teardown closes its own backlog item before reporting success"
 }
 
+test_teardown_records_the_routing_outcome() {
+  local pr_state=$1 expected=$2 ref=$3 case_dir out history review_head
+  case_dir=$(make_case "routing-outcome-$pr_state-$expected")
+  write_meta "$case_dir" no-mistakes ship
+  printf 'branch-only change\n' > "$case_dir/wt/feature"
+  git -C "$case_dir/wt" add feature
+  wt_commit "$case_dir"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  seed_backlog_in_flight "$case_dir"
+  history="$case_dir/state/dispatch-history.jsonl"
+  printf '%s\n' '{"kind":"spawn","time":1,"task_id":"task-x1","harness":"claude","relaunch":false}' \
+    '{"kind":"spawn","time":2,"task_id":"task-x1","harness":"claude","relaunch":true}' > "$history"
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+if [ "$1 $2" = 'pr view' ] && [[ "$*" == *'--json state,reviews'* ]]; then
+  printf '%s\t3\t2\t%s\n' "$REVIEW_STATE" "$REVIEW_HEAD"
+else
+  exit 1
+fi
+SH
+  review_head=$(git -C "$case_dir/wt" rev-parse "$ref")
+  out=$(REVIEW_STATE="$pr_state" REVIEW_HEAD="$review_head" FM_HOME="$case_dir" run_teardown "$case_dir") || fail "routing-outcome: teardown failed: $out"
+  tail -n 1 "$history" | jq -e --arg state "$pr_state" --arg result "$expected" '
+    .kind == "outcome" and .task_id == "task-x1" and .task_kind == "ship" and
+    .result == $result and .pr == "https://github.com/example/repo/pull/7" and .relaunches == 1 and
+    .pr_state == $state and .reviews == 3 and .review_rounds == 2 and (.time | type) == "number"' >/dev/null \
+    || fail "routing-outcome: expected $expected for $pr_state at $ref: $(tail -n 1 "$history")"
+  assert_no_grep 'teardown fixture task' "$history" "routing-outcome: the outcome stores no task text"
+  pass "teardown records $expected for a pushed task with PR state $pr_state at $ref"
+}
+
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note() {
   local case_dir out real_tasks_axi gerrit_url=https://gerrit.example.com/c/project/+/12345
   case_dir=$(make_case tasks-axi-close-gerrit)
@@ -5553,8 +5585,8 @@ test_lsof_absent_gone_window_never_reaps_another_pane() {
   # session's active pane with exit 0, so an unguarded pane_pid read resolves
   # to the victim's process and a group reap kills another task's pane.
   # The socket path must stay short (unix socket name limit), so it lives at
-  # /tmp rather than inside the deep per-case fixture dir.
-  sock="/tmp/fm-td-gone-$$.sock"
+  # the runner's private socket directory rather than the deep case directory.
+  sock="${TMUX_TMPDIR:-/tmp}/fm-td-gone-$$.sock"
   rm -f "$sock"
   env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" \
     new-session -d -s firstmate -n fm-other-task 'sleep 300' \
@@ -5727,8 +5759,8 @@ test_lsof_absent_replaced_window_never_reaps() {
   # the pane_pid read must be addressed to @5, which resolves to nothing, so
   # the replacement's group is never signaled through the fallback. The
   # socket path must stay short (unix socket name limit), so it lives at
-  # /tmp rather than inside the deep per-case fixture dir.
-  sock="/tmp/fm-td-repl-$$.sock"
+  # the runner's private socket directory rather than the deep case directory.
+  sock="${TMUX_TMPDIR:-/tmp}/fm-td-repl-$$.sock"
   rm -f "$sock"
   env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$sock" \
     new-session -d -s firstmate -n fm-task-x1 'sleep 300' \
@@ -6961,6 +6993,9 @@ test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
+test_teardown_records_the_routing_outcome OPEN unknown HEAD
+test_teardown_records_the_routing_outcome MERGED landed HEAD
+test_teardown_records_the_routing_outcome MERGED unknown HEAD^
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note
 test_teardown_closes_a_gitlab_task_with_its_merge_request_url_as_a_note
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
