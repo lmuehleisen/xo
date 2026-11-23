@@ -122,6 +122,20 @@ run_reconcile() { # <home> [--startup]
     FM_FORGE_LOG="$WORLD/forge.log" "$RECON" scan ${option:+"$option"}
 }
 
+reconcile_until_reports_stamped() { # <home> <child>...
+  local home=$1 attempt id waiting
+  shift
+  for ((attempt = 0; attempt < 8; attempt++)); do
+    run_reconcile "$home" || return 1
+    waiting=0
+    for id in "$@"; do
+      grep -q '^Written by: ' "$home/data/$id/report.md" || waiting=1
+    done
+    [ "$waiting" = 1 ] || return 0
+  done
+  return 1
+}
+
 # Teardown-side entry points for a caller holding the child's meta lock.
 run_report() { # <home> <child> [report|stamp]
   local home=$1 child=$2 action=${3:-report}
@@ -757,7 +771,7 @@ test_main_completed_reports_are_stamped_once() {
   printf '# Archived report\n' > "$MAIN/data/archived/report.md"
   cp "$MAIN/data/archived/report.md" "$WORLD/archived-report"
 
-  run_reconcile "$MAIN" || fail 'scan failed on completed reports'
+  reconcile_until_reports_stamped "$MAIN" scout legacy || fail 'completed reports did not gain attribution across bounded polls'
   printf '\n\nWritten by: GPT-6.2 Sol high (Codex)\n' >> "$WORLD/initial-report"
   cmp -s "$report" "$WORLD/initial-report" || fail 'the scout report did not gain its recorded author'
   grep -Fxq 'Written by: default model unrecorded effort (unrecorded harness)' "$MAIN/data/legacy/report.md" \
@@ -839,8 +853,8 @@ SH
   grep -Fq 'child=outcome state=done' "$MAIN/state/.wake-queue" \
     || fail 'the report pass prevented the inactive outcome scan'
   FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" \
-    FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" \
-    || fail 'the follow-up scan failed'
+    FM_INACTIVE_RECONCILE_BUDGET_SECS=1 reconcile_until_reports_stamped "$MAIN" z-ready \
+    || fail 'the report pass did not reach the ready report after the stalled read'
   grep -Fxq 'Written by: unrecorded model unrecorded effort (Codex)' "$MAIN/data/z-ready/report.md" \
     || fail 'the report pass did not resume after the stalled read'
   pass 'bounded report stamps preserve outcome reconciliation and resume after a stalled read'
@@ -882,7 +896,8 @@ test_secondmate_remote_route_ledger_delivery() {
   printf 'harness=kiro\nmodel=claude-opus-5.5\neffort=xhigh\n' >> "$MATE/state/child.meta"
   mkdir -p "$MATE/data/child"
   printf '# Findings\n\n## Metadata\n' > "$MATE/data/child/report.md"
-  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  FM_FAKE_CREW_STATE='unknown' reconcile_until_reports_stamped "$MATE" child \
+    || fail 'the remote-home report did not gain attribution across bounded polls'
   FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
   [ "$(grep -c 'child-outcome-child-done' "$MATE/state/parent-replies.status")" = 1 ] \
     || fail "remote ledger delivery was not once-only: $(cat "$MATE/state/parent-replies.status" 2>/dev/null)"
