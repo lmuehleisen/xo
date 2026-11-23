@@ -10,10 +10,10 @@
 # This is an adjunct to the existing watcher poll loop and session-start path,
 # not a watcher, daemon, PR poll, or forge client of its own.
 # After outcome reconciliation, report stamping starts one attempt before
-# the one-second batch limit applies. The separate processing timeout is the
-# configured reconciliation budget with a minimum of ten seconds, so a stalled
-# report cannot block a poll. The cursor resumes after the last attempted task
-# when either limit is reached. A complete worker `done:`
+# the one-second batch limit applies. Each stamp runs with the configured
+# reconciliation timeout, with a minimum of ten seconds. The caller holds
+# both locks outside that timeout and advances the cursor past a stalled read.
+# A complete worker `done:`
 # event lets the pass append one Written by line using the recorded launch
 # harness, model, and effort under the task meta lock. Teardown's `stamp`
 # entry point requires that lock and retries before committing backlog close.
@@ -587,17 +587,12 @@ stamp_completed_report_locked() { # <id> <meta>
   printf '%sWritten by: %s %s (%s)\n' "$separator" "$model" "$effort" "$harness" >> "$report"
 }
 
-stamp_report_with_notice() { # <id> <meta>, caller holds task meta lock
-  stamp_completed_report_locked "$1" "$2" && return 0
-  printf 'fm-inactive-reconcile: could not stamp the author on %s/report.md\n' "$1" >&2
-  publish_actionable "inactive-reconcile:report-author:$1" "could not stamp the author on $1/report.md" || true
-  return 1
-}
-
-# Checkpoint before touching a report, so the next poll can reach later tasks
-# even when the hard timeout cut this one off. Reaching the end wraps the pass.
-stamp_report_pass() {
-  local cursor='' meta id lock tmp attempted=0 started=$SECONDS
+# Checkpoint before touching a report so a timeout cannot starve later tasks.
+# Only the report I/O runs in the timed process group.
+stamp_report_pass() ( # <stamp-timeout>
+  local timeout=$1 cursor='' meta id lock tmp attempted=0 started=$SECONDS
+  fm_lock_try_acquire "$REPORT_CURSOR.lock" || return 0
+  trap 'fm_lock_release "$REPORT_CURSOR.lock"' EXIT
   [ ! -d "$REPORT_CURSOR" ] || return 1
   if [ -f "$REPORT_CURSOR" ] && [ ! -L "$REPORT_CURSOR" ]; then
     IFS= read -r cursor < "$REPORT_CURSOR" || cursor=''
@@ -619,15 +614,11 @@ stamp_report_pass() {
     attempted=1
     lock=$(fm_meta_lock_path "$meta") || continue
     fm_lock_try_acquire "$lock" || continue
-    REPORT_META_LOCK=$lock
-    if [ -f "$meta" ] && [ ! -L "$meta" ]; then
-      stamp_report_with_notice "$id" "$meta" || true
-    fi
+    fm_run_timed "$timeout" "$0" stamp "$id" || true
     fm_lock_release "$lock"
-    REPORT_META_LOCK=''
   done
   rm -f -- "$REPORT_CURSOR"
-}
+)
 
 # Claim one already-delivered inactive fallback as the delivery of this ledger
 # event. Both reconciliation paths hold the child's meta lock, so this receipt
@@ -957,11 +948,7 @@ case "$mode" in
       [ -f "$DATA/${id%.meta}/report.md" ] || continue
       stamp_timeout=$FM_INACTIVE_RECONCILE_BUDGET_SECS
       [ "$stamp_timeout" -ge 10 ] || stamp_timeout=10
-      if fm_run_timed "$stamp_timeout" "$0" _stamp-locked; then
-        :
-      elif [ "$?" -ne 124 ]; then
-        exit 1
-      fi
+      stamp_report_pass "$stamp_timeout" || exit 1
       break
     done
     ;;
@@ -971,13 +958,6 @@ case "$mode" in
     trap 'fm_lock_release "$SCAN_LOCK"' EXIT
     scan "$2"
     ;;
-  _stamp-locked)
-    fm_lock_try_acquire "$REPORT_CURSOR.lock" || exit 0
-    REPORT_META_LOCK=''
-    trap '[ -z "$REPORT_META_LOCK" ] || fm_lock_release "$REPORT_META_LOCK"; fm_lock_release "$REPORT_CURSOR.lock"' EXIT
-    trap 'exit 143' TERM
-    stamp_report_pass
-    ;;
   stamp)
     if [ "$#" -ne 2 ] || ! valid_id "$2"; then
       printf 'usage: fm-inactive-reconcile.sh stamp <task-id>\n' >&2
@@ -985,7 +965,10 @@ case "$mode" in
     fi
     meta="$STATE/$2.meta"
     [ -f "$meta" ] && [ ! -L "$meta" ] || exit 0
-    stamp_report_with_notice "$2" "$meta"
+    if ! stamp_completed_report_locked "$2" "$meta"; then
+      printf 'fm-inactive-reconcile: could not stamp the author on %s/report.md\n' "$2" >&2
+      exit 1
+    fi
     ;;
   report)
     if [ "$#" -ne 2 ] || ! valid_id "$2"; then

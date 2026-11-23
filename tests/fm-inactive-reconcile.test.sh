@@ -825,7 +825,7 @@ test_report_ignores_done_from_previous_launch() {
 }
 
 test_stalled_report_stamp_preserves_outcome_scan_and_resumes() {
-  local real_grep attempt
+  local real_grep attempt stamp_pid meta_owner cursor_owner
   make_world stamp-budget
   write_child "$MAIN" outcome 'done: green'
   write_child "$MAIN" x-stalled 'done: report complete'
@@ -838,7 +838,10 @@ test_stalled_report_stamp_preserves_outcome_scan_and_resumes() {
 #!/usr/bin/env bash
 case "${@: -1}" in
   */x-stalled/report.md)
-    : > "$FM_STAMP_STALL_LOG"
+    {
+      printf '%s\n' "$PPID"
+      cat "$FM_STAMP_STATE/.meta-x-stalled.lock/pid" "$FM_STAMP_STATE/.report-author-cursor.lock/pid"
+    } > "$FM_STAMP_STALL_LOG"
     sleep 30
     ;;
   */z-ready/report.md) sleep 2 ;;
@@ -850,7 +853,7 @@ SH
   # Both passes have independent deadlines. A cold startup can consume an
   # outcome scan's slice, so wait for outcome progress across a few scans.
   for ((attempt = 0; attempt < 4; attempt++)); do
-    FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" \
+    FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" FM_STAMP_STATE="$MAIN/state" \
       FM_INACTIVE_RECONCILE_BUDGET_SECS=3 FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup \
       || fail 'the bounded startup scan failed'
     if [ -f "$WORLD/stamp-stalled" ] && grep -Fq 'child=outcome state=done' "$MAIN/state/.wake-queue" 2>/dev/null; then
@@ -858,9 +861,16 @@ SH
     fi
   done
   [ -f "$WORLD/stamp-stalled" ] || fail 'the report-read delay was not exercised'
+  {
+    IFS= read -r stamp_pid && IFS= read -r meta_owner && IFS= read -r cursor_owner
+  } < "$WORLD/stamp-stalled" || fail 'the stalled report did not observe both lock owners'
+  [ "$stamp_pid" != "$meta_owner" ] && [ "$stamp_pid" != "$cursor_owner" ] \
+    || fail 'the process subject to timeout owned a report lock'
+  assert_absent "$MAIN/state/.meta-x-stalled.lock" 'the timed-out stamp left its metadata lock'
+  assert_absent "$MAIN/state/.report-author-cursor.lock" 'the timed-out stamp left its cursor lock'
   grep -Fq 'child=outcome state=done' "$MAIN/state/.wake-queue" \
     || fail 'the report pass prevented the inactive outcome scan'
-  FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" \
+  FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_STALL_LOG="$WORLD/stamp-stalled" FM_STAMP_STATE="$MAIN/state" \
     FM_INACTIVE_RECONCILE_BUDGET_SECS=1 reconcile_until_reports_stamped "$MAIN" z-ready \
     || fail 'the report pass did not reach the ready report after the stalled read'
   grep -Fxq 'Written by: unrecorded model unrecorded effort (Codex)' "$MAIN/data/z-ready/report.md" \
