@@ -3,6 +3,7 @@
 #
 # Usage:
 #   fm-inactive-reconcile.sh scan [--startup]
+#   fm-inactive-reconcile.sh stamp <task-id>
 #   fm-inactive-reconcile.sh report <task-id>
 #   fm-inactive-reconcile.sh acknowledge <fingerprint>
 #
@@ -12,8 +13,8 @@
 # one-second budget. The report cursor resumes after the last attempted task
 # if a read stalls or a batch exhausts that budget. A complete worker `done:`
 # event lets the pass append one Written by line using the recorded launch
-# harness, model, and effort under the task meta lock. Teardown's `report`
-# entry point retries before retiring that record.
+# harness, model, and effort under the task meta lock. Teardown's `stamp`
+# entry point requires that lock and retries before committing backlog close.
 #
 # In a secondmate home every `scan` invocation, which is every watcher poll,
 # first runs the LEDGER-FIRST parent delivery: a direct child whose status
@@ -526,15 +527,11 @@ stamp_completed_report_locked() { # <id> <meta>
   case "$id" in .|..) return 0 ;; esac
   [ -f "$report" ] && [ ! -L "$report" ] && [ ! -L "$dir" ] || return 0
   case "$(fm_meta_get "$meta" kind)" in ship|scout) ;; *) return 0 ;; esac
-  if grep -Eiq '^[[:blank:]]*([-*+][[:blank:]]+)?(Written by:|\*\*Written by:\*\*|\*\*Written by\*\*:)' "$report"; then
-    return 0
-  elif [ "$?" -ne 1 ]; then
-    return 1
-  fi
   last=$(child_terminal_ledger_line "$status" worker) || return 0
   [ "$(status_line_verb "$last")" = done ] || return 0
 
   # A relaunch can leave the previous worker's done in the status log.
+  # Same-second timestamps cannot establish that done followed the launch.
   spawn_epoch=$(fm_meta_get "$meta" spawn_gen)
   spawn_epoch=${spawn_epoch#s}
   spawn_epoch=${spawn_epoch%%.*}
@@ -544,11 +541,16 @@ stamp_completed_report_locked() { # <id> <meta>
     *)
       if [ -n "$spawn_epoch" ] && [ -n "$done_epoch" ] \
         && [ "${#spawn_epoch}" -le 12 ] && [ "${#done_epoch}" -le 12 ] \
-        && [ "$spawn_epoch" -gt "$done_epoch" ]; then
+        && [ "$spawn_epoch" -ge "$done_epoch" ]; then
         return 0
       fi
       ;;
   esac
+  if grep -Eiq '^[[:blank:]]*([-*+][[:blank:]]+)?(Written by:|\*\*Written by:\*\*|\*\*Written by\*\*:)' "$report"; then
+    return 0
+  elif [ "$?" -ne 1 ]; then
+    return 1
+  fi
 
   harness=$(fm_meta_get "$meta" harness)
   model=$(fm_meta_get "$meta" model)
@@ -721,21 +723,13 @@ ledger_pass() {
 
 # The `report <task-id>` entry point: the caller holds the child's meta lock.
 report_child() { # <id>
-  local id=$1 meta deliver=1 rc=0
+  local id=$1 meta rc=0
   mkdir -p "$STATE" "$OUTCOME_DIR" || return 1
   [ ! -L "$OUTCOME_DIR" ] || return 1
-  if home_secondmate_id >/dev/null; then
-    :
-  else
-    rc=$?
-    [ "$rc" -eq 1 ] || return 1
-    deliver=0
-  fi
+  home_secondmate_id >/dev/null || { rc=$?; [ "$rc" -eq 1 ] && return 0; return 1; }
   meta="$STATE/$id.meta"
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   [ "$(meta_field "$meta" kind)" != secondmate ] || return 0
-  stamp_report_with_notice "$id" "$meta" || return 1
-  [ "$deliver" = 1 ] || return 0
   report_child_ledger_locked "$id" "$meta"
 }
 
@@ -975,6 +969,15 @@ case "$mode" in
     trap '[ -z "$REPORT_META_LOCK" ] || fm_lock_release "$REPORT_META_LOCK"; fm_lock_release "$REPORT_CURSOR.lock"' EXIT
     trap 'exit 143' TERM
     stamp_report_pass
+    ;;
+  stamp)
+    if [ "$#" -ne 2 ] || ! valid_id "$2"; then
+      printf 'usage: fm-inactive-reconcile.sh stamp <task-id>\n' >&2
+      exit 2
+    fi
+    meta="$STATE/$2.meta"
+    [ -f "$meta" ] && [ ! -L "$meta" ] || exit 0
+    stamp_report_with_notice "$2" "$meta"
     ;;
   report)
     if [ "$#" -ne 2 ] || ! valid_id "$2"; then

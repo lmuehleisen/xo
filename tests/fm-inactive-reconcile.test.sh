@@ -122,14 +122,13 @@ run_reconcile() { # <home> [--startup]
     FM_FORGE_LOG="$WORLD/forge.log" "$RECON" scan ${option:+"$option"}
 }
 
-# The teardown-side entry point: deliver one child's terminal ledger line for a
-# caller holding its meta lock.
-run_report() { # <home> <child>
-  local home=$1 child=$2
+# Teardown-side entry points for a caller holding the child's meta lock.
+run_report() { # <home> <child> [report|stamp]
+  local home=$1 child=$2 action=${3:-report}
   PATH="$WORLD/fakebin:$PATH" FM_ROOT_OVERRIDE="$WORLD/root" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
     FM_INACTIVE_CREW_STATE_BIN="$WORLD/fakebin/fm-crew-state.sh" \
-    FM_FORGE_LOG="$WORLD/forge.log" "$RECON" report "$child"
+    FM_FORGE_LOG="$WORLD/forge.log" "$RECON" "$action" "$child"
 }
 
 wake_count() { # <home> <key prefix>
@@ -770,7 +769,7 @@ test_main_completed_reports_are_stamped_once() {
 
   printf 'model=other-model\n' >> "$MAIN/state/scout.meta"
   run_reconcile "$MAIN" || fail 'repeated scan failed'
-  run_report "$MAIN" scout || fail 'teardown-side reconciliation failed'
+  run_report "$MAIN" scout stamp || fail 'teardown-side reconciliation failed'
   cmp -s "$report" "$WORLD/initial-report" || fail 'a retry rewrote or duplicated the attribution'
   pass 'completed main-home reports gain one launch attribution and preserve existing content'
 }
@@ -787,22 +786,25 @@ test_report_ignores_done_from_previous_launch() {
   printf 'done [at=1999999999]: earlier launch completed\n' > "$MAIN/state/child.status"
   run_reconcile "$MAIN" || fail 'scan failed on an earlier launch event'
   cmp -s "$report" "$WORLD/initial-report" || fail 'an earlier launch event allowed stamping'
+  printf 'done [at=2000000000]: completion in the launch second\n' >> "$MAIN/state/child.status"
+  run_reconcile "$MAIN" || fail 'scan failed on a same-second event'
+  cmp -s "$report" "$WORLD/initial-report" || fail 'an unordered same-second event allowed stamping'
   printf 'done [at=2000000001]: current launch completed\n' >> "$MAIN/state/child.status"
-  run_report "$MAIN" child || fail 'teardown-side stamping failed'
+  run_report "$MAIN" child stamp || fail 'teardown-side stamping failed'
   printf '\nWritten by: provider/model-id default effort (pi-signed)\n' >> "$WORLD/initial-report"
   cmp -s "$report" "$WORLD/initial-report" || fail 'teardown reconciliation did not stamp the current launch'
 
   for at in '' invalid 999999999999999999999999; do
     printf '# Report\n' > "$report"
     printf 'done [at=%s]: current launch completed\n' "$at" > "$MAIN/state/child.status"
-    run_report "$MAIN" child 2> "$WORLD/stamp.err" || fail 'a malformed completion time caused stamping to fail'
+    run_report "$MAIN" child stamp 2> "$WORLD/stamp.err" || fail 'a malformed completion time caused stamping to fail'
     [ ! -s "$WORLD/stamp.err" ] || fail "a malformed completion time produced a diagnostic: $(cat "$WORLD/stamp.err")"
     cmp -s "$report" "$WORLD/initial-report" || fail 'an unknown completion time suppressed attribution'
   done
   printf '# Report\n' > "$report"
   printf 'spawn_gen=s999999999999999999999999.1.2\n' >> "$MAIN/state/child.meta"
   printf 'done [at=2000000001]: current launch completed\n' > "$MAIN/state/child.status"
-  run_report "$MAIN" child 2> "$WORLD/stamp.err" || fail 'an out-of-range launch time caused stamping to fail'
+  run_report "$MAIN" child stamp 2> "$WORLD/stamp.err" || fail 'an out-of-range launch time caused stamping to fail'
   [ ! -s "$WORLD/stamp.err" ] || fail "an out-of-range launch time produced a diagnostic: $(cat "$WORLD/stamp.err")"
   cmp -s "$report" "$WORLD/initial-report" || fail 'an unknown launch time suppressed attribution'
   pass 'a relaunched worker must finish before its report can be attributed'
@@ -842,6 +844,34 @@ SH
   grep -Fxq 'Written by: unrecorded model unrecorded effort (Codex)' "$MAIN/data/z-ready/report.md" \
     || fail 'the report pass did not resume after the stalled read'
   pass 'bounded report stamps preserve outcome reconciliation and resume after a stalled read'
+}
+
+test_failed_worker_does_not_read_its_report() {
+  local real_grep
+  make_world unstamped-failure; bind_secondmate local
+  write_child "$MATE" child 'failed: check failed'
+  mkdir -p "$MATE/data/child"
+  printf '# Preliminary report\n' > "$MATE/data/child/report.md"
+  real_grep=$(command -v grep)
+  cat > "$WORLD/fakebin/grep" <<'SH'
+#!/usr/bin/env bash
+case "${@: -1}" in
+  */child/report.md)
+    : > "$FM_STAMP_READ_LOG"
+    exit 2
+    ;;
+esac
+exec "$FM_STAMP_REAL_GREP" "$@"
+SH
+  chmod +x "$WORLD/fakebin/grep"
+  FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_READ_LOG="$WORLD/stamp-read" run_reconcile "$MATE" \
+    || fail 'scan failed on a worker failure'
+  FM_STAMP_REAL_GREP="$real_grep" FM_STAMP_READ_LOG="$WORLD/stamp-read" run_report "$MATE" child stamp \
+    || fail 'teardown-side stamping refused a failed report'
+  assert_absent "$WORLD/stamp-read" 'attribution tried to read a failed report'
+  grep -Fq 'child child failed: check failed' "$MAIN/state/mate.status" \
+    || fail 'the failed outcome did not reach the parent'
+  pass 'a failed report is ineligible for attribution and its outcome still reaches the parent'
 }
 
 # The remote route delivers the same line into this home's parent-replies
@@ -1630,6 +1660,7 @@ test_secondmate_partial_ledger_line_waits_for_newline
 test_main_completed_reports_are_stamped_once
 test_report_ignores_done_from_previous_launch
 test_stalled_report_stamp_preserves_outcome_scan_and_resumes
+test_failed_worker_does_not_read_its_report
 test_secondmate_remote_route_ledger_delivery
 test_report_subcommand_delivers_and_refuses
 test_pending_ledger_done_is_delivered_after_worktree_removal
