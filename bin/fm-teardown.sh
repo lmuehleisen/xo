@@ -4309,6 +4309,16 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
 fi
 fi
 
+# Close replay can retire the metadata even if teardown later fails. Finish
+# report attribution before publishing that replayable marker.
+if [ "$KIND" != secondmate ] && [ -f "$DATA/$ID/report.md" ]; then
+  if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+      "$SCRIPT_DIR/fm-inactive-reconcile.sh" stamp "$ID"; then
+    echo "error: could not finish attributing $ID's report; retaining its task record and backlog item for retry" >&2
+    exit 1
+  fi
+fi
+
 if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
 # Roll the accepted legacy incarnation's stamp back to the record's exact
 # pre-stamp bytes. Uses perl - already in the teardown lifecycle's curated PATH

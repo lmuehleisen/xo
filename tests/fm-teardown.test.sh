@@ -767,6 +767,50 @@ test_teardown_closes_the_backlog_item_itself() {
   pass "teardown closes its own backlog item before reporting success"
 }
 
+test_teardown_attribution_failure_leaves_no_close_marker() {
+  local case_dir report rc=0 real_grep
+  case_dir=$(make_case report-attribution-retry)
+  write_meta "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  printf 'harness=codex\nmodel=gpt-6.2-sol\neffort=high\n' >> "$case_dir/state/task-x1.meta"
+  printf 'done: report complete\n' > "$case_dir/state/task-x1.status"
+  mkdir -p "$case_dir/data/task-x1"
+  report="$case_dir/data/task-x1/report.md"
+  printf '# Findings\n' > "$report"
+  real_grep=$(command -v grep)
+  cat > "$case_dir/fakebin/grep" <<'SH'
+#!/usr/bin/env bash
+case "${@: -1}" in
+  */task-x1/report.md)
+    : > "$FM_STAMP_TEST_START"
+    sleep 30
+    : > "$FM_STAMP_TEST_END"
+    exit 2
+    ;;
+esac
+exec "$FM_STAMP_REAL_GREP" "$@"
+SH
+  chmod +x "$case_dir/fakebin/grep"
+
+  FM_HOME="$case_dir" FM_STAMP_REAL_GREP="$real_grep" FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    FM_STAMP_TEST_START="$case_dir/stamp-start" FM_STAMP_TEST_END="$case_dir/stamp-end" run_teardown "$case_dir" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "a timed-out report stamp should stop teardown: $(cat "$case_dir/stderr")"
+  assert_present "$case_dir/stamp-start" 'teardown did not exercise the stalled read'
+  assert_absent "$case_dir/stamp-end" 'teardown let the stalled read finish instead of timing it out'
+  assert_grep 'retaining its task record and backlog item for retry' "$case_dir/stderr" \
+    'teardown did not identify attribution as the failure'
+  assert_present "$case_dir/state/task-x1.meta" 'the failed stamp removed the launch metadata'
+  assert_absent "$case_dir/state/task-x1.backlog-close" 'a replayable close was published before attribution'
+
+  rm -f "$case_dir/fakebin/grep"
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "teardown could not retry the stamp: $(cat "$case_dir/stderr")"
+  grep -Fxq 'Written by: GPT-6.2 Sol high (Codex)' "$report" || fail 'the retry lost the recorded launch'
+  [ "$(backlog_row_state "$case_dir")" = 'done' ] || fail 'the successful retry did not close the backlog'
+  pass 'teardown preserves launch metadata until attribution succeeds and then closes the backlog'
+}
+
 test_teardown_records_the_routing_outcome() {
   local pr_state=$1 expected=$2 ref=$3 case_dir out history review_head
   case_dir=$(make_case "routing-outcome-$pr_state-$expected")
@@ -6993,6 +7037,7 @@ test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
+test_teardown_attribution_failure_leaves_no_close_marker
 test_teardown_records_the_routing_outcome OPEN unknown HEAD
 test_teardown_records_the_routing_outcome MERGED landed HEAD
 test_teardown_records_the_routing_outcome MERGED unknown HEAD^
