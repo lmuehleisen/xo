@@ -443,6 +443,9 @@
 #   unrelated-worktree reads are waited out, never adopted as the task path.
 #   A pane that never reaches the lease refuses at the deadline, naming its last
 #   path and preserving the lease for inspection.
+#   The root home takes task slots from Treehouse's default pool. A local
+#   secondmate passes --root to lease from a pool outside the home that uses
+#   its own project clone (fm_treehouse_spawn_root in bin/fm-wake-lib.sh).
 #   That placement is proven only at launch.
 #   Every ship or scout pane therefore also receives `export FM_TASK_ID=<task-id>`
 #   before the launch command, on the same channel as GOTMPDIR, and
@@ -1897,6 +1900,7 @@ SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
 SPAWN_TREEHOUSE_RECEIPT=
 SPAWN_LANE_ADMISSION_LOCK=
 SPAWN_LANE_ADMISSION_LOCK_HELD=0
+SPAWN_TREEHOUSE_ROOT=
 # Pre-launch abort scope (header: Treehouse lease receipt). Each flag is set
 # when a fresh spawn acquires the resource and cleared just before the launch
 # line reaches the endpoint; past that point the per-harness gates own failure.
@@ -3030,6 +3034,14 @@ if [ "$EFFORT_SET" -eq 1 ] && [ "$EFFORT" = default ] && [ "$ARG3" != opencode ]
   echo "error: --effort default applies only to an OpenCode relaunch" >&2
   exit 1
 fi
+
+spawn_treehouse() {
+  if [ -n "$SPAWN_TREEHOUSE_ROOT" ]; then
+    treehouse --root "$SPAWN_TREEHOUSE_ROOT" "$@"
+  else
+    treehouse "$@"
+  fi
+}
 
 shell_quote() {
   printf "'"
@@ -5027,6 +5039,12 @@ elif [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -n "$SPAWN_PROJECT_
   fi
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
 fi
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  SPAWN_TREEHOUSE_ROOT=$(fm_treehouse_spawn_root "$FM_HOME") || {
+    echo "error: could not resolve which Treehouse pool this home's clone of $PROJ_ABS uses" >&2
+    exit 1
+  }
+fi
 if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
   if ! fm_project_capacity_occupants "$SPAWN_TREEHOUSE_PROJECT_LOCK" "$PROJ_ABS" "$STATE" "$ID"; then
     echo "error: spawn refused: project $(basename "$PROJ_ABS") declares a capacity of $SPAWN_PROJECT_CAPACITY, but this machine's task records cannot all be read to count it ($FM_PROJECT_CAPACITY_ERROR)" >&2
@@ -6289,7 +6307,7 @@ EOF
       # A durable lease (bin/fm-home-seed.sh's pattern): there is no pane to run
       # the interactive `treehouse get` in, and a slot a live T3 thread points at
       # must never be handed on while that thread could re-create it.
-      WT=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || {
+      WT=$(cd "$PROJ_ABS" && spawn_treehouse get --lease --lease-holder "$ID") || {
         echo "error: treehouse get --lease failed to lease a worktree for $ID from $PROJ_ABS" >&2
         exit 1
       }
@@ -7046,7 +7064,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$BACKEND" != t3co
       set -C
       : >"$SPAWN_TREEHOUSE_RECEIPT"
     ) || exit 1
-    if ! (cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$FM_HOME:$ID") >>"$SPAWN_TREEHOUSE_RECEIPT"; then
+    if ! (cd "$PROJ_ABS" && spawn_treehouse get --lease --lease-holder "$FM_HOME:$ID") >>"$SPAWN_TREEHOUSE_RECEIPT"; then
       echo "error: Treehouse lease acquisition failed; retained $SPAWN_TREEHOUSE_RECEIPT for inspection; no automatic return attempted" >&2
       exit 1
     fi

@@ -997,7 +997,7 @@ make_bootstrap_dispatch_fixture() {  # <dir>; writes <dir>/home + <dir>/fakebin
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
+  printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>] [--root <dir>]'
 fi
 exit 0
 SH

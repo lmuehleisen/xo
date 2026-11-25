@@ -50,6 +50,7 @@ The retained compatibility gate lifecycle boundary for fleet lifecycle entrypoin
 | `fm-rex-marks.sh`        | Opt-in: turn each Rex task's latest status into one badge and notification on its pane, plus validation progress and an optional tint (`plan`, `sync`, `clear`); the watcher runs `sync` each poll while the option or a cached record exists, and cleanup runs `clear` |
 | `fm-osc7501.sh`          | Launch-driven [OSC 7501 worker status bridge](configuration.md#osc-7501-worker-status-reporting); its header owns commands and reporting rules |
 | `fm-test-run.sh`         | Behavior-test runner: selection, portable lanes, bounded concurrency, budgets, coverage guard, timing/JSON; refuses to execute in the repository primary checkout when `FM_TASK_ID` marks a task worker |
+| `fm-ci-budget-warn.sh`   | Emit a warning-only annotation when a CI lane's measured command time crosses twenty minutes |
 | `fm-test-isolation-proof.sh` | Concurrent isolation harness and portable candidate set owner |
 | `fm-ensure-agents-md.sh` | Manually initialize project agent-memory files (see the helper's header and help) |
 | `fm-capacity.sh`         | Report of open lanes against the optional `config/lane-capacity` target, or a measured `auto` budget, and host headroom for queued-work dispatch; `--publish` writes this home's `state/lane-capacity.json`, and `--spawn-gate` is the opt-in spawn check |

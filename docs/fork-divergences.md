@@ -320,6 +320,9 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
   Generic prelaunch rollback returns a provably unstarted clean lease; post-launch adapter cleanup otherwise follows upstream and retains unresolved lease receipts for explicit recovery.
   Upstream's Herdr-only lease that starts the pane's top-level shell in the copy ([upstream #8052](https://github.com/kunchenguid/firstmate/pull/8052)) is not taken: the fork's universal receipt lease and child-shell launch boundary already preserve the copy, while a restored Herdr pane reopens at its original directory rather than inside the copy.
   Its suite `tests/fm-spawn-herdr-lease.test.sh` pins that top-level-shell entry and is not carried; the slow-entry tolerance and single cd resend in `spawn_assert_agent_worktree` (upstream #8139) are kept.
+  The secondmate pool root applies to the same durable acquire and resolves existing ancestors to keep newly created pools outside the home.
+  A nonempty retired-home pool is retained because it can contain an unpublished lease receipt's worktree.
+  `tests/fm-spawn-secondmate-pool.test.sh` guards local and remote selection with the fork lease protocol, and `tests/fm-teardown.test.sh` guards retention and sibling isolation.
 
 ### claude-trust-escape
 
@@ -619,17 +622,13 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### ci-shard-split
 
-- Intent: portable serial CI runs as fourteen shards, using upstream's supervision-host and watch-triage suite boundaries plus focused fork regression suites, so each shard stays inside the CI job limit; canonical lint supports `NofM` partitions and CI uses three.
+- Intent: retain fork regression suites within the upstream fifteen-minute serial packing target, preserve lint coverage for file-type changes, and keep timing warnings advisory.
 - Class: carried.
-- Seam: the shard and lint matrices in `.github/workflows/ci.yml`, partition parsing and balancing in `bin/fm-lint.sh`, measured shard weights and fork capture/repro selection in `bin/fm-test-run.sh`, its documentation-only `GROK_BOT.md` exclusion, `docs/fm-test-portable-shards.md`, and `CONTRIBUTING.md`; upstream split suites share `tests/supervision-host-helpers.sh` and `tests/watch-triage-helpers.sh`, with fork-only regressions in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`.
-- Guard: `tests/fm-test-run.test.sh` shard cases; `tests/fm-lint.test.sh`; `tests/fm-ci-workflow.test.sh`; every integration ports upstream's new supervision-host tests into the split suites.
-- Upstream: runs eleven serial shards and split supervision-host and watcher-triage suites; retain the fork shard count until it fits that layout with headroom.
-  Successful suite durations in green runs [40214527890](https://github.com/lmuehleisen/xo/actions/runs/40214527890) and [40116342702](https://github.com/lmuehleisen/xo/actions/runs/40116342702) sum to 258.03 and 264.77 minutes respectively when shard sums are rounded to hundredths, implying a nine-shard minimum of 28.67 and 29.42 minutes even with perfect balance and no job setup.
-  Their measured shard sums in numerical order were 19.41, 19.25, 20.91, 24.44, 11.33, 14.92, 19.81, 16.15, 18.62, 17.48, 19.11, 19.12, 16.56, 20.92 minutes and 19.89, 19.09, 18.39, 25.92, 10.24, 14.55, 20.03, 21.63, 19.60, 19.53, 20.45, 19.25, 19.13, 17.07 minutes.
-  The post-merge candidate run [40419989504](https://github.com/lmuehleisen/xo/actions/runs/40419989504) measured 20.90, 19.58, 21.24, 19.98, 10.13, 20.04, 19.99, 22.70, 17.68, 20.64, 18.32, 17.97, 16.29, 16.15 minutes; two shards contained failures, so its 261.61-minute total (summing the rounded shard values) is not a complete successful baseline.
-  A 25-minute suite budget leaves five minutes of the 30-minute job limit for setup and runner variance; both green-run lower bounds exceed that budget before combining suites or accounting for imbalance.
-  The candidate run's successful watch-triage and declared-wait suites alone took 13.61 and 17.24 minutes, so their combined 30.85 minutes also exceeds the job limit before setup.
-  The 30-minute tripwire those runs were measured against is now `ci-normal-tier-timeout`.
+- Seam: the serial matrix in `.github/workflows/ci.yml`, fork weights in `tests/fm-test-ci-timings.tsv`, strict partition validation and type-change detection in `bin/fm-lint.sh`, the independent timing reads in `bin/fm-ci-budget-warn.sh`, the fork capture/repro selection and stock Bash serial selection in `bin/fm-test-run.sh`, and `docs/fm-test-portable-shards.md` (shared); upstream split suites share `tests/supervision-host-helpers.sh` and `tests/watch-triage-helpers.sh`, with fork-only cases in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`.
+- Guard: `tests/fm-test-run.test.sh` shard cases; `tests/fm-lint.test.sh` partition cases; `tests/fm-ci-workflow.test.sh` matrix and packing cases.
+- Upstream: uses nineteen serial shards; the combined fork weights require twenty-one under the same target.
+  Four lint partitions, changed-file lint with full-source fallbacks, duration-balanced parallel lanes, and upstream's captain-hold and watcher splits are taken.
+  Drop the matrix difference if refreshed fork measurements fit the upstream count and the lint parser difference once its validation is equivalent.
 
 ### pi-saved-trust-denial
 

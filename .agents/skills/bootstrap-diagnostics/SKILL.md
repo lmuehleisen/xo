@@ -21,7 +21,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Report the installed version and the printed `upgrade:` command and wait for the same consent rule before running it; a printed command that is the tool's own installer means that tool ships no self-updater yet, so the upgrade reuses its install command.
   [`bin/fm-bootstrap.sh`](../../../bin/fm-bootstrap.sh) owns the floor policy, and never argue the floor down to whatever the home happens to have installed.
   This fork does not require no-mistakes, gh-axi, chrome-devtools-axi, or lavish-axi; the optional Lavish toggle installs lavish-axi only through its pinned, hook-free command (`docs/lavish.md`).
-  For `treehouse`, the requirement is `treehouse get --lease` support.
+  For `treehouse`, the requirement is `treehouse get` support for both `--lease` and `--root`.
   For `tasks-axi`, the requirement also covers the separate feature probe (`bin/fm-tasks-axi-lib.sh` owns the definition); `config/backlog-backend=manual` only suppresses the verbose `BOOTSTRAP_INFO: tasks-axi available` fact, not this report.
   For `quota-axi`, bootstrap requires it because firstmate reads its current output directly before resolving every crew-dispatch profile array; without it, report the requirement and do not choose around an unexamined candidate.
 - `MISSING_MANUAL: <tool> (instructions: <url>)` - tell the captain why the tool is required and give them the printed instructions URL, but do not pass the tool to `bin/fm-bootstrap.sh install`; wait for the captain to complete the manual installation, then rerun session start to confirm the dependency is present.

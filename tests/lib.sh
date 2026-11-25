@@ -794,6 +794,7 @@ fm_fake_treehouse_lease() {
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$(dirname "$0")/treehouse-calls"
+[ "${1:-}" != --root ] || shift 2
 if [ "${1:-}" = get ] && [ "${2:-}" = --lease ]; then
   path=${FM_FAKE_LEASE_PATH:-${FM_FAKE_PANE_PATH:-}}
   [ -n "$path" ] || IFS= read -r path < "$(dirname "$0")/treehouse-lease-path"
