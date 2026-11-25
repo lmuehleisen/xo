@@ -73,26 +73,20 @@ minutes() {  # <ms>
   awk -v ms="$1" 'BEGIN { printf "%.1f", ms / 60000 }'
 }
 
-if [ ! -f "$AGGREGATE" ]; then
-  warn "no aggregate timing JSON at $AGGREGATE; skipped the 20-minute budget check"
-  exit 0
-fi
+warn_on_behavior_budget() {
+  local rows selection duration
+  if [ ! -f "$AGGREGATE" ]; then
+    warn "no aggregate timing JSON at $AGGREGATE; skipped behavior budget check"
+    return 0
+  fi
 
-command -v python3 >/dev/null 2>&1 || die "python3 is required to read timing JSON"
-
-tmp=$(mktemp "${TMPDIR:-/tmp}/fm-ci-budget-warn.XXXXXX")
-trap 'rm -f "$tmp"' EXIT
-if ! python3 - "$AGGREGATE" "$BUDGET_MS" >"$tmp" <<'PY'
+  if ! rows=$(python3 - "$AGGREGATE" "$BUDGET_MS" 2>/dev/null <<'PY'
 import json, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 budget = int(sys.argv[2])
-try:
-    doc = json.loads(path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError) as exc:
-    print("UNREADABLE\t%s" % exc)
-    sys.exit(0)
+doc = json.loads(path.read_text(encoding="utf-8"))
 for lane in doc.get("lanes") or []:
     summary = lane.get("summary") or {}
     try:
@@ -102,25 +96,22 @@ for lane in doc.get("lanes") or []:
     if duration < budget:
         continue
     selection = lane.get("selection") or lane.get("path") or "unknown lane"
-    print("LANE\t%s\t%s" % (selection, duration))
+    print("%s\t%s" % (selection, duration))
 PY
-then
-  die "failed to parse $AGGREGATE"
-fi
+  ); then
+    warn "could not parse $AGGREGATE; skipped behavior budget check"
+    return 0
+  fi
 
-while IFS=$'\t' read -r kind selection duration || [ -n "$kind" ]; do
-  [ -n "$kind" ] || continue
-  case "$kind" in
-    UNREADABLE)
-      warn "could not parse $AGGREGATE; skipped the 20-minute budget check"
-      ;;
-    LANE)
-      selection=${selection#lane=}
-      selection=${selection%%;*}
-      warn "lane ${selection} command time was $(minutes "$duration") minutes, above the 20-minute healthy budget"
-      ;;
-  esac
-done <"$tmp"
+  while IFS=$'\t' read -r selection duration; do
+    [ -n "$duration" ] || continue
+    selection=${selection#lane=}
+    selection=${selection%%;*}
+    warn "lane ${selection} command time was $(minutes "$duration") minutes, above the 20-minute healthy budget"
+  done <<<"$rows"
+}
+
+warn_on_behavior_budget
 
 if [ -n "$LINT_DIR" ] && [ -d "$LINT_DIR" ]; then
   while IFS= read -r telemetry; do

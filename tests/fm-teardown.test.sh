@@ -2389,8 +2389,10 @@ test_secondmate_teardown_preserves_unrecorded_pool_content() {
   printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
     "$case_dir" > "$sibling/.fm-secondmate-parent"
   printf '%s\n' "home=$home" >> "$case_dir/state/task-x1.meta"
+  # shellcheck disable=SC2016 # The child Bash expands the positional arguments.
   pool_root=$(FM_HOME="$home" "$BASH" -c '. "$1" && fm_treehouse_spawn_root "$2"' \
     _ "$ROOT/bin/fm-wake-lib.sh" "$home")
+  # shellcheck disable=SC2016 # The child Bash expands the positional arguments.
   sibling_root=$(FM_HOME="$sibling" "$BASH" -c '. "$1" && fm_treehouse_spawn_root "$2"' \
     _ "$ROOT/bin/fm-wake-lib.sh" "$sibling")
   [ -n "$pool_root" ] || fail "secondmate-pool-root: spawn root for the home under teardown was empty"

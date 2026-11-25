@@ -1959,6 +1959,8 @@ JSON
   out=$(PATH="$fakebin:$BASE_PATH" TREEHOUSE_ROOT="$root" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "unowned slot older than 30d: $clone_mate" \
+    "bootstrap did not report the old slot in the secondmate pool"
   assert_not_contains "$out" "duplicate-clone" \
     "a secondmate pool sharing the default pool's origin was reported as a duplicate clone"
   pass "bootstrap does not report a secondmate pool as a duplicate of the default pool"

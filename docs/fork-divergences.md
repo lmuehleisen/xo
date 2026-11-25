@@ -622,9 +622,9 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 
 ### ci-shard-split
 
-- Intent: retain fork regression suites within the upstream fifteen-minute serial packing target and reject noncanonical lint partition identifiers.
+- Intent: retain fork regression suites within the upstream fifteen-minute serial packing target, preserve lint coverage for file-type changes, and keep timing warnings advisory.
 - Class: carried.
-- Seam: the serial matrix in `.github/workflows/ci.yml`, fork weights in `tests/fm-test-ci-timings.tsv`, partition validation in `bin/fm-lint.sh`, the fork capture/repro selection and stock Bash serial selection in `bin/fm-test-run.sh`, and `docs/fm-test-portable-shards.md` (shared); upstream split suites share `tests/supervision-host-helpers.sh` and `tests/watch-triage-helpers.sh`, with fork-only cases in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`.
+- Seam: the serial matrix in `.github/workflows/ci.yml`, fork weights in `tests/fm-test-ci-timings.tsv`, strict partition validation and type-change detection in `bin/fm-lint.sh`, the independent timing reads in `bin/fm-ci-budget-warn.sh`, the fork capture/repro selection and stock Bash serial selection in `bin/fm-test-run.sh`, and `docs/fm-test-portable-shards.md` (shared); upstream split suites share `tests/supervision-host-helpers.sh` and `tests/watch-triage-helpers.sh`, with fork-only cases in `tests/fm-supervision-host-fork.test.sh` and `tests/fm-watch-triage-fork.test.sh`.
 - Guard: `tests/fm-test-run.test.sh` shard cases; `tests/fm-lint.test.sh` partition cases; `tests/fm-ci-workflow.test.sh` matrix and packing cases.
 - Upstream: uses nineteen serial shards; the combined fork weights require twenty-one under the same target.
   Four lint partitions, changed-file lint with full-source fallbacks, duration-balanced parallel lanes, and upstream's captain-hold and watcher splits are taken.

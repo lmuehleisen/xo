@@ -1302,16 +1302,14 @@ test_portable_serial_hint_coverage_is_reported_and_bounded() {
   pass "coverage guard bounds the unmeasured share and serial packing within fifteen minutes"
 }
 
-write_fixture_timings() {  # <repo> <triage-ms> [second-script] [second-ms]
-  local repo=$1 triage_ms=$2 second=${3:-} second_ms=${4:-1}
+write_fixture_timings() {  # <repo> <triage-ms>
+  local repo=$1 triage_ms=$2
   local script
   {
     printf 'path\tduration_ms\n'
     while IFS= read -r script; do
       if [ "$script" = "tests/fm-watch-triage.test.sh" ]; then
         printf '%s\t%s\n' "$script" "$triage_ms"
-      elif [ -n "$second" ] && [ "$script" = "$second" ]; then
-        printf '%s\t%s\n' "$script" "$second_ms"
       else
         printf '%s\t1\n' "$script"
       fi
@@ -1320,7 +1318,7 @@ write_fixture_timings() {  # <repo> <triage-ms> [second-script] [second-ms]
 }
 
 test_portable_serial_packing_budget_boundary() {
-  local tmp repo out rc
+  local tmp repo out rc shard_count
   tmp=$(fm_test_tmproot fm-test-run-packing-boundary)
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
@@ -1346,23 +1344,15 @@ test_portable_serial_packing_budget_boundary() {
   assert_contains "$out" "FM_TEST_COVERAGE ok" "singleton overflow coverage did not pass"
   assert_contains "$out" "serial_max_ms=900001" "singleton overflow did not keep the script's own hint"
 
-  python3 - "$repo/bin/fm-test-run.sh" <<'PY' || fail "could not pin the fixture to one serial shard"
-from pathlib import Path
-import re, sys
-runner = Path(sys.argv[1])
-text = runner.read_text()
-new, n = re.subn(
-    r"^PORTABLE_SERIAL_SHARDS=[0-9]+$",
-    "PORTABLE_SERIAL_SHARDS=1",
-    text,
-    count=1,
-    flags=re.M,
-)
-if n != 1:
-    sys.exit("serial shard count not found")
-runner.write_text(new)
-PY
-  write_fixture_timings "$repo" 450001 tests/fm-watch-triage-pause.test.sh 450001
+  # More than one half-budget suite per shard forces a multi-script overflow.
+  shard_count=$("$RUNNER" --list-lanes | grep -c '^portable-serial-[0-9]*of[0-9]*$')
+  write_fixture_timings "$repo" 1
+  awk -F '\t' -v OFS='\t' -v heavy_count="$((shard_count + 1))" '
+    FILENAME != "-" { if (FNR <= heavy_count) heavy[$0] = 1; next }
+    $1 in heavy { $2 = 450001 }
+    { print }
+  ' <("$RUNNER" --list --lane portable-serial) - <"$repo/tests/fm-test-ci-timings.tsv" >"$tmp/overflow.tsv"
+  mv "$tmp/overflow.tsv" "$repo/tests/fm-test-ci-timings.tsv"
   out=$(bash "$repo/bin/fm-test-run.sh" --check-coverage 2>&1) && rc=0 || rc=$?
   expect_code 1 "$rc" "a multi-script shard above the budget must be refused"
   assert_contains "$out" "packs above the 900000ms target with more than one script" \
@@ -2135,10 +2125,22 @@ JSON
 
   rc=0
   out=$(GITHUB_ACTIONS=true bash "$ROOT/bin/fm-ci-budget-warn.sh" \
-    "$tmp/missing.json" 2>"$tmp/missing.err") || rc=$?
+    "$tmp/missing.json" "$tmp/lint" 2>"$tmp/missing.err") || rc=$?
   [ "$rc" -eq 0 ] || fail "missing aggregate must still exit 0, got $rc"
   assert_contains "$out" "::warning title=CI budget::no aggregate timing JSON" \
     "missing aggregate did not warn"
+  assert_contains "$out" "::warning title=CI budget::lint partition 2" \
+    "missing aggregate skipped lint telemetry"
+
+  printf '{"lanes":[null]}\n' >"$tmp/malformed.json"
+  rc=0
+  out=$(GITHUB_ACTIONS=true bash "$ROOT/bin/fm-ci-budget-warn.sh" \
+    "$tmp/malformed.json" "$tmp/lint" 2>"$tmp/malformed.err") || rc=$?
+  [ "$rc" -eq 0 ] || fail "malformed aggregate must still exit 0, got $rc"
+  assert_contains "$out" "::warning title=CI budget::could not parse" \
+    "malformed aggregate did not warn"
+  assert_contains "$out" "::warning title=CI budget::lint partition 2" \
+    "malformed aggregate skipped lint telemetry"
   pass "budget warn annotates 20-minute overruns and never fails the job"
 }
 

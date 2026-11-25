@@ -874,11 +874,11 @@ fm_lint_collect_changed_roots() {  # <merge-base>
     fm_lint_is_canonical_root "$changed_path" || continue
     [ -f "$changed_path" ] || continue
     ROOTS+=("$changed_path")
-  done < <(git diff --name-only --diff-filter=ACMR -z "$merge_base" -- 2>/dev/null | LC_ALL=C sort -z)
+  done < <(git diff --name-only --diff-filter=ACMRT -z "$merge_base" -- 2>/dev/null | LC_ALL=C sort -z)
 }
 
-# git diff --name-only drops a rename's old path, and --diff-filter=ACMR drops
-# deletions, so both upgrade checks walk name-status ACDMR and treat a rename
+# git diff --name-only drops a rename's old path, and --diff-filter=ACMRT drops
+# deletions, so both upgrade checks walk name-status ACDMRT and treat a rename
 # or copy as both of its paths.
 fm_lint_changed_paths() {  # <merge-base>
   local merge_base=$1 status p1 p2
@@ -893,7 +893,7 @@ fm_lint_changed_paths() {  # <merge-base>
         [ -n "$p1" ] && printf '%s\n' "$p1"
         ;;
     esac
-  done < <(git diff --name-status --diff-filter=ACDMR "$merge_base" -- 2>/dev/null)
+  done < <(git diff --name-status --diff-filter=ACDMRT "$merge_base" -- 2>/dev/null)
 }
 
 # Changing the lint owner, its pinned installers, or the bounds watchdog is a

@@ -280,13 +280,13 @@ case "$*" in
     fi
     exit 1
     ;;
-  "diff --name-only --diff-filter=ACMR -z "*)
+  "diff --name-only --diff-filter=ACMRT -z "*)
     if [ -n "${FM_TEST_GIT_DIFF_FILE:-}" ] && [ -f "$FM_TEST_GIT_DIFF_FILE" ]; then
       cat "$FM_TEST_GIT_DIFF_FILE"
     fi
     exit 0
     ;;
-  "diff --name-only --diff-filter=ACMR "*)
+  "diff --name-only --diff-filter=ACMRT "*)
     if [ -n "${FM_TEST_GIT_DIFF_FILE:-}" ] && [ -f "$FM_TEST_GIT_DIFF_FILE" ]; then
       after=0
       specs=
@@ -313,7 +313,7 @@ case "$*" in
     fi
     exit 0
     ;;
-  "diff --name-status --diff-filter=ACDMR "*)
+  "diff --name-status --diff-filter=ACDMRT "*)
     if [ -n "${FM_TEST_GIT_NAME_STATUS_FILE:-}" ] && [ -f "$FM_TEST_GIT_NAME_STATUS_FILE" ]; then
       cat "$FM_TEST_GIT_NAME_STATUS_FILE"
     elif [ -n "${FM_TEST_GIT_DIFF_FILE:-}" ] && [ -f "$FM_TEST_GIT_DIFF_FILE" ]; then
@@ -1024,6 +1024,31 @@ test_changed_flag_upgrades_when_a_sourced_helper_is_deleted() {
   assert_contains "$(cat "$tmp/err")" "a sourced helper changed" \
     "--changed upgrade did not explain why a deleted sourced helper used the full set"
   pass "fm-lint.sh --changed upgrades to full lint when a sourced helper is deleted"
+}
+
+test_changed_flag_includes_file_type_changes() {
+  local repo listed
+  repo=$(fm_test_tmproot fm-lint-type-change)/repo
+  fm_git_init_commit "$repo" || fail "could not initialize lint fixture"
+  mkdir -p "$repo/bin"
+  cp "$LINT" "$repo/bin/fm-lint.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/replacement"
+  cp "$repo/replacement" "$repo/bin/tool.sh"
+  cp "$repo/replacement" "$repo/bin/helper.sh"
+  printf '#!/usr/bin/env bash\n# shellcheck source=helper.sh\n. ./helper.sh\n' > "$repo/bin/consumer.sh"
+  git -C "$repo" add .
+  (fm_git_identity && git -C "$repo" commit -qm "lint fixtures") || fail "could not commit lint fixture"
+
+  ln -sf ../replacement "$repo/bin/tool.sh"
+  listed=$(CI=true "$BASH" "$repo/bin/fm-lint.sh" --changed --list-files) \
+    || fail "could not list a type-changed lint root"
+  [ "$listed" = bin/tool.sh ] || fail "type-changed canonical file was missing: $listed"
+
+  ln -sf ../replacement "$repo/bin/helper.sh"
+  listed=$(CI=true "$BASH" "$repo/bin/fm-lint.sh" --changed --list-files) \
+    || fail "could not list roots after a sourced helper changed type"
+  assert_contains "$listed" "bin/consumer.sh" "type-changed sourced helper did not trigger full lint"
+  pass "changed lint includes type-changed roots and upgrades for type-changed sourced helpers"
 }
 
 test_changed_flag_upgrades_when_a_sourced_helper_is_renamed() {
@@ -2325,6 +2350,7 @@ test_changed_flag_keeps_source_following_in_ci
 test_changed_flag_upgrades_when_lint_definition_changes
 test_changed_flag_upgrades_when_a_sourced_helper_changes
 test_changed_flag_upgrades_when_a_sourced_helper_is_deleted
+test_changed_flag_includes_file_type_changes
 test_changed_flag_upgrades_when_a_sourced_helper_is_renamed
 test_changed_flag_upgrades_when_a_lint_definition_is_renamed
 test_empty_changed_partition_is_a_successful_noop

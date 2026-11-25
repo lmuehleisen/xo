@@ -104,6 +104,7 @@ meta_worktree() {  # <home> <id>
 
 spawn_root_for() {  # <home>
   local home=$1
+  # shellcheck disable=SC2016 # The child Bash expands the positional arguments.
   FM_HOME="$home" "$BASH" -c '. "$1" && fm_treehouse_spawn_root "$2"' \
     _ "$ROOT/bin/fm-wake-lib.sh" "$home"
 }

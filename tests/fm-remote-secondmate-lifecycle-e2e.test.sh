@@ -1436,7 +1436,7 @@ FM_FAKE_SSH_MODE=unreachable FM_STATE_OVERRIDE="$WATCH_STATE_UNREACHABLE" \
 watch_pid=$!
 i=0
 processed=0
-while [ "$i" -lt 80 ]; do
+while [ "$i" -lt 240 ]; do
   kill -0 "$watch_pid" 2>/dev/null \
     || fail "the watcher exited against an unreachable remote secondmate: $(cat "$TMP_ROOT/watch-unreachable.out" "$TMP_ROOT/watch-unreachable.err")"
   if [ "$processed" -eq 0 ] \
@@ -1451,6 +1451,9 @@ while [ "$i" -lt 80 ]; do
   sleep 0.1
   i=$((i + 1))
 done
+[ "$processed" -eq 1 ] \
+  && [ "$WATCH_STATE_UNREACHABLE/.last-watcher-beat" -nt "$TMP_ROOT/watch-unreachable.processed" ] \
+  || fail "the watcher did not complete the unreachable liveness pass: $(cat "$TMP_ROOT/watch-unreachable.out" "$TMP_ROOT/watch-unreachable.err")"
 kill -0 "$watch_pid" 2>/dev/null \
   || fail "the watcher exited against an unreachable remote secondmate: $(cat "$TMP_ROOT/watch-unreachable.out" "$TMP_ROOT/watch-unreachable.err")"
 kill "$watch_pid" 2>/dev/null || true
