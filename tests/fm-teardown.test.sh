@@ -2374,6 +2374,50 @@ test_forced_secondmate_dirty_child_return_warns_and_completes() {
   pass "a forced secondmate teardown warns about a dirty child return and still completes"
 }
 
+test_secondmate_teardown_preserves_unrecorded_pool_content() {
+  local contents=$1 case_dir home sibling pool_root sibling_root rc
+  case_dir=$(make_case "secondmate-pool-root-$contents")
+  write_meta "$case_dir" local-only secondmate
+  home="$case_dir/secondmate-home"
+  sibling="$case_dir/sibling-home"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects" \
+    "$sibling/state" "$sibling/data" "$sibling/config" "$sibling/projects"
+  printf '%s\n' task-x1 > "$home/.fm-secondmate-home"
+  printf '%s\n' sibling-x > "$sibling/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
+    "$case_dir" > "$home/.fm-secondmate-parent"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
+    "$case_dir" > "$sibling/.fm-secondmate-parent"
+  printf '%s\n' "home=$home" >> "$case_dir/state/task-x1.meta"
+  pool_root=$(FM_HOME="$home" /bin/bash -c '. "$1" && fm_treehouse_spawn_root "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$home")
+  sibling_root=$(FM_HOME="$sibling" /bin/bash -c '. "$1" && fm_treehouse_spawn_root "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$sibling")
+  [ -n "$pool_root" ] || fail "secondmate-pool-root: spawn root for the home under teardown was empty"
+  [ -n "$sibling_root" ] || fail "secondmate-pool-root: spawn root for the sibling home was empty"
+  [ "$pool_root" != "$sibling_root" ] || fail "secondmate-pool-root: sibling home shared the teardown home's pool root"
+  mkdir -p "$pool_root" "$sibling_root"
+  printf 'keep\n' > "$sibling_root/marker"
+  if [ "$contents" = unrecorded ]; then
+    printf 'keep\n' > "$pool_root/marker"
+  fi
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "secondmate-pool-root: forced secondmate teardown should succeed: $(cat "$case_dir/stderr")"
+  assert_absent "$home" "secondmate-pool-root: secondmate home was not removed"
+  if [ "$contents" = unrecorded ]; then
+    assert_present "$pool_root/marker" "secondmate-pool-root: unrecorded content was removed"
+    assert_grep "retained nonempty Treehouse pool" "$case_dir/stderr" \
+      "secondmate-pool-root: retained pool was not reported"
+  else
+    assert_absent "$pool_root" "secondmate-pool-root: empty pool root survived teardown"
+  fi
+  assert_present "$sibling_root/marker" "secondmate-pool-root: sibling home's pool root was removed"
+  pass "secondmate teardown handles an $contents pool and leaves the sibling pool untouched"
+}
+
 test_return_that_removes_copy_warns_cannot_verify() {
   local case_dir wt rc
   case_dir=$(make_case return-removes-copy)
@@ -7117,6 +7161,8 @@ test_dirty_return_warns_which_slot_was_lost
 test_dirty_return_warns_even_when_a_later_step_refuses
 test_forced_secondmate_child_scout_nested_clone_returns_clean
 test_forced_secondmate_dirty_child_return_warns_and_completes
+test_secondmate_teardown_preserves_unrecorded_pool_content empty
+test_secondmate_teardown_preserves_unrecorded_pool_content unrecorded
 test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
 test_gh_error_and_content_absent_refuses

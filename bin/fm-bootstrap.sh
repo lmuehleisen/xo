@@ -63,7 +63,7 @@
 #          `setup hooks` or a `curl | sh` installer. MISSING stays for absent
 #          tools only.
 #          treehouse is OUTDATED when its installed version lacks
-#          "treehouse get --lease" support.
+#          "treehouse get --lease" or "--root" support.
 #          gitleaks is MISSING when the home has config/publish-guard (a
 #          secondmate home inherits it) and no gitleaks is on PATH; its install
 #          command is the pinned bin/fm-install-gitleaks.sh.
@@ -978,8 +978,14 @@ TOOLS="$BACKEND_TOOLS $COMMON_TOOLS"
 LAVISH_AXI_MIN=0.1.80
 LAVISH_AXI_BOARD_MIN=0.1.77
 
-treehouse_supports_lease() {
-  treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
+# --lease durably leases secondmate homes and task slots;
+# --root gives a local secondmate home's task spawns a pool of its own clone
+# (fm_treehouse_spawn_root).
+treehouse_supports_required_flags() {
+  local help
+  help=$(treehouse get --help 2>&1)
+  printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)' \
+    && printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--root([^[:alnum:]_-]|$)'
 }
 
 # Semantic-version floor for the lavish-reply-compatible probe. A version string
@@ -1595,12 +1601,12 @@ detect_local_tools() {
   if [ -d "$CONFIG/publish-guard" ] && ! command -v gitleaks >/dev/null 2>&1; then
     missing_tool_diagnostic gitleaks
   fi
-  # The treehouse lease-support upgrade check is only relevant when the resolved
+  # The treehouse lease- and root-support upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its
   # own worktrees); an orca home must not be told to upgrade a provider it never uses.
   if fm_backend_list_contains "$TOOLS" treehouse \
-    && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
-    echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease support; upgrade: $(upgrade_cmd treehouse))"
+    && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_required_flags; then
+    echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease and --root support; upgrade: $(upgrade_cmd treehouse))"
   fi
   if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
     echo "OUTDATED: quota-axi (installed: $(tool_version quota-axi); requires $FM_QUOTA_AXI_MIN; upgrade: $(upgrade_cmd quota-axi))"
@@ -1617,7 +1623,8 @@ treehouse_pool_report() {
   case "$threshold" in ''|*[!0-9]*) threshold=30 ;; esac
   now=$(date +%s)
   records=$(mktemp "${TMPDIR:-/tmp}/fm-pool-records.XXXXXX") || return 0
-  for state in "$root"/*/treehouse-state.json; do
+  for state in "$root"/*/treehouse-state.json \
+               "$root"/fm-secondmate/*/.treehouse/*/treehouse-state.json; do
     [ -f "$state" ] || continue
     pool_count=$((pool_count + 1))
     pool=${state%/treehouse-state.json}
@@ -1650,27 +1657,32 @@ treehouse_pool_report() {
       if [ -n "$repo" ]; then
         identity=$(git -C "$slot" remote get-url origin 2>/dev/null) || identity=$repo
         [ -n "$identity" ] || identity=$repo
-        duplicate=0
-        seen_pair=0
-        for ((i = 0; i < ${#seen_repos[@]}; i++)); do
-          if [ "${seen_repos[$i]}" = "$identity" ]; then
-            if [ "${seen_pools[$i]}" = "$pool" ]; then
-              seen_pair=1
-            else
-              duplicate=1
+        case "$pool" in
+          */fm-secondmate/*/.treehouse/*) ;;
+          *)
+            duplicate=0
+            seen_pair=0
+            for ((i = 0; i < ${#seen_repos[@]}; i++)); do
+              if [ "${seen_repos[$i]}" = "$identity" ]; then
+                if [ "${seen_pools[$i]}" = "$pool" ]; then
+                  seen_pair=1
+                else
+                  duplicate=1
+                fi
+              fi
+            done
+            if [ "$duplicate" -eq 1 ]; then
+              if [ "$duplicate_reported" -eq 0 ]; then
+                echo "TREEHOUSE_POOL_REPORT: duplicate-clone pool $pool (project $repo)"
+                duplicate_reported=1
+              fi
             fi
-          fi
-        done
-        if [ "$duplicate" -eq 1 ]; then
-          if [ "$duplicate_reported" -eq 0 ]; then
-            echo "TREEHOUSE_POOL_REPORT: duplicate-clone pool $pool (project $repo)"
-            duplicate_reported=1
-          fi
-        fi
-        if [ "$seen_pair" -eq 0 ]; then
-          seen_repos+=("$identity")
-          seen_pools+=("$pool")
-        fi
+            if [ "$seen_pair" -eq 0 ]; then
+              seen_repos+=("$identity")
+              seen_pools+=("$pool")
+            fi
+            ;;
+        esac
       fi
       if [ ! -e "${slot%/*}/.fm-slot-owner" ] && [ ! -e "$slot/.fm-slot-owner" ] \
         && [ "$owner_live" -eq 0 ] && [ "$slot_leased" != true ]; then
