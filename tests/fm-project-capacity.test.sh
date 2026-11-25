@@ -129,6 +129,7 @@ SH
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 printf 'treehouse %s\n' "$*" >> "$FM_FAKE_CALL_LOG"
+[ "${1:-}" != --root ] || shift 2
 if [ "${1:-}" = get ] && [ "${2:-}" = --lease ]; then
   printf '%s\n' "${FM_FAKE_PANE_PATH:-}"
 fi
