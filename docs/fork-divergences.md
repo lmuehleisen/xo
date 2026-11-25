@@ -320,7 +320,8 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
   Generic prelaunch rollback returns a provably unstarted clean lease; post-launch adapter cleanup otherwise follows upstream and retains unresolved lease receipts for explicit recovery.
   Upstream's Herdr-only lease that starts the pane's top-level shell in the copy ([upstream #8052](https://github.com/kunchenguid/firstmate/pull/8052)) is not taken: the fork's universal receipt lease and child-shell launch boundary already preserve the copy, while a restored Herdr pane reopens at its original directory rather than inside the copy.
   Its suite `tests/fm-spawn-herdr-lease.test.sh` pins that top-level-shell entry and is not carried; the slow-entry tolerance and single cd resend in `spawn_assert_agent_worktree` (upstream #8139) are kept.
-  The secondmate pool root applies to the same durable acquire, and a nonempty retired-home pool is retained because it can contain an unpublished lease receipt's worktree.
+  The secondmate pool root applies to the same durable acquire and resolves existing ancestors to keep newly created pools outside the home.
+  A nonempty retired-home pool is retained because it can contain an unpublished lease receipt's worktree.
   `tests/fm-spawn-secondmate-pool.test.sh` guards local and remote selection with the fork lease protocol, and `tests/fm-teardown.test.sh` guards retention and sibling isolation.
 
 ### claude-trust-escape

@@ -104,7 +104,7 @@ meta_worktree() {  # <home> <id>
 
 spawn_root_for() {  # <home>
   local home=$1
-  FM_HOME="$home" /bin/bash -c '. "$1" && fm_treehouse_spawn_root "$2"' \
+  FM_HOME="$home" "$BASH" -c '. "$1" && fm_treehouse_spawn_root "$2"' \
     _ "$ROOT/bin/fm-wake-lib.sh" "$home"
 }
 
@@ -249,9 +249,30 @@ test_treehouse_root_under_the_home_is_refused() {
   pass "an absolute TREEHOUSE_ROOT under the home is refused"
 }
 
+test_treehouse_pool_refuses_symlink_into_home() {
+  local case_dir mate root candidate rc
+  case_dir="$TMP_ROOT/symlink-root"
+  make_main_home "$case_dir"
+  make_mate_home "$case_dir" local
+  mate="$case_dir/mate-home"
+  ln -s "$mate" "$case_dir/home-alias"
+  mkdir -p "$case_dir/pools"
+  ln -s "$mate" "$case_dir/pools/fm-secondmate"
+
+  for candidate in "$case_dir/home-alias/new/pools" "$case_dir/pools"; do
+    rc=0
+    root=$(TREEHOUSE_ROOT="$candidate" spawn_root_for "$mate") || rc=$?
+    expect_code 1 "$rc" "a pool root symlink into the secondmate home must be refused"
+    [ -z "$root" ] || fail "a refused pool root still printed: $root"
+  done
+  assert_absent "$mate/new" "pool root preflight created directories under the home"
+  pass "a pool root cannot enter the home through a symlink above missing directories"
+}
+
 test_local_secondmate_pool_root_is_outside_the_home
 test_relative_treehouse_root_is_ignored
 test_treehouse_root_under_the_home_is_refused
+test_treehouse_pool_refuses_symlink_into_home
 test_local_secondmate_spawns_from_its_own_clone_pool
 test_root_home_keeps_the_default_pool
 test_remote_seeded_home_keeps_the_default_pool

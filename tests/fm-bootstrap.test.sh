@@ -50,8 +50,8 @@ unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH PAS
 # case keeps bare BASE_PATH.
 
 # A fake toolchain where every required tool is present and gh is authenticated.
-# treehouse's `get --help` advertises --lease and --root only when FM_FAKE_TREEHOUSE_LEASE_HELP=1,
-# and --lease alone when it is lease-only.
+# treehouse's `get --help` advertises --lease and --root for 1 or probe-error,
+# and --lease alone for lease-only. The probe-error case exits unsuccessfully.
 make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
@@ -81,8 +81,9 @@ if [ "${1:-}" = --version ]; then
   exit 0
 fi
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ]; then
+  if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ] || [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = probe-error ]; then
     printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>] [--root <dir>]'
+    [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" != probe-error ] || exit 42
   elif [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = lease-only ]; then
     printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
   else
@@ -520,6 +521,7 @@ treehouse --lease support is accepted silently^1^0.2.6^1^manual^empty^^
 absent treehouse reports a missing tool^absent^0.2.6^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
 treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires --lease and --root support; upgrade: treehouse update)^NEEDS_GH_AUTH
 treehouse with --lease but without --root reports an upgrade^lease-only^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires --lease and --root support; upgrade: treehouse update)^NEEDS_GH_AUTH
+treehouse with a failed capability probe reports an upgrade^probe-error^0.2.6^1^-^grep^OUTDATED: treehouse (installed: 0.4.2; requires --lease and --root support; upgrade: treehouse update)^NEEDS_GH_AUTH
 compatible tasks-axi is silent by default^1^0.2.6^1^-^empty^^
 missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
 incompatible tasks-axi reports an upgrade by default^1^0.1.0^1^-^exact^OUTDATED: tasks-axi (installed: 0.1.0; requires 0.2.6; upgrade: npm install -g tasks-axi)^

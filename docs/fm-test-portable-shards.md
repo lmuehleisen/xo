@@ -96,7 +96,7 @@ The workflow uploads each partition's quiet telemetry plus its per-root lifecycl
 The packing target is a complete green run under fifteen minutes including start delay.
 One indivisible serial suite (`tests/fm-remote-secondmate-lifecycle-e2e.test.sh`) currently measures above that target on its own; it occupies a singleton shard rather than raising the job timeout. It is one sequential fixture lifecycle, not independently invocable cases, so splitting it would re-run provision/seed/launch per file and change how the lifecycle is asserted.
 Job timeouts remain hang tripwires under the policy in [Timeouts](#timeouts) below; they are not the desired healthy duration.
-The layout uses twenty-one serial jobs, two parallel jobs with `--jobs 2`, four lint partitions, Herdr, plus short checks and macOS.
+The layout uses twenty-one serial jobs, two parallel jobs with `--jobs 2`, four lint partitions, Herdr and herdr-core, plus short checks and macOS.
 The workflow retains per-PR supersession and keeps only the newest of close main pushes' runs.
 
 ## Local entry points

@@ -2017,11 +2017,12 @@ fm_treehouse_project_lock_path() {  # <project-dir>
 # ${TREEHOUSE_ROOT:-$HOME/.treehouse}/fm-secondmate/<home-id>, outside the
 # Firstmate home, so a slot's ancestors never include that home's CLAUDE.md or
 # AGENTS.md. A relative TREEHOUSE_ROOT is ignored in favor of $HOME/.treehouse;
-# a root equal to the home, or under it, is refused. <home-id> is the git
+# a pool equal to the home, or under it after resolving existing ancestors,
+# is refused. <home-id> is the git
 # object id of the resolved home path. A remote home is the root of its own
 # machine and keeps the default.
 fm_treehouse_spawn_root() {  # <home>
-  local home=$1 resolved root id base printed
+  local home=$1 resolved root id base component missing_tail='' parent printed
   resolved=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 1
   root=$(fm_firstmate_root_home "$resolved") || return 1
   [ "$root" != "$resolved" ] || return 0
@@ -2032,11 +2033,20 @@ fm_treehouse_spawn_root() {  # <home>
     /*) base=$TREEHOUSE_ROOT ;;
   esac
   [ -n "$base" ] || [ -z "${HOME:-}" ] || base=$HOME/.treehouse
-  [ -n "$base" ] || return 1
-  if [ -d "$base" ]; then
-    base=$(CDPATH='' cd -- "$base" && pwd -P) || return 1
-  fi
-  printed="$base/fm-secondmate/$id"
+  case "$base" in /*) ;; *) return 1 ;; esac
+  # Resolve the existing prefix before appending a missing directory tail.
+  # A symlink above a new pool must not defeat the outside-home check.
+  while [ ! -d "$base" ]; do
+    [ ! -e "$base" ] && [ ! -L "$base" ] || return 1
+    fm_basename_to component "$base"
+    case "$component" in ''|.|..) return 1 ;; esac
+    missing_tail="/$component$missing_tail"
+    fm_dirname_to base "$base"
+  done
+  base=$(CDPATH='' cd -P -- "$base" && pwd -P) || return 1
+  parent="${base%/}$missing_tail/fm-secondmate"
+  printed="$parent/$id"
+  [ ! -L "$parent" ] && [ ! -L "$printed" ] || return 1
   case "$printed" in
     "$resolved"|"$resolved"/*) return 1 ;;
   esac

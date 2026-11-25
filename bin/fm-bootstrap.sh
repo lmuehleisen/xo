@@ -983,7 +983,7 @@ LAVISH_AXI_BOARD_MIN=0.1.77
 # (fm_treehouse_spawn_root).
 treehouse_supports_required_flags() {
   local help
-  help=$(treehouse get --help 2>&1)
+  help=$(treehouse get --help 2>&1) || return 1
   printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)' \
     && printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--root([^[:alnum:]_-]|$)'
 }
