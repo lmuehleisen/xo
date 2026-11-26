@@ -77,7 +77,7 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Class: intended.
 - Seam: permission resolution and `launch_template` in `bin/fm-spawn.sh`, the omitted upstream bypass-only failover helper and suite, and `docs/configuration.md` (shared).
 - Guard: `tests/fm-spawn-dispatch-profile.test.sh` `test_worker_permission_modes`, `test_invalid_worker_permissions_refuse`, and `test_upstream_claude_permission_mode_file_cannot_select_bypass`; `test_claude_exclude_tools_leave_the_rest_of_the_launch_unchanged` checks that tool exclusions keep the reviewed mode; the negative bypass assertions in `tests/fm-claude-trust.test.sh`.
-- Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; upstream's separate Codex restricted setting is represented by the fork's existing manual review posture; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant rather than replacing it.
+- Upstream: bypasses permissions by default, with model-reviewed opt-ins for Claude and Codex and a bypass-failure recovery command; XO keeps its reviewed defaults and omits the redundant bypass-only failover helper and tests; upstream's separate Codex restricted setting is represented by the fork's existing manual review posture; its task-channel `--add-dir` grant for Claude launches (upstream #5884) is taken beside the fork's state and task-data grant for Codex and secondmates, and replaces that grant for Claude ships and scouts under [claude-add-dir-channel-trust](#claude-add-dir-channel-trust).
 
 ### codex-reviewed-launch
 
@@ -270,6 +270,15 @@ Each entry has these one-line fields: `Intent:` with its source, `Class:`, `Seam
 - Upstream: has no aggregate gate job; each workflow job reports as its own check.
 
 ## Carried
+
+### claude-add-dir-channel-trust
+
+- Intent: a Claude ship or scout reaches its brief without an "Adding a new directory" startup question on Claude Code 2.1.326 and later; `docs/configuration.md` "Worker permission mode".
+- Class: carried.
+- Seam: the `--task-channels` option and its refusals in `bin/fm-claude-trust.sh`, the Claude trust call and task-channel resolution before it plus the Claude ship and scout arm of the `__PERMISSIONDIRS__` substitution in `bin/fm-spawn.sh`, the live-guard registration in `bin/fm-test-run.sh`, and the matching configuration, harness-adapter, verification, and timing documentation (shared); `tests/fm-claude-add-dir-trust-live.test.sh` with its fork whole-state arm.
+- Guard: `test_task_channels_are_narrow_and_atomic` and `test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief` in `tests/fm-claude-trust.test.sh`; `test_worker_permission_modes` in `tests/fm-spawn-dispatch-profile.test.sh`; the default-on token-free `tests/fm-claude-add-dir-trust-live.test.sh`.
+- Upstream: [upstream #8551](https://github.com/kunchenguid/firstmate/issues/8551) is open, and its open fix [upstream #8560](https://github.com/kunchenguid/firstmate/pull/8560) registers the same four channels; the fork ports it without that PR's secondmate inbox registration, keeps its own import-consent rules, and also drops the fork's whole-state and duplicate task-data Claude grant, because registered channels never cover their parent `state/`.
+  Converge onto upstream's version once it lands, keeping the dropped Claude grant under [reviewed-worker-permissions](#reviewed-worker-permissions).
 
 ### kiro-worker-adapter
 

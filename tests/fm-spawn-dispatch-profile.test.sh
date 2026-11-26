@@ -328,8 +328,8 @@ test_claude_secondmate_launch_brief_publishes_into_its_own_home() {
 }
 
 # A claude worker given a typed envelope would see it with the marker stripped,
-# so a launch-brief record that cannot be published stops the spawn before any
-# launch is sent.
+# so an unusable launch-brief channel stops the spawn before any launch is
+# sent. Channel trust preparation detects this before record publication.
 test_claude_spawn_refuses_when_the_brief_record_cannot_publish() {
   local rec id out status
   id="brief-doorbell-refused-z3"
@@ -341,8 +341,8 @@ test_claude_spawn_refuses_when_the_brief_record_cannot_publish() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "a claude spawn whose launch-brief record cannot publish succeeded"$'\n'"$out"
-  assert_contains "$out" "could not publish the launch brief for $id" \
-    "the refused spawn did not name the record publication failure"
+  assert_contains "$out" "could not resolve the task-channel directories for $id" \
+    "the refused spawn did not name the unusable brief channel"
   [ ! -s "$LAUNCH_LOG" ] || fail "a launch was sent despite the unpublished brief record: $(cat "$LAUNCH_LOG")"
   pass "a claude spawn whose launch-brief record cannot publish stops with a clear error and sends no launch"
 }
@@ -1081,7 +1081,7 @@ test_claude_threads_model_and_effort() {
   expect_code 0 "$status" "claude spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude sonnet high
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --model 'sonnet' --effort 'high'" \
+  assert_contains "$launch" "claude --permission-mode auto $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --model 'sonnet' --effort 'high'" \
     "claude launch did not thread model and effort flags"
   assert_not_contains "$launch" "--tui-mode" "non-Pi launches must not receive Pi's TUI mode override"
   pass "claude receives --model and --effort profile flags"
@@ -3173,7 +3173,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --add-dir '$(cd "$HOME_DIR/state" && pwd -P)' --add-dir '$(cd "$HOME_DIR/data/$id" && pwd -P)' $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u JETSKI_APP_DATA_DIR env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"ultracode\":false,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
@@ -3316,7 +3316,7 @@ test_claude_secondmate_launch_omits_task_control_channel_authority() {
 # This fork's reviewed Claude worker launch (config/crew-permissions absent),
 # the same string test_no_profile_keeps_claude_profile_defaults pins.
 fork_claude_expected_launch() {  # <launch> <home> <id>
-  claude_expected_launch "$1" "$2" "$3" "--permission-mode auto --add-dir '$(cd "$2/state" && pwd -P)' --add-dir '$(cd "$2/data/$3" && pwd -P)'"
+  claude_expected_launch "$1" "$2" "$3" "--permission-mode auto"
 }
 
 test_claude_long_launch_is_delivered_intact() {
@@ -3452,8 +3452,17 @@ test_worker_permission_modes() {
       assert_not_contains "$launch" '__PERMISSIONDIRS__' 'directory placeholder leaked'
       state_real=$(cd "$HOME_DIR/state" && pwd -P)
       data_real=$(cd "$HOME_DIR/data/$id" && pwd -P)
-      assert_contains "$launch" "--add-dir '$state_real'" 'status/inbox access missing'
-      assert_contains "$launch" "--add-dir '$data_real'" 'brief/report access missing'
+      if [ "$harness" = claude ]; then
+        # A whole-state --add-dir is its own Claude startup trust question, so
+        # a Claude ship gets its exact task channels and the brief dir once.
+        assert_not_contains "$launch" "--add-dir '$state_real'" 'Claude must not be granted the whole state directory'
+        [ "$(printf '%s' "$launch" | grep -o -- "--add-dir '$data_real'" | wc -l | tr -d ' ')" = 1 ] ||
+          fail "Claude brief/report access must be granted exactly once: $launch"
+        assert_contains "$launch" "--add-dir '$state_real/$id.inbox'" 'Claude steering inbox access missing'
+      else
+        assert_contains "$launch" "--add-dir '$state_real'" 'status/inbox access missing'
+        assert_contains "$launch" "--add-dir '$data_real'" 'brief/report access missing'
+      fi
       assert_not_contains "$launch" "--add-dir '$HOME_DIR' " 'whole home must not be granted'
       task_brief="$HOME_DIR/data/$id/launch-brief.md"
       case "$harness:$mode" in
