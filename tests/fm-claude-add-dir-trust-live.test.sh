@@ -87,12 +87,19 @@ def launch(label, expect_gate, extra=()):
             raise AssertionError("registered launch did not reach the composer and exit cleanly")
     finally:
         (root / (label + ".log")).write_bytes(output)
+        # The group can empty between poll() and killpg(); that is not a failure.
         if proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             try:
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 proc.wait()
         os.close(master)
 
