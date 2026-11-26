@@ -1465,7 +1465,7 @@ Its status appends therefore fall under the selected permission review rather th
 Before a Claude ship or scout spawn or relaunch, Firstmate registers trust for exactly those four channel directories in the selected Claude configuration, so the worker reaches its brief without that question ([verification](verification/runtime-backends.md#added-task-channel-directories)).
 Channel entries carry directory trust only and leave external `CLAUDE.md` import consent to the workspace rules.
 Each channel must resolve to its declared path under its configured root, so a symlinked channel, an invalid task id, or a failed registration refuses the launch.
-Firstmate never registers trust for the whole home, its `state/`, or the code checkout.
+The channel entries never extend trust to their parent directories, such as the home, its `state/`, or the code checkout.
 A secondmate launch keeps its existing grants and home-only trust.
 Protected Git writes and operations outside the allowed sandbox still require the harness's normal review.
 
