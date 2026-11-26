@@ -1460,6 +1460,13 @@ For the exact grants in both agy worker modes, see [Worker directory grants](../
 Other adapter-specific state grants remain governed by their launch owners; the shared state layout is not a per-task security boundary.
 Every pane-backed Claude launch also passes `--add-dir` for exactly its Firstmate task channels, resolved to real paths: this home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills` for a ship or scout, or the parent home's `state/<id>.inbox` for a secondmate.
 Claude Code path-checks its Read, Glob, and Grep tools against its working directories, and since 2.1.257 the first outside read in auto mode parks the pane on a one-time question, so the grant keeps those channels readable without that question.
+A Claude ship or scout gets only those four channels, not the home's whole `state/` or a second copy of `data/<id>`, because Claude Code 2.1.326 and later ask a separate startup trust question for every added directory that is not already trusted.
+Its status appends therefore fall under the selected permission review rather than a directory grant.
+Before a Claude ship or scout spawn or relaunch, Firstmate registers trust for exactly those four channel directories in the selected Claude configuration, so the worker reaches its brief without that question ([verification](verification/runtime-backends.md#added-task-channel-directories)).
+Channel entries carry directory trust only and leave external `CLAUDE.md` import consent to the workspace rules.
+Each channel must resolve to its declared path under its configured root, so a symlinked channel, an invalid task id, or a failed registration refuses the launch.
+The channel entries never extend trust to their parent directories, such as the home, its `state/`, or the code checkout.
+A secondmate launch keeps its existing grants and home-only trust.
 Protected Git writes and operations outside the allowed sandbox still require the harness's normal review.
 
 The Devin and agy worker policy layers share the metadata-only credential classifier in [`bin/fm-credential-access.mjs`](../bin/fm-credential-access.mjs).

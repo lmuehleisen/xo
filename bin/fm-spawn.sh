@@ -623,6 +623,9 @@
 #   Both modes add only the owning home's state directory and the brief's
 #   directory to the worker's existing worktree access, for status/inbox/report
 #   writes. State is shared across this home's tasks, not per-task isolation.
+#   A Claude ship or scout instead gets only its exact task-channel grant
+#   (__CLAUDEADDDIRS__), because a whole-state --add-dir is a separate Claude
+#   startup trust question; its status appends fall under the selected review.
 #   Git protected paths and network requests still follow the harness's review.
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
 #     __CLAUDEPERMFLAG__ the claude permission flag selected by config/crew-permissions, then __PERMISSIONDIRS__
@@ -767,6 +770,7 @@
 # any per-task state exists, and before its busy hooks are written, every
 # claude launch pre-registers its launch directory -
 # the task worktree, or the secondmate home for a --secondmate spawn -
+# and, for a ship or scout, exactly its --add-dir task channels,
 # in the launching user's own Claude trust store through bin/fm-claude-trust.sh,
 # because Claude's interactive workspace-trust dialog gates a folder it has never
 # seen and firstmate cannot answer it. That helper's header owns the structural
@@ -7203,13 +7207,21 @@ fi
 # arm keeps this in the same class as the two worktree refusals just above: no
 # temp root, no retired relaunch wiring and no busy record exists yet to strand,
 # so the refusal names the endpoint the same way they do and leaves nothing else
-# behind.
+# behind. A ship or scout launch also trusts exactly its --add-dir task channels,
+# which Claude Code 2.1.326 and later check at startup on their own; resolving
+# (and creating) them here keeps the trust entries and the launch flags on the
+# same paths, relaunch included. A secondmate launch keeps its home-only trust.
+CLAUDE_ADD_DIRS=
 case "$HARNESS" in
 claude*)
   if [ "$KIND" = secondmate ]; then
     spawn_trust_args=(--secondmate-home "$PROJ_ABS" "$ID")
   else
-    spawn_trust_args=("$WT" "$PROJ_ABS")
+    CLAUDE_ADD_DIRS=$(claude_add_dirs_flag "$KIND" "$STATE" "$DATA" "$FM_ROOT" "$ID") || {
+      echo "error: could not resolve the task-channel directories for $ID's claude --add-dir grant; inspect window $T" >&2
+      exit 1
+    }
+    spawn_trust_args=("$WT" "$PROJ_ABS" --task-channels "$STATE" "$DATA" "$FM_ROOT" "$ID")
   fi
   if ! "$FM_ROOT/bin/fm-claude-trust.sh" "${spawn_trust_args[@]}" >/dev/null; then
     echo "error: could not pre-register Claude workspace trust for $WT; refusing to launch a claude worker that would wedge on the trust dialog; inspect window $T" >&2
@@ -8684,7 +8696,15 @@ LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 LAUNCH=${LAUNCH//__TASKTMP__/$sq_tasktmp}
 [ "$RAW_LAUNCH" -eq 0 ] && case "$HARNESS" in
 claude | codex)
-  permission_dirs="--add-dir $(shell_quote "$STATE_REAL") --add-dir $(shell_quote "$(cd "$(dirname "$BRIEF")" && pwd -P)") "
+  # A Claude ship or scout reaches its state and brief channels through the
+  # exact __CLAUDEADDDIRS__ grant instead: a whole-state --add-dir is its own
+  # Claude Code startup trust question, and trusting state/ would cover every
+  # task's records.
+  if [ "$HARNESS" = claude ] && [ "$KIND" != secondmate ]; then
+    permission_dirs=
+  else
+    permission_dirs="--add-dir $(shell_quote "$STATE_REAL") --add-dir $(shell_quote "$(cd "$(dirname "$BRIEF")" && pwd -P)") "
+  fi
   LAUNCH=${LAUNCH//__PERMISSIONDIRS__/$permission_dirs}
   ;;
 agy)
@@ -8721,7 +8741,7 @@ esac
 esac
 [ "$RAW_LAUNCH" -eq 0 ] && case "$LAUNCH" in
 *__CLAUDEADDDIRS__*)
-  CLAUDE_ADD_DIRS=$(claude_add_dirs_flag "$KIND" "$STATE" "$DATA" "$FM_ROOT" "$ID") || {
+  [ -n "$CLAUDE_ADD_DIRS" ] || CLAUDE_ADD_DIRS=$(claude_add_dirs_flag "$KIND" "$STATE" "$DATA" "$FM_ROOT" "$ID") || {
     echo "error: could not resolve the task-channel directories for $ID's claude --add-dir grant" >&2
     exit 1
   }

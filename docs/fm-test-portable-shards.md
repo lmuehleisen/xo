@@ -12,6 +12,7 @@ Local timings are not interchangeable with CI timings: platform and machine load
 
 The committed table starts with the slowest successful `duration_ms` per `tests/*.test.sh` across green main CI runs [43359484992](https://github.com/kunchenguid/firstmate/actions/runs/43359484992), [43331691300](https://github.com/kunchenguid/firstmate/actions/runs/43331691300), and [43209319634](https://github.com/kunchenguid/firstmate/actions/runs/43209319634), refreshed 2026-11-13.
 Fork-only suites retain their existing timing hints until refreshed from successful fork CI runs.
+The `tests/fm-claude-add-dir-trust-live.test.sh` hint is a provisional 83 ms capability skip, taken from the upstream measurement with Claude absent, until the next refresh.
 With those hints included, nineteen serial shards model over 16 minutes each, so this fork uses twenty-one shards for the same 15-minute packing target.
 Failed or cancelled scripts are ignored, so a timeout does not become a packing weight.
 Observed maxima provide conservative packing weights, not an upper bound on future durations.
